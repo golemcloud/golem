@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, Cancellable, NotCancellable, drain_dropped_call_events_access,
+};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::{
     ActiveAtomicRegion, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
@@ -21,6 +23,7 @@ use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
+use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
     HostGetPromiseResultWithStore,
@@ -28,7 +31,6 @@ use crate::preview2::golem_api_1_x::host::{
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
-use crate::preview2::{Pollable, golem_api_1_x};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
@@ -66,7 +68,7 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::{Accessor, HasSelf, Resource};
-use wasmtime_wasi::{IoView, subscribe};
+use wasmtime_wasi::IoView;
 
 fn classify_worker_proxy_error(err: &WorkerProxyError) -> HostFailureKind {
     match err {
@@ -1214,10 +1216,87 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> HostGetPromiseResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn get<T: Send>(
-        _accessor: &Accessor<T, Self>,
-        _resource: Resource<GetPromiseResultEntry>,
+        accessor: &Accessor<T, Self>,
+        resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Vec<u8>> {
-        unimplemented!("HostGetPromiseResultWithStore::get (p3 migration)")
+        let resource_rep = resource.rep();
+        let (entry, self_agent_id) = accessor.with(|mut access| {
+            let ctx = access.get();
+            let entry = ctx
+                .table()
+                .get(&Resource::<GetPromiseResultEntry>::new_borrow(resource_rep))?
+                .clone();
+            Ok::<_, anyhow::Error>((entry, ctx.agent_id().clone()))
+        })?;
+
+        drain_dropped_call_events_access(accessor, accessor.getter())
+            .await
+            .map_err(anyhow::Error::from)?;
+
+        let mut handle = CallHandle::<GolemApiGetPromiseResult, Cancellable>::start_access(
+            accessor,
+            accessor.getter(),
+            HostRequestNoInput {},
+            DurableFunctionType::ReadRemote,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+
+        if !handle.is_live() {
+            match handle
+                .replay_access(accessor, accessor.getter())
+                .await
+                .map_err(anyhow::Error::from)?
+            {
+                CallReplayOutcome::Replayed(response) => {
+                    return response.result.ok_or_else(|| {
+                        anyhow::anyhow!("Promise result was not completed in the oplog")
+                    });
+                }
+                CallReplayOutcome::Incomplete(live) => handle = live,
+            }
+        }
+
+        // Only the agent that originally created the promise is woken up when it is completed.
+        if entry.promise_id.agent_id != self_agent_id {
+            return Err(handle.trap(anyhow!(
+                "Tried awaiting a promise not created by the current agent"
+            )));
+        }
+
+        let promise_handle = match entry.get_handle().await {
+            Ok(handle) => handle,
+            Err(err) => {
+                return Err(handle.trap(WorkerExecutorError::runtime(err.clone())));
+            }
+        };
+        promise_handle.await_ready().await;
+        let result = match promise_handle.get().await {
+            Some(result) => result,
+            None => {
+                return Err(handle.trap(WorkerExecutorError::runtime(format!(
+                    "Promise {} was ready without a completion payload",
+                    entry.promise_id
+                ))));
+            }
+        };
+
+        let response = handle
+            .complete_access(
+                accessor,
+                accessor.getter(),
+                HostResponseGolemApiPromiseResult {
+                    result: Some(result),
+                },
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
+
+        response.result.ok_or_else(|| {
+            anyhow::Error::from(WorkerExecutorError::runtime(
+                "Promise result was not completed after durable persistence",
+            ))
+        })
     }
 }
 

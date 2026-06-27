@@ -37,9 +37,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, drain_dropped_call_events_access,
-};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
 use wasmtime::component::{HasData, Linker};
@@ -110,10 +108,6 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
 {
-    drain_dropped_call_events_access(store, durable_worker_ctx::<Ctx, T>)
-        .await
-        .map_err(wasmtime::Error::from)?;
-
     let mut handle = CallHandle::<Pair, Cancellable>::start_access(
         store,
         durable_worker_ctx::<Ctx, T>,

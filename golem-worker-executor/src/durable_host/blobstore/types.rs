@@ -12,17 +12,180 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io::Cursor;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use std::task::{Context, Poll};
 
-use wasmtime::component::{Resource, StreamReader};
+use bytes::BytesMut;
+use golem_common::model::oplog::host_functions::P3BlobstoreTypesIncomingValueConsumeAsync;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestNoInput, HostResponseP3BlobstoreIncomingValueStream,
+};
+use wasmtime::AsContextMut;
+use wasmtime::StoreContextMut;
+use wasmtime::component::{
+    Access, Accessor, AccessorTask, Destination, HasSelf, Resource, StreamProducer, StreamReader,
+    StreamResult,
+};
 use wasmtime_wasi::IoView;
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 
 use crate::preview2::wasi::blobstore::types::{
-    Error, Host, HostIncomingValue, HostOutgoingValue, IncomingValue,
+    Error, Host, HostIncomingValue, HostIncomingValueWithStore, HostOutgoingValue, IncomingValue,
 };
 use crate::workerctx::WorkerCtx;
+
+const BLOBSTORE_STREAM_BUFFER_CAPACITY: usize = 8192;
+
+enum DeferredIncomingValueStreamState {
+    Awaiting(tokio::sync::oneshot::Receiver<wasmtime::Result<Vec<u8>>>),
+    Streaming(Cursor<BytesMut>),
+    Done,
+}
+
+struct DeferredIncomingValueStreamProducer {
+    state: DeferredIncomingValueStreamState,
+}
+
+impl DeferredIncomingValueStreamProducer {
+    fn new(rx: tokio::sync::oneshot::Receiver<wasmtime::Result<Vec<u8>>>) -> Self {
+        Self {
+            state: DeferredIncomingValueStreamState::Awaiting(rx),
+        }
+    }
+}
+
+impl<D> StreamProducer<D> for DeferredIncomingValueStreamProducer {
+    type Item = u8;
+    type Buffer = Cursor<BytesMut>;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, D>,
+        dst: Destination<'a, Self::Item, Self::Buffer>,
+        _finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        loop {
+            match &mut self.state {
+                DeferredIncomingValueStreamState::Awaiting(rx) => match Pin::new(rx).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Ok(Ok(contents))) => {
+                        self.state = DeferredIncomingValueStreamState::Streaming(Cursor::new(
+                            BytesMut::from(contents.as_slice()),
+                        ));
+                    }
+                    Poll::Ready(Ok(Err(error))) => {
+                        self.state = DeferredIncomingValueStreamState::Done;
+                        return Poll::Ready(Err(error));
+                    }
+                    Poll::Ready(Err(_)) => {
+                        self.state = DeferredIncomingValueStreamState::Done;
+                        return Poll::Ready(Err(wasmtime::Error::msg(
+                            "blobstore incoming value replay task dropped",
+                        )));
+                    }
+                },
+                DeferredIncomingValueStreamState::Streaming(contents) => {
+                    if dst.remaining(store.as_context_mut()) == Some(0) {
+                        return Poll::Ready(Ok(StreamResult::Completed));
+                    }
+
+                    let bytes = contents.get_ref();
+                    let position = contents.position() as usize;
+                    if position >= bytes.len() {
+                        self.state = DeferredIncomingValueStreamState::Done;
+                        return Poll::Ready(Ok(StreamResult::Dropped));
+                    }
+
+                    let mut dst = dst.as_direct(store, BLOBSTORE_STREAM_BUFFER_CAPACITY);
+                    let remaining = &bytes[position..];
+                    let n = remaining.len().min(dst.remaining().len());
+                    dst.remaining()[..n].copy_from_slice(&remaining[..n]);
+                    dst.mark_written(n);
+                    contents.set_position((position + n) as u64);
+                    return Poll::Ready(Ok(StreamResult::Completed));
+                }
+                DeferredIncomingValueStreamState::Done => {
+                    return Poll::Ready(Ok(StreamResult::Dropped));
+                }
+            }
+        }
+    }
+}
+
+struct IncomingValueConsumeTask<Ctx> {
+    contents: Vec<u8>,
+    result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx> IncomingValueConsumeTask<Ctx> {
+    fn new(
+        contents: Vec<u8>,
+        result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+    ) -> Self {
+        Self {
+            contents,
+            result_tx,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<Ctx, T> AccessorTask<T, HasSelf<DurableWorkerCtx<Ctx>>> for IncomingValueConsumeTask<Ctx>
+where
+    Ctx: WorkerCtx,
+    T: 'static,
+{
+    async fn run(
+        self,
+        accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        let result = async {
+            let mut handle =
+                CallHandle::<P3BlobstoreTypesIncomingValueConsumeAsync, Cancellable>::start_access(
+                    accessor,
+                    accessor.getter(),
+                    HostRequestNoInput {},
+                    DurableFunctionType::ReadRemote,
+                )
+                .await
+                .map_err(wasmtime::Error::from)?;
+
+            if !handle.is_live() {
+                match handle
+                    .replay_access(accessor, accessor.getter())
+                    .await
+                    .map_err(wasmtime::Error::from)?
+                {
+                    CallReplayOutcome::Replayed(response) => return Ok(response.contents),
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
+            let response = handle
+                .complete_access(
+                    accessor,
+                    accessor.getter(),
+                    HostResponseP3BlobstoreIncomingValueStream {
+                        contents: self.contents,
+                    },
+                )
+                .await
+                .map_err(wasmtime::Error::from)?;
+            Ok(response.contents)
+        }
+        .await;
+
+        let _ = self.result_tx.send(result);
+        Ok(())
+    }
+}
 
 impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
@@ -73,17 +236,6 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         Ok(Ok(value))
     }
 
-    async fn incoming_value_consume_async(
-        &mut self,
-        _self_: Resource<IncomingValue>,
-    ) -> anyhow::Result<Result<StreamReader<u8>, Error>> {
-        self.observe_function_call(
-            "blobstore::types::incoming_value",
-            "incoming_value_consume_async",
-        );
-        unimplemented!("incoming_value_consume_async is not yet implemented for WASI p3 streams")
-    }
-
     async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
         self.observe_function_call("blobstore::types::incoming_value", "size");
         let body = self
@@ -102,6 +254,35 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
             .table()
             .delete::<IncomingValueEntry>(rep)?;
         Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> HostIncomingValueWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    fn incoming_value_consume_async<T>(
+        mut host: Access<T, Self>,
+        self_: Resource<IncomingValue>,
+    ) -> anyhow::Result<Result<StreamReader<u8>, Error>> {
+        let contents = {
+            let ctx = host.get();
+            ctx.observe_function_call(
+                "blobstore::types::incoming_value",
+                "incoming_value_consume_async",
+            );
+            let body = ctx
+                .as_wasi_view()
+                .table()
+                .get::<IncomingValueEntry>(&self_)?
+                .body
+                .clone();
+            body.write().unwrap().drain(..).collect::<Vec<u8>>()
+        };
+
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        host.spawn(IncomingValueConsumeTask::<Ctx>::new(contents, result_tx));
+        Ok(Ok(StreamReader::new(
+            &mut host,
+            DeferredIncomingValueStreamProducer::new(result_rx),
+        )?))
     }
 }
 

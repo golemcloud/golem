@@ -14,16 +14,19 @@
 
 use golem_common::model::oplog::host_functions::{
     BlobstoreContainerClear, BlobstoreContainerDeleteObject, BlobstoreContainerDeleteObjects,
-    BlobstoreContainerGetData, BlobstoreContainerHasObject, BlobstoreContainerObjectInfo,
-    BlobstoreContainerWriteData,
+    BlobstoreContainerGetData, BlobstoreContainerHasObject, BlobstoreContainerListObject,
+    BlobstoreContainerObjectInfo, BlobstoreContainerWriteData,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestBlobStoreContainer, HostRequestBlobStoreContainerAndObject,
     HostRequestBlobStoreContainerAndObjects, HostRequestBlobStoreGetData,
     HostRequestBlobStoreWriteData, HostResponseBlobStoreContains, HostResponseBlobStoreGetData,
-    HostResponseBlobStoreObjectMetadata, HostResponseBlobStoreUnit,
+    HostResponseBlobStoreListObjects, HostResponseBlobStoreObjectMetadata,
+    HostResponseBlobStoreUnit,
 };
-use wasmtime::component::{Resource, StreamReader};
+use std::any::{Any, type_name};
+
+use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
 use wasmtime_wasi::IoView;
 
 use crate::durable_host::blobstore::classify_blob_store_error;
@@ -37,10 +40,81 @@ use crate::metrics::storage::{
     record_storage_objects_written,
 };
 use crate::preview2::wasi::blobstore::container::{
-    Container, ContainerMetadata, Error, Host, HostContainer, IncomingValue, ObjectMetadata,
-    ObjectName, OutgoingValue,
+    Container, ContainerMetadata, Error, Host, HostContainer, HostContainerWithStore,
+    IncomingValue, ObjectMetadata, ObjectName, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
+
+fn durable_worker_ctx_from_self<Ctx: WorkerCtx, T: 'static>(
+    data: &mut T,
+) -> &mut DurableWorkerCtx<Ctx> {
+    (data as &mut dyn Any)
+        .downcast_mut::<DurableWorkerCtx<Ctx>>()
+        .unwrap_or_else(|| {
+            panic!(
+                "durable blobstore wrapper registered with unexpected store data type: expected {}, got {}",
+                type_name::<DurableWorkerCtx<Ctx>>(),
+                type_name::<T>(),
+            )
+        })
+}
+
+async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
+    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    container: Resource<Container>,
+) -> anyhow::Result<Result<Vec<ObjectName>, Error>> {
+    let (environment_id, container_name, blob_store_service) = accessor.with(|mut host| {
+        let ctx = host.get();
+        let environment_id = ctx.state.owned_agent_id.environment_id();
+        let container_name = ctx
+            .as_wasi_view()
+            .table()
+            .get::<ContainerEntry>(&container)
+            .map(|container_entry| container_entry.name.clone())?;
+        Ok::<_, anyhow::Error>((
+            environment_id,
+            container_name,
+            ctx.state.blob_store_service.clone(),
+        ))
+    })?;
+
+    let mut handle = CallHandle::<BlobstoreContainerListObject, NotCancellable>::start_access(
+        accessor,
+        durable_worker_ctx_from_self::<Ctx, T>,
+        HostRequestBlobStoreContainer {
+            container: container_name.clone(),
+        },
+        DurableFunctionType::ReadRemote,
+    )
+    .await?;
+
+    let result = 'resp: {
+        if !handle.is_live() {
+            match handle
+                .replay_access(accessor, durable_worker_ctx_from_self::<Ctx, T>)
+                .await?
+            {
+                CallReplayOutcome::Replayed(response) => break 'resp response,
+                CallReplayOutcome::Incomplete(live) => handle = live,
+            }
+        }
+
+        let result = blob_store_service
+            .list_objects(environment_id, container_name)
+            .await;
+        handle
+            .complete_access(
+                accessor,
+                durable_worker_ctx_from_self::<Ctx, T>,
+                HostResponseBlobStoreListObjects {
+                    result: result.map_err(|err| err.to_string()),
+                },
+            )
+            .await?
+    };
+
+    Ok(result.result)
+}
 
 impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     async fn name(
@@ -230,14 +304,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .await?
         };
         Ok(result.result)
-    }
-
-    async fn list_objects(
-        &mut self,
-        _container: Resource<Container>,
-    ) -> anyhow::Result<Result<StreamReader<ObjectName>, Error>> {
-        self.observe_function_call("blobstore::container::container", "list_objects");
-        unimplemented!("list_objects is not yet implemented for WASI p3 streams")
     }
 
     async fn delete_object(
@@ -577,6 +643,20 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .delete::<ContainerEntry>(container)?;
         Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> HostContainerWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn list_objects<T: Send + 'static>(
+        accessor: &Accessor<T, Self>,
+        container: Resource<Container>,
+    ) -> anyhow::Result<Result<StreamReader<ObjectName>, Error>> {
+        let result = list_objects_durable_access(accessor, container).await?;
+
+        match result {
+            Ok(objects) => accessor.with(|mut host| Ok(Ok(StreamReader::new(&mut host, objects)?))),
+            Err(err) => Ok(Err(err)),
+        }
     }
 }
 

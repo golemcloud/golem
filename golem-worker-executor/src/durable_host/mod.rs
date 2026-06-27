@@ -307,6 +307,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     wasi: Arc<Mutex<WasiCtx>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     io_ctx: Arc<Mutex<IoCtx>>,
+    stdin: ManagedStdIn,
     wasi_http: WasiHttpCtx,
     http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
@@ -509,7 +510,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             worker_dir.path().to_path_buf(),
-            stdin,
+            stdin.clone(),
             stdout,
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
@@ -526,6 +527,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
             io_ctx: Arc::new(Mutex::new(io_ctx)),
+            stdin,
             wasi_http,
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
@@ -905,6 +907,69 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn reserve_filesystem_storage(&mut self, new_bytes: u64) -> anyhow::Result<()> {
         self.check_filesystem_storage_quota(new_bytes)?;
         self.acquire_filesystem_storage_space(new_bytes).await
+    }
+
+    pub(crate) fn prepare_filesystem_storage_reservation(
+        &mut self,
+        new_bytes: u64,
+    ) -> anyhow::Result<Option<Arc<Worker<Ctx>>>> {
+        if new_bytes == 0 || self.state.is_replay() {
+            return Ok(None);
+        }
+        self.check_filesystem_storage_quota(new_bytes)?;
+        self.state.current_filesystem_storage_usage += new_bytes;
+        Ok(Some(self.public_state.worker()))
+    }
+
+    pub(crate) fn rollback_filesystem_storage_reservation(&mut self, new_bytes: u64) {
+        if new_bytes == 0 || self.state.is_replay() {
+            return;
+        }
+        self.state.current_filesystem_storage_usage -= new_bytes;
+    }
+
+    pub(crate) fn finish_filesystem_storage_reservation(&mut self, new_bytes: u64) {
+        if new_bytes == 0 || self.state.is_replay() {
+            return;
+        }
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_written(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            new_bytes,
+        );
+    }
+
+    pub(crate) fn prepare_filesystem_storage_release(
+        &mut self,
+        freed_bytes: u64,
+    ) -> Option<(Arc<Worker<Ctx>>, u64)> {
+        if freed_bytes == 0 || self.state.is_replay() {
+            return None;
+        }
+        let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
+        if freed_bytes == 0 {
+            None
+        } else {
+            self.state.current_filesystem_storage_usage -= freed_bytes;
+            Some((self.public_state.worker(), freed_bytes))
+        }
+    }
+
+    pub(crate) fn finish_filesystem_storage_release(&mut self, freed_bytes: u64) {
+        if freed_bytes == 0 || self.state.is_replay() {
+            return;
+        }
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_deleted(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            freed_bytes,
+        );
     }
 
     pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
@@ -1447,7 +1512,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } else {
                 DurableScopeKind::NonIdempotentWrite
             };
-            self.state.push_durable_scope(result, kind, scope_replay_handle);
+            self.state
+                .push_durable_scope(result, kind, scope_replay_handle);
 
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
@@ -1852,8 +1918,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }?;
 
             // The (possibly re-begun) transaction scope is open until commit/rollback.
-            self.state
-                .push_durable_scope(result, DurableScopeKind::Transaction, scope_replay_handle);
+            self.state.push_durable_scope(
+                result,
+                DurableScopeKind::Transaction,
+                scope_replay_handle,
+            );
             self.state.current_retry_point = original_begin_index;
 
             Ok((result, tx))
@@ -2847,6 +2916,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
+        if self.state.is_live() && self.state.snapshotting_mode.is_none() {
+            if let Err(err) = concurrent::drain_queued_dropped_call_events(self).await {
+                error!(
+                    "failed to drain dropped durable calls before invocation failure entry: {err}"
+                );
+                return RetryDecision::None;
+            }
+        }
+
         if let TrapType::Error { error, .. } = trap_type {
             match error {
                 AgentError::EphemeralSleepTooLong(_) => {
@@ -2984,6 +3062,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
+                concurrent::drain_queued_dropped_call_events(self)
+                    .await
+                    .map_err(|err| err.source)?;
+
                 let component_revision = output.component_revision.ok_or_else(|| {
                     WorkerExecutorError::runtime(
                         "component_revision missing in AgentInvocationOutput during replay",
@@ -5070,6 +5152,12 @@ impl PrivateDurableWorkerState {
             .iter_mut()
             .find(|scope| scope.start_index == start_index)
             .and_then(|scope| scope.replay_end.take())
+    }
+
+    fn is_durable_scope_open(&self, start_index: OplogIndex) -> bool {
+        self.active_durable_scopes
+            .iter()
+            .any(|scope| scope.start_index == start_index)
     }
 
     /// Closes the durable scope opened at `start_index`. Durable scopes are not strictly nested

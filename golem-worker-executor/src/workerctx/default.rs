@@ -698,10 +698,6 @@ impl HostFutureInvokeResult for Context {
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
     }
-
-    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
-    }
 }
 
 impl HostCancellationToken for Context {

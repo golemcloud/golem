@@ -51,10 +51,12 @@ use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
+use wasmtime_wasi::p2::{FsError, SocketError};
+use wasmtime_wasi::p3::bindings::cli::types as p3_cli_types;
+use wasmtime_wasi::p3::bindings::filesystem as p3_filesystem;
 use wasmtime_wasi::p3::bindings::sockets::{
     ip_name_lookup as p3_ip_name_lookup, types as p3_socket_types,
 };
-use wasmtime_wasi::p2::{FsError, SocketError};
 use wasmtime_wasi_http::FieldMap;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
@@ -132,7 +134,10 @@ impl From<SerializableDateTime> for wasmtime_wasi::p2::bindings::clocks::wall_cl
 
 impl From<SerializableDateTime> for SystemTime {
     fn from(value: SerializableDateTime) -> Self {
-        SystemTime::UNIX_EPOCH.add(Duration::new(value.seconds.max(0) as u64, value.nanoseconds))
+        SystemTime::UNIX_EPOCH.add(Duration::new(
+            value.seconds.max(0) as u64,
+            value.nanoseconds,
+        ))
     }
 }
 
@@ -202,6 +207,288 @@ impl From<FileSystemError> for FsError {
         match value {
             FileSystemError::ErrorCode(SerializableFsErrorCode(error_code)) => error_code.into(),
             FileSystemError::Generic(error) => FsError::trap(wasmtime::Error::msg(error)),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3FileSystemError {
+    ErrorCode(SerializableP3FsErrorCode),
+    Generic(String),
+}
+
+impl SerializableP3FileSystemError {
+    pub fn from_result(result: Result<p3_filesystem::types::ErrorCode, String>) -> Self {
+        match result {
+            Ok(error_code) => Self::ErrorCode(SerializableP3FsErrorCode::from(error_code)),
+            Err(msg) => SerializableP3FileSystemError::Generic(msg),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3CliErrorCode {
+    Io,
+    IllegalByteSequence,
+    Pipe,
+}
+
+impl From<p3_cli_types::ErrorCode> for SerializableP3CliErrorCode {
+    fn from(value: p3_cli_types::ErrorCode) -> Self {
+        match value {
+            p3_cli_types::ErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
+            p3_cli_types::ErrorCode::Pipe => Self::Pipe,
+            _ => Self::Io,
+        }
+    }
+}
+
+impl From<SerializableP3CliErrorCode> for p3_cli_types::ErrorCode {
+    fn from(value: SerializableP3CliErrorCode) -> Self {
+        match value {
+            SerializableP3CliErrorCode::Io => Self::Io,
+            SerializableP3CliErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
+            SerializableP3CliErrorCode::Pipe => Self::Pipe,
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3FsErrorCode {
+    Access,
+    Already,
+    BadDescriptor,
+    Busy,
+    Deadlock,
+    Quota,
+    Exist,
+    FileTooLarge,
+    IllegalByteSequence,
+    InProgress,
+    Interrupted,
+    Invalid,
+    Io,
+    IsDirectory,
+    Loop,
+    TooManyLinks,
+    MessageSize,
+    NameTooLong,
+    NoDevice,
+    NoEntry,
+    NoLock,
+    InsufficientMemory,
+    InsufficientSpace,
+    NotDirectory,
+    NotEmpty,
+    NotRecoverable,
+    Unsupported,
+    NoTty,
+    NoSuchDevice,
+    Overflow,
+    NotPermitted,
+    Pipe,
+    ReadOnly,
+    InvalidSeek,
+    TextFileBusy,
+    CrossDevice,
+    Other(Option<String>),
+}
+
+impl From<p3_filesystem::types::ErrorCode> for SerializableP3FsErrorCode {
+    fn from(value: p3_filesystem::types::ErrorCode) -> Self {
+        match value {
+            p3_filesystem::types::ErrorCode::Access => Self::Access,
+            p3_filesystem::types::ErrorCode::Already => Self::Already,
+            p3_filesystem::types::ErrorCode::BadDescriptor => Self::BadDescriptor,
+            p3_filesystem::types::ErrorCode::Busy => Self::Busy,
+            p3_filesystem::types::ErrorCode::Deadlock => Self::Deadlock,
+            p3_filesystem::types::ErrorCode::Quota => Self::Quota,
+            p3_filesystem::types::ErrorCode::Exist => Self::Exist,
+            p3_filesystem::types::ErrorCode::FileTooLarge => Self::FileTooLarge,
+            p3_filesystem::types::ErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
+            p3_filesystem::types::ErrorCode::InProgress => Self::InProgress,
+            p3_filesystem::types::ErrorCode::Interrupted => Self::Interrupted,
+            p3_filesystem::types::ErrorCode::Invalid => Self::Invalid,
+            p3_filesystem::types::ErrorCode::Io => Self::Io,
+            p3_filesystem::types::ErrorCode::IsDirectory => Self::IsDirectory,
+            p3_filesystem::types::ErrorCode::Loop => Self::Loop,
+            p3_filesystem::types::ErrorCode::TooManyLinks => Self::TooManyLinks,
+            p3_filesystem::types::ErrorCode::MessageSize => Self::MessageSize,
+            p3_filesystem::types::ErrorCode::NameTooLong => Self::NameTooLong,
+            p3_filesystem::types::ErrorCode::NoDevice => Self::NoDevice,
+            p3_filesystem::types::ErrorCode::NoEntry => Self::NoEntry,
+            p3_filesystem::types::ErrorCode::NoLock => Self::NoLock,
+            p3_filesystem::types::ErrorCode::InsufficientMemory => Self::InsufficientMemory,
+            p3_filesystem::types::ErrorCode::InsufficientSpace => Self::InsufficientSpace,
+            p3_filesystem::types::ErrorCode::NotDirectory => Self::NotDirectory,
+            p3_filesystem::types::ErrorCode::NotEmpty => Self::NotEmpty,
+            p3_filesystem::types::ErrorCode::NotRecoverable => Self::NotRecoverable,
+            p3_filesystem::types::ErrorCode::Unsupported => Self::Unsupported,
+            p3_filesystem::types::ErrorCode::NoTty => Self::NoTty,
+            p3_filesystem::types::ErrorCode::NoSuchDevice => Self::NoSuchDevice,
+            p3_filesystem::types::ErrorCode::Overflow => Self::Overflow,
+            p3_filesystem::types::ErrorCode::NotPermitted => Self::NotPermitted,
+            p3_filesystem::types::ErrorCode::Pipe => Self::Pipe,
+            p3_filesystem::types::ErrorCode::ReadOnly => Self::ReadOnly,
+            p3_filesystem::types::ErrorCode::InvalidSeek => Self::InvalidSeek,
+            p3_filesystem::types::ErrorCode::TextFileBusy => Self::TextFileBusy,
+            p3_filesystem::types::ErrorCode::CrossDevice => Self::CrossDevice,
+            p3_filesystem::types::ErrorCode::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+impl From<SerializableP3FsErrorCode> for p3_filesystem::types::ErrorCode {
+    fn from(value: SerializableP3FsErrorCode) -> Self {
+        match value {
+            SerializableP3FsErrorCode::Access => Self::Access,
+            SerializableP3FsErrorCode::Already => Self::Already,
+            SerializableP3FsErrorCode::BadDescriptor => Self::BadDescriptor,
+            SerializableP3FsErrorCode::Busy => Self::Busy,
+            SerializableP3FsErrorCode::Deadlock => Self::Deadlock,
+            SerializableP3FsErrorCode::Quota => Self::Quota,
+            SerializableP3FsErrorCode::Exist => Self::Exist,
+            SerializableP3FsErrorCode::FileTooLarge => Self::FileTooLarge,
+            SerializableP3FsErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
+            SerializableP3FsErrorCode::InProgress => Self::InProgress,
+            SerializableP3FsErrorCode::Interrupted => Self::Interrupted,
+            SerializableP3FsErrorCode::Invalid => Self::Invalid,
+            SerializableP3FsErrorCode::Io => Self::Io,
+            SerializableP3FsErrorCode::IsDirectory => Self::IsDirectory,
+            SerializableP3FsErrorCode::Loop => Self::Loop,
+            SerializableP3FsErrorCode::TooManyLinks => Self::TooManyLinks,
+            SerializableP3FsErrorCode::MessageSize => Self::MessageSize,
+            SerializableP3FsErrorCode::NameTooLong => Self::NameTooLong,
+            SerializableP3FsErrorCode::NoDevice => Self::NoDevice,
+            SerializableP3FsErrorCode::NoEntry => Self::NoEntry,
+            SerializableP3FsErrorCode::NoLock => Self::NoLock,
+            SerializableP3FsErrorCode::InsufficientMemory => Self::InsufficientMemory,
+            SerializableP3FsErrorCode::InsufficientSpace => Self::InsufficientSpace,
+            SerializableP3FsErrorCode::NotDirectory => Self::NotDirectory,
+            SerializableP3FsErrorCode::NotEmpty => Self::NotEmpty,
+            SerializableP3FsErrorCode::NotRecoverable => Self::NotRecoverable,
+            SerializableP3FsErrorCode::Unsupported => Self::Unsupported,
+            SerializableP3FsErrorCode::NoTty => Self::NoTty,
+            SerializableP3FsErrorCode::NoSuchDevice => Self::NoSuchDevice,
+            SerializableP3FsErrorCode::Overflow => Self::Overflow,
+            SerializableP3FsErrorCode::NotPermitted => Self::NotPermitted,
+            SerializableP3FsErrorCode::Pipe => Self::Pipe,
+            SerializableP3FsErrorCode::ReadOnly => Self::ReadOnly,
+            SerializableP3FsErrorCode::InvalidSeek => Self::InvalidSeek,
+            SerializableP3FsErrorCode::TextFileBusy => Self::TextFileBusy,
+            SerializableP3FsErrorCode::CrossDevice => Self::CrossDevice,
+            SerializableP3FsErrorCode::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3DescriptorType {
+    BlockDevice,
+    CharacterDevice,
+    Directory,
+    Fifo,
+    SymbolicLink,
+    RegularFile,
+    Socket,
+    Other(Option<String>),
+}
+
+impl From<p3_filesystem::types::DescriptorType> for SerializableP3DescriptorType {
+    fn from(value: p3_filesystem::types::DescriptorType) -> Self {
+        match value {
+            p3_filesystem::types::DescriptorType::BlockDevice => Self::BlockDevice,
+            p3_filesystem::types::DescriptorType::CharacterDevice => Self::CharacterDevice,
+            p3_filesystem::types::DescriptorType::Directory => Self::Directory,
+            p3_filesystem::types::DescriptorType::Fifo => Self::Fifo,
+            p3_filesystem::types::DescriptorType::SymbolicLink => Self::SymbolicLink,
+            p3_filesystem::types::DescriptorType::RegularFile => Self::RegularFile,
+            p3_filesystem::types::DescriptorType::Socket => Self::Socket,
+            p3_filesystem::types::DescriptorType::Other(other) => Self::Other(other),
+        }
+    }
+}
+
+impl From<SerializableP3DescriptorType> for p3_filesystem::types::DescriptorType {
+    fn from(value: SerializableP3DescriptorType) -> Self {
+        match value {
+            SerializableP3DescriptorType::BlockDevice => Self::BlockDevice,
+            SerializableP3DescriptorType::CharacterDevice => Self::CharacterDevice,
+            SerializableP3DescriptorType::Directory => Self::Directory,
+            SerializableP3DescriptorType::Fifo => Self::Fifo,
+            SerializableP3DescriptorType::SymbolicLink => Self::SymbolicLink,
+            SerializableP3DescriptorType::RegularFile => Self::RegularFile,
+            SerializableP3DescriptorType::Socket => Self::Socket,
+            SerializableP3DescriptorType::Other(other) => Self::Other(other),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3DirectoryEntry {
+    pub type_: SerializableP3DescriptorType,
+    pub name: String,
+}
+
+impl From<p3_filesystem::types::DirectoryEntry> for SerializableP3DirectoryEntry {
+    fn from(value: p3_filesystem::types::DirectoryEntry) -> Self {
+        Self {
+            type_: value.type_.into(),
+            name: value.name,
+        }
+    }
+}
+
+impl From<SerializableP3DirectoryEntry> for p3_filesystem::types::DirectoryEntry {
+    fn from(value: SerializableP3DirectoryEntry) -> Self {
+        Self {
+            type_: value.type_.into(),
+            name: value.name,
         }
     }
 }
@@ -1193,6 +1480,95 @@ impl Display for SerializableHttpMethod {
     }
 }
 
+/// Serializable form of a p3 `http::client::send` request head — the Start
+/// payload of the `P3HttpClientSend` oplog pair.
+///
+/// Records everything needed to identify and replay the outgoing request
+/// except the body bytes. The outgoing request body is a `stream<u8>` the guest
+/// writes; its bytes are owned by that stream's own durable wrapper (the
+/// outgoing-body stream path), so they are intentionally not duplicated here.
+/// Whether the consuming `send` already captures those outgoing bytes is a
+/// step-3 open question; this payload assumes not and leaves them out.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3HttpClientSend {
+    pub method: SerializableHttpMethod,
+    pub scheme: Option<SerializableP3HttpScheme>,
+    pub authority: Option<String>,
+    pub path_with_query: Option<String>,
+    pub headers: HashMap<String, Vec<Vec<u8>>>,
+    pub options: Option<SerializableP3HttpRequestOptions>,
+}
+
+/// Serializable form of a p3 request `Scheme`. `http::uri::Scheme` only ever
+/// holds `http`/`https` or an arbitrary other scheme string.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpScheme {
+    Http,
+    Https,
+    Other(String),
+}
+
+/// Serializable form of `wasi:http/types.request-options`.
+///
+/// All three timeouts are `std::time::Duration`s (unsigned), stored as
+/// nanoseconds. The p3 no-clamp rule applies to *signed* instants, so it does
+/// not apply here; durations are stored and replayed verbatim.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3HttpRequestOptions {
+    pub connect_timeout_nanos: Option<u64>,
+    pub first_byte_timeout_nanos: Option<u64>,
+    pub between_bytes_timeout_nanos: Option<u64>,
+}
+
+/// Result of a p3 `http::client::send` — the End payload of the
+/// `P3HttpClientSend` oplog pair. This is a result/enum rather than a bare
+/// status+headers so that a replayed transport/protocol `ErrorCode` (the gap
+/// blocker #2 closes) round-trips back to the guest exactly as it did live.
+///
+/// Only the response *head* (status + headers) lives here. The body and
+/// trailers arrive after the body closes and are replayed by the separate
+/// `consume_body` payload pair (step 5), not by this result. Hard traps still
+/// escape via `CallHandle::trap`.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpClientSendResult {
+    Success(SerializableResponseHeaders),
+    HttpError(SerializableHttpErrorCode),
+}
+
 /// A subset of AgentMetadata visible for guests (and serializable to oplog)
 #[derive(
     Debug,
@@ -1510,6 +1886,78 @@ impl From<SerializableP3IpAddresses> for Vec<p3_socket_types::IpAddress> {
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
+pub struct SerializableP3IpSocketAddress {
+    pub address: SerializableP3IpAddress,
+    pub port: u16,
+    pub flow_info: Option<u32>,
+    pub scope_id: Option<u32>,
+}
+
+impl From<p3_socket_types::IpSocketAddress> for SerializableP3IpSocketAddress {
+    fn from(value: p3_socket_types::IpSocketAddress) -> Self {
+        match value {
+            p3_socket_types::IpSocketAddress::Ipv4(address) => Self {
+                address: p3_socket_types::IpAddress::Ipv4(address.address).into(),
+                port: address.port,
+                flow_info: None,
+                scope_id: None,
+            },
+            p3_socket_types::IpSocketAddress::Ipv6(address) => Self {
+                address: p3_socket_types::IpAddress::Ipv6(address.address).into(),
+                port: address.port,
+                flow_info: Some(address.flow_info),
+                scope_id: Some(address.scope_id),
+            },
+        }
+    }
+}
+
+impl From<SerializableP3IpSocketAddress> for p3_socket_types::IpSocketAddress {
+    fn from(value: SerializableP3IpSocketAddress) -> Self {
+        match p3_socket_types::IpAddress::from(value.address) {
+            p3_socket_types::IpAddress::Ipv4(address) => {
+                p3_socket_types::IpSocketAddress::Ipv4(p3_socket_types::Ipv4SocketAddress {
+                    port: value.port,
+                    address,
+                })
+            }
+            p3_socket_types::IpAddress::Ipv6(address) => {
+                p3_socket_types::IpSocketAddress::Ipv6(p3_socket_types::Ipv6SocketAddress {
+                    port: value.port,
+                    flow_info: value.flow_info.unwrap_or_default(),
+                    address,
+                    scope_id: value.scope_id.unwrap_or_default(),
+                })
+            }
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3UdpDatagram {
+    pub data: Vec<u8>,
+    pub remote_address: SerializableP3IpSocketAddress,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
 pub enum SerializableP3IpNameLookupError {
     AccessDenied,
     InvalidArgument,
@@ -1549,6 +1997,78 @@ impl From<SerializableP3IpNameLookupError> for p3_ip_name_lookup::ErrorCode {
                 Self::PermanentResolverFailure
             }
             SerializableP3IpNameLookupError::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3SocketErrorCode {
+    AccessDenied,
+    NotSupported,
+    InvalidArgument,
+    OutOfMemory,
+    Timeout,
+    InvalidState,
+    AddressNotBindable,
+    AddressInUse,
+    RemoteUnreachable,
+    ConnectionRefused,
+    ConnectionBroken,
+    ConnectionReset,
+    ConnectionAborted,
+    DatagramTooLarge,
+    Other(Option<String>),
+}
+
+impl From<p3_socket_types::ErrorCode> for SerializableP3SocketErrorCode {
+    fn from(value: p3_socket_types::ErrorCode) -> Self {
+        match value {
+            p3_socket_types::ErrorCode::AccessDenied => Self::AccessDenied,
+            p3_socket_types::ErrorCode::NotSupported => Self::NotSupported,
+            p3_socket_types::ErrorCode::InvalidArgument => Self::InvalidArgument,
+            p3_socket_types::ErrorCode::OutOfMemory => Self::OutOfMemory,
+            p3_socket_types::ErrorCode::Timeout => Self::Timeout,
+            p3_socket_types::ErrorCode::InvalidState => Self::InvalidState,
+            p3_socket_types::ErrorCode::AddressNotBindable => Self::AddressNotBindable,
+            p3_socket_types::ErrorCode::AddressInUse => Self::AddressInUse,
+            p3_socket_types::ErrorCode::RemoteUnreachable => Self::RemoteUnreachable,
+            p3_socket_types::ErrorCode::ConnectionRefused => Self::ConnectionRefused,
+            p3_socket_types::ErrorCode::ConnectionBroken => Self::ConnectionBroken,
+            p3_socket_types::ErrorCode::ConnectionReset => Self::ConnectionReset,
+            p3_socket_types::ErrorCode::ConnectionAborted => Self::ConnectionAborted,
+            p3_socket_types::ErrorCode::DatagramTooLarge => Self::DatagramTooLarge,
+            p3_socket_types::ErrorCode::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+impl From<SerializableP3SocketErrorCode> for p3_socket_types::ErrorCode {
+    fn from(value: SerializableP3SocketErrorCode) -> Self {
+        match value {
+            SerializableP3SocketErrorCode::AccessDenied => Self::AccessDenied,
+            SerializableP3SocketErrorCode::NotSupported => Self::NotSupported,
+            SerializableP3SocketErrorCode::InvalidArgument => Self::InvalidArgument,
+            SerializableP3SocketErrorCode::OutOfMemory => Self::OutOfMemory,
+            SerializableP3SocketErrorCode::Timeout => Self::Timeout,
+            SerializableP3SocketErrorCode::InvalidState => Self::InvalidState,
+            SerializableP3SocketErrorCode::AddressNotBindable => Self::AddressNotBindable,
+            SerializableP3SocketErrorCode::AddressInUse => Self::AddressInUse,
+            SerializableP3SocketErrorCode::RemoteUnreachable => Self::RemoteUnreachable,
+            SerializableP3SocketErrorCode::ConnectionRefused => Self::ConnectionRefused,
+            SerializableP3SocketErrorCode::ConnectionBroken => Self::ConnectionBroken,
+            SerializableP3SocketErrorCode::ConnectionReset => Self::ConnectionReset,
+            SerializableP3SocketErrorCode::ConnectionAborted => Self::ConnectionAborted,
+            SerializableP3SocketErrorCode::DatagramTooLarge => Self::DatagramTooLarge,
+            SerializableP3SocketErrorCode::Other(error) => Self::Other(error),
         }
     }
 }

@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable, Resolution};
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, Cancellable, DropEvent, NotCancellable,
+    end_durable_function_access,
+};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{
@@ -21,7 +24,6 @@ use crate::preview2::golem::agent::host::{
 };
 use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::Error;
@@ -29,7 +31,6 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
@@ -40,11 +41,11 @@ use golem_common::model::oplog::host_functions::{
 };
 use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
-    HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
-    HostResponse, HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait,
-    HostResponseGolemRpcInvokeGet, HostResponseGolemRpcScheduledInvocation,
-    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, PersistenceLevel,
+    DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
+    HostRequestGolemRpcScheduledInvocationCancellation, HostResponseGolemRpcCreate,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
+    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
+    HostResponseGolemRpcUnitOrFailure, OplogEntry,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
@@ -61,6 +62,7 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{Instrument, error};
 use wasmtime::component::{Accessor, HasSelf, Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
@@ -679,7 +681,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             let fut = self.table().push(FutureInvokeResultEntry {
                 payload: Box::new(FutureInvokeResultState::Pending {
-                    handle,
+                    handle: Arc::new(tokio::sync::Mutex::new(handle)),
                     request,
                     span_id: span.span_id().clone(),
                     begin_index,
@@ -885,12 +887,747 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     }
 }
 
+type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
+type FutureInvokeTaskHandle =
+    Arc<tokio::sync::Mutex<AbortOnDropJoinHandle<FutureInvokeTaskResult>>>;
+type FutureInvokeGetResult = Result<Result<SchemaValue, RpcError>, Error>;
+
+struct FutureInvokeGetSnapshot {
+    request: HostRequestGolemRpcInvoke,
+    begin_index: OplogIndex,
+    span_id: SpanId,
+    cancelled: bool,
+}
+
+struct FutureInvokeDropSnapshot {
+    request: Option<HostRequestGolemRpcInvoke>,
+    begin_index: OplogIndex,
+    span_id: SpanId,
+}
+
+struct FutureInvokeParentScopeGuard {
+    sink: Option<UnboundedSender<DropEvent>>,
+    begin_index: OplogIndex,
+    span_id: SpanId,
+    armed: bool,
+}
+
+impl FutureInvokeParentScopeGuard {
+    fn armed(
+        sink: Option<UnboundedSender<DropEvent>>,
+        begin_index: OplogIndex,
+        span_id: SpanId,
+    ) -> Self {
+        Self {
+            sink,
+            begin_index,
+            span_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for FutureInvokeParentScopeGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(sink) = &self.sink {
+            let _ = sink.send(DropEvent::CloseDurableScope {
+                function_type: DurableFunctionType::WriteRemote,
+                begin_index: self.begin_index,
+                span_id: Some(self.span_id.clone()),
+            });
+        }
+    }
+}
+
+struct DeferredFutureInvoke {
+    remote_agent_id: OwnedAgentId,
+    self_agent_id: AgentId,
+    self_created_by: AccountId,
+    env: Vec<(String, String)>,
+    method_name: String,
+    method_parameters: SchemaValue,
+    idempotency_key: IdempotencyKey,
+    span_id: SpanId,
+    begin_index: OplogIndex,
+    auth_ctx: AuthCtx,
+}
+
+enum FutureInvokeGetActionPlan {
+    Ready(FutureInvokeGetResult),
+    Await(FutureInvokeTaskHandle),
+    Deferred(DeferredFutureInvoke),
+}
+
+enum FutureInvokeGetAction {
+    Ready(FutureInvokeGetResult),
+    Await(FutureInvokeTaskHandle),
+}
+
+enum FutureInvokeGetActionResult {
+    Ready(FutureInvokeGetResult),
+    Awaited(FutureInvokeTaskResult),
+}
+
+fn future_invoke_request_from_deferred(
+    deferred: &DeferredFutureInvoke,
+) -> HostRequestGolemRpcInvoke {
+    HostRequestGolemRpcInvoke {
+        remote_agent_id: deferred.remote_agent_id.agent_id(),
+        idempotency_key: deferred.idempotency_key.clone(),
+        method_name: deferred.method_name.clone(),
+        input: deferred.method_parameters.clone(),
+        remote_agent_type: None,
+        remote_agent_parameters: None,
+    }
+}
+
+fn snapshot_future_invoke_get<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: Resource<FutureInvokeResult>,
+) -> anyhow::Result<FutureInvokeGetSnapshot> {
+    let entry = ctx.table().get_mut(&this)?;
+    let state = entry
+        .payload
+        .as_any_mut()
+        .downcast_mut::<FutureInvokeResultState>()
+        .unwrap();
+
+    let begin_index = state.begin_index();
+    let span_id = state.span_id().clone();
+    let cancelled = matches!(state, FutureInvokeResultState::Cancelled { .. });
+    let request = match state {
+        FutureInvokeResultState::Pending { request, .. }
+        | FutureInvokeResultState::Completed { request, .. }
+        | FutureInvokeResultState::Cancelled { request, .. }
+        | FutureInvokeResultState::Consumed { request, .. } => request.clone(),
+        FutureInvokeResultState::Deferred {
+            remote_agent_id,
+            method_name,
+            method_parameters,
+            idempotency_key,
+            ..
+        } => HostRequestGolemRpcInvoke {
+            remote_agent_id: remote_agent_id.agent_id(),
+            idempotency_key: idempotency_key.clone(),
+            method_name: method_name.clone(),
+            input: method_parameters.clone(),
+            remote_agent_type: None,
+            remote_agent_parameters: None,
+        },
+    };
+
+    Ok(FutureInvokeGetSnapshot {
+        request,
+        begin_index,
+        span_id,
+        cancelled,
+    })
+}
+
+fn snapshot_future_invoke_drop<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: Resource<FutureInvokeResult>,
+) -> anyhow::Result<Option<FutureInvokeDropSnapshot>> {
+    let entry = ctx.table().get_mut(&this)?;
+    let state = entry
+        .payload
+        .as_any_mut()
+        .downcast_mut::<FutureInvokeResultState>()
+        .unwrap();
+
+    Ok(match state {
+        FutureInvokeResultState::Pending {
+            request,
+            span_id,
+            begin_index,
+            ..
+        }
+        | FutureInvokeResultState::Completed {
+            request,
+            span_id,
+            begin_index,
+            ..
+        } => Some(FutureInvokeDropSnapshot {
+            request: Some(request.clone()),
+            begin_index: *begin_index,
+            span_id: span_id.clone(),
+        }),
+        FutureInvokeResultState::Deferred {
+            remote_agent_id,
+            method_name,
+            method_parameters,
+            idempotency_key,
+            span_id,
+            begin_index,
+            ..
+        } => Some(FutureInvokeDropSnapshot {
+            request: Some(HostRequestGolemRpcInvoke {
+                remote_agent_id: remote_agent_id.agent_id(),
+                idempotency_key: idempotency_key.clone(),
+                method_name: method_name.clone(),
+                input: method_parameters.clone(),
+                remote_agent_type: None,
+                remote_agent_parameters: None,
+            }),
+            begin_index: *begin_index,
+            span_id: span_id.clone(),
+        }),
+        FutureInvokeResultState::Cancelled {
+            span_id,
+            begin_index,
+            ..
+        } => Some(FutureInvokeDropSnapshot {
+            request: None,
+            begin_index: *begin_index,
+            span_id: span_id.clone(),
+        }),
+        FutureInvokeResultState::Consumed { .. } => None,
+    })
+}
+
+fn future_invoke_parent_scope<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: Resource<FutureInvokeResult>,
+) -> anyhow::Result<Option<(OplogIndex, SpanId)>> {
+    let entry = ctx.table().get_mut(&this)?;
+    let state = entry
+        .payload
+        .as_any_mut()
+        .downcast_mut::<FutureInvokeResultState>()
+        .unwrap();
+
+    Ok(match state {
+        FutureInvokeResultState::Consumed { .. } => None,
+        state => Some((state.begin_index(), state.span_id().clone())),
+    })
+}
+
+fn take_future_invoke_get_action_plan<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: Resource<FutureInvokeResult>,
+) -> anyhow::Result<FutureInvokeGetActionPlan> {
+    let entry = ctx.table().get_mut(&this)?;
+    let state = entry
+        .payload
+        .as_any_mut()
+        .downcast_mut::<FutureInvokeResultState>()
+        .unwrap();
+
+    match state {
+        FutureInvokeResultState::Consumed { .. } => {
+            let message = "future-invoke-result already consumed";
+            Ok(FutureInvokeGetActionPlan::Ready(Err(anyhow::Error::new(
+                ClassifiedHostError {
+                    kind: HostFailureKind::Permanent,
+                    message: message.to_string(),
+                },
+            ))))
+        }
+        FutureInvokeResultState::Pending {
+            request,
+            handle,
+            span_id,
+            begin_index,
+        } => {
+            let action = FutureInvokeGetActionPlan::Await(handle.clone());
+            let request = request.clone();
+            let span_id = span_id.clone();
+            let begin_index = *begin_index;
+            *state = FutureInvokeResultState::Consumed {
+                request,
+                span_id,
+                begin_index,
+            };
+            Ok(action)
+        }
+        FutureInvokeResultState::Completed {
+            request,
+            result,
+            span_id,
+            begin_index,
+        } => {
+            let result = future_invoke_task_result_to_get_result(result);
+            let request = request.clone();
+            let span_id = span_id.clone();
+            let begin_index = *begin_index;
+            *state = FutureInvokeResultState::Consumed {
+                request,
+                span_id,
+                begin_index,
+            };
+            Ok(FutureInvokeGetActionPlan::Ready(result))
+        }
+        FutureInvokeResultState::Cancelled {
+            request,
+            span_id,
+            begin_index,
+        } => {
+            let rpc_error = InternalRpcError::ProtocolError {
+                details: "Invocation cancelled".to_string(),
+            };
+            let request = request.clone();
+            let span_id = span_id.clone();
+            let begin_index = *begin_index;
+            *state = FutureInvokeResultState::Consumed {
+                request,
+                span_id,
+                begin_index,
+            };
+            Ok(FutureInvokeGetActionPlan::Ready(Ok(Err(rpc_error.into()))))
+        }
+        FutureInvokeResultState::Deferred {
+            remote_agent_id,
+            self_agent_id,
+            self_created_by,
+            env,
+            method_name,
+            method_parameters,
+            idempotency_key,
+            span_id,
+            begin_index,
+            auth_ctx,
+        } => {
+            let deferred = DeferredFutureInvoke {
+                remote_agent_id: remote_agent_id.clone(),
+                self_agent_id: self_agent_id.clone(),
+                self_created_by: *self_created_by,
+                env: env.clone(),
+                method_name: method_name.clone(),
+                method_parameters: method_parameters.clone(),
+                idempotency_key: idempotency_key.clone(),
+                span_id: span_id.clone(),
+                begin_index: *begin_index,
+                auth_ctx: auth_ctx.clone(),
+            };
+            Ok(FutureInvokeGetActionPlan::Deferred(deferred))
+        }
+    }
+}
+
+fn prepare_future_invoke_get_action<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: Resource<FutureInvokeResult>,
+) -> anyhow::Result<FutureInvokeGetAction> {
+    let this_rep = this.rep();
+    match take_future_invoke_get_action_plan(ctx, Resource::new_borrow(this_rep))? {
+        FutureInvokeGetActionPlan::Ready(result) => Ok(FutureInvokeGetAction::Ready(result)),
+        FutureInvokeGetActionPlan::Await(handle) => Ok(FutureInvokeGetAction::Await(handle)),
+        FutureInvokeGetActionPlan::Deferred(deferred) => {
+            let stack = ctx.clone_as_inherited_stack(&deferred.span_id);
+            let in_atomic_region = ctx.in_atomic_region();
+            let allow_retry = !in_atomic_region;
+            let retry_params = if allow_retry {
+                Some(TaskRetryParams {
+                    environment_state_service: ctx.state.environment_state_service.clone(),
+                    environment_id: ctx.state.owned_agent_id.environment_id,
+                    default_retry_policy: NamedRetryPolicy::default_from_config(
+                        &ctx.state.config.retry,
+                    ),
+                    agent_config_retry_policies: ctx.state.agent_config_retry_policies(),
+                    runtime_retry_policy_mutations: ctx
+                        .state
+                        .runtime_retry_policy_mutations
+                        .clone(),
+                    retry_properties: {
+                        let mut properties = RetryContext::rpc(
+                            "invoke-and-await",
+                            &deferred.remote_agent_id,
+                            &deferred.method_name,
+                        );
+                        if let Some(agent_id) = ctx.state.agent_id.as_ref() {
+                            properties.set(
+                                "agent-type",
+                                PredicateValue::Text(agent_id.agent_type.to_string()),
+                            );
+                            properties.set(
+                                "is-idempotent",
+                                PredicateValue::Boolean(ctx.state.assume_idempotence),
+                            );
+                        }
+                        properties
+                    },
+                    max_in_function_retry_delay: ctx
+                        .durable_execution_state()
+                        .max_in_function_retry_delay,
+                    worker: ctx.public_state.worker(),
+                    retry_point: deferred.begin_index,
+                    execution_status: ctx.execution_status.clone(),
+                })
+            } else {
+                None
+            };
+
+            let request = future_invoke_request_from_deferred(&deferred);
+            let span_id = deferred.span_id.clone();
+            let begin_index = deferred.begin_index;
+            let handle = spawn_rpc_task_with_retry(
+                ctx.rpc(),
+                deferred.remote_agent_id,
+                deferred.idempotency_key,
+                deferred.method_name,
+                deferred.method_parameters,
+                deferred.self_created_by,
+                deferred.self_agent_id,
+                deferred.env,
+                stack,
+                retry_params,
+                deferred.auth_ctx,
+            );
+            let handle = Arc::new(tokio::sync::Mutex::new(handle));
+            let this = Resource::<FutureInvokeResult>::new_borrow(this_rep);
+            let entry = ctx.table().get_mut(&this)?;
+            let state = entry
+                .payload
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
+                .unwrap();
+            if matches!(state, FutureInvokeResultState::Deferred { .. }) {
+                *state = FutureInvokeResultState::Consumed {
+                    request,
+                    span_id,
+                    begin_index,
+                };
+            }
+            Ok(FutureInvokeGetAction::Await(handle))
+        }
+    }
+}
+
+async fn run_future_invoke_get_action(
+    action: FutureInvokeGetAction,
+) -> FutureInvokeGetActionResult {
+    match action {
+        FutureInvokeGetAction::Ready(result) => FutureInvokeGetActionResult::Ready(result),
+        FutureInvokeGetAction::Await(handle) => {
+            let result = {
+                let mut handle = handle.lock().await;
+                (&mut *handle).await
+            };
+            FutureInvokeGetActionResult::Awaited(result)
+        }
+    }
+}
+
+fn future_invoke_task_result_to_get_result(
+    result: &FutureInvokeTaskResult,
+) -> FutureInvokeGetResult {
+    match result {
+        Ok(Ok(value)) => Ok(Ok(value.clone())),
+        Ok(Err(error)) => Ok(Err(error.clone().into())),
+        Err(err) => Err(anyhow::anyhow!(err.to_string())),
+    }
+}
+
+fn serializable_future_invoke_get_result(
+    result: &FutureInvokeGetResult,
+) -> SerializableInvokeResult {
+    match result {
+        Ok(Ok(value)) => SerializableInvokeResult::Completed(Ok(value.clone())),
+        Ok(Err(error)) => {
+            let error: InternalRpcError = error.clone().into();
+            SerializableInvokeResult::Completed(Err(error.into()))
+        }
+        Err(err) => SerializableInvokeResult::Failed(err.to_string()),
+    }
+}
+
+fn serializable_future_invoke_get_result_to_wire(
+    result: SerializableInvokeResult,
+) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
+    match result {
+        SerializableInvokeResult::Pending => Err(anyhow::anyhow!(
+            "future-invoke-result.get replayed a pending result"
+        )),
+        SerializableInvokeResult::Completed(result) => match result {
+            Ok(value) => Ok(Ok(schema_value_to_wire_output(&value))),
+            Err(error) => {
+                let rpc_error: InternalRpcError = error.into();
+                Ok(Err(rpc_error.into()))
+            }
+        },
+        SerializableInvokeResult::Failed(error) => Err(anyhow::anyhow!(error)),
+    }
+}
+
+fn mark_future_invoke_get_consumed<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: Resource<FutureInvokeResult>,
+    request: HostRequestGolemRpcInvoke,
+    span_id: SpanId,
+    begin_index: OplogIndex,
+) -> anyhow::Result<()> {
+    let entry = ctx.table().get_mut(&this)?;
+    let state = entry
+        .payload
+        .as_any_mut()
+        .downcast_mut::<FutureInvokeResultState>()
+        .unwrap();
+    *state = FutureInvokeResultState::Consumed {
+        request,
+        span_id,
+        begin_index,
+    };
+    Ok(())
+}
+
+async fn finish_span_access<T, Ctx: WorkerCtx>(
+    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    span_id: &SpanId,
+) -> Result<(), WorkerExecutorError> {
+    let (is_live, worker, replay_state) = accessor.with(|mut access| {
+        let ctx = access.get();
+        (
+            ctx.state.is_live(),
+            ctx.public_state.worker(),
+            ctx.state.replay_state.clone(),
+        )
+    });
+
+    if is_live {
+        worker
+            .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
+            .await;
+    } else {
+        crate::get_oplog_entry!(replay_state, OplogEntry::FinishSpan)?;
+    }
+
+    accessor.with(|mut access| {
+        let ctx = access.get();
+        if &ctx.state.current_span_id == span_id {
+            let span = ctx.state.invocation_context.get(span_id).map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "span {span_id} missing during finish_span replay: {err}"
+                ))
+            })?;
+            ctx.state.current_span_id = span
+                .parent()
+                .map(|p| p.span_id().clone())
+                .unwrap_or_else(|| ctx.state.invocation_context.root.span_id().clone());
+        }
+        let _ = ctx
+            .state
+            .invocation_context
+            .finish_span(span_id)
+            .map_err(WorkerExecutorError::runtime);
+        Ok(())
+    })
+}
+
+async fn finish_future_invoke_get<T, Ctx: WorkerCtx>(
+    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    begin_index: OplogIndex,
+    span_id: &SpanId,
+) -> anyhow::Result<()> {
+    end_durable_function_access(
+        accessor,
+        accessor.getter(),
+        DurableFunctionType::WriteRemote,
+        begin_index,
+        false,
+    )
+    .await
+    .map_err(anyhow::Error::from)?;
+    finish_span_access(accessor, span_id)
+        .await
+        .map_err(anyhow::Error::from)
+}
+
+async fn finish_future_invoke_if_open<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    begin_index: OplogIndex,
+    span_id: &SpanId,
+) -> anyhow::Result<()> {
+    if ctx.state.is_durable_scope_open(begin_index) {
+        ctx.end_function(&DurableFunctionType::WriteRemote, begin_index)
+            .await?;
+        ctx.finish_span(span_id).await?;
+    }
+    Ok(())
+}
+
+async fn finish_future_invoke_if_open_access<T, Ctx: WorkerCtx>(
+    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    begin_index: OplogIndex,
+    span_id: &SpanId,
+) -> anyhow::Result<()> {
+    let is_open = accessor.with(|mut access| access.get().state.is_durable_scope_open(begin_index));
+
+    if is_open {
+        end_durable_function_access(
+            accessor,
+            accessor.getter(),
+            DurableFunctionType::WriteRemote,
+            begin_index,
+            false,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+        finish_span_access(accessor, span_id)
+            .await
+            .map_err(anyhow::Error::from)?;
+    }
+
+    Ok(())
+}
+
 impl<Ctx: WorkerCtx> HostFutureInvokeResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn get<T: Send>(
-        _accessor: &Accessor<T, Self>,
-        _this: Resource<FutureInvokeResult>,
+        accessor: &Accessor<T, Self>,
+        this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
-        unimplemented!("HostFutureInvokeResultWithStore::get (p3 migration)")
+        let this_rep = this.rep();
+        let snapshot = accessor.with(|mut access| {
+            snapshot_future_invoke_get(access.get(), Resource::new_borrow(this_rep))
+        })?;
+
+        if snapshot.cancelled {
+            accessor.with(|mut access| {
+                mark_future_invoke_get_consumed(
+                    access.get(),
+                    Resource::new_borrow(this_rep),
+                    snapshot.request,
+                    snapshot.span_id.clone(),
+                    snapshot.begin_index,
+                )
+            })?;
+            let rpc_error = InternalRpcError::ProtocolError {
+                details: "Invocation cancelled".to_string(),
+            };
+            return Ok(Err(rpc_error.into()));
+        }
+
+        let function_type = DurableFunctionType::WriteRemoteBatched(Some(snapshot.begin_index));
+        let mut parent_scope_guard = FutureInvokeParentScopeGuard::armed(
+            accessor.with(|mut access| access.get().state.dropped_call_event_sender()),
+            snapshot.begin_index,
+            snapshot.span_id.clone(),
+        );
+        let mut call = match CallHandle::<GolemRpcFutureInvokeResultGet, Cancellable>::start_access(
+            accessor,
+            accessor.getter(),
+            snapshot.request.clone(),
+            function_type,
+        )
+        .await
+        {
+            Ok(call) => call,
+            Err(err) => {
+                parent_scope_guard.disarm();
+                return Err(anyhow::Error::from(err));
+            }
+        };
+
+        if !call.is_live() {
+            match call
+                .replay_access(accessor, accessor.getter())
+                .await
+                .map_err(anyhow::Error::from)?
+            {
+                CallReplayOutcome::Replayed(response) => {
+                    finish_future_invoke_get(accessor, snapshot.begin_index, &snapshot.span_id)
+                        .await?;
+                    parent_scope_guard.disarm();
+                    accessor.with(|mut access| {
+                        mark_future_invoke_get_consumed(
+                            access.get(),
+                            Resource::new_borrow(this_rep),
+                            snapshot.request,
+                            snapshot.span_id.clone(),
+                            snapshot.begin_index,
+                        )
+                    })?;
+                    return serializable_future_invoke_get_result_to_wire(response.result);
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
+
+        let action = accessor.with(|mut access| {
+            prepare_future_invoke_get_action(access.get(), Resource::new_borrow(this_rep))
+        })?;
+        let result = match run_future_invoke_get_action(action).await {
+            FutureInvokeGetActionResult::Ready(result) => result,
+            FutureInvokeGetActionResult::Awaited(task_result) => {
+                future_invoke_task_result_to_get_result(&task_result)
+            }
+        };
+        let response = HostResponseGolemRpcInvokeGet {
+            result: serializable_future_invoke_get_result(&result),
+        };
+        let response = call
+            .complete_access(accessor, accessor.getter(), response)
+            .await
+            .map_err(anyhow::Error::from)?;
+        finish_future_invoke_get(accessor, snapshot.begin_index, &snapshot.span_id).await?;
+        parent_scope_guard.disarm();
+        accessor.with(|mut access| {
+            mark_future_invoke_get_consumed(
+                access.get(),
+                Resource::new_borrow(this_rep),
+                snapshot.request,
+                snapshot.span_id.clone(),
+                snapshot.begin_index,
+            )
+        })?;
+
+        serializable_future_invoke_get_result_to_wire(response.result)
+    }
+
+    async fn drop<T>(
+        accessor: &Accessor<T, Self>,
+        this: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<()> {
+        let future_rep = this.rep();
+        let drop_snapshot = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.observe_function_call("golem::rpc::future-invoke-result", "drop");
+            snapshot_future_invoke_drop(ctx, Resource::new_borrow(future_rep))
+        })?;
+
+        if let Some(snapshot) = &drop_snapshot {
+            if let Some(request) = &snapshot.request {
+                let handle =
+                    CallHandle::<GolemRpcFutureInvokeResultGet, Cancellable>::start_access(
+                        accessor,
+                        accessor.getter(),
+                        request.clone(),
+                        DurableFunctionType::WriteRemoteBatched(Some(snapshot.begin_index)),
+                    )
+                    .await?;
+
+                handle
+                    .cancel_access(accessor, accessor.getter(), None)
+                    .await?;
+            }
+
+            finish_future_invoke_if_open_access(accessor, snapshot.begin_index, &snapshot.span_id)
+                .await?;
+        }
+
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            match ctx.table().delete(this) {
+                Ok(entry) => {
+                    for child_rep in &entry.child_pollables {
+                        ctx.state.rpc_pollable_to_parent.remove(child_rep);
+                    }
+                }
+                Err(ResourceTableError::HasChildren) => {
+                    let parent: Resource<FutureInvokeResult> = Resource::new_borrow(future_rep);
+                    ctx.table().get_mut(&parent)?.drop_pending = true;
+                }
+                Err(err) => return Err(err.into()),
+            }
+
+            Ok(())
+        })
     }
 }
 
@@ -1020,30 +1757,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             }
         }
 
-        Ok(())
-    }
-
-    async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        self.observe_function_call("golem::rpc::future-invoke-result", "drop");
-        let future_rep = this.rep();
-
-        // This only releases resource-table bookkeeping for the future and its child pollables (or
-        // defers the delete while children are still live). It deliberately does not close the
-        // invocation's durable scope: the `WriteRemote` scope opened at `begin_index` is ended by
-        // `get()` once it observes a terminal (non-pending) result — including the cancelled result
-        // produced after `future-invoke-result.cancel`. A future dropped before `get()` observes a
-        // terminal result leaves its scope `Start` open.
-        match self.table().delete(this) {
-            Ok(entry) => {
-                for child_rep in &entry.child_pollables {
-                    self.state.rpc_pollable_to_parent.remove(child_rep);
-                }
-            }
-            Err(ResourceTableError::HasChildren) => {
-                let parent: Resource<FutureInvokeResult> = Resource::new_borrow(future_rep);
-                self.table().get_mut(&parent)?.drop_pending = true;
-            }
-            Err(err) => return Err(err.into()),
+        if let Some((begin_index, span_id)) =
+            future_invoke_parent_scope(self, Resource::new_borrow(this.rep()))?
+        {
+            finish_future_invoke_if_open(self, begin_index, &span_id).await?;
         }
 
         Ok(())
@@ -1301,186 +2018,6 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     )
 }
 
-#[allow(clippy::type_complexity)]
-fn handle_completed_rpc_result(
-    entry: &mut FutureInvokeResultState,
-    span_id: &SpanId,
-) -> Result<
-    (
-        Result<Option<Result<SchemaValue, RpcError>>, anyhow::Error>,
-        HostRequestGolemRpcInvoke,
-        SerializableInvokeResult,
-        OplogIndex,
-    ),
-    WorkerExecutorError,
-> {
-    // Validate the state *before* any mutation so a corrupt/unexpected state
-    // does not leave a torn entry behind.
-    if !matches!(entry, FutureInvokeResultState::Completed { .. }) {
-        return Err(WorkerExecutorError::runtime(
-            "handle_completed_rpc_result called with state != FutureInvokeResultState::Completed",
-        ));
-    }
-    let request = match entry {
-        FutureInvokeResultState::Completed { request, .. } => request.clone(),
-        // Structurally excluded by the `matches!` check above, but we surface a runtime
-        // error instead of panicking to keep the worker-executor process alive on any
-        // unforeseen state-machine corruption.
-        _ => {
-            return Err(WorkerExecutorError::runtime(
-                "handle_completed_rpc_result: unexpected non-completed state after precheck",
-            ));
-        }
-    };
-    let begin_index = entry.begin_index();
-    let span_id = span_id.clone();
-    let result = std::mem::replace(
-        entry,
-        FutureInvokeResultState::Consumed {
-            request,
-            span_id,
-            begin_index,
-        },
-    );
-    if let FutureInvokeResultState::Completed {
-        request, result, ..
-    } = result
-    {
-        Ok(match result {
-            Ok(Ok(typed)) => (
-                Ok(Some(Ok(typed.clone()))),
-                request,
-                SerializableInvokeResult::Completed(Ok(typed)),
-                begin_index,
-            ),
-            Ok(Err(rpc_error)) => (
-                Ok(Some(Err(rpc_error.clone().into()))),
-                request,
-                SerializableInvokeResult::Completed(Err(rpc_error.into())),
-                begin_index,
-            ),
-            Err(err) => {
-                let serializable_err = err.to_string();
-                (
-                    Err(err),
-                    request,
-                    SerializableInvokeResult::Failed(serializable_err),
-                    begin_index,
-                )
-            }
-        })
-    } else {
-        // Unreachable in practice (we validated `entry` above and only swapped
-        // a different value out of the *same slot*), but kept for safety.
-        Err(WorkerExecutorError::runtime(
-            "handle_completed_rpc_result: extracted state was not FutureInvokeResultState::Completed",
-        ))
-    }
-}
-
-#[allow(clippy::type_complexity)]
-fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
-    entry: &mut FutureInvokeResultState,
-    rpc: Arc<dyn Rpc>,
-    stack: InvocationContextStack,
-    allow_retry: bool,
-    environment_state_service: Arc<dyn EnvironmentStateService>,
-    environment_id: EnvironmentId,
-    default_retry_policy: NamedRetryPolicy,
-    agent_config_retry_policies: Vec<NamedRetryPolicy>,
-    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
-    enrichment: Option<(&ParsedAgentId, bool)>,
-    max_in_function_retry_delay: Duration,
-    worker: Arc<crate::worker::Worker<Ctx>>,
-    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
-) -> anyhow::Result<(
-    Result<Option<Result<SchemaValue, RpcError>>, anyhow::Error>,
-    HostRequestGolemRpcInvoke,
-    SerializableInvokeResult,
-    OplogIndex,
-)> {
-    let begin_index = entry.begin_index();
-
-    let FutureInvokeResultState::Deferred {
-        remote_agent_id,
-        self_agent_id,
-        self_created_by,
-        env,
-        method_name,
-        method_parameters,
-        idempotency_key,
-        span_id,
-        auth_ctx,
-        ..
-    } = &*entry
-    else {
-        return Err(anyhow::anyhow!("unexpected state entry"));
-    };
-
-    let request = HostRequestGolemRpcInvoke {
-        remote_agent_id: remote_agent_id.agent_id(),
-        idempotency_key: idempotency_key.clone(),
-        method_name: method_name.clone(),
-        input: method_parameters.clone(),
-        remote_agent_type: None,
-        remote_agent_parameters: None,
-    };
-    let mut retry_properties = RetryContext::rpc("invoke-and-await", remote_agent_id, method_name);
-    if let Some((agent_id, assume_idempotence)) = enrichment {
-        retry_properties.set(
-            "agent-type",
-            PredicateValue::Text(agent_id.agent_type.to_string()),
-        );
-        retry_properties.set("is-idempotent", PredicateValue::Boolean(assume_idempotence));
-    }
-
-    let retry_params = if allow_retry {
-        Some(TaskRetryParams {
-            environment_state_service,
-            environment_id,
-            default_retry_policy,
-            agent_config_retry_policies,
-            runtime_retry_policy_mutations,
-            retry_properties,
-            max_in_function_retry_delay,
-            worker,
-            retry_point: begin_index,
-            execution_status,
-        })
-    } else {
-        None
-    };
-
-    let handle = spawn_rpc_task_with_retry(
-        rpc,
-        remote_agent_id.clone(),
-        idempotency_key.clone(),
-        method_name.clone(),
-        method_parameters.clone(),
-        *self_created_by,
-        self_agent_id.clone(),
-        env.clone(),
-        stack,
-        retry_params,
-        auth_ctx.clone(),
-    );
-
-    let span_id = span_id.clone();
-    *entry = FutureInvokeResultState::Pending {
-        handle,
-        request: request.clone(),
-        span_id,
-        begin_index,
-    };
-
-    Ok((
-        Ok(None),
-        request,
-        SerializableInvokeResult::Pending,
-        begin_index,
-    ))
-}
-
 pub struct WasmRpcEntryPayload {
     #[allow(dead_code)]
     pub demand: Box<dyn RpcDemand>,
@@ -1621,7 +2158,7 @@ pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
 enum FutureInvokeResultState {
     Pending {
         request: HostRequestGolemRpcInvoke,
-        handle: AbortOnDropJoinHandle<Result<Result<SchemaValue, InternalRpcError>, Error>>,
+        handle: FutureInvokeTaskHandle,
         span_id: SpanId,
         begin_index: OplogIndex,
     },
@@ -1699,7 +2236,10 @@ impl SubscribeAny for FutureInvokeResultState {
             begin_index,
         } = self
         {
-            let result = handle.await;
+            let result = {
+                let mut handle = handle.lock().await;
+                (&mut *handle).await
+            };
             let request = request.clone();
             let span_id = span_id.clone();
             let begin_index = *begin_index;
