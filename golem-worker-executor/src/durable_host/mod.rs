@@ -86,7 +86,7 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 pub use durability::*;
 use futures::TryFutureExt;
@@ -126,10 +126,13 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
+use http_body_util::BodyExt;
+use http_body_util::combinators::UnsyncBoxBody;
 use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -189,6 +192,8 @@ use wasmtime_wasi_http::p2::{
     BodyCompletionReceiver, HttpResult, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
     default_send_request_with_pool,
 };
+use wasmtime_wasi_http::p3::RequestOptions;
+use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 use wasmtime_wasi_http::{HttpConnectionPool, WasiHttpCtx};
 
 /// Hooks providing the custom HTTP request handling needed for durable
@@ -238,6 +243,34 @@ impl WasiHttpHooks for DurableHttpHooks {
 
     fn connection_pool(&self) -> Option<&HttpConnectionPool> {
         self.connection_pool.as_ref()
+    }
+}
+
+impl wasmtime_wasi_http::p3::WasiHttpHooks for DurableHttpHooks {
+    fn send_request(
+        &mut self,
+        request: ::http::Request<UnsyncBoxBody<Bytes, ErrorCode>>,
+        options: Option<RequestOptions>,
+        fut: Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+    ) -> Box<
+        dyn Future<
+                Output = Result<
+                    (
+                        ::http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
+                        Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+                    ),
+                    wasmtime_wasi::TrappableError<ErrorCode>,
+                >,
+            > + Send,
+    > {
+        _ = fut;
+        Box::new(async move {
+            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
+            Ok((
+                res.map(BodyExt::boxed_unsync),
+                Box::new(io) as Box<dyn Future<Output = _> + Send>,
+            ))
+        })
     }
 }
 
@@ -759,7 +792,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         wasmtime_wasi_http::p3::WasiHttpCtxView {
             ctx: &mut inner.wasi_http,
             table,
-            hooks: wasmtime_wasi_http::p3::default_hooks(),
+            hooks: &mut inner.http_hooks,
         }
     }
 
