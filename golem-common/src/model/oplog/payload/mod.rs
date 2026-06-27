@@ -32,9 +32,10 @@ use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
     SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpClientSend,
-    SerializableP3HttpClientSendResult, SerializableP3IpAddresses,
-    SerializableP3IpNameLookupError, SerializableRdbmsError, SerializableRdbmsRequest,
-    SerializableRpcError, SerializableScheduleId, SerializableStreamError,
+    SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult, SerializableP3IpAddresses,
+    SerializableP3IpNameLookupError,
+    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
+    SerializableStreamError,
 };
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::RevertWorkerTarget;
@@ -510,6 +511,10 @@ oplog_payload! {
         },
         P3HttpClientSendResult {
             result: SerializableP3HttpClientSendResult
+        },
+        P3HttpClientConsumeBodyResult {
+            contents: Vec<u8>,
+            result: SerializableP3HttpConsumeBodyResult
         }
     }
 }
@@ -671,7 +676,8 @@ pub mod host_functions {
         (P3SocketsTypesTcpSocketReceive => "sockets::types::tcp-socket", "receive", NoInput, P3SocketsTcpStream),
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
-        (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult)
+        (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
+        (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult)
     }
 }
 

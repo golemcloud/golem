@@ -1569,6 +1569,36 @@ pub enum SerializableP3HttpClientSendResult {
     HttpError(SerializableHttpErrorCode),
 }
 
+/// Terminal of a p3 response `consume-body` — the End payload of the
+/// `P3HttpClientConsumeBody` oplog pair (step 5).
+///
+/// The response body *bytes* are recorded separately in the End payload's
+/// `contents` field and replayed lazily; this enum captures only how the body
+/// stream terminated:
+///
+/// * `Trailers(None)` — the body closed cleanly with no trailers.
+/// * `Trailers(Some(..))` — the body closed cleanly and delivered trailers.
+/// * `HttpError(..)` — the body errored before completing. In p3 a body error
+///   is surfaced to the guest via the trailers future's `ErrorCode`, not via
+///   the body stream, so it round-trips here rather than on the stream.
+///
+/// `contents` is recorded regardless of this terminal (partial bytes on
+/// error/cancel must replay), so an `HttpError` terminal can still carry the
+/// bytes that were observed before the failure.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpConsumeBodyResult {
+    Trailers(Option<HashMap<String, Vec<Vec<u8>>>>),
+    HttpError(SerializableHttpErrorCode),
+}
+
 /// A subset of AgentMetadata visible for guests (and serializable to oplog)
 #[derive(
     Debug,

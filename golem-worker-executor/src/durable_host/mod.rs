@@ -264,12 +264,20 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for DurableHttpHooks {
             > + Send,
     > {
         _ = fut;
+        let connection_pool = self.connection_pool.clone();
         Box::new(async move {
-            let (res, io) = wasmtime_wasi_http::p3::default_send_request(request, options).await?;
-            Ok((
-                res.map(BodyExt::boxed_unsync),
-                Box::new(io) as Box<dyn Future<Output = _> + Send>,
-            ))
+            match connection_pool {
+                Some(pool) => {
+                    let (response, io) = pool.pooled_send_request_p3(request, options).await?;
+                    Ok((response, io))
+                }
+                None => {
+                    let (res, io) =
+                        wasmtime_wasi_http::p3::default_send_request(request, options).await?;
+                    let io: Box<dyn Future<Output = Result<(), ErrorCode>> + Send> = Box::new(io);
+                    Ok((res.map(BodyExt::boxed_unsync), io))
+                }
+            }
         })
     }
 }
@@ -3991,8 +3999,14 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+    use http_body::Frame;
     use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
     use test_r::test;
+    use test_r::timeout;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
@@ -4048,6 +4062,113 @@ mod tests {
 
         assert_eq!(first, OplogIndex::from_u64(11));
         assert_eq!(second, OplogIndex::from_u64(12));
+    }
+
+    struct PendingRequestBody;
+
+    impl http_body::Body for PendingRequestBody {
+        type Data = Bytes;
+        type Error = ErrorCode;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            Poll::Pending
+        }
+
+        fn is_end_stream(&self) -> bool {
+            false
+        }
+    }
+
+    async fn poll_p3_send_request_io_with_open_body(
+        connection_pool: Option<HttpConnectionPool>,
+    ) -> Poll<Result<(), ErrorCode>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            loop {
+                let mut buf = [0; 1024];
+                let n = stream.read(&mut buf).await.unwrap();
+                assert_ne!(n, 0, "client closed before sending request headers");
+                received.extend_from_slice(&buf[..n]);
+                if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            let _ = server_done_rx.await;
+        });
+
+        let mut hooks = DurableHttpHooks {
+            connection_pool,
+            is_replay: Arc::new(AtomicBool::new(false)),
+        };
+        let request = ::http::Request::post(format!("http://{addr}/upload"))
+            .body(PendingRequestBody.boxed_unsync())
+            .unwrap();
+
+        let send = wasmtime_wasi_http::p3::WasiHttpHooks::send_request(
+            &mut hooks,
+            request,
+            None,
+            Box::new(async { Ok(()) }),
+        );
+        let send = Box::into_pin(send);
+        let (_response, io) = tokio::time::timeout(Duration::from_secs(5), send)
+            .await
+            .expect("server responded before request body completed")
+            .expect("send_request should return response headers successfully");
+        let mut io = Box::into_pin(io);
+
+        let poll = io
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()));
+
+        let _ = server_done_tx.send(());
+        server.await.unwrap();
+
+        poll
+    }
+
+    #[test]
+    #[timeout(120000)]
+    async fn p3_pooled_send_request_io_future_waits_for_open_request_body_transmission() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        assert!(
+            matches!(
+                poll_p3_send_request_io_with_open_body(None).await,
+                Poll::Pending
+            ),
+            "the default p3 request transmission future should remain pending while the request body is still open"
+        );
+
+        let pool = HttpConnectionPool::new(wasmtime_wasi_http::p2::HttpConnectionPoolConfig {
+            max_idle_per_host: 1,
+            idle_timeout: Duration::from_secs(30),
+            connect_timeout: Duration::from_secs(5),
+            max_connections_per_host: 1,
+            max_total_connections: 1,
+            max_host_entries: 16,
+        });
+
+        assert!(
+            matches!(
+                poll_p3_send_request_io_with_open_body(Some(pool)).await,
+                Poll::Pending
+            ),
+            "the p3 request transmission future must not resolve while the request body is still open"
+        );
     }
 
     #[test]
