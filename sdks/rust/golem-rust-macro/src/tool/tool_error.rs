@@ -19,7 +19,7 @@
 use crate::tool::doc::parse_doc_full;
 use crate::tool::helpers::{SeenKeys, expr_str, expr_u8, to_kebab_case};
 use crate::tool::ir::{ErrorKindIr, ToolErrorIr, ToolErrorPayloadIr, ToolErrorVariantIr};
-use crate::tool::synthesis::{doc_tokens, error_kind_tokens, schema_graph_tokens};
+use crate::tool::synthesis::{doc_tokens, error_kind_tokens};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
@@ -42,10 +42,14 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
         let kind = error_kind_tokens(variant.kind);
         let exit_code = variant.exit_code;
         let payload = match &variant.payload {
-            ToolErrorPayloadIr::None => quote! { None },
+            ToolErrorPayloadIr::None => quote! { ::std::option::Option::None },
             ToolErrorPayloadIr::Single { ty } => {
-                let graph = schema_graph_tokens(ty);
-                quote! { Some(#graph) }
+                let position = format!("error {name} payload");
+                quote! {
+                    ::std::option::Option::Some(
+                        golem_rust::agentic::tool_value_schema::<#ty>(#position)?
+                    )
+                }
             }
         };
         quote! {
@@ -60,8 +64,11 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
     });
     quote! {
         impl golem_rust::agentic::ToolErrorSchema for #enum_ident {
-            fn error_cases() -> ::std::vec::Vec<golem_rust::agentic::ExtendedErrorCase> {
-                vec![ #(#cases),* ]
+            fn error_cases() -> ::std::result::Result<
+                ::std::vec::Vec<golem_rust::agentic::ExtendedErrorCase>,
+                golem_rust::agentic::ToolBuildError,
+            > {
+                ::std::result::Result::Ok(::std::vec![ #(#cases),* ])
             }
         }
     }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::schema_graph_root;
+use crate::agentic::tool_literal::{ToolLiteral, value_is_literal_to_schema_value};
 use crate::golem_agentic::golem::tool::common as wire;
 use crate::schema::validation::validate_value;
 use crate::schema::wit::GraphEncoder;
@@ -147,8 +148,13 @@ pub struct ExtendedErrorCase {
 
 /// Implemented by `#[derive(ToolError)]` enums. A tool method returning
 /// `Result<T, E>` reads its declared error cases from `E::error_cases()`.
+///
+/// Resolving an error case can fail the same way any other tool value type can:
+/// a variant payload whose type resolves to an auto-injected schema has no value
+/// graph, so this returns a [`ToolBuildError`] rather than panicking during
+/// descriptor synthesis.
 pub trait ToolErrorSchema {
-    fn error_cases() -> Vec<ExtendedErrorCase>;
+    fn error_cases() -> Result<Vec<ExtendedErrorCase>, ToolBuildError>;
 }
 
 #[derive(Clone, Debug)]
@@ -160,7 +166,28 @@ pub enum ExtendedRef {
 #[derive(Clone, Debug)]
 pub struct ExtendedValueIsRef {
     pub name: String,
-    pub value: SchemaValue,
+    pub value: ExtendedValueIsLiteral,
+}
+
+/// The literal a `value-is` constraint compares against.
+///
+/// The descriptor macro always emits the raw, un-typed
+/// [`ExtendedValueIsLiteral::Deferred`] literal; it never re-derives a comparand
+/// graph (doing so duplicated the runtime's option/list/map/tail and
+/// refinement-placement rules and drifted from them). Every deferred literal is
+/// resolved against the effective constraint scope by
+/// [`normalize_inherited_globals`] — which runs inside the generated descriptor
+/// fn — and is type-checked there, becoming [`ExtendedValueIsLiteral::Resolved`].
+/// A literal naming a locally known argument is therefore still resolved (and any
+/// type/refinement mismatch reported) when the descriptor is built; one naming a
+/// global supplied only by an ancestor subtree method is resolved once that
+/// global is in scope during composition. A deferred literal that survives
+/// composition (the standalone subtree-child case) is reported as an unresolved
+/// constraint reference by validation rather than silently accepted.
+#[derive(Clone, Debug)]
+pub enum ExtendedValueIsLiteral {
+    Resolved(SchemaValue),
+    Deferred(ToolLiteral),
 }
 
 #[derive(Clone, Debug)]
@@ -194,19 +221,39 @@ pub struct ExtendedForbidsC {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolBuildError {
     EmptyCommandTree,
-    CommandIndexOutOfBounds { index: i32, len: usize },
+    CommandIndexOutOfBounds {
+        index: i32,
+        len: usize,
+    },
     UnreachableCommandNode(i32),
     CommandTreeCycle(i32),
     DuplicateCommandParent(i32),
-    InvalidIdentifier { kind: &'static str, value: String },
+    InvalidIdentifier {
+        kind: &'static str,
+        value: String,
+    },
     SubtreeCycle(String),
     SubtreeRootHasBody(String),
-    SubtreeRootNameMismatch { expected: String, actual: String },
+    SubtreeRootNameMismatch {
+        expected: String,
+        actual: String,
+    },
     SubtreeAnnotationsUnsupported(String),
     DuplicateName(String),
     DuplicateShort(char),
-    UnresolvedTypeRef { position: String, id: String },
-    IllFormedSchema { position: String, detail: String },
+    InheritedGlobalConflict {
+        name: String,
+        inherited: String,
+        command: String,
+    },
+    UnresolvedTypeRef {
+        position: String,
+        id: String,
+    },
+    IllFormedSchema {
+        position: String,
+        detail: String,
+    },
     EncodeError(String),
     DefaultTypeMismatch(String),
     ValueIsTypeMismatch(String),
@@ -216,6 +263,18 @@ pub enum ToolBuildError {
     VariantInInputPosition(String),
     CommandNotFound(String),
     UnresolvedConstraintRef(String),
+    AutoInjectedToolParameter(String),
+    InvalidNumericBound(String),
+    RefinementTypeMismatch {
+        refinement: &'static str,
+        actual: &'static str,
+    },
+    UnresolvedValueIsLiteral(String),
+    InvalidTailOccurrenceBounds {
+        name: String,
+        min: u32,
+        max: u32,
+    },
 }
 
 impl Display for ToolBuildError {
@@ -250,6 +309,17 @@ impl Display for ToolBuildError {
             ),
             ToolBuildError::DuplicateName(s) => write!(f, "duplicate tool metadata name: {s}"),
             ToolBuildError::DuplicateShort(c) => write!(f, "duplicate short form: {c:?}"),
+            ToolBuildError::InheritedGlobalConflict {
+                name,
+                inherited,
+                command,
+            } => write!(
+                f,
+                "parameter surface name {name:?} on command {command:?} conflicts with inherited \
+                 global {inherited:?}: it either has an incompatible shape or collides with more \
+                 than one distinct inherited global; rename the parameter or align it with a \
+                 single compatible inherited global"
+            ),
             ToolBuildError::UnresolvedTypeRef { position, id } => write!(
                 f,
                 "type reference {id:?} at {position} does not resolve within its schema graph"
@@ -280,10 +350,45 @@ impl Display for ToolBuildError {
             ToolBuildError::UnresolvedConstraintRef(s) => {
                 write!(f, "constraint references an unknown argument: {s}")
             }
+            ToolBuildError::AutoInjectedToolParameter(s) => write!(
+                f,
+                "auto-injected types are not valid tool value parameters or results: {s}"
+            ),
+            ToolBuildError::InvalidNumericBound(s) => {
+                write!(f, "invalid numeric bound: {s}")
+            }
+            ToolBuildError::RefinementTypeMismatch { refinement, actual } => write!(
+                f,
+                "{refinement} refinement cannot apply to a {actual} schema; the parameter's type \
+                 resolves to a schema kind that has no {refinement} restrictions to set"
+            ),
+            ToolBuildError::UnresolvedValueIsLiteral(s) => write!(
+                f,
+                "value-is literal for argument {s:?} was not resolved against its comparand type \
+                 during composition"
+            ),
+            ToolBuildError::InvalidTailOccurrenceBounds { name, min, max } => write!(
+                f,
+                "tail positional {name:?} has an impossible occurrence range: min {min} is greater \
+                 than max {max}"
+            ),
         }
     }
 }
 impl std::error::Error for ToolBuildError {}
+
+/// Build the value schema graph for a tool parameter/result Rust type,
+/// returning a [`ToolBuildError`] (instead of panicking) when the type resolves
+/// to an auto-injected schema, which has no value graph. Used by macro-generated
+/// descriptors so an auto-injected param/result is a clean descriptor-build
+/// error rather than a panic at registration time.
+pub fn tool_value_schema<T: crate::agentic::Schema>(
+    position: &str,
+) -> Result<SchemaGraph, ToolBuildError> {
+    T::get_type()
+        .get_schema_graph()
+        .ok_or_else(|| ToolBuildError::AutoInjectedToolParameter(position.to_string()))
+}
 
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
@@ -358,24 +463,65 @@ impl ExtendedToolType {
     }
 
     pub fn canonical_input_fields(&self, command_index: usize) -> Vec<CanonicalInputField> {
+        // Collect the body field names first so an inherited global can be
+        // shadowed by a body-local declaration of the same surface name. A
+        // well-formed (normalized) descriptor never has such a collision, but
+        // this method may be called on a not-yet-validated or hand-built
+        // descriptor, and surfacing the body-local field is the least misleading
+        // fallback (it reflects the parameter the author actually wrote).
+        let body = self
+            .commands
+            .get(command_index)
+            .and_then(|c| c.body.as_ref());
+        // Body surface names include option/flag aliases, so an inherited global
+        // is shadowed when *any* of its surface names (long or alias) collides
+        // with any body-local surface name.
+        let mut body_names: BTreeSet<&str> = BTreeSet::new();
+        if let Some(body) = body {
+            for p in &body.positionals.fixed {
+                body_names.insert(p.name.as_str());
+            }
+            if let Some(t) = &body.positionals.tail {
+                body_names.insert(t.name.as_str());
+            }
+            for o in &body.options {
+                body_names.insert(o.long.as_str());
+                body_names.extend(o.aliases.iter().map(String::as_str));
+            }
+            for f in &body.flags {
+                body_names.insert(f.long.as_str());
+                body_names.extend(f.aliases.iter().map(String::as_str));
+            }
+        }
+
         let mut fields = Vec::new();
         for global in self.effective_globals(command_index) {
             match global {
-                EffectiveCommandField::Option(o) => fields.push(CanonicalInputField {
-                    name: o.long.clone(),
-                    schema: option_collected_graph(&o.shape),
-                }),
-                EffectiveCommandField::Flag(f) => fields.push(CanonicalInputField {
-                    name: f.long.clone(),
-                    schema: flag_graph(&f),
-                }),
+                EffectiveCommandField::Option(o) => {
+                    if body_names.contains(o.long.as_str())
+                        || o.aliases.iter().any(|a| body_names.contains(a.as_str()))
+                    {
+                        continue;
+                    }
+                    fields.push(CanonicalInputField {
+                        name: o.long.clone(),
+                        schema: option_collected_graph(&o.shape),
+                    })
+                }
+                EffectiveCommandField::Flag(f) => {
+                    if body_names.contains(f.long.as_str())
+                        || f.aliases.iter().any(|a| body_names.contains(a.as_str()))
+                    {
+                        continue;
+                    }
+                    fields.push(CanonicalInputField {
+                        name: f.long.clone(),
+                        schema: flag_graph(&f),
+                    })
+                }
             }
         }
-        if let Some(body) = self
-            .commands
-            .get(command_index)
-            .and_then(|c| c.body.as_ref())
-        {
+        if let Some(body) = body {
             fields.extend(body.positionals.fixed.iter().map(|p| CanonicalInputField {
                 name: p.name.clone(),
                 schema: p.type_.clone(),
@@ -675,10 +821,21 @@ fn encode_refs(r: &[ExtendedRef]) -> Result<Vec<wire::Ref>, ToolBuildError> {
         .map(|r| {
             Ok(match r {
                 ExtendedRef::Present(n) => wire::Ref::Present(n.clone()),
-                ExtendedRef::ValueIs(v) => wire::Ref::ValueIs(wire::ValueIsRef {
-                    name: v.name.clone(),
-                    value: encode_schema_value_default(&v.value)?,
-                }),
+                ExtendedRef::ValueIs(v) => {
+                    let value = match &v.value {
+                        ExtendedValueIsLiteral::Resolved(sv) => encode_schema_value_default(sv)?,
+                        // A deferred literal reaching encoding means composition
+                        // never resolved it against a comparand type; the wire
+                        // model only carries resolved values.
+                        ExtendedValueIsLiteral::Deferred(_) => {
+                            return Err(ToolBuildError::UnresolvedValueIsLiteral(v.name.clone()));
+                        }
+                    };
+                    wire::Ref::ValueIs(wire::ValueIsRef {
+                        name: v.name.clone(),
+                        value,
+                    })
+                }
             })
         })
         .collect()
@@ -728,7 +885,7 @@ fn collect_option(s: &ExtendedOptionShape, v: &mut Vec<SchemaGraph>) {
 /// `default`): a `repeatable-list` collects into `list<item>`, a
 /// `repeatable-map` into its map node; scalar/optional-scalar use the value
 /// type directly. Definition graphs are preserved so refs still resolve.
-fn option_collected_graph(s: &ExtendedOptionShape) -> SchemaGraph {
+pub fn option_collected_graph(s: &ExtendedOptionShape) -> SchemaGraph {
     match s {
         ExtendedOptionShape::Scalar(g) | ExtendedOptionShape::OptionalScalar(g) => g.clone(),
         ExtendedOptionShape::RepeatableList(r) => list_wrapper_graph(&r.item_type),
@@ -768,29 +925,111 @@ fn flag_graph(f: &FlagSpec) -> SchemaGraph {
     SchemaGraph::anonymous(ty)
 }
 
-/// The comparand graph a `value-is` literal for an option is checked against,
-/// per the WIT "any occurrence / entry equals this literal" rule: a scalar
-/// option uses its value type, a `repeatable-list` its element type, and a
-/// `repeatable-map` its map value type. Definition graphs are preserved.
-fn value_is_comparand_graph(shape: &ExtendedOptionShape) -> SchemaGraph {
+/// How a `value-is` literal is matched against its comparand graph.
+///
+/// The distinction is whether the referenced surface *collects* multiple CLI
+/// occurrences into a container. The spec says a `value-is` against a "repeated
+/// or list-typed name means any occurrence / element equals this literal", so a
+/// collecting surface compares exactly one collected occurrence, never the whole
+/// container.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ValueIsMode {
+    /// The literal must be a valid value for the comparand graph exactly, with
+    /// no element/value relaxation. Used for *collecting* surfaces — a
+    /// repeatable-list option, a repeatable-map option, or a tail positional —
+    /// whose comparand is already the per-occurrence type (list item, map value,
+    /// tail item). A `Vec<String>` repeatable option compares against `String`
+    /// (accepting `"x"`, rejecting `["x"]`); a `Vec<Vec<u32>>` repeatable option
+    /// compares against `list<u32>` (accepting `[1]`, rejecting `1` and `[[1]]`).
+    Exact,
+    /// The literal may be a valid value for the comparand graph as a whole, or —
+    /// after peeling leading `option` wrappers — for exactly one element of a
+    /// list/fixed-list comparand or one value of a map comparand. Used for
+    /// *non-collecting* value surfaces: scalar / optional-scalar options and
+    /// fixed positionals, whose declared value is the comparand itself. A
+    /// `BTreeMap<String,u32>` positional accepts the whole map or a single `u32`
+    /// value; a `FixedList<u32,2>` positional accepts the whole `[1,2]` or a
+    /// single element.
+    WholeOrOnePeel,
+}
+
+/// A `value-is` comparand: the graph a literal is matched against, plus the
+/// [`ValueIsMode`] controlling whether the one-level element/value relaxation
+/// applies.
+#[derive(Clone, Debug)]
+struct ValueIsComparand {
+    graph: SchemaGraph,
+    mode: ValueIsMode,
+}
+
+/// The `value-is` comparand recorded for a referenceable name. Mirrors the host
+/// validator's `ValueComparand`: a value-carrying name maps to a typed
+/// comparand; a name whose declared type cannot yield a comparable value (a
+/// repeatable-map whose map type does not resolve to a map) is
+/// [`ValueComparand::BlockedByTypeError`] so `value-is` checking is suppressed
+/// and the underlying type error is reported by [`validate_tool`] instead of a
+/// misleading cascading mismatch. A name absent from the scope's comparand map
+/// is a flag (no value type), against which a `value-is` is a genuine mismatch.
+#[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
+enum ValueComparand {
+    Type(ValueIsComparand),
+    BlockedByTypeError,
+}
+
+/// The `value-is` comparand for an option, keyed by whether the option collects
+/// occurrences. A scalar / optional-scalar option is non-collecting: its
+/// declared value graph is matched with the whole-or-one-peel relaxation. A
+/// repeatable-list option collects into a list, so its comparand is the
+/// per-occurrence item type matched exactly; a repeatable-map option collects
+/// into a map, so its comparand is the per-entry map *value* type matched
+/// exactly. A repeatable-map whose map type does not resolve to a map yields
+/// [`ValueComparand::BlockedByTypeError`] (the malformed type is reported by
+/// [`validate_tool`]). Definition graphs are preserved so any `Ref` still
+/// resolves.
+fn option_value_is_comparand(shape: &ExtendedOptionShape) -> ValueComparand {
     match shape {
-        ExtendedOptionShape::Scalar(g) | ExtendedOptionShape::OptionalScalar(g) => g.clone(),
-        ExtendedOptionShape::RepeatableList(r) => r.item_type.clone(),
-        ExtendedOptionShape::RepeatableMap(r) => map_value_graph(&r.map_type),
+        ExtendedOptionShape::Scalar(g) | ExtendedOptionShape::OptionalScalar(g) => {
+            ValueComparand::Type(ValueIsComparand {
+                graph: g.clone(),
+                mode: ValueIsMode::WholeOrOnePeel,
+            })
+        }
+        ExtendedOptionShape::RepeatableList(r) => ValueComparand::Type(ValueIsComparand {
+            graph: r.item_type.clone(),
+            mode: ValueIsMode::Exact,
+        }),
+        ExtendedOptionShape::RepeatableMap(r) if resolves_to_map(&r.map_type) => {
+            ValueComparand::Type(ValueIsComparand {
+                graph: map_value_graph(&r.map_type),
+                mode: ValueIsMode::Exact,
+            })
+        }
+        ExtendedOptionShape::RepeatableMap(_) => ValueComparand::BlockedByTypeError,
     }
 }
 
-/// The value type of a `Map` graph (resolving the root through any `Ref`s),
-/// preserving definitions. Falls back to the map's own root when it is not a
-/// map (the repeatable-map shape check reports that case separately).
+/// Whether a comparand graph is structurally sound (no dangling references or
+/// pure-alias cycles). When it is not, [`validate_tool`] reports the schema
+/// error (an [`ToolBuildError::UnresolvedTypeRef`] / [`ToolBuildError::IllFormedSchema`]),
+/// so `value-is` resolution must not also report a cascading mismatch against a
+/// graph that cannot be resolved.
+fn comparand_graph_is_sound(graph: &SchemaGraph) -> bool {
+    crate::schema::validation::validate_graph(graph).is_ok()
+}
+
+/// The per-entry value comparand for a map: a graph whose root is the map's
+/// value type, with the map graph's definitions preserved so any `Ref` in the
+/// value type still resolves. Falls back to the original graph when the root
+/// does not resolve to a `Map` (a not-a-map repeatable-map type is reported
+/// separately, so this avoids fabricating the value comparand).
 fn map_value_graph(map: &SchemaGraph) -> SchemaGraph {
-    let root = match map.resolve_ref(&map.root) {
-        Ok(SchemaType::Map { value, .. }) => (**value).clone(),
-        _ => map.root.clone(),
-    };
-    SchemaGraph {
-        defs: map.defs.clone(),
-        root,
+    match map.resolve_ref(&map.root) {
+        Ok(SchemaType::Map { value, .. }) => SchemaGraph {
+            defs: map.defs.clone(),
+            root: (**value).clone(),
+        },
+        _ => map.clone(),
     }
 }
 
@@ -854,12 +1093,25 @@ fn validate_default(value: &SchemaValue, graph: &SchemaGraph) -> Result<(), Tool
         .map_err(|e| ToolBuildError::DefaultTypeMismatch(format!("{e:?}")))
 }
 
-/// A `value-is` literal is compatible if it is a valid value for the comparand
-/// type, or — for the "any element/occurrence" relaxation — for the element
-/// type of a list-shaped (optionally `option`-wrapped) comparand.
-fn value_is_compatible(graph: &SchemaGraph, value: &SchemaValue) -> bool {
+/// Whether a `value-is` literal is compatible with its [`ValueIsComparand`].
+///
+/// The literal is always compatible if it is a valid value for the comparand
+/// graph as a whole. For a [`ValueIsMode::WholeOrOnePeel`] comparand (a
+/// non-collecting value surface) it is *also* compatible — under the WIT "any
+/// element / entry equals this literal" relaxation — if it is a valid value for
+/// the element type of a list-shaped, or the value type of a map-shaped,
+/// (optionally `option`-wrapped) comparand. A [`ValueIsMode::Exact`] comparand
+/// (a collecting surface, whose graph is already the per-occurrence type) gets
+/// no relaxation: matching one more level would descend past a single
+/// occurrence (e.g. accept `1` against a `Vec<Vec<u32>>` option whose occurrence
+/// is `list<u32>`).
+fn value_is_compatible(comparand: &ValueIsComparand, value: &SchemaValue) -> bool {
+    let graph = &comparand.graph;
     if validate_value(graph, &graph.root, value).is_ok() {
         return true;
+    }
+    if comparand.mode == ValueIsMode::Exact {
+        return false;
     }
     let Ok(mut peeled) = graph.resolve_ref(&graph.root) else {
         return false;
@@ -870,10 +1122,15 @@ fn value_is_compatible(graph: &SchemaGraph, value: &SchemaValue) -> bool {
             Err(_) => return false,
         }
     }
-    if let SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } = peeled {
-        return validate_value(graph, element, value).is_ok();
+    match peeled {
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            validate_value(graph, element, value).is_ok()
+        }
+        SchemaType::Map {
+            value: map_value, ..
+        } => validate_value(graph, map_value, value).is_ok(),
+        _ => false,
     }
-    false
 }
 
 /// `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`: lowercase kebab-case starting with a letter,
@@ -1118,11 +1375,47 @@ fn seed_global_tokens(
     }
 }
 
-/// Per-name comparand graph for `value-is` resolution (only value-typed names).
+/// Per-name `value-is` comparand for constraint resolution (only value-typed
+/// names; a name in `names` but absent from `typed` is a flag).
 #[derive(Default)]
 struct NameScope {
     names: BTreeSet<String>,
-    typed: BTreeMap<String, SchemaGraph>,
+    typed: BTreeMap<String, ValueComparand>,
+}
+
+/// Registers a flag's referenceable names. A flag carries no value type, so it
+/// is never added to [`NameScope::typed`]; a `value-is` against it is rejected.
+fn register_flag_scope(scope: &mut NameScope, flag: &FlagSpec) {
+    scope.names.insert(flag.long.clone());
+    scope.names.extend(flag.aliases.iter().cloned());
+}
+
+/// Registers a fixed positional's name and its whole-or-one-peel comparand (a
+/// fixed positional is a non-collecting value surface: its declared type is the
+/// comparand).
+fn register_fixed_positional_scope(scope: &mut NameScope, positional: &ExtendedPositional) {
+    scope.names.insert(positional.name.clone());
+    scope.typed.insert(
+        positional.name.clone(),
+        ValueComparand::Type(ValueIsComparand {
+            graph: positional.type_.clone(),
+            mode: ValueIsMode::WholeOrOnePeel,
+        }),
+    );
+}
+
+/// Registers a tail positional's name and its per-occurrence comparand. A tail
+/// collects occurrences into a `list<item>`, so a `value-is` literal matches one
+/// item exactly (the tail's `item_type`), never the whole collected list.
+fn register_tail_scope(scope: &mut NameScope, tail: &ExtendedTailPositional) {
+    scope.names.insert(tail.name.clone());
+    scope.typed.insert(
+        tail.name.clone(),
+        ValueComparand::Type(ValueIsComparand {
+            graph: tail.item_type.clone(),
+            mode: ValueIsMode::Exact,
+        }),
+    );
 }
 
 fn check_body(
@@ -1139,8 +1432,7 @@ fn check_body(
             register_option_scope(&mut scope, opt);
         }
         for flag in &globals.flags {
-            scope.names.insert(flag.long.clone());
-            scope.names.extend(flag.aliases.iter().cloned());
+            register_flag_scope(&mut scope, flag);
         }
     }
 
@@ -1165,8 +1457,7 @@ fn check_body(
         if let Some(short) = flag.short {
             insert_unique_short(&mut shorts, short)?;
         }
-        scope.names.insert(flag.long.clone());
-        scope.names.extend(flag.aliases.iter().cloned());
+        register_flag_scope(&mut scope, flag);
     }
 
     for positional in &body.positionals.fixed {
@@ -1176,10 +1467,7 @@ fn check_body(
             &format!("positional {}", positional.name),
         )?;
         insert_unique(&mut names, &positional.name)?;
-        scope.names.insert(positional.name.clone());
-        scope
-            .typed
-            .insert(positional.name.clone(), positional.type_.clone());
+        register_fixed_positional_scope(&mut scope, positional);
         if let Some(default) = &positional.default {
             validate_default(default, &positional.type_)?;
         }
@@ -1194,16 +1482,21 @@ fn check_body(
         check_identifier("positional name", &tail.name)?;
         check_graph_closed(&tail.item_type, &format!("tail {}", tail.name))?;
         insert_unique(&mut names, &tail.name)?;
-        scope.names.insert(tail.name.clone());
-        // A tail positional is list-like; a value-is literal matches an item.
-        scope
-            .typed
-            .insert(tail.name.clone(), tail.item_type.clone());
+        register_tail_scope(&mut scope, tail);
         if graph_reaches_variant(&tail.item_type) {
             return Err(ToolBuildError::VariantInInputPosition(tail.name.clone()));
         }
         if tail.verbatim && tail.separator.is_none() {
             return Err(ToolBuildError::VerbatimWithoutSeparator(tail.name.clone()));
+        }
+        if let Some(max) = tail.max
+            && tail.min > max
+        {
+            return Err(ToolBuildError::InvalidTailOccurrenceBounds {
+                name: tail.name.clone(),
+                min: tail.min,
+                max,
+            });
         }
     }
 
@@ -1240,7 +1533,7 @@ fn check_body(
 fn register_option_scope(scope: &mut NameScope, opt: &ExtendedOptionSpec) {
     scope.names.insert(opt.long.clone());
     scope.names.extend(opt.aliases.iter().cloned());
-    let comparand = value_is_comparand_graph(&opt.shape);
+    let comparand = option_value_is_comparand(&opt.shape);
     scope.typed.insert(opt.long.clone(), comparand.clone());
     for alias in &opt.aliases {
         scope.typed.insert(alias.clone(), comparand.clone());
@@ -1296,13 +1589,27 @@ fn check_refs(refs: &[ExtendedRef], scope: &NameScope) -> Result<(), ToolBuildEr
                 if !scope.names.contains(&v.name) {
                     return Err(ToolBuildError::UnresolvedConstraintRef(v.name.clone()));
                 }
-                // A name with no value type (a flag) cannot carry a value-is.
-                let graph = scope
-                    .typed
-                    .get(&v.name)
-                    .ok_or_else(|| ToolBuildError::ValueIsTypeMismatch(v.name.clone()))?;
-                if !value_is_compatible(graph, &v.value) {
-                    return Err(ToolBuildError::ValueIsTypeMismatch(v.name.clone()));
+                match scope.typed.get(&v.name) {
+                    // A name with no value type (a flag) cannot carry a value-is.
+                    None => return Err(ToolBuildError::ValueIsTypeMismatch(v.name.clone())),
+                    // A repeatable-map whose type is not a map: the malformed
+                    // type is reported by the structural checks; suppress the
+                    // cascading value-is mismatch.
+                    Some(ValueComparand::BlockedByTypeError) => {}
+                    Some(ValueComparand::Type(comparand)) => match &v.value {
+                        ExtendedValueIsLiteral::Resolved(value) => {
+                            if !value_is_compatible(comparand, value) {
+                                return Err(ToolBuildError::ValueIsTypeMismatch(v.name.clone()));
+                            }
+                        }
+                        // The name is in scope, so composition (which carries the
+                        // comparand type) should have resolved this literal. A
+                        // surviving deferred literal is a resolution gap, not a
+                        // silently acceptable ref.
+                        ExtendedValueIsLiteral::Deferred(_) => {
+                            return Err(ToolBuildError::UnresolvedValueIsLiteral(v.name.clone()));
+                        }
+                    },
                 }
             }
         }
@@ -1562,6 +1869,24 @@ impl ToolBuildCtx {
     pub fn pop_descriptor(&mut self) {
         self.stack.pop();
     }
+    /// True when no ancestor descriptor is currently on the recursion stack —
+    /// i.e. this is the outermost `__golem_tool_descriptor_for_*` invocation.
+    /// Must be called from inside [`Self::with_descriptor`] (the current
+    /// descriptor's identity is then on top of the stack), so a value of `1`
+    /// means there is exactly one descriptor in flight: this one.
+    ///
+    /// A nested subtree child descriptor (called from a parent's subtree link)
+    /// returns `false`. The child therefore skips composition/normalization and
+    /// returns its raw command tree, with `value-is` literals still deferred;
+    /// the outermost descriptor normalizes the fully grafted tree once, when all
+    /// ancestor subtree globals and inherited-global de-projections are in scope.
+    /// Normalizing a nested child against its standalone scope would resolve (and
+    /// type-check) its constraints against child-local declarations that parent
+    /// composition may widen or replace, rejecting a constraint that is valid in
+    /// the composed tool.
+    pub fn is_outermost_descriptor(&self) -> bool {
+        self.stack.len() == 1
+    }
     /// Build a child descriptor while the given identity is pushed on the
     /// recursion stack, always popping afterwards. Preferred over manual
     /// [`Self::push_descriptor`] / [`Self::pop_descriptor`] so an early return
@@ -1647,6 +1972,694 @@ pub fn graft_subtree(
     Ok(nodes)
 }
 
+/// Normalize a whole tool's command tree against inherited globals.
+///
+/// A subtree child trait is synthesized independently, so a child command whose
+/// Rust signature repeats a parameter an ancestor declares as a global projects
+/// it as a body option/flag/positional (or as its own global) in the standalone
+/// descriptor. Likewise a leaf command in the same trait as the root may repeat
+/// a root global. Once composed under the ancestor that supplies that name as a
+/// global, the local re-declaration must be reconciled, otherwise the canonical
+/// shape carries a body-local (or nested-global) name colliding with an
+/// effective inherited global.
+///
+/// This is the single source of truth for that reconciliation. It traverses the
+/// tree root→leaf, carrying the *strict ancestor* globals in scope. For every
+/// node it reconciles the node's own globals and its body arguments against the
+/// strict-ancestor globals:
+///
+/// * a same-name re-declaration whose canonical input shape is *compatible* with
+///   the inherited global is removed — the ancestor global is the single source
+///   of truth for docs, defaults, requiredness, aliases, and parse behavior;
+/// * a same-name re-declaration whose shape is *incompatible* is an
+///   [`ToolBuildError::InheritedGlobalConflict`]: the composition is invalid and
+///   is rejected rather than silently dropping or replacing the local parameter.
+///
+/// Body arguments are reconciled only against *strict ancestors*, never the
+/// node's own globals; a body argument colliding with a global declared on the
+/// same command is an ordinary authoring error left for [`validate_tool`].
+///
+/// The traversal guards against malformed (cyclic / out-of-bounds) trees so it
+/// is safe to run before [`validate_tool`] proves the tree well-formed.
+pub fn normalize_inherited_globals(tool: &mut ExtendedToolType) -> Result<(), ToolBuildError> {
+    if tool.commands.is_empty() {
+        return Ok(());
+    }
+    let mut visited = vec![false; tool.commands.len()];
+    normalize_command(tool, 0, &[], &mut visited)
+}
+
+fn normalize_command(
+    tool: &mut ExtendedToolType,
+    index: usize,
+    ancestor_globals: &[EffectiveCommandField],
+    visited: &mut [bool],
+) -> Result<(), ToolBuildError> {
+    if index >= tool.commands.len() || visited[index] {
+        return Ok(());
+    }
+    visited[index] = true;
+
+    let command_name = tool.commands[index].name.clone();
+
+    // Reconcile this node's own globals and body args against strict ancestors.
+    {
+        let node = &mut tool.commands[index];
+        reconcile_globals(&mut node.globals, ancestor_globals, &command_name)?;
+        if let Some(body) = node.body.as_mut() {
+            reconcile_body(body, ancestor_globals, &command_name)?;
+        }
+    }
+
+    // Resolve any deferred `value-is` literals now that the constraint scope —
+    // strict-ancestor globals plus this node's own (surviving) globals and body
+    // arguments — is known. A subtree child trait names a constraint against a
+    // global supplied by an ancestor subtree method; the standalone child could
+    // not type the literal, so it was deferred until this composition step.
+    if tool.commands[index].body.is_some() {
+        let node = &mut tool.commands[index];
+        let scope = value_is_scope(ancestor_globals, &node.globals, node.body.as_ref().unwrap());
+        resolve_deferred_value_is(node.body.as_mut().unwrap(), &scope)?;
+    }
+
+    // Children inherit the strict-ancestor globals plus this node's surviving
+    // globals (the ones not removed as compatible re-declarations).
+    let mut child_globals = ancestor_globals.to_vec();
+    {
+        let node = &tool.commands[index];
+        child_globals.extend(
+            node.globals
+                .options
+                .iter()
+                .cloned()
+                .map(EffectiveCommandField::Option),
+        );
+        child_globals.extend(
+            node.globals
+                .flags
+                .iter()
+                .cloned()
+                .map(EffectiveCommandField::Flag),
+        );
+    }
+
+    let subcommands = tool.commands[index].subcommands.clone();
+    for sub in subcommands {
+        if sub >= 0 {
+            normalize_command(tool, sub as usize, &child_globals, visited)?;
+        }
+    }
+    Ok(())
+}
+
+/// Builds the `value-is` resolution scope for a command body: strict-ancestor
+/// globals, the node's own globals, and the body's own arguments. This mirrors
+/// the constraint scope assembled by [`check_body`] (via [`register_option_scope`]
+/// and the positional/tail/flag handling) so deferred-literal resolution and
+/// validation agree on which names are value-carrying and on each name's
+/// comparand graph.
+fn value_is_scope(
+    ancestors: &[EffectiveCommandField],
+    node_globals: &ExtendedGlobals,
+    body: &ExtendedCommandBody,
+) -> NameScope {
+    let mut scope = NameScope::default();
+    for field in ancestors {
+        match field {
+            EffectiveCommandField::Option(opt) => register_option_scope(&mut scope, opt),
+            EffectiveCommandField::Flag(flag) => register_flag_scope(&mut scope, flag),
+        }
+    }
+    for opt in &node_globals.options {
+        register_option_scope(&mut scope, opt);
+    }
+    for flag in &node_globals.flags {
+        register_flag_scope(&mut scope, flag);
+    }
+    for opt in &body.options {
+        register_option_scope(&mut scope, opt);
+    }
+    for flag in &body.flags {
+        register_flag_scope(&mut scope, flag);
+    }
+    for positional in &body.positionals.fixed {
+        register_fixed_positional_scope(&mut scope, positional);
+    }
+    if let Some(tail) = &body.positionals.tail {
+        register_tail_scope(&mut scope, tail);
+    }
+    scope
+}
+
+/// Resolves every [`ExtendedValueIsLiteral::Deferred`] literal in `body`'s
+/// constraints against `scope`, the effective constraint scope assembled by
+/// [`value_is_scope`] (and mirrored by [`check_body`]). This is the single
+/// source of truth for typing a `value-is` literal: the descriptor macro carries
+/// the raw literal and never re-derives a comparand graph, so resolution always
+/// agrees with the validation performed by [`check_refs`].
+///
+/// For a name with a value-carrying comparand graph the literal is interpreted
+/// into a [`SchemaValue`] and then checked against the graph with
+/// [`value_is_compatible`], so a literal whose *value* is incompatible (a wrong
+/// type or one that violates the option's refinements — e.g. a regex/numeric
+/// bound) is rejected here rather than slipping through to a later stage. A name
+/// in scope but without a comparand (a flag) is a
+/// [`ToolBuildError::ValueIsTypeMismatch`]. A name not in scope is left deferred
+/// — it is reported as an unresolved constraint reference by [`check_refs`] (the
+/// standalone subtree-child case where the ancestor global is not present).
+fn resolve_deferred_value_is(
+    body: &mut ExtendedCommandBody,
+    scope: &NameScope,
+) -> Result<(), ToolBuildError> {
+    for constraint in &mut body.constraints {
+        for_each_ref_mut(constraint, &mut |r| {
+            let ExtendedRef::ValueIs(v) = r else {
+                return Ok(());
+            };
+            let ExtendedValueIsLiteral::Deferred(lit) = &v.value else {
+                return Ok(());
+            };
+            match scope.typed.get(&v.name) {
+                Some(ValueComparand::Type(comparand)) => {
+                    // The structural validator owns schema soundness. If the
+                    // comparand graph is unsound (a dangling or pure-alias-cycle
+                    // ref) leave the literal deferred so `validate_tool` reports
+                    // the real schema error instead of a cascading value-is
+                    // mismatch against a graph that cannot be resolved.
+                    if comparand_graph_is_sound(&comparand.graph) {
+                        let value = value_is_literal_to_schema_value(&comparand.graph, lit)
+                            .map_err(|_| ToolBuildError::ValueIsTypeMismatch(v.name.clone()))?;
+                        if !value_is_compatible(comparand, &value) {
+                            return Err(ToolBuildError::ValueIsTypeMismatch(v.name.clone()));
+                        }
+                        v.value = ExtendedValueIsLiteral::Resolved(value);
+                    }
+                }
+                // A repeatable-map whose type is not a map: `validate_tool`
+                // reports the malformed type. Leave the literal deferred and
+                // suppress the cascading value-is mismatch.
+                Some(ValueComparand::BlockedByTypeError) => {}
+                // A flag (in scope, no value type) cannot carry a value-is. A
+                // name not in scope is left deferred — `check_refs` reports it as
+                // an unresolved constraint reference.
+                None => {
+                    if scope.names.contains(&v.name) {
+                        return Err(ToolBuildError::ValueIsTypeMismatch(v.name.clone()));
+                    }
+                }
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// Applies `f` to every [`ExtendedRef`] referenced by a constraint, regardless of
+/// its variant, short-circuiting on the first error.
+fn for_each_ref_mut(
+    constraint: &mut ExtendedConstraint,
+    f: &mut impl FnMut(&mut ExtendedRef) -> Result<(), ToolBuildError>,
+) -> Result<(), ToolBuildError> {
+    match constraint {
+        ExtendedConstraint::RequiresAll(v)
+        | ExtendedConstraint::AllOrNone(v)
+        | ExtendedConstraint::RequiresAny(v) => {
+            for r in v.iter_mut() {
+                f(r)?;
+            }
+        }
+        ExtendedConstraint::MutexGroups(groups) => {
+            for group in groups.iter_mut() {
+                for r in group.refs.iter_mut() {
+                    f(r)?;
+                }
+            }
+        }
+        ExtendedConstraint::Implies(i) => {
+            for r in i.lhs.iter_mut() {
+                f(r)?;
+            }
+            for r in i.rhs.iter_mut() {
+                f(r)?;
+            }
+        }
+        ExtendedConstraint::Forbids(fb) => {
+            for r in fb.lhs.iter_mut() {
+                f(r)?;
+            }
+            for r in fb.rhs.iter_mut() {
+                f(r)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_globals(
+    globals: &mut ExtendedGlobals,
+    ancestors: &[EffectiveCommandField],
+    command: &str,
+) -> Result<(), ToolBuildError> {
+    if ancestors.is_empty() {
+        return Ok(());
+    }
+    let mut kept_options = Vec::with_capacity(globals.options.len());
+    for opt in std::mem::take(&mut globals.options) {
+        let shape = FieldShape::Value(option_collected_graph(&opt.shape));
+        if !reconcile_local(&option_surface_names(&opt), &shape, ancestors, command)? {
+            kept_options.push(opt);
+        }
+    }
+    globals.options = kept_options;
+
+    let mut kept_flags = Vec::with_capacity(globals.flags.len());
+    for flag in std::mem::take(&mut globals.flags) {
+        let shape = flag_field_shape(&flag);
+        if !reconcile_local(&flag_surface_names(&flag), &shape, ancestors, command)? {
+            kept_flags.push(flag);
+        }
+    }
+    globals.flags = kept_flags;
+    Ok(())
+}
+
+fn reconcile_body(
+    body: &mut ExtendedCommandBody,
+    ancestors: &[EffectiveCommandField],
+    command: &str,
+) -> Result<(), ToolBuildError> {
+    if ancestors.is_empty() {
+        return Ok(());
+    }
+    let mut kept_options = Vec::with_capacity(body.options.len());
+    for opt in std::mem::take(&mut body.options) {
+        let shape = FieldShape::Value(option_collected_graph(&opt.shape));
+        if !reconcile_local(&option_surface_names(&opt), &shape, ancestors, command)? {
+            kept_options.push(opt);
+        }
+    }
+    body.options = kept_options;
+
+    let mut kept_flags = Vec::with_capacity(body.flags.len());
+    for flag in std::mem::take(&mut body.flags) {
+        let shape = flag_field_shape(&flag);
+        if !reconcile_local(&flag_surface_names(&flag), &shape, ancestors, command)? {
+            kept_flags.push(flag);
+        }
+    }
+    body.flags = kept_flags;
+
+    let mut kept_fixed = Vec::with_capacity(body.positionals.fixed.len());
+    for positional in std::mem::take(&mut body.positionals.fixed) {
+        let shape = FieldShape::Value(positional.type_.clone());
+        if !reconcile_local(
+            std::slice::from_ref(&positional.name),
+            &shape,
+            ancestors,
+            command,
+        )? {
+            kept_fixed.push(positional);
+        }
+    }
+    body.positionals.fixed = kept_fixed;
+
+    if let Some(tail) = body.positionals.tail.take() {
+        let shape = FieldShape::Value(list_wrapper_graph(&tail.item_type));
+        if !reconcile_local(std::slice::from_ref(&tail.name), &shape, ancestors, command)? {
+            body.positionals.tail = Some(tail);
+        }
+    }
+    Ok(())
+}
+
+/// Decide the fate of one local declaration against the inherited globals in
+/// scope. Returns `Ok(true)` when the local is a compatible re-declaration that
+/// should be removed (the inherited global covers it), `Ok(false)` when no
+/// inherited global shares a surface name (keep the local), and
+/// [`ToolBuildError::InheritedGlobalConflict`] when a surface name matches but
+/// the input shapes are incompatible.
+fn reconcile_local(
+    local_names: &[String],
+    local_shape: &FieldShape,
+    ancestors: &[EffectiveCommandField],
+    command: &str,
+) -> Result<bool, ToolBuildError> {
+    // A local may share a surface name with more than one inherited global (its
+    // long name with one, an alias with another). All ancestors are scanned so
+    // that an incompatible collision — even one found after a compatible one — is
+    // reported immediately as a conflict. The local can be de-projected onto an
+    // inherited global only when it collides with exactly one *distinct* inherited
+    // global (matching the same global through both its long name and an alias is
+    // a single ancestor entry, hence still one global). Colliding compatibly with
+    // two or more distinct inherited globals is ambiguous — there is no single
+    // global to inherit from, and silently dropping the local would leave the Rust
+    // parameter with no canonical body field — so that is also a conflict.
+    let mut compatible: Vec<String> = Vec::new();
+    for inherited in ancestors {
+        let inherited_names = effective_field_surface_names(inherited);
+        let Some(colliding) = local_names
+            .iter()
+            .find(|l| inherited_names.iter().any(|n| n == *l))
+        else {
+            continue;
+        };
+        if !field_shapes_compatible(&effective_field_shape(inherited), local_shape) {
+            return Err(ToolBuildError::InheritedGlobalConflict {
+                name: colliding.clone(),
+                inherited: effective_field_primary_name(inherited),
+                command: command.to_string(),
+            });
+        }
+        compatible.push(effective_field_primary_name(inherited));
+    }
+    if compatible.len() > 1 {
+        return Err(ToolBuildError::InheritedGlobalConflict {
+            name: local_names.first().cloned().unwrap_or_default(),
+            inherited: compatible.join(", "),
+            command: command.to_string(),
+        });
+    }
+    Ok(!compatible.is_empty())
+}
+
+/// The primary (long) surface name of an inherited effective global, used to
+/// name the colliding global in [`ToolBuildError::InheritedGlobalConflict`].
+fn effective_field_primary_name(g: &EffectiveCommandField) -> String {
+    match g {
+        EffectiveCommandField::Option(o) => o.long.clone(),
+        EffectiveCommandField::Flag(f) => f.long.clone(),
+    }
+}
+
+/// The canonical input "surface family" of a command field, used to decide
+/// whether a local re-declaration is compatible with an inherited global. Flags
+/// are distinguished by their flag family (a bool flag and a count flag carry
+/// different values, and neither is interchangeable with a value-bearing option
+/// or positional of the same name); every value-bearing form (scalar/optional
+/// option, repeatable list/map option, fixed positional, tail positional) is
+/// compared by its canonical input value graph.
+#[allow(clippy::large_enum_variant)]
+enum FieldShape {
+    BoolFlag,
+    CountFlag,
+    Value(SchemaGraph),
+}
+
+fn flag_field_shape(f: &FlagSpec) -> FieldShape {
+    match f.shape {
+        wire::FlagShape::BoolFlag(_) => FieldShape::BoolFlag,
+        wire::FlagShape::CountFlag(_) => FieldShape::CountFlag,
+    }
+}
+
+fn effective_field_shape(g: &EffectiveCommandField) -> FieldShape {
+    match g {
+        EffectiveCommandField::Option(o) => FieldShape::Value(option_collected_graph(&o.shape)),
+        EffectiveCommandField::Flag(f) => flag_field_shape(f),
+    }
+}
+
+fn field_shapes_compatible(a: &FieldShape, b: &FieldShape) -> bool {
+    match (a, b) {
+        (FieldShape::BoolFlag, FieldShape::BoolFlag) => true,
+        (FieldShape::CountFlag, FieldShape::CountFlag) => true,
+        (FieldShape::Value(ga), FieldShape::Value(gb)) => schema_shapes_match(ga, gb),
+        _ => false,
+    }
+}
+
+fn option_surface_names(o: &ExtendedOptionSpec) -> Vec<String> {
+    let mut names = Vec::with_capacity(1 + o.aliases.len());
+    names.push(o.long.clone());
+    names.extend(o.aliases.iter().cloned());
+    names
+}
+
+fn flag_surface_names(f: &FlagSpec) -> Vec<String> {
+    let mut names = Vec::with_capacity(1 + f.aliases.len());
+    names.push(f.long.clone());
+    names.extend(f.aliases.iter().cloned());
+    names
+}
+
+fn effective_field_surface_names(g: &EffectiveCommandField) -> Vec<String> {
+    match g {
+        EffectiveCommandField::Option(o) => option_surface_names(o),
+        EffectiveCommandField::Flag(f) => flag_surface_names(f),
+    }
+}
+
+/// Maximum recursion depth for structural shape comparison; deeper than this the
+/// comparison gives up and reports "not a match". This keeps the comparison
+/// terminating on pathological (deeply nested or recursive) types. Reporting
+/// "not a match" on exhaustion is the safe direction: a non-match between two
+/// same-named declarations surfaces as an explicit
+/// [`ToolBuildError::InheritedGlobalConflict`] rather than silently dropping a
+/// local parameter that might actually differ. Real CLI input schemas (strings,
+/// numbers, bools, lists, maps, small records) are far shallower than this.
+const SHAPE_MATCH_MAX_DEPTH: u32 = 32;
+
+/// Whether two canonical input value graphs describe the same value *shape*,
+/// ignoring metadata and validation restrictions (docs, numeric/text bounds,
+/// etc.) but honoring structure and exact primitive representation. References
+/// are resolved against their respective graphs.
+///
+/// Recursive (cyclic) graphs are compared coinductively: when the same pair of
+/// referenced definitions is reached again along a path, the two shapes are
+/// assumed to match (the cycle has already been established structurally). This
+/// makes an identical recursive type re-declaration compare equal instead of
+/// being falsely rejected once the structural recursion bottoms out. The
+/// per-pair memo is what guarantees termination; the depth counter is a defensive
+/// secondary guard for pathologically deep finite types.
+fn schema_shapes_match(a: &SchemaGraph, b: &SchemaGraph) -> bool {
+    let mut visiting = std::collections::HashSet::new();
+    schema_types_match(a, &a.root, b, &b.root, SHAPE_MATCH_MAX_DEPTH, &mut visiting)
+}
+
+fn schema_types_match(
+    a_graph: &SchemaGraph,
+    a_ty: &SchemaType,
+    b_graph: &SchemaGraph,
+    b_ty: &SchemaType,
+    depth: u32,
+    visiting: &mut std::collections::HashSet<(crate::schema::TypeId, crate::schema::TypeId)>,
+) -> bool {
+    // Break recursion at reference boundaries before resolving: revisiting the
+    // same pair of named definitions means we have already entered comparing
+    // them, so the recursive shapes coincide along this path.
+    if let (SchemaType::Ref { id: a_id, .. }, SchemaType::Ref { id: b_id, .. }) = (a_ty, b_ty)
+        && !visiting.insert((a_id.clone(), b_id.clone()))
+    {
+        return true;
+    }
+    let (Ok(a_ty), Ok(b_ty)) = (a_graph.resolve_ref(a_ty), b_graph.resolve_ref(b_ty)) else {
+        return false;
+    };
+    if depth == 0 {
+        return false;
+    }
+    let next = depth - 1;
+    match (a_ty, b_ty) {
+        (SchemaType::List { element: ea, .. }, SchemaType::List { element: eb, .. }) => {
+            schema_types_match(a_graph, ea, b_graph, eb, next, visiting)
+        }
+        (
+            SchemaType::FixedList {
+                element: ea,
+                length: la,
+                ..
+            },
+            SchemaType::FixedList {
+                element: eb,
+                length: lb,
+                ..
+            },
+        ) => la == lb && schema_types_match(a_graph, ea, b_graph, eb, next, visiting),
+        (SchemaType::Option { inner: ia, .. }, SchemaType::Option { inner: ib, .. }) => {
+            schema_types_match(a_graph, ia, b_graph, ib, next, visiting)
+        }
+        (
+            SchemaType::Map {
+                key: ka, value: va, ..
+            },
+            SchemaType::Map {
+                key: kb, value: vb, ..
+            },
+        ) => {
+            schema_types_match(a_graph, ka, b_graph, kb, next, visiting)
+                && schema_types_match(a_graph, va, b_graph, vb, next, visiting)
+        }
+        (SchemaType::Tuple { elements: ea, .. }, SchemaType::Tuple { elements: eb, .. }) => {
+            ea.len() == eb.len()
+                && ea
+                    .iter()
+                    .zip(eb)
+                    .all(|(x, y)| schema_types_match(a_graph, x, b_graph, y, next, visiting))
+        }
+        (SchemaType::Record { fields: fa, .. }, SchemaType::Record { fields: fb, .. }) => {
+            fa.len() == fb.len()
+                && fa.iter().zip(fb).all(|(x, y)| {
+                    x.name == y.name
+                        && schema_types_match(a_graph, &x.body, b_graph, &y.body, next, visiting)
+                })
+        }
+        (SchemaType::Variant { cases: ca, .. }, SchemaType::Variant { cases: cb, .. }) => {
+            ca.len() == cb.len()
+                && ca.iter().zip(cb).all(|(x, y)| {
+                    x.name == y.name
+                        && match (&x.payload, &y.payload) {
+                            (None, None) => true,
+                            (Some(px), Some(py)) => {
+                                schema_types_match(a_graph, px, b_graph, py, next, visiting)
+                            }
+                            _ => false,
+                        }
+                })
+        }
+        (SchemaType::Union { spec: sa, .. }, SchemaType::Union { spec: sb, .. }) => {
+            sa.branches.len() == sb.branches.len()
+                && sa.branches.iter().zip(&sb.branches).all(|(x, y)| {
+                    x.tag == y.tag
+                        && x.discriminator == y.discriminator
+                        && schema_types_match(a_graph, &x.body, b_graph, &y.body, next, visiting)
+                })
+        }
+        (SchemaType::Enum { cases: ca, .. }, SchemaType::Enum { cases: cb, .. }) => ca == cb,
+        (SchemaType::Flags { flags: fa, .. }, SchemaType::Flags { flags: fb, .. }) => fa == fb,
+        // Rich leaf types whose spec carries *type identity* (not just refinable
+        // validation restrictions) must compare those identity fields. Otherwise
+        // a leaf could de-project an inherited global onto a genuinely different
+        // Rust type — e.g. `Quantity<Meters>` vs `Quantity<Seconds>`, which
+        // share the `Quantity` discriminant but are not interchangeable values.
+        // Identity here means the parts of the spec derived from the Rust type
+        // (not overlaid by `#[arg]`): the quantity unit set, the secret category,
+        // the quota-token resource, and the unstructured text languages / binary
+        // MIME sets. Pure validation restrictions (numeric/text/url bounds, path
+        // direction/kind — all `#[arg]`-refinable) stay ignored per this
+        // function's contract.
+        (SchemaType::Quantity { spec: sa, .. }, SchemaType::Quantity { spec: sb, .. }) => {
+            sa.base_unit == sb.base_unit
+                && str_sets_match(
+                    &effective_quantity_units(&sa.base_unit, &sa.allowed_suffixes),
+                    &effective_quantity_units(&sb.base_unit, &sb.allowed_suffixes),
+                )
+        }
+        (SchemaType::Secret { spec: sa, .. }, SchemaType::Secret { spec: sb, .. }) => {
+            sa.category == sb.category
+        }
+        (SchemaType::QuotaToken { spec: sa, .. }, SchemaType::QuotaToken { spec: sb, .. }) => {
+            sa.resource_name == sb.resource_name
+        }
+        (
+            SchemaType::Text {
+                restrictions: ra, ..
+            },
+            SchemaType::Text {
+                restrictions: rb, ..
+            },
+        ) => opt_str_sets_match(&ra.languages, &rb.languages),
+        (
+            SchemaType::Binary {
+                restrictions: ra, ..
+            },
+            SchemaType::Binary {
+                restrictions: rb, ..
+            },
+        ) => opt_str_sets_match(&ra.mime_types, &rb.mime_types),
+        // A plain `String` and a `Text` differ only by the latter carrying
+        // refinable restrictions (regex/min/max), which `#[arg]` overlays via
+        // `refine_text` (the only `String`→`Text` promotion). So an inherited
+        // refined-`String` global (`Text`) and a leaf redeclaring the same plain
+        // `String` describe the same shape and must de-project. The exception is
+        // a `languages`-restricted `Text`, which reflects a different Rust type
+        // (`UnstructuredText<…>`) and stays incompatible with a plain `String`.
+        (SchemaType::String { .. }, SchemaType::Text { restrictions, .. })
+        | (SchemaType::Text { restrictions, .. }, SchemaType::String { .. }) => {
+            restrictions.languages.is_none()
+        }
+        (SchemaType::Result { spec: sa, .. }, SchemaType::Result { spec: sb, .. }) => {
+            schema_opt_box_match(
+                a_graph,
+                sa.ok.as_deref(),
+                b_graph,
+                sb.ok.as_deref(),
+                next,
+                visiting,
+            ) && schema_opt_box_match(
+                a_graph,
+                sa.err.as_deref(),
+                b_graph,
+                sb.err.as_deref(),
+                next,
+                visiting,
+            )
+        }
+        (SchemaType::Future { inner: ia, .. }, SchemaType::Future { inner: ib, .. })
+        | (SchemaType::Stream { inner: ia, .. }, SchemaType::Stream { inner: ib, .. }) => {
+            schema_opt_box_match(
+                a_graph,
+                ia.as_deref(),
+                b_graph,
+                ib.as_deref(),
+                next,
+                visiting,
+            )
+        }
+        // Primitives and the remaining rich leaf types (incl. distinct numeric
+        // widths/signs, `Url`, `Path`, `Datetime`, `Duration`) are compared by
+        // kind, which already ignores their refinable restrictions.
+        _ => std::mem::discriminant(a_ty) == std::mem::discriminant(b_ty),
+    }
+}
+
+/// Whether two string collections describe the same *set* of values (order- and
+/// duplicate-insensitive). Used to compare rich-type identity fields that are
+/// authored as ordered lists but semantically unordered (quantity units, allowed
+/// languages, allowed MIME types).
+fn str_sets_match(a: &[String], b: &[String]) -> bool {
+    let sa: std::collections::HashSet<&str> = a.iter().map(String::as_str).collect();
+    let sb: std::collections::HashSet<&str> = b.iter().map(String::as_str).collect();
+    sa == sb
+}
+
+/// Set comparison for an optional restriction (`None` = unrestricted). An
+/// unrestricted side never matches a restricted side: they describe different
+/// accepted value sets.
+fn opt_str_sets_match(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => str_sets_match(a, b),
+        _ => false,
+    }
+}
+
+/// The set of units a [`SchemaType::Quantity`] accepts: its explicit
+/// `allowed_suffixes`, or just the canonical `base_unit` when no suffixes are
+/// declared. Two quantities with the same base unit but different accepted unit
+/// sets are not interchangeable, so de-projection must treat them as distinct.
+fn effective_quantity_units(base_unit: &str, allowed_suffixes: &[String]) -> Vec<String> {
+    if allowed_suffixes.is_empty() {
+        vec![base_unit.to_string()]
+    } else {
+        allowed_suffixes.to_vec()
+    }
+}
+
+fn schema_opt_box_match(
+    a_graph: &SchemaGraph,
+    a_ty: Option<&SchemaType>,
+    b_graph: &SchemaGraph,
+    b_ty: Option<&SchemaType>,
+    depth: u32,
+    visiting: &mut std::collections::HashSet<(crate::schema::TypeId, crate::schema::TypeId)>,
+) -> bool {
+    match (a_ty, b_ty) {
+        (None, None) => true,
+        (Some(x), Some(y)) => schema_types_match(a_graph, x, b_graph, y, depth, visiting),
+        _ => false,
+    }
+}
+
 /// Append a graft (graft-local command nodes whose index 0 is the dispatcher
 /// placeholder) to `parent`, offsetting every internal subcommand index, and
 /// return the parent index of the placeholder. The caller links this index as a
@@ -1666,8 +2679,12 @@ pub fn append_grafted_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agentic::tool_refinement::{refine_numeric, refine_text, refine_url};
+    use crate::agentic::tool_refinement::{refine_numeric, refine_path, refine_text, refine_url};
     use crate::schema::schema_type::{NumericBound, NumericRestrictions};
+    use crate::schema::{
+        BinaryRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuotaTokenSpec,
+        SecretSpec, TextRestrictions,
+    };
     use test_r::test;
 
     fn doc(summary: &str) -> Doc {
@@ -1795,6 +2812,116 @@ mod tests {
         assert_eq!(names, vec!["verbose", "input", "config", "force"]);
     }
 
+    /// Builds a two-node tool: a root carrying one inherited global option, and a
+    /// single `leaf` body whose only option is described by `(long, aliases)`.
+    /// Used to exercise alias-aware body-vs-inherited-global shadowing on an
+    /// unnormalized descriptor.
+    fn tool_with_inherited_global_and_body_option(
+        global_long: &str,
+        global_aliases: Vec<String>,
+        body_long: &str,
+        body_aliases: Vec<String>,
+    ) -> ExtendedToolType {
+        ExtendedToolType {
+            version: "0.1.0".to_string(),
+            commands: vec![
+                ExtendedCommandNode {
+                    name: "root".to_string(),
+                    aliases: vec![],
+                    doc: doc("root"),
+                    globals: ExtendedGlobals {
+                        options: vec![ExtendedOptionSpec {
+                            long: global_long.to_string(),
+                            short: None,
+                            aliases: global_aliases,
+                            doc: doc("global"),
+                            value_name: None,
+                            shape: ExtendedOptionShape::Scalar(u32_graph()),
+                            default: None,
+                            required: false,
+                            env_var: None,
+                        }],
+                        flags: vec![],
+                    },
+                    subcommands: vec![1],
+                    body: None,
+                },
+                ExtendedCommandNode {
+                    name: "leaf".to_string(),
+                    aliases: vec![],
+                    doc: doc("leaf"),
+                    globals: ExtendedGlobals::default(),
+                    subcommands: vec![],
+                    body: Some(ExtendedCommandBody {
+                        positionals: ExtendedPositionals::default(),
+                        options: vec![ExtendedOptionSpec {
+                            long: body_long.to_string(),
+                            short: None,
+                            aliases: body_aliases,
+                            doc: doc("body"),
+                            value_name: None,
+                            shape: ExtendedOptionShape::Scalar(str_graph()),
+                            default: None,
+                            required: false,
+                            env_var: None,
+                        }],
+                        flags: vec![],
+                        constraints: vec![],
+                        stdin: None,
+                        stdout: None,
+                        result: None,
+                        errors: vec![],
+                        annotations: None,
+                    }),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn canonical_input_fields_body_alias_shadows_inherited_global() {
+        // A body option whose ALIAS equals an inherited global's long name
+        // shadows that global on an unnormalized descriptor.
+        let tool = tool_with_inherited_global_and_body_option(
+            "verbose",
+            vec![],
+            "local",
+            vec!["verbose".to_string()],
+        );
+        let names: Vec<_> = tool
+            .canonical_input_fields(1)
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["local"],
+            "an inherited global must be shadowed by a body option aliased to its name"
+        );
+    }
+
+    #[test]
+    fn canonical_input_fields_inherited_global_alias_is_shadowed() {
+        // The reverse: an inherited global whose ALIAS equals a body option's
+        // long name is shadowed too.
+        let tool = tool_with_inherited_global_and_body_option(
+            "global",
+            vec!["v".to_string()],
+            "v",
+            vec![],
+        );
+        let names: Vec<_> = tool
+            .canonical_input_fields(1)
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["v"],
+            "an inherited global aliased to a body option's name must be shadowed"
+        );
+    }
+
     #[test]
     fn help_contains_names() {
         let help = render_help(&sample_tool(), &["run".to_string()]).unwrap();
@@ -1913,23 +3040,56 @@ mod tests {
             ctx.push_descriptor("a"),
             Err(ToolBuildError::SubtreeCycle(_))
         ));
-        let text = refine_text(SchemaType::string(), Some("x+".into()), Some(1), Some(3));
+        let text = refine_text(SchemaType::string(), Some("x+".into()), Some(1), Some(3)).unwrap();
         assert!(matches!(text, SchemaType::Text { .. }));
         let url = refine_url(
             SchemaType::url(Default::default()),
             Some(vec!["https".into()]),
-        );
+        )
+        .unwrap();
         assert!(matches!(url, SchemaType::Url { .. }));
         let num = refine_numeric(
             SchemaType::u32(),
             Some(NumericBound::Unsigned(1)),
             None,
             Some("ms".into()),
-        );
+        )
+        .unwrap();
         assert_eq!(
             num.numeric_restrictions().unwrap().unit.as_deref(),
             Some("ms")
         );
+
+        // Refinements reject schema kinds that cannot carry their restrictions
+        // (the runtime backstop for macro-opaque types).
+        assert!(matches!(
+            refine_numeric(SchemaType::string(), None, None, Some("ms".into())),
+            Err(ToolBuildError::RefinementTypeMismatch {
+                refinement: "numeric",
+                ..
+            })
+        ));
+        assert!(matches!(
+            refine_path(SchemaType::string(), None, None, None),
+            Err(ToolBuildError::RefinementTypeMismatch {
+                refinement: "path",
+                ..
+            })
+        ));
+        assert!(matches!(
+            refine_url(SchemaType::string(), Some(vec!["https".into()])),
+            Err(ToolBuildError::RefinementTypeMismatch {
+                refinement: "url",
+                ..
+            })
+        ));
+        assert!(matches!(
+            refine_text(SchemaType::u32(), Some("x+".into()), None, None),
+            Err(ToolBuildError::RefinementTypeMismatch {
+                refinement: "text",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -1941,8 +3101,9 @@ mod tests {
             Some(NumericBound::Unsigned(10)),
             None,
             Some("items".into()),
-        );
-        let refined = refine_numeric(base, None, Some(NumericBound::Unsigned(20)), None);
+        )
+        .unwrap();
+        let refined = refine_numeric(base, None, Some(NumericBound::Unsigned(20)), None).unwrap();
         let r = refined.numeric_restrictions().unwrap();
         assert_eq!(r.min, Some(NumericBound::Unsigned(10)));
         assert_eq!(r.max, Some(NumericBound::Unsigned(20)));
@@ -1961,7 +3122,7 @@ mod tests {
             metadata: Default::default(),
         };
 
-        let refined = refine_numeric(base, None, Some(NumericBound::Unsigned(200)), None);
+        let refined = refine_numeric(base, None, Some(NumericBound::Unsigned(200)), None).unwrap();
 
         let restrictions = refined.numeric_restrictions().unwrap();
         assert_eq!(restrictions.min, Some(NumericBound::Unsigned(10)));
@@ -2059,7 +3220,7 @@ mod tests {
         let ok = leaf_tool_with_body(map_config_option(vec![ExtendedConstraint::RequiresAll(
             vec![ExtendedRef::ValueIs(ExtendedValueIsRef {
                 name: "config".to_string(),
-                value: SchemaValue::U32(1),
+                value: ExtendedValueIsLiteral::Resolved(SchemaValue::U32(1)),
             })],
         )]));
         assert!(ok.try_to_tool().is_ok());
@@ -2067,7 +3228,7 @@ mod tests {
         let bad = leaf_tool_with_body(map_config_option(vec![ExtendedConstraint::RequiresAll(
             vec![ExtendedRef::ValueIs(ExtendedValueIsRef {
                 name: "config".to_string(),
-                value: SchemaValue::String("x".to_string()),
+                value: ExtendedValueIsLiteral::Resolved(SchemaValue::String("x".to_string())),
             })],
         )]));
         assert!(matches!(
@@ -2084,6 +3245,148 @@ mod tests {
         assert!(matches!(
             leaf_tool_with_body(body).try_to_tool().unwrap_err(),
             ToolBuildError::UnresolvedConstraintRef(_)
+        ));
+    }
+
+    /// Builds a parent-dispatcher + child-leaf tool where the child's body carries
+    /// `constraints` referencing names that only exist on the parent's globals (a
+    /// subtree-style composition). The parent declares the given `parent_globals`.
+    fn deferred_value_is_tree(
+        parent_globals: ExtendedGlobals,
+        constraints: Vec<ExtendedConstraint>,
+    ) -> ExtendedToolType {
+        let mut child_body = empty_body();
+        child_body.constraints = constraints;
+        tool_with_nodes(vec![
+            ExtendedCommandNode {
+                name: "root".into(),
+                aliases: vec![],
+                doc: doc(""),
+                globals: parent_globals,
+                subcommands: vec![1],
+                body: None,
+            },
+            ExtendedCommandNode {
+                name: "leaf".into(),
+                aliases: vec![],
+                doc: doc(""),
+                globals: ExtendedGlobals::default(),
+                subcommands: vec![],
+                body: Some(child_body),
+            },
+        ])
+    }
+
+    fn first_value_is(body: &ExtendedCommandBody) -> &ExtendedValueIsRef {
+        match &body.constraints[0] {
+            ExtendedConstraint::RequiresAll(refs) => match &refs[0] {
+                ExtendedRef::ValueIs(v) => v,
+                other => panic!("expected a value-is ref, got {other:?}"),
+            },
+            other => panic!("expected a requires-all constraint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deferred_value_is_resolves_against_ancestor_global() {
+        let mut tool = deferred_value_is_tree(
+            ExtendedGlobals {
+                options: vec![scalar_opt("format", None)],
+                flags: vec![],
+            },
+            vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+                ExtendedValueIsRef {
+                    name: "format".into(),
+                    value: ExtendedValueIsLiteral::Deferred(ToolLiteral::Str("json".into())),
+                },
+            )])],
+        );
+        normalize_inherited_globals(&mut tool)
+            .expect("composition should resolve the deferred literal against the parent global");
+        let resolved = first_value_is(tool.commands[1].body.as_ref().unwrap());
+        assert!(
+            matches!(&resolved.value, ExtendedValueIsLiteral::Resolved(SchemaValue::String(s)) if s == "json"),
+            "deferred literal should be resolved to a string, got {:?}",
+            resolved.value
+        );
+        assert!(tool.try_to_tool().is_ok());
+    }
+
+    #[test]
+    fn deferred_value_is_unknown_name_is_rejected() {
+        let mut tool = deferred_value_is_tree(
+            ExtendedGlobals::default(),
+            vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+                ExtendedValueIsRef {
+                    name: "missing".into(),
+                    value: ExtendedValueIsLiteral::Deferred(ToolLiteral::Str("json".into())),
+                },
+            )])],
+        );
+        // Normalization leaves a name absent from every scope deferred; the
+        // dangling reference is reported by validation.
+        normalize_inherited_globals(&mut tool).expect("normalization tolerates unknown names");
+        assert!(matches!(
+            tool.try_to_tool().unwrap_err(),
+            ToolBuildError::UnresolvedConstraintRef(name) if name == "missing"
+        ));
+    }
+
+    #[test]
+    fn deferred_value_is_incompatible_literal_is_rejected() {
+        let mut tool = deferred_value_is_tree(
+            ExtendedGlobals {
+                options: vec![scalar_opt("format", None)],
+                flags: vec![],
+            },
+            vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+                ExtendedValueIsRef {
+                    name: "format".into(),
+                    value: ExtendedValueIsLiteral::Deferred(ToolLiteral::Bool(true)),
+                },
+            )])],
+        );
+        assert!(matches!(
+            normalize_inherited_globals(&mut tool).unwrap_err(),
+            ToolBuildError::ValueIsTypeMismatch(name) if name == "format"
+        ));
+    }
+
+    #[test]
+    fn deferred_value_is_against_ancestor_flag_is_rejected() {
+        let mut tool = deferred_value_is_tree(
+            ExtendedGlobals {
+                options: vec![],
+                flags: vec![bool_flag("force", None)],
+            },
+            vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+                ExtendedValueIsRef {
+                    name: "force".into(),
+                    value: ExtendedValueIsLiteral::Deferred(ToolLiteral::Bool(true)),
+                },
+            )])],
+        );
+        assert!(matches!(
+            normalize_inherited_globals(&mut tool).unwrap_err(),
+            ToolBuildError::ValueIsTypeMismatch(name) if name == "force"
+        ));
+    }
+
+    #[test]
+    fn deferred_value_is_unresolved_at_validation_is_rejected() {
+        // A deferred literal whose name *is* in scope but was never resolved
+        // (composition skipped) is a resolution gap, not a silently accepted ref.
+        let mut body = empty_body();
+        body.options = vec![scalar_opt("format", None)];
+        body.constraints = vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+            ExtendedValueIsRef {
+                name: "format".into(),
+                value: ExtendedValueIsLiteral::Deferred(ToolLiteral::Str("json".into())),
+            },
+        )])];
+        assert!(matches!(
+            validate_tool(&leaf_tool_with_body(body)),
+            Err(ToolBuildError::UnresolvedValueIsLiteral(name)) if name == "format"
         ));
     }
 
@@ -2284,7 +3587,7 @@ mod tests {
         body.constraints = vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
             ExtendedValueIsRef {
                 name: "force".into(),
-                value: SchemaValue::Bool(true),
+                value: ExtendedValueIsLiteral::Resolved(SchemaValue::Bool(true)),
             },
         )])];
         assert!(matches!(
@@ -2314,6 +3617,41 @@ mod tests {
         assert!(matches!(
             validate_tool(&leaf_tool_with_body(body)),
             Err(ToolBuildError::RepeatableMapTypeNotMap(_))
+        ));
+    }
+
+    #[test]
+    fn deferred_value_is_does_not_mask_repeatable_map_type_error() {
+        let mut body = empty_body();
+        body.options = vec![ExtendedOptionSpec {
+            long: "config".into(),
+            short: None,
+            aliases: vec![],
+            doc: doc(""),
+            value_name: None,
+            shape: ExtendedOptionShape::RepeatableMap(ExtendedRepeatableMapShape {
+                repetition: wire::Repetition::Repeated,
+                map_type: str_graph(),
+                duplicate_key_policy: wire::DuplicateKeyPolicy::Reject,
+            }),
+            default: None,
+            required: false,
+            env_var: None,
+        }];
+        body.constraints = vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+            ExtendedValueIsRef {
+                name: "config".into(),
+                value: ExtendedValueIsLiteral::Deferred(ToolLiteral::Int(1)),
+            },
+        )])];
+
+        let mut tool = leaf_tool_with_body(body);
+        normalize_inherited_globals(&mut tool).expect(
+            "normalization must not report a value-is mismatch before validation can report the malformed repeatable-map type",
+        );
+        assert!(matches!(
+            validate_tool(&tool),
+            Err(ToolBuildError::RepeatableMapTypeNotMap(name)) if name == "config"
         ));
     }
 
@@ -2349,6 +3687,29 @@ mod tests {
         body.options[0].shape = ExtendedOptionShape::Scalar(ref_graph("nope"));
         assert!(matches!(
             validate_tool(&leaf_tool_with_body(body)),
+            Err(ToolBuildError::UnresolvedTypeRef { position, id })
+                if position == "option --name" && id == "nope"
+        ));
+    }
+
+    #[test]
+    fn deferred_value_is_does_not_mask_dangling_option_type_ref() {
+        let mut body = empty_body();
+        body.options = vec![scalar_opt("name", None)];
+        body.options[0].shape = ExtendedOptionShape::Scalar(ref_graph("nope"));
+        body.constraints = vec![ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+            ExtendedValueIsRef {
+                name: "name".into(),
+                value: ExtendedValueIsLiteral::Deferred(ToolLiteral::Str("x".into())),
+            },
+        )])];
+
+        let mut tool = leaf_tool_with_body(body);
+        normalize_inherited_globals(&mut tool).expect(
+            "normalization must not report a value-is mismatch before schema validation can report the dangling type ref",
+        );
+        assert!(matches!(
+            validate_tool(&tool),
             Err(ToolBuildError::UnresolvedTypeRef { position, id })
                 if position == "option --name" && id == "nope"
         ));
@@ -2460,5 +3821,160 @@ mod tests {
             render_argument_help(&tool, &["run".to_string()], "nope"),
             Err(ToolBuildError::CommandNotFound(_))
         ));
+    }
+
+    fn shapes_match(a: SchemaType, b: SchemaType) -> bool {
+        schema_shapes_match(&SchemaGraph::anonymous(a), &SchemaGraph::anonymous(b))
+    }
+
+    fn quantity(base_unit: &str, allowed_suffixes: &[&str]) -> SchemaType {
+        SchemaType::quantity(QuantitySpec {
+            base_unit: base_unit.to_string(),
+            allowed_suffixes: allowed_suffixes.iter().map(|s| s.to_string()).collect(),
+            min: None,
+            max: None,
+        })
+    }
+
+    #[test]
+    fn rich_leaf_quantity_identity_is_compared_but_bounds_ignored() {
+        // Different base unit: not interchangeable.
+        assert!(!shapes_match(quantity("m", &[]), quantity("s", &[])));
+        // Same base unit, different accepted unit sets: not interchangeable.
+        assert!(!shapes_match(
+            quantity("m", &["m", "km"]),
+            quantity("m", &["m"])
+        ));
+        // Same identity, suffix order irrelevant.
+        assert!(shapes_match(
+            quantity("m", &["m", "km"]),
+            quantity("m", &["km", "m"])
+        ));
+        // Bounds (min/max) are validation restrictions and stay ignored.
+        let lo = SchemaType::quantity(QuantitySpec {
+            base_unit: "m".to_string(),
+            allowed_suffixes: vec![],
+            min: None,
+            max: None,
+        });
+        let hi = SchemaType::quantity(QuantitySpec {
+            base_unit: "m".to_string(),
+            allowed_suffixes: vec![],
+            min: Some(crate::schema::QuantityValue {
+                mantissa: 0,
+                scale: 0,
+                unit: "m".to_string(),
+            }),
+            max: None,
+        });
+        assert!(shapes_match(lo, hi));
+    }
+
+    #[test]
+    fn rich_leaf_secret_and_quota_identity_is_compared() {
+        assert!(shapes_match(
+            SchemaType::secret(SecretSpec {
+                category: Some("api-key".into())
+            }),
+            SchemaType::secret(SecretSpec {
+                category: Some("api-key".into())
+            }),
+        ));
+        assert!(!shapes_match(
+            SchemaType::secret(SecretSpec {
+                category: Some("api-key".into())
+            }),
+            SchemaType::secret(SecretSpec {
+                category: Some("oauth-token".into())
+            }),
+        ));
+        assert!(!shapes_match(
+            SchemaType::quota_token(QuotaTokenSpec {
+                resource_name: Some("tokens".into())
+            }),
+            SchemaType::quota_token(QuotaTokenSpec {
+                resource_name: Some("requests".into())
+            }),
+        ));
+    }
+
+    #[test]
+    fn rich_leaf_text_and_binary_identity_is_compared_but_other_bounds_ignored() {
+        let text = |languages: Option<&[&str]>, regex: Option<&str>| {
+            SchemaType::text(TextRestrictions {
+                languages: languages.map(|ls| ls.iter().map(|s| s.to_string()).collect()),
+                min_length: None,
+                max_length: None,
+                regex: regex.map(|s| s.to_string()),
+            })
+        };
+        // Language set is type identity.
+        assert!(!shapes_match(
+            text(Some(&["en"]), None),
+            text(Some(&["de"]), None)
+        ));
+        assert!(!shapes_match(text(None, None), text(Some(&["en"]), None)));
+        // Regex is a refinable restriction and stays ignored.
+        assert!(shapes_match(
+            text(Some(&["en"]), Some("a+")),
+            text(Some(&["en"]), Some("b+"))
+        ));
+
+        let binary = |mime: Option<&[&str]>, max_bytes: Option<u32>| {
+            SchemaType::binary(BinaryRestrictions {
+                mime_types: mime.map(|ms| ms.iter().map(|s| s.to_string()).collect()),
+                min_bytes: None,
+                max_bytes,
+            })
+        };
+        assert!(!shapes_match(
+            binary(Some(&["image/png"]), None),
+            binary(Some(&["image/jpeg"]), None)
+        ));
+        // Byte bounds are refinable restrictions and stay ignored.
+        assert!(shapes_match(
+            binary(Some(&["image/png"]), Some(10)),
+            binary(Some(&["image/png"]), Some(20))
+        ));
+    }
+
+    #[test]
+    fn rich_leaf_path_direction_and_kind_are_refinable_and_ignored() {
+        let path = |direction: PathDirection, kind: PathKind| {
+            SchemaType::path(PathSpec {
+                direction,
+                kind,
+                allowed_mime_types: None,
+                allowed_extensions: None,
+            })
+        };
+        // direction/kind are `#[arg]`-refinable, so a leaf may re-specify them;
+        // de-projection still treats them as the same inherited global.
+        assert!(shapes_match(
+            path(PathDirection::Input, PathKind::File),
+            path(PathDirection::Output, PathKind::Directory)
+        ));
+    }
+
+    #[test]
+    fn plain_string_matches_unrestricted_text_but_not_language_restricted() {
+        let unrestricted = SchemaType::text(TextRestrictions {
+            languages: None,
+            min_length: None,
+            max_length: None,
+            regex: Some("^x$".to_string()),
+        });
+        let language_restricted = SchemaType::text(TextRestrictions {
+            languages: Some(vec!["en".to_string()]),
+            min_length: None,
+            max_length: None,
+            regex: None,
+        });
+        // A leaf `String` de-projects onto an inherited refined-`String` (`Text`)
+        // global; the regex is a refinable restriction and is ignored.
+        assert!(shapes_match(SchemaType::string(), unrestricted.clone()));
+        assert!(shapes_match(unrestricted, SchemaType::string()));
+        // A language-restricted `Text` is a different Rust type and must conflict.
+        assert!(!shapes_match(SchemaType::string(), language_restricted));
     }
 }

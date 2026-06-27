@@ -45,11 +45,36 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
 
     // Building the IR validates every tool authoring attribute and surfaces
     // parse errors at compile time.
-    if let Err(err) = build_tool_definition_ir(&item_trait, version) {
-        return err.to_compile_error().into();
-    }
+    let ir = match build_tool_definition_ir(&item_trait, version) {
+        Ok(ir) => ir,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    // Metadata synthesis: the hidden free descriptor function that builds the
+    // runtime `ExtendedToolType`. It is emitted as a module-level free function
+    // so a parent tool's `#[command(subtree = path::Child)]` can reach it
+    // through the child trait's module path without a concrete `Self`.
+    let descriptor_fn = match crate::tool::descriptor::synthesize_descriptor_fn(&ir) {
+        Ok(tokens) => tokens,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
 
     strip_helper_attrs(&mut item_trait);
+
+    // A hidden default method delegating to the free descriptor function, so the
+    // `#[tool_implementation]` registration ctor can call it through the trait.
+    let descriptor_item: TraitItem = syn::parse_quote! {
+        #[doc(hidden)]
+        fn __tool_descriptor() -> golem_rust::agentic::ExtendedToolType
+        where
+            Self: Sized,
+        {
+            #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
+                .expect("tool descriptor build failed")
+        }
+    };
+    item_trait.items.push(descriptor_item);
 
     let annotation_item: TraitItem = syn::parse_quote! {
         #[doc(hidden)]
@@ -60,6 +85,8 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
     quote! {
         #[allow(async_fn_in_trait)]
         #item_trait
+
+        #descriptor_fn
     }
     .into()
 }

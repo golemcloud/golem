@@ -49,6 +49,52 @@ pub fn literal_to_schema_value(
     interpret(graph, &root, lit)
 }
 
+/// Interprets `lit` as a `value-is` comparand literal against `graph`, honoring
+/// the WIT "any occurrence / element equals this literal" rule: when the literal
+/// is not a whole-value match and the comparand resolves (through `Option`
+/// wrappers) to a list, the literal is interpreted as a single element value; to
+/// a map, as a single map-value.
+///
+/// `graph` is the comparand graph the runtime registered for the referenced
+/// argument (`value_is_comparand_graph` for an option, the declared type for a
+/// fixed positional, `list<item>` for a tail). Because this peels exactly one
+/// element/value level from the *whole declared type*, `value-is("xs", item)` is
+/// accepted as an item literal whether `xs` is a `Vec<T>`, a `type Alias =
+/// Vec<T>`, a map, or an ancestor-supplied global, and stays consistent with the
+/// `value_is_compatible` check applied next.
+pub fn value_is_literal_to_schema_value(
+    graph: &SchemaGraph,
+    lit: &ToolLiteral,
+) -> Result<SchemaValue, ToolBuildError> {
+    let direct = match literal_to_schema_value(graph, lit) {
+        Ok(value) => return Ok(value),
+        Err(direct) => direct,
+    };
+    // The literal is not a whole-value match; for a list-shaped comparand,
+    // interpret it as one element.
+    let mut ty = match graph.resolve_ref(&graph.root) {
+        Ok(ty) => ty,
+        Err(_) => return Err(direct),
+    };
+    while let SchemaType::Option { inner, .. } = ty {
+        match graph.resolve_ref(inner) {
+            Ok(next) => ty = next,
+            Err(_) => return Err(direct),
+        }
+    }
+    match ty {
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            let element = (**element).clone();
+            interpret(graph, &element, lit).map_err(|_| direct)
+        }
+        SchemaType::Map { value, .. } => {
+            let map_value = (**value).clone();
+            interpret(graph, &map_value, lit).map_err(|_| direct)
+        }
+        _ => Err(direct),
+    }
+}
+
 fn mismatch(ty: &SchemaType, lit: &ToolLiteral) -> ToolBuildError {
     ToolBuildError::DefaultTypeMismatch(format!("literal {lit:?} is not valid for type {ty:?}"))
 }
@@ -158,6 +204,18 @@ fn interpret(
             }
             _ => Err(mismatch(resolved, lit)),
         },
+        SchemaType::FixedList {
+            element, length, ..
+        } => match lit {
+            ToolLiteral::List(items) if items.len() == *length as usize => {
+                let elements = items
+                    .iter()
+                    .map(|item| interpret(graph, element, item))
+                    .collect::<Result<_, _>>()?;
+                Ok(SchemaValue::FixedList { elements })
+            }
+            _ => Err(mismatch(resolved, lit)),
+        },
         SchemaType::Map { key, value, .. } => match lit {
             ToolLiteral::Map(entries) => {
                 let entries = entries
@@ -165,6 +223,12 @@ fn interpret(
                     .map(|(k, v)| Ok((interpret(graph, key, k)?, interpret(graph, value, v)?)))
                     .collect::<Result<_, _>>()?;
                 Ok(SchemaValue::Map { entries })
+            }
+            // An empty array literal `[]` is the natural way to author an empty
+            // map default; it parses as a (List) literal but carries no entries,
+            // so it interprets as an empty map.
+            ToolLiteral::List(items) if items.is_empty() => {
+                Ok(SchemaValue::Map { entries: vec![] })
             }
             _ => Err(mismatch(resolved, lit)),
         },
@@ -313,5 +377,29 @@ mod tests {
                 )]
             }
         );
+    }
+
+    #[test]
+    fn fixed_list_of_matching_length() {
+        let v = literal_to_schema_value(
+            &graph(SchemaType::fixed_list(SchemaType::u32(), 2)),
+            &ToolLiteral::List(vec![ToolLiteral::Int(1), ToolLiteral::Int(2)]),
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            SchemaValue::FixedList {
+                elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)]
+            }
+        );
+    }
+
+    #[test]
+    fn fixed_list_of_wrong_length_is_rejected() {
+        let err = literal_to_schema_value(
+            &graph(SchemaType::fixed_list(SchemaType::u32(), 2)),
+            &ToolLiteral::List(vec![ToolLiteral::Int(1)]),
+        );
+        assert!(err.is_err());
     }
 }

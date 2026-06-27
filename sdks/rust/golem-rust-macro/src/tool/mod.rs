@@ -23,6 +23,7 @@ mod arg;
 mod command;
 mod constraint;
 mod definition;
+mod descriptor;
 mod doc;
 mod helpers;
 mod implementation;

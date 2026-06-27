@@ -18,7 +18,6 @@
 use crate::tool::ir::{DocIr, ErrorKindIr};
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::Type;
 
 /// Emits a `golem_rust::agentic::Doc` value from a [`DocIr`].
 pub fn doc_tokens(doc: &DocIr) -> TokenStream {
@@ -52,16 +51,5 @@ pub fn error_kind_tokens(kind: ErrorKindIr) -> TokenStream {
         ErrorKindIr::RuntimeError => quote! {
             golem_rust::golem_agentic::golem::tool::common::ErrorKind::RuntimeError
         },
-    }
-}
-
-/// Emits a `golem_rust::agentic::SchemaGraph` for a Rust type by asking its
-/// `Schema` implementation at runtime. Used for positionals, options, results,
-/// and error payloads (anything that contributes a value type to the tool).
-pub fn schema_graph_tokens(ty: &Type) -> TokenStream {
-    quote! {
-        <#ty as golem_rust::agentic::Schema>::get_type()
-            .get_schema_graph()
-            .expect("tool value type must be a value schema, not an auto-injected type")
     }
 }

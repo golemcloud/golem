@@ -285,13 +285,31 @@ struct Validator<'a> {
     used_ref_ids: HashSet<TypeId>,
 }
 
+/// How a `value-is` literal is matched against its comparand type. Mirrors the
+/// SDK runtime's `ValueIsMode` so host and guest agree on what a `value-is`
+/// against a collecting vs. non-collecting surface means.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ValueIsMode {
+    /// A non-collecting value surface (a scalar option, a fixed positional): the
+    /// literal matches the whole declared value, or — under the one-level
+    /// relaxation — a single element of a list/fixed-list or value of a map
+    /// (optionally `option`-wrapped).
+    WholeOrOnePeel,
+    /// A collecting surface (a repeatable option or tail positional, whose
+    /// comparand is already the per-occurrence type): the literal matches one
+    /// occurrence exactly, with no element/value relaxation (matching one more
+    /// level would descend past a single occurrence).
+    Exact,
+}
+
 /// The `value-is` comparand recorded for a name that carries a declared value
 /// type. A name absent from the comparand map carries no value type at all (a
 /// flag), which is a genuine `value-is` mismatch.
 #[derive(Clone, Copy)]
 enum ValueComparand<'a> {
-    /// The resolved type a `value-is` literal must be valid for.
-    Type(&'a SchemaType),
+    /// The resolved type a `value-is` literal must be valid for, plus the mode
+    /// controlling whether the one-level relaxation applies.
+    Type(&'a SchemaType, ValueIsMode),
     /// The name is typed, but its declared type could not be resolved to a
     /// comparable value type (a repeatable-map whose `map_type` does not resolve
     /// to a map). The underlying type error is reported separately, so
@@ -822,7 +840,7 @@ impl<'a> Validator<'a> {
             scope.names.insert(positional.name.clone());
             scope.typed.insert(
                 positional.name.clone(),
-                ValueComparand::Type(&positional.type_),
+                ValueComparand::Type(&positional.type_, ValueIsMode::WholeOrOnePeel),
             );
             self.check_positional_default(command, positional);
             self.check_type_well_formed(command, &positional.name, &positional.type_);
@@ -837,10 +855,13 @@ impl<'a> Validator<'a> {
             self.check_identifier("positional name", &tail.name);
             add_name(self, &tail.name);
             scope.names.insert(tail.name.clone());
-            // A tail positional is list-like; a value-is literal matches an item.
-            scope
-                .typed
-                .insert(tail.name.clone(), ValueComparand::Type(&tail.item_type));
+            // A tail positional collects occurrences into a list; a value-is
+            // literal matches one item exactly (the per-occurrence item type),
+            // never the whole collected list.
+            scope.typed.insert(
+                tail.name.clone(),
+                ValueComparand::Type(&tail.item_type, ValueIsMode::Exact),
+            );
             self.check_type_well_formed(command, &tail.name, &tail.item_type);
             self.input_roots.push(InputRoot {
                 command: command.to_string(),
@@ -909,8 +930,8 @@ impl<'a> Validator<'a> {
                         continue;
                     }
                     match scope.typed.get(&value_is.name) {
-                        Some(ValueComparand::Type(declared)) => {
-                            match self.value_is_outcome(declared, &value_is.value) {
+                        Some(ValueComparand::Type(declared, mode)) => {
+                            match self.value_is_outcome(declared, *mode, &value_is.value) {
                                 ValueIsOutcome::Compatible => {}
                                 ValueIsOutcome::Mismatch => {
                                     self.errors.push(ToolValidationError::ValueIsTypeMismatch {
@@ -949,26 +970,47 @@ impl<'a> Validator<'a> {
 
     /// Classify a `value-is` literal against the declared type. The literal is
     /// [`ValueIsOutcome::Compatible`] if it is a valid value for the declared
-    /// type, or — for the "any element/occurrence" relaxation — for the element
-    /// type of a list-shaped (optionally `option`-wrapped) declared type;
-    /// repeatable options already store their element type.
+    /// type. For a [`ValueIsMode::WholeOrOnePeel`] comparand (a non-collecting
+    /// value surface) it is *also* compatible — under the "any element / entry
+    /// equals this literal" relaxation — for the element type of a list/fixed-list
+    /// or the value type of a map (optionally `option`-wrapped) declared type. A
+    /// [`ValueIsMode::Exact`] comparand (a collecting surface, whose type is
+    /// already the per-occurrence type) gets no relaxation: matching one more
+    /// level would descend past a single occurrence.
     ///
     /// When neither comparison holds, the result is [`ValueIsOutcome::Mismatch`]
     /// unless the relevant comparison failed *purely* because the value
     /// descended into an unresolved reference, in which case it is
     /// [`ValueIsOutcome::BlockedByDanglingRef`] and the mismatch is suppressed
     /// (the unresolved reference is reported separately as `UnresolvedTypeRef`).
-    fn value_is_outcome(&self, declared: &SchemaType, value: &SchemaValue) -> ValueIsOutcome {
+    fn value_is_outcome(
+        &self,
+        declared: &SchemaType,
+        mode: ValueIsMode,
+        value: &SchemaValue,
+    ) -> ValueIsOutcome {
         let graph = &self.tool.schema;
         let direct = validate_value(graph, declared, value);
         if direct.is_ok() {
             return ValueIsOutcome::Compatible;
         }
 
-        // "any element/occurrence" relaxation: peel `option` wrappers (resolving
-        // refs along the way) and, for a list-shaped declared type, compare the
-        // literal against the element type. When this relaxation applies, its
-        // element comparison is the relevant one for classification.
+        // A collecting surface's comparand is already the per-occurrence type; no
+        // element/value relaxation applies. Classify on the direct comparison.
+        if mode == ValueIsMode::Exact {
+            return match direct {
+                Err(errors) if value_mismatch_is_only_dangling(&errors) => {
+                    ValueIsOutcome::BlockedByDanglingRef
+                }
+                _ => ValueIsOutcome::Mismatch,
+            };
+        }
+
+        // "any element/entry" relaxation: peel `option` wrappers (resolving refs
+        // along the way) and, for a list/fixed-list-shaped declared type, compare
+        // the literal against the element type, or for a map-shaped type against
+        // the value type. When this relaxation applies, its comparison is the
+        // relevant one for classification.
         if let Ok(mut peeled) = graph.resolve_ref(declared) {
             while let SchemaType::Option { inner, .. } = peeled {
                 match graph.resolve_ref(inner) {
@@ -987,9 +1029,15 @@ impl<'a> Validator<'a> {
                     }
                 }
             }
-            if let SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } = peeled
-            {
-                return match validate_value(graph, element, value) {
+            let relaxed = match peeled {
+                SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                    Some(element.as_ref())
+                }
+                SchemaType::Map { value: v, .. } => Some(v.as_ref()),
+                _ => None,
+            };
+            if let Some(inner_ty) = relaxed {
+                return match validate_value(graph, inner_ty, value) {
                     Ok(()) => ValueIsOutcome::Compatible,
                     Err(errors) if value_mismatch_is_only_dangling(&errors) => {
                         ValueIsOutcome::BlockedByDanglingRef
@@ -1069,12 +1117,24 @@ fn register_option<'a>(graph: &'a SchemaGraph, scope: &mut NameScope<'a>, opt: &
     // type error is reported elsewhere. A dangling reference inside an otherwise
     // comparable type is handled at check time by [`Validator::value_is_outcome`].
     let comparand = match option_value_type(graph, opt) {
-        Some(ty) => ValueComparand::Type(ty),
+        Some(ty) => ValueComparand::Type(ty, option_value_is_mode(opt)),
         None => ValueComparand::BlockedByTypeError,
     };
     scope.typed.insert(opt.long.clone(), comparand);
     for alias in &opt.aliases {
         scope.typed.insert(alias.clone(), comparand);
+    }
+}
+
+/// The `value-is` matching mode for an option: a scalar / optional-scalar option
+/// is a non-collecting value surface (its declared value is matched with the
+/// one-level relaxation); a repeatable-list or repeatable-map option collects
+/// occurrences, so its per-occurrence comparand (element / map value type) is
+/// matched exactly.
+fn option_value_is_mode(opt: &OptionSpec) -> ValueIsMode {
+    match &opt.shape {
+        OptionShape::Scalar(_) | OptionShape::OptionalScalar(_) => ValueIsMode::WholeOrOnePeel,
+        OptionShape::RepeatableList(_) | OptionShape::RepeatableMap(_) => ValueIsMode::Exact,
     }
 }
 

@@ -355,6 +355,114 @@ fn repeatable_map_value_is_uses_resolved_map_value_type() {
     assert_eq!(validate_tool(&tool), Ok(()));
 }
 
+#[test]
+fn value_is_one_item_literal_on_repeatable_list_option_is_accepted() {
+    // A repeatable-list option collecting `list<u32>` items: a value-is matches
+    // one occurrence (a `list<u32>`) exactly.
+    let mut inc = scalar_option("inc", SchemaType::string());
+    inc.shape = OptionShape::RepeatableList(RepeatableListShape {
+        repetition: Repetition::Repeated,
+        item_type: SchemaType::list(SchemaType::u32()),
+    });
+    let mut body = empty_body();
+    body.options = vec![inc];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "inc".to_string(),
+        value: SchemaValue::List {
+            elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)],
+        },
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    assert_eq!(validate_tool(&tool), Ok(()));
+}
+
+#[test]
+fn value_is_into_nested_element_of_repeatable_list_option_is_rejected() {
+    // A repeatable-list option collecting `list<u32>` items is a collecting
+    // surface: its comparand is one occurrence (`list<u32>`), matched exactly. A
+    // bare `u32` would be a nested element of one occurrence, which must NOT be
+    // accepted (no element relaxation on a collecting surface).
+    let mut inc = scalar_option("inc", SchemaType::string());
+    inc.shape = OptionShape::RepeatableList(RepeatableListShape {
+        repetition: Repetition::Repeated,
+        item_type: SchemaType::list(SchemaType::u32()),
+    });
+    let mut body = empty_body();
+    body.options = vec![inc];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "inc".to_string(),
+        value: SchemaValue::U32(1),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { name, .. } if name == "inc"
+        )),
+        "expected value-is mismatch for nested element of repeatable list, got {errors:?}"
+    );
+}
+
+#[test]
+fn value_is_whole_list_literal_on_tail_positional_is_rejected() {
+    // A tail positional collects items into a list; its comparand is one item
+    // (`string`), matched exactly. A whole-list literal must NOT be accepted.
+    let mut body = empty_body();
+    body.positionals.tail = Some(TailPositional {
+        name: "args".to_string(),
+        doc: Doc::default(),
+        value_name: None,
+        item_type: SchemaType::string(),
+        min: 0,
+        max: None,
+        separator: None,
+        verbatim: false,
+        accepts_stdio: false,
+    });
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "args".to_string(),
+        value: SchemaValue::List {
+            elements: vec![SchemaValue::String("prod".to_string())],
+        },
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { name, .. } if name == "args"
+        )),
+        "expected value-is mismatch for whole-list literal on tail, got {errors:?}"
+    );
+}
+
+#[test]
+fn value_is_into_map_value_of_scalar_option_is_accepted() {
+    // A scalar option whose declared type is a map is a non-collecting value
+    // surface: a value-is matches the whole map, or — under the one-level
+    // relaxation — a single map value.
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "cfg",
+        SchemaType::map(SchemaType::string(), SchemaType::u32()),
+    )];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "cfg".to_string(),
+        value: SchemaValue::U32(1),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    assert_eq!(validate_tool(&tool), Ok(()));
+}
+
 // --- validation: failures ---
 
 #[test]
@@ -964,6 +1072,46 @@ fn pure_recursive_alias_input_type_is_reported_once_at_input_position() {
                 .to_string(),
         }],
         "recursive alias should be reported once at the input that uses it, got {errors:?}"
+    );
+}
+
+#[test]
+fn value_is_on_pure_recursive_alias_is_not_suppressed_like_dangling_ref() {
+    let id = TypeId::new("cycle");
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(id.clone()))];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "arg".to_string(),
+        value: SchemaValue::String("x".to_string()),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![SchemaTypeDef {
+        id: id.clone(),
+        name: Some("Cycle".to_string()),
+        body: SchemaType::ref_to(id),
+    }];
+
+    let errors = validate_tool(&tool).expect_err("recursive alias must be rejected");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::IllFormedSchema { position, detail, .. }
+                if position == "arg" && detail.contains("reference cycle with no concrete type")
+        )),
+        "expected the structural recursive-alias error, got {errors:?}"
+    );
+    // A reference cycle never resolves to a concrete type, so no literal can ever
+    // satisfy it: unlike a *dangling* ref (which is suppressed in favor of the
+    // separate `UnresolvedTypeRef`), the recursive comparand is a genuine
+    // `value-is` mismatch and is reported alongside the structural error.
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { name, .. } if name == "arg"
+        )),
+        "value-is mismatch on a recursive alias must not be suppressed, got {errors:?}"
     );
 }
 
