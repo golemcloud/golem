@@ -96,7 +96,7 @@ final case class QuantitySpec(
   max: Option[QuantityValue] = None
 )
 
-final case class SecretSpec(category: Option[String] = None)
+final case class SecretSpec(inner: SchemaType, category: Option[String] = None)
 
 final case class QuotaTokenSpec(resourceName: Option[String] = None)
 

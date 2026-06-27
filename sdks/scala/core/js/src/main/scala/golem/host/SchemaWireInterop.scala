@@ -268,8 +268,8 @@ object SchemaWireInterop {
       case other          => throw new IllegalArgumentException(s"Unknown discriminator tag: $other")
     }
 
-  private def secretSpecToJs(s: SecretSpec): JsSecretSpec   = JsSecretSpec(s.category.orUndefined)
-  private def secretSpecFromJs(j: JsSecretSpec): SecretSpec = SecretSpec(j.category.toOption)
+  private def secretSpecToJs(s: WitSecretSpec): JsSecretSpec   = JsSecretSpec(s.inner, s.category.orUndefined)
+  private def secretSpecFromJs(j: JsSecretSpec): WitSecretSpec = WitSecretSpec(j.inner, j.category.toOption)
 
   private def quotaSpecToJs(s: QuotaTokenSpec): JsQuotaTokenSpec   = JsQuotaTokenSpec(s.resourceName.orUndefined)
   private def quotaSpecFromJs(j: JsQuotaTokenSpec): QuotaTokenSpec = QuotaTokenSpec(j.resourceName.toOption)
@@ -445,7 +445,8 @@ object SchemaWireInterop {
    */
   private def preflightValueTree(v: WitSchemaValueTree): Unit = {
     import WitSchemaValueNode._
-    val seenRawQuota = mutable.Set.empty[Any]
+    val seenRawSecret = mutable.Set.empty[Any]
+    val seenRawQuota  = mutable.Set.empty[Any]
 
     def checkRange(name: String, value: Long, min: Long, max: Long): Unit =
       if (value < min || value > max)
@@ -466,6 +467,14 @@ object SchemaWireInterop {
           throw SchemaEncodeError(
             s"invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${dt.nanoseconds}"
           )
+      case SecretValue(h) =>
+        val raw = h
+          .withHandle(identity)
+          .getOrElse(
+            throw SchemaEncodeError("secret handle was already transferred; an owned secret can only be sent once")
+          )
+        if (!seenRawSecret.add(raw))
+          throw SchemaEncodeError("the same secret handle appeared more than once in one value tree")
       case QuotaTokenHandle(h) =>
         // Peek the underlying owned resource without consuming it so two distinct
         // holders wrapping the same raw handle are also rejected.
@@ -518,8 +527,15 @@ object SchemaWireInterop {
         JsSchemaValueNode.durationValue(JsDurationValuePayload(js.BigInt(p.nanoseconds.toString)))
       case QuantityValueNode(v) => JsSchemaValueNode.quantityValueNode(quantityValueToJs(v))
       case UnionValue(p)        => JsSchemaValueNode.unionValue(JsUnionValuePayload(p.tag, p.body))
-      case SecretValue(p)       => JsSchemaValueNode.secretValue(JsSecretValuePayload(p.secretRef))
-      case QuotaTokenHandle(h)  =>
+      case SecretValue(h)       =>
+        h.take() match {
+          case Some(raw) => JsSchemaValueNode.secretValue(raw.asInstanceOf[js.Any])
+          case None      =>
+            throw new IllegalStateException(
+              "secret handle was already transferred; an owned secret can only be sent once"
+            )
+        }
+      case QuotaTokenHandle(h) =>
         // Move the owned `quota-token` resource out of the opaque handle exactly
         // once. `schemaValueToWit` preflights that every handle is present and
         // unique, so this take always succeeds for a well-formed tree.
@@ -581,8 +597,7 @@ object SchemaWireInterop {
         val p = valOf(j).asInstanceOf[JsUnionValuePayload]
         UnionValue(WitUnionValuePayload(p.tag, p.body))
       case "secret-value" =>
-        val p = valOf(j).asInstanceOf[JsSecretValuePayload]
-        SecretValue(WitSecretValuePayload(p.secretRef))
+        SecretValue(GuestSecretHandle.fromRaw(valOf(j)))
       case "quota-token-handle" =>
         // Wrap the owned `quota-token` resource in a fresh take-once handle.
         QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(valOf(j)))

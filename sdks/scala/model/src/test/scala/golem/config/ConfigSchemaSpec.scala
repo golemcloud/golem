@@ -16,10 +16,12 @@
 
 package golem.config
 
-import golem.schema.{IntoSchema, SchemaValue}
+import golem.schema.{IntoSchema, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue, SecretSpec}
 import zio.test._
 
 object ConfigSchemaSpec extends ZIOSpecDefault {
+  private def secretGraph[A](implicit into: IntoSchema[A]): SchemaGraph =
+    SchemaGraph(into.graph.defs, SchemaType(SchemaTypeBody.SecretType(SecretSpec(into.graph.root))))
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ConfigSchemaSpec")(
@@ -77,7 +79,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Secret,
             decls.head.path == List("apiKey"),
-            decls.head.valueType == IntoSchema[String].graph
+            decls.head.valueType == secretGraph[String]
           )
         },
         test("Secret[Int] produces secret declaration with int type") {
@@ -86,7 +88,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Secret,
             decls.head.path == List("pin"),
-            decls.head.valueType == IntoSchema[Int].graph
+            decls.head.valueType == secretGraph[Int]
           )
         }
       ),
