@@ -113,6 +113,24 @@ pub(all) struct ResultSpec {
       ok : Int?; err : Int?
 } derive(Show, Eq)
 ///|
+/// --- Numeric restrictions ---
+/// A numeric bound usable across every numeric representation. Float bounds
+/// carry canonical IEEE-754 `f64` bits (NaN/inf rejected, -0.0 normalized);
+/// comparisons decode the bits to `f64` and compare numerically.
+pub(all) enum NumericBound {
+      Signed(Int64)
+      Unsigned(UInt64)
+      FloatBits(UInt64)
+} derive(Show, Eq)
+///|
+/// Inline numeric refinement. `none` on a numeric type means unconstrained
+/// (the common case). The empty restriction set is never encoded as `some`:
+/// producers normalize it to `none`, decoders normalize a decoded empty to
+/// `none`. `unit` is schema/help metadata only.
+pub(all) struct NumericRestrictions {
+      min : NumericBound?; max : NumericBound?; unit : String?
+} derive(Show, Eq)
+///|
 /// --- Text / Binary restrictions ---
 pub(all) struct TextRestrictions {
       languages : Array[String]?; min_length : UInt?; max_length : UInt?; regex : String?
@@ -256,16 +274,16 @@ pub(all) struct QuotaTokenSpec {
 pub(all) enum SchemaTypeBody {
       RefType(Int)
       BoolType
-      S8Type
-      S16Type
-      S32Type
-      S64Type
-      U8Type
-      U16Type
-      U32Type
-      U64Type
-      F32Type
-      F64Type
+      S8Type(NumericRestrictions?)
+      S16Type(NumericRestrictions?)
+      S32Type(NumericRestrictions?)
+      S64Type(NumericRestrictions?)
+      U8Type(NumericRestrictions?)
+      U16Type(NumericRestrictions?)
+      U32Type(NumericRestrictions?)
+      U64Type(NumericRestrictions?)
+      F32Type(NumericRestrictions?)
+      F64Type(NumericRestrictions?)
       CharType
       StringType
       RecordType(Array[NamedFieldType])

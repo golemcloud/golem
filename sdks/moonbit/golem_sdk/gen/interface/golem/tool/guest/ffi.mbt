@@ -14,7 +14,7 @@ pub fn wasmExportDiscoverTools() -> Int {
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.Tool = (payload)[(index)]
                         let iter_base = address + (index * 36);
-                        __wit_bindgen_lower_t517((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t523((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((return_area) + 8, (payload).length())
@@ -24,7 +24,7 @@ pub fn wasmExportDiscoverTools() -> Int {
             }
             Err(payload0) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t518((return_area) + 4, payload0)
+                  __wit_bindgen_lower_t524((return_area) + 4, payload0)
 
                   ()
             }
@@ -66,7 +66,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 32))
 
                               for index4 = 0; index4 < (mbt_ffi_load32((iter_base) + 44)); index4 = index4 + 1 {
-                                    let iter_base = (mbt_ffi_load32((iter_base) + 40)) + (index4 * 108)
+                                    let iter_base = (mbt_ffi_load32((iter_base) + 40)) + (index4 * 112)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                     for index1 = 0; index1 < (mbt_ffi_load32((iter_base) + 20)); index1 = index1 + 1 {
@@ -95,12 +95,12 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                           _ => panic()
                                     }
 
-                                    match (mbt_ffi_load8_u((iter_base) + 76)) {
+                                    match (mbt_ffi_load8_u((iter_base) + 80)) {
                                           0 => ()
                                           1 => {
 
-                                                for index3 = 0; index3 < (mbt_ffi_load32((iter_base) + 84)); index3 = index3 + 1 {
-                                                      let iter_base = (mbt_ffi_load32((iter_base) + 80)) + (index3 * 32)
+                                                for index3 = 0; index3 < (mbt_ffi_load32((iter_base) + 88)); index3 = index3 + 1 {
+                                                      let iter_base = (mbt_ffi_load32((iter_base) + 84)) + (index3 * 32)
 
                                                       match (mbt_ffi_load8_u((iter_base) + 0)) {
                                                             0 => ()
@@ -200,16 +200,16 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                       }
 
                                                 }
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 80))
+                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 84))
 
                                           }
                                           _ => panic()
                                     }
 
-                                    match (mbt_ffi_load8_u((iter_base) + 96)) {
+                                    match (mbt_ffi_load8_u((iter_base) + 100)) {
                                           0 => ()
                                           1 => {
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 100))
+                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 104))
 
                                           }
                                           _ => panic()
@@ -431,7 +431,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                           }
 
                                           for index15 = 0; index15 < (mbt_ffi_load32((iter_base) + 160)); index15 = index15 + 1 {
-                                                let iter_base = (mbt_ffi_load32((iter_base) + 156)) + (index15 * 108)
+                                                let iter_base = (mbt_ffi_load32((iter_base) + 156)) + (index15 * 112)
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                                 for index12 = 0; index12 < (mbt_ffi_load32((iter_base) + 20)); index12 = index12 + 1 {
@@ -460,12 +460,12 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                       _ => panic()
                                                 }
 
-                                                match (mbt_ffi_load8_u((iter_base) + 76)) {
+                                                match (mbt_ffi_load8_u((iter_base) + 80)) {
                                                       0 => ()
                                                       1 => {
 
-                                                            for index14 = 0; index14 < (mbt_ffi_load32((iter_base) + 84)); index14 = index14 + 1 {
-                                                                  let iter_base = (mbt_ffi_load32((iter_base) + 80)) + (index14 * 32)
+                                                            for index14 = 0; index14 < (mbt_ffi_load32((iter_base) + 88)); index14 = index14 + 1 {
+                                                                  let iter_base = (mbt_ffi_load32((iter_base) + 84)) + (index14 * 32)
 
                                                                   match (mbt_ffi_load8_u((iter_base) + 0)) {
                                                                         0 => ()
@@ -565,16 +565,16 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                   }
 
                                                             }
-                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 80))
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 84))
 
                                                       }
                                                       _ => panic()
                                                 }
 
-                                                match (mbt_ffi_load8_u((iter_base) + 96)) {
+                                                match (mbt_ffi_load8_u((iter_base) + 100)) {
                                                       0 => ()
                                                       1 => {
-                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 100))
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 104))
 
                                                       }
                                                       _ => panic()
@@ -1734,16 +1734,206 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                               match (mbt_ffi_load8_u((iter_base) + 0)) {
                                     0 => ()
                                     1 => ()
-                                    2 => ()
-                                    3 => ()
-                                    4 => ()
-                                    5 => ()
-                                    6 => ()
-                                    7 => ()
-                                    8 => ()
-                                    9 => ()
-                                    10 => ()
-                                    11 => ()
+                                    2 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    3 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    4 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    5 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    6 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    7 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    8 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    9 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    10 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
+                                    11 => {
+
+                                          match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                0 => ()
+                                                1 => {
+
+                                                      match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                            0 => ()
+                                                            1 => {
+                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                            }
+                                                            _ => panic()
+                                                      }
+
+                                                }
+                                                _ => panic()
+                                          }
+
+                                    }
                                     12 => ()
                                     13 => ()
                                     14 => {
@@ -2277,16 +2467,206 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
                                           1 => ()
-                                          2 => ()
-                                          3 => ()
-                                          4 => ()
-                                          5 => ()
-                                          6 => ()
-                                          7 => ()
-                                          8 => ()
-                                          9 => ()
-                                          10 => ()
-                                          11 => ()
+                                          2 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          3 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          4 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          5 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          6 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          7 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          8 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          9 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          10 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          11 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
                                           12 => ()
                                           13 => ()
                                           14 => {
@@ -2903,13 +3283,13 @@ pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
       match result0 {
             Ok(payload) => {
                   mbt_ffi_store8((return_area) + 0, (0))
-                  __wit_bindgen_lower_t517((return_area) + 4, payload)
+                  __wit_bindgen_lower_t523((return_area) + 4, payload)
 
                   ()
             }
             Err(payload1) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t518((return_area) + 4, payload1)
+                  __wit_bindgen_lower_t524((return_area) + 4, payload1)
 
                   ()
             }
@@ -2948,7 +3328,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 32))
 
                         for index4 = 0; index4 < (mbt_ffi_load32((iter_base) + 44)); index4 = index4 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 40)) + (index4 * 108)
+                              let iter_base = (mbt_ffi_load32((iter_base) + 40)) + (index4 * 112)
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                               for index1 = 0; index1 < (mbt_ffi_load32((iter_base) + 20)); index1 = index1 + 1 {
@@ -2977,12 +3357,12 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                     _ => panic()
                               }
 
-                              match (mbt_ffi_load8_u((iter_base) + 76)) {
+                              match (mbt_ffi_load8_u((iter_base) + 80)) {
                                     0 => ()
                                     1 => {
 
-                                          for index3 = 0; index3 < (mbt_ffi_load32((iter_base) + 84)); index3 = index3 + 1 {
-                                                let iter_base = (mbt_ffi_load32((iter_base) + 80)) + (index3 * 32)
+                                          for index3 = 0; index3 < (mbt_ffi_load32((iter_base) + 88)); index3 = index3 + 1 {
+                                                let iter_base = (mbt_ffi_load32((iter_base) + 84)) + (index3 * 32)
 
                                                 match (mbt_ffi_load8_u((iter_base) + 0)) {
                                                       0 => ()
@@ -3082,16 +3462,16 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                 }
 
                                           }
-                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 80))
+                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 84))
 
                                     }
                                     _ => panic()
                               }
 
-                              match (mbt_ffi_load8_u((iter_base) + 96)) {
+                              match (mbt_ffi_load8_u((iter_base) + 100)) {
                                     0 => ()
                                     1 => {
-                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 100))
+                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 104))
 
                                     }
                                     _ => panic()
@@ -3313,7 +3693,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                     }
 
                                     for index15 = 0; index15 < (mbt_ffi_load32((iter_base) + 160)); index15 = index15 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 156)) + (index15 * 108)
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 156)) + (index15 * 112)
                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                           for index12 = 0; index12 < (mbt_ffi_load32((iter_base) + 20)); index12 = index12 + 1 {
@@ -3342,12 +3722,12 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                 _ => panic()
                                           }
 
-                                          match (mbt_ffi_load8_u((iter_base) + 76)) {
+                                          match (mbt_ffi_load8_u((iter_base) + 80)) {
                                                 0 => ()
                                                 1 => {
 
-                                                      for index14 = 0; index14 < (mbt_ffi_load32((iter_base) + 84)); index14 = index14 + 1 {
-                                                            let iter_base = (mbt_ffi_load32((iter_base) + 80)) + (index14 * 32)
+                                                      for index14 = 0; index14 < (mbt_ffi_load32((iter_base) + 88)); index14 = index14 + 1 {
+                                                            let iter_base = (mbt_ffi_load32((iter_base) + 84)) + (index14 * 32)
 
                                                             match (mbt_ffi_load8_u((iter_base) + 0)) {
                                                                   0 => ()
@@ -3447,16 +3827,16 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                             }
 
                                                       }
-                                                      mbt_ffi_free(mbt_ffi_load32((iter_base) + 80))
+                                                      mbt_ffi_free(mbt_ffi_load32((iter_base) + 84))
 
                                                 }
                                                 _ => panic()
                                           }
 
-                                          match (mbt_ffi_load8_u((iter_base) + 96)) {
+                                          match (mbt_ffi_load8_u((iter_base) + 100)) {
                                                 0 => ()
                                                 1 => {
-                                                      mbt_ffi_free(mbt_ffi_load32((iter_base) + 100))
+                                                      mbt_ffi_free(mbt_ffi_load32((iter_base) + 104))
 
                                                 }
                                                 _ => panic()
@@ -4616,16 +4996,206 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                         match (mbt_ffi_load8_u((iter_base) + 0)) {
                               0 => ()
                               1 => ()
-                              2 => ()
-                              3 => ()
-                              4 => ()
-                              5 => ()
-                              6 => ()
-                              7 => ()
-                              8 => ()
-                              9 => ()
-                              10 => ()
-                              11 => ()
+                              2 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              3 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              4 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              5 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              6 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              7 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              8 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              9 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              10 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
+                              11 => {
+
+                                    match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                          0 => ()
+                                          1 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                      0 => ()
+                                                      1 => {
+                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          _ => panic()
+                                    }
+
+                              }
                               12 => ()
                               13 => ()
                               14 => {
@@ -5156,16 +5726,206 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
                                           1 => ()
-                                          2 => ()
-                                          3 => ()
-                                          4 => ()
-                                          5 => ()
-                                          6 => ()
-                                          7 => ()
-                                          8 => ()
-                                          9 => ()
-                                          10 => ()
-                                          11 => ()
+                                          2 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          3 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          4 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          5 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          6 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          7 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          8 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          9 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          10 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          11 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
                                           12 => ()
                                           13 => ()
                                           14 => {
@@ -5786,11 +6546,11 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
       }
       mbt_ffi_free(mbt_ffi_load32((p0) + 8))
 
-      let array126 : Array[@types.SchemaTypeNode] = [];
-      for index127 = 0; index127 < (mbt_ffi_load32((p0) + 20)); index127 = index127 + 1 {
-            let iter_base = (mbt_ffi_load32((p0) + 16)) + (index127 * 144)
+      let array196 : Array[@types.SchemaTypeNode] = [];
+      for index197 = 0; index197 < (mbt_ffi_load32((p0) + 20)); index197 = index197 + 1 {
+            let iter_base = (mbt_ffi_load32((p0) + 16)) + (index197 * 144)
 
-            let lifted112 = match (mbt_ffi_load8_u((iter_base) + 0)) {
+            let lifted182 = match (mbt_ffi_load8_u((iter_base) + 0)) {
                   0 => {
 
                         @types.SchemaTypeBody::RefType(mbt_ffi_load32((iter_base) + 8))
@@ -5801,43 +6561,743 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   2 => {
 
-                        @types.SchemaTypeBody::S8Type
+                        let lifted6 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted1 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted3 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted2 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted2)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted5 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result4 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result4)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted1, max : lifted3, unit : lifted5})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::S8Type(lifted6)
                   }
                   3 => {
 
-                        @types.SchemaTypeBody::S16Type
+                        let lifted13 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted8 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted7 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted7)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted10 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted9 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted9)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted12 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result11 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result11)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted8, max : lifted10, unit : lifted12})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::S16Type(lifted13)
                   }
                   4 => {
 
-                        @types.SchemaTypeBody::S32Type
+                        let lifted20 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted15 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted14 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted14)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted17 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted16 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted16)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted19 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result18 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result18)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted15, max : lifted17, unit : lifted19})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::S32Type(lifted20)
                   }
                   5 => {
 
-                        @types.SchemaTypeBody::S64Type
+                        let lifted27 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted22 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted21 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted21)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted24 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted23 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted23)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted26 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result25 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result25)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted22, max : lifted24, unit : lifted26})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::S64Type(lifted27)
                   }
                   6 => {
 
-                        @types.SchemaTypeBody::U8Type
+                        let lifted34 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted29 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted28 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted28)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted31 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted30 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted30)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted33 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result32 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result32)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted29, max : lifted31, unit : lifted33})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::U8Type(lifted34)
                   }
                   7 => {
 
-                        @types.SchemaTypeBody::U16Type
+                        let lifted41 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted36 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted35 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted35)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted38 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted37 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted37)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted40 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result39 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result39)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted36, max : lifted38, unit : lifted40})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::U16Type(lifted41)
                   }
                   8 => {
 
-                        @types.SchemaTypeBody::U32Type
+                        let lifted48 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted43 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted42 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted42)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted45 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted44 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted44)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted47 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result46 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result46)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted43, max : lifted45, unit : lifted47})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::U32Type(lifted48)
                   }
                   9 => {
 
-                        @types.SchemaTypeBody::U64Type
+                        let lifted55 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted50 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted49 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted49)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted52 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted51 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted51)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted54 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result53 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result53)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted50, max : lifted52, unit : lifted54})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::U64Type(lifted55)
                   }
                   10 => {
 
-                        @types.SchemaTypeBody::F32Type
+                        let lifted62 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted57 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted56 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted56)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted59 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted58 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted58)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted61 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result60 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result60)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted57, max : lifted59, unit : lifted61})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::F32Type(lifted62)
                   }
                   11 => {
 
-                        @types.SchemaTypeBody::F64Type
+                        let lifted69 : @types.NumericRestrictions? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              0 => Option::None
+                              1 => {
+
+                                    let lifted64 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 16) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted63 = match (mbt_ffi_load8_u((iter_base) + 24)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 32))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 32)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted63)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted66 : @types.NumericBound? = match mbt_ffi_load8_u((iter_base) + 40) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let lifted65 = match (mbt_ffi_load8_u((iter_base) + 48)) {
+                                                      0 => {
+
+                                                            @types.NumericBound::Signed(mbt_ffi_load64((iter_base) + 56))
+                                                      }
+                                                      1 => {
+
+                                                            @types.NumericBound::Unsigned((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      2 => {
+
+                                                            @types.NumericBound::FloatBits((mbt_ffi_load64((iter_base) + 56)).reinterpret_as_uint64())
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                                Option::Some(lifted65)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    let lifted68 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                                          0 => Option::None
+                                          1 => {
+
+                                                let result67 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+
+                                                Option::Some(result67)
+                                          }
+                                          _ => panic()
+                                    }
+
+                                    Option::Some(@types.NumericRestrictions::{min : lifted64, max : lifted66, unit : lifted68})
+                              }
+                              _ => panic()
+                        }
+
+                        @types.SchemaTypeBody::F64Type(lifted69)
                   }
                   12 => {
 
@@ -5849,59 +7309,59 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   14 => {
 
-                        let array14 : Array[@types.NamedFieldType] = [];
-                        for index15 = 0; index15 < (mbt_ffi_load32((iter_base) + 12)); index15 = index15 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index15 * 68)
+                        let array84 : Array[@types.NamedFieldType] = [];
+                        for index85 = 0; index85 < (mbt_ffi_load32((iter_base) + 12)); index85 = index85 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index85 * 68)
 
-                              let result1 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                              let result70 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                              let lifted : String? = match mbt_ffi_load8_u((iter_base) + 12) {
+                              let lifted72 : String? = match mbt_ffi_load8_u((iter_base) + 12) {
                                     0 => Option::None
                                     1 => {
 
-                                          let result2 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
+                                          let result71 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
 
-                                          Option::Some(result2)
+                                          Option::Some(result71)
                                     }
                                     _ => panic()
                               }
 
-                              let array4 : Array[String] = [];
-                              for index5 = 0; index5 < (mbt_ffi_load32((iter_base) + 28)); index5 = index5 + 1 {
-                                    let iter_base = (mbt_ffi_load32((iter_base) + 24)) + (index5 * 8)
+                              let array74 : Array[String] = [];
+                              for index75 = 0; index75 < (mbt_ffi_load32((iter_base) + 28)); index75 = index75 + 1 {
+                                    let iter_base = (mbt_ffi_load32((iter_base) + 24)) + (index75 * 8)
 
-                                    let result3 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                    let result73 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                    array4.push(result3)
+                                    array74.push(result73)
                               }
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 24))
 
-                              let array7 : Array[String] = [];
-                              for index8 = 0; index8 < (mbt_ffi_load32((iter_base) + 36)); index8 = index8 + 1 {
-                                    let iter_base = (mbt_ffi_load32((iter_base) + 32)) + (index8 * 8)
+                              let array77 : Array[String] = [];
+                              for index78 = 0; index78 < (mbt_ffi_load32((iter_base) + 36)); index78 = index78 + 1 {
+                                    let iter_base = (mbt_ffi_load32((iter_base) + 32)) + (index78 * 8)
 
-                                    let result6 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                    let result76 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                    array7.push(result6)
+                                    array77.push(result76)
                               }
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 32))
 
-                              let lifted10 : String? = match mbt_ffi_load8_u((iter_base) + 40) {
+                              let lifted80 : String? = match mbt_ffi_load8_u((iter_base) + 40) {
                                     0 => Option::None
                                     1 => {
 
-                                          let result9 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 44), mbt_ffi_load32((iter_base) + 48))
+                                          let result79 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 44), mbt_ffi_load32((iter_base) + 48))
 
-                                          Option::Some(result9)
+                                          Option::Some(result79)
                                     }
                                     _ => panic()
                               }
 
-                              let lifted13 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 52) {
+                              let lifted83 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 52) {
                                     0 => Option::None
                                     1 => {
 
-                                          let lifted12 = match (mbt_ffi_load8_u((iter_base) + 56)) {
+                                          let lifted82 = match (mbt_ffi_load8_u((iter_base) + 56)) {
                                                 0 => {
 
                                                       @types.Role::Multimodal
@@ -5916,33 +7376,33 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                                                 }
                                                 3 => {
 
-                                                      let result11 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 60), mbt_ffi_load32((iter_base) + 64))
+                                                      let result81 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 60), mbt_ffi_load32((iter_base) + 64))
 
-                                                      @types.Role::Other(result11)
+                                                      @types.Role::Other(result81)
                                                 }
                                                 _ => panic()
                                           }
 
-                                          Option::Some(lifted12)
+                                          Option::Some(lifted82)
                                     }
                                     _ => panic()
                               }
 
-                              array14.push(@types.NamedFieldType::{name : result1, body : mbt_ffi_load32((iter_base) + 8), metadata : @types.MetadataEnvelope::{doc : lifted, aliases : array4, examples : array7, deprecated : lifted10, role : lifted13}})
+                              array84.push(@types.NamedFieldType::{name : result70, body : mbt_ffi_load32((iter_base) + 8), metadata : @types.MetadataEnvelope::{doc : lifted72, aliases : array74, examples : array77, deprecated : lifted80, role : lifted83}})
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaTypeBody::RecordType(array14)
+                        @types.SchemaTypeBody::RecordType(array84)
                   }
                   15 => {
 
-                        let array31 : Array[@types.VariantCaseType] = [];
-                        for index32 = 0; index32 < (mbt_ffi_load32((iter_base) + 12)); index32 = index32 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index32 * 72)
+                        let array101 : Array[@types.VariantCaseType] = [];
+                        for index102 = 0; index102 < (mbt_ffi_load32((iter_base) + 12)); index102 = index102 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index102 * 72)
 
-                              let result16 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                              let result86 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                              let lifted17 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
+                              let lifted87 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
                                     0 => Option::None
                                     1 => {
 
@@ -5951,53 +7411,53 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                                     _ => panic()
                               }
 
-                              let lifted19 : String? = match mbt_ffi_load8_u((iter_base) + 16) {
+                              let lifted89 : String? = match mbt_ffi_load8_u((iter_base) + 16) {
                                     0 => Option::None
                                     1 => {
 
-                                          let result18 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
+                                          let result88 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
 
-                                          Option::Some(result18)
+                                          Option::Some(result88)
                                     }
                                     _ => panic()
                               }
 
-                              let array21 : Array[String] = [];
-                              for index22 = 0; index22 < (mbt_ffi_load32((iter_base) + 32)); index22 = index22 + 1 {
-                                    let iter_base = (mbt_ffi_load32((iter_base) + 28)) + (index22 * 8)
+                              let array91 : Array[String] = [];
+                              for index92 = 0; index92 < (mbt_ffi_load32((iter_base) + 32)); index92 = index92 + 1 {
+                                    let iter_base = (mbt_ffi_load32((iter_base) + 28)) + (index92 * 8)
 
-                                    let result20 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                    let result90 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                    array21.push(result20)
+                                    array91.push(result90)
                               }
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 28))
 
-                              let array24 : Array[String] = [];
-                              for index25 = 0; index25 < (mbt_ffi_load32((iter_base) + 40)); index25 = index25 + 1 {
-                                    let iter_base = (mbt_ffi_load32((iter_base) + 36)) + (index25 * 8)
+                              let array94 : Array[String] = [];
+                              for index95 = 0; index95 < (mbt_ffi_load32((iter_base) + 40)); index95 = index95 + 1 {
+                                    let iter_base = (mbt_ffi_load32((iter_base) + 36)) + (index95 * 8)
 
-                                    let result23 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                    let result93 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                    array24.push(result23)
+                                    array94.push(result93)
                               }
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 36))
 
-                              let lifted27 : String? = match mbt_ffi_load8_u((iter_base) + 44) {
+                              let lifted97 : String? = match mbt_ffi_load8_u((iter_base) + 44) {
                                     0 => Option::None
                                     1 => {
 
-                                          let result26 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 48), mbt_ffi_load32((iter_base) + 52))
+                                          let result96 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 48), mbt_ffi_load32((iter_base) + 52))
 
-                                          Option::Some(result26)
+                                          Option::Some(result96)
                                     }
                                     _ => panic()
                               }
 
-                              let lifted30 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 56) {
+                              let lifted100 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 56) {
                                     0 => Option::None
                                     1 => {
 
-                                          let lifted29 = match (mbt_ffi_load8_u((iter_base) + 60)) {
+                                          let lifted99 = match (mbt_ffi_load8_u((iter_base) + 60)) {
                                                 0 => {
 
                                                       @types.Role::Multimodal
@@ -6012,63 +7472,63 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                                                 }
                                                 3 => {
 
-                                                      let result28 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 64), mbt_ffi_load32((iter_base) + 68))
+                                                      let result98 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 64), mbt_ffi_load32((iter_base) + 68))
 
-                                                      @types.Role::Other(result28)
+                                                      @types.Role::Other(result98)
                                                 }
                                                 _ => panic()
                                           }
 
-                                          Option::Some(lifted29)
+                                          Option::Some(lifted99)
                                     }
                                     _ => panic()
                               }
 
-                              array31.push(@types.VariantCaseType::{name : result16, payload : lifted17, metadata : @types.MetadataEnvelope::{doc : lifted19, aliases : array21, examples : array24, deprecated : lifted27, role : lifted30}})
+                              array101.push(@types.VariantCaseType::{name : result86, payload : lifted87, metadata : @types.MetadataEnvelope::{doc : lifted89, aliases : array91, examples : array94, deprecated : lifted97, role : lifted100}})
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaTypeBody::VariantType(array31)
+                        @types.SchemaTypeBody::VariantType(array101)
                   }
                   16 => {
 
-                        let array34 : Array[String] = [];
-                        for index35 = 0; index35 < (mbt_ffi_load32((iter_base) + 12)); index35 = index35 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index35 * 8)
+                        let array104 : Array[String] = [];
+                        for index105 = 0; index105 < (mbt_ffi_load32((iter_base) + 12)); index105 = index105 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index105 * 8)
 
-                              let result33 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                              let result103 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                              array34.push(result33)
+                              array104.push(result103)
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaTypeBody::EnumType(array34)
+                        @types.SchemaTypeBody::EnumType(array104)
                   }
                   17 => {
 
-                        let array37 : Array[String] = [];
-                        for index38 = 0; index38 < (mbt_ffi_load32((iter_base) + 12)); index38 = index38 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index38 * 8)
+                        let array107 : Array[String] = [];
+                        for index108 = 0; index108 < (mbt_ffi_load32((iter_base) + 12)); index108 = index108 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index108 * 8)
 
-                              let result36 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                              let result106 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                              array37.push(result36)
+                              array107.push(result106)
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaTypeBody::FlagsType(array37)
+                        @types.SchemaTypeBody::FlagsType(array107)
                   }
                   18 => {
 
-                        let array39 : Array[Int] = [];
-                        for index40 = 0; index40 < (mbt_ffi_load32((iter_base) + 12)); index40 = index40 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index40 * 4)
+                        let array109 : Array[Int] = [];
+                        for index110 = 0; index110 < (mbt_ffi_load32((iter_base) + 12)); index110 = index110 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index110 * 4)
 
-                              array39.push(mbt_ffi_load32((iter_base) + 0))
+                              array109.push(mbt_ffi_load32((iter_base) + 0))
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaTypeBody::TupleType(array39)
+                        @types.SchemaTypeBody::TupleType(array109)
                   }
                   19 => {
 
@@ -6088,7 +7548,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   23 => {
 
-                        let lifted41 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted111 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
@@ -6097,7 +7557,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        let lifted42 : Int? = match mbt_ffi_load8_u((iter_base) + 16) {
+                        let lifted112 : Int? = match mbt_ffi_load8_u((iter_base) + 16) {
                               0 => Option::None
                               1 => {
 
@@ -6106,30 +7566,30 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::ResultType(@types.ResultSpec::{ok : lifted41, err : lifted42})
+                        @types.SchemaTypeBody::ResultType(@types.ResultSpec::{ok : lifted111, err : lifted112})
                   }
                   24 => {
 
-                        let lifted46 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted116 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
-                                    let array44 : Array[String] = [];
-                                    for index45 = 0; index45 < (mbt_ffi_load32((iter_base) + 16)); index45 = index45 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 12)) + (index45 * 8)
+                                    let array114 : Array[String] = [];
+                                    for index115 = 0; index115 < (mbt_ffi_load32((iter_base) + 16)); index115 = index115 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 12)) + (index115 * 8)
 
-                                          let result43 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                          let result113 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                          array44.push(result43)
+                                          array114.push(result113)
                                     }
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 12))
 
-                                    Option::Some(array44)
+                                    Option::Some(array114)
                               }
                               _ => panic()
                         }
 
-                        let lifted47 : UInt? = match mbt_ffi_load8_u((iter_base) + 20) {
+                        let lifted117 : UInt? = match mbt_ffi_load8_u((iter_base) + 20) {
                               0 => Option::None
                               1 => {
 
@@ -6138,7 +7598,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        let lifted48 : UInt? = match mbt_ffi_load8_u((iter_base) + 28) {
+                        let lifted118 : UInt? = match mbt_ffi_load8_u((iter_base) + 28) {
                               0 => Option::None
                               1 => {
 
@@ -6147,41 +7607,41 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        let lifted50 : String? = match mbt_ffi_load8_u((iter_base) + 36) {
+                        let lifted120 : String? = match mbt_ffi_load8_u((iter_base) + 36) {
                               0 => Option::None
                               1 => {
 
-                                    let result49 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 40), mbt_ffi_load32((iter_base) + 44))
+                                    let result119 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 40), mbt_ffi_load32((iter_base) + 44))
 
-                                    Option::Some(result49)
+                                    Option::Some(result119)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::TextType(@types.TextRestrictions::{languages : lifted46, min_length : lifted47, max_length : lifted48, regex : lifted50})
+                        @types.SchemaTypeBody::TextType(@types.TextRestrictions::{languages : lifted116, min_length : lifted117, max_length : lifted118, regex : lifted120})
                   }
                   25 => {
 
-                        let lifted54 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted124 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
-                                    let array52 : Array[String] = [];
-                                    for index53 = 0; index53 < (mbt_ffi_load32((iter_base) + 16)); index53 = index53 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 12)) + (index53 * 8)
+                                    let array122 : Array[String] = [];
+                                    for index123 = 0; index123 < (mbt_ffi_load32((iter_base) + 16)); index123 = index123 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 12)) + (index123 * 8)
 
-                                          let result51 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                          let result121 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                          array52.push(result51)
+                                          array122.push(result121)
                                     }
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 12))
 
-                                    Option::Some(array52)
+                                    Option::Some(array122)
                               }
                               _ => panic()
                         }
 
-                        let lifted55 : UInt? = match mbt_ffi_load8_u((iter_base) + 20) {
+                        let lifted125 : UInt? = match mbt_ffi_load8_u((iter_base) + 20) {
                               0 => Option::None
                               1 => {
 
@@ -6190,7 +7650,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        let lifted56 : UInt? = match mbt_ffi_load8_u((iter_base) + 28) {
+                        let lifted126 : UInt? = match mbt_ffi_load8_u((iter_base) + 28) {
                               0 => Option::None
                               1 => {
 
@@ -6199,91 +7659,91 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{mime_types : lifted54, min_bytes : lifted55, max_bytes : lifted56})
+                        @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{mime_types : lifted124, min_bytes : lifted125, max_bytes : lifted126})
                   }
                   26 => {
 
-                        let lifted60 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 12) {
+                        let lifted130 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 12) {
                               0 => Option::None
                               1 => {
 
-                                    let array58 : Array[String] = [];
-                                    for index59 = 0; index59 < (mbt_ffi_load32((iter_base) + 20)); index59 = index59 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 16)) + (index59 * 8)
+                                    let array128 : Array[String] = [];
+                                    for index129 = 0; index129 < (mbt_ffi_load32((iter_base) + 20)); index129 = index129 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 16)) + (index129 * 8)
 
-                                          let result57 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                          let result127 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                          array58.push(result57)
+                                          array128.push(result127)
                                     }
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 16))
 
-                                    Option::Some(array58)
+                                    Option::Some(array128)
                               }
                               _ => panic()
                         }
 
-                        let lifted64 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 24) {
+                        let lifted134 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 24) {
                               0 => Option::None
                               1 => {
 
-                                    let array62 : Array[String] = [];
-                                    for index63 = 0; index63 < (mbt_ffi_load32((iter_base) + 32)); index63 = index63 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 28)) + (index63 * 8)
+                                    let array132 : Array[String] = [];
+                                    for index133 = 0; index133 < (mbt_ffi_load32((iter_base) + 32)); index133 = index133 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 28)) + (index133 * 8)
 
-                                          let result61 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                          let result131 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                          array62.push(result61)
+                                          array132.push(result131)
                                     }
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 28))
 
-                                    Option::Some(array62)
+                                    Option::Some(array132)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::PathType(@types.PathSpec::{direction : @types.PathDirection::from(mbt_ffi_load8_u((iter_base) + 8)), kind : @types.PathKind::from(mbt_ffi_load8_u((iter_base) + 9)), allowed_mime_types : lifted60, allowed_extensions : lifted64})
+                        @types.SchemaTypeBody::PathType(@types.PathSpec::{direction : @types.PathDirection::from(mbt_ffi_load8_u((iter_base) + 8)), kind : @types.PathKind::from(mbt_ffi_load8_u((iter_base) + 9)), allowed_mime_types : lifted130, allowed_extensions : lifted134})
                   }
                   27 => {
 
-                        let lifted68 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted138 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
-                                    let array66 : Array[String] = [];
-                                    for index67 = 0; index67 < (mbt_ffi_load32((iter_base) + 16)); index67 = index67 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 12)) + (index67 * 8)
+                                    let array136 : Array[String] = [];
+                                    for index137 = 0; index137 < (mbt_ffi_load32((iter_base) + 16)); index137 = index137 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 12)) + (index137 * 8)
 
-                                          let result65 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                          let result135 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                          array66.push(result65)
+                                          array136.push(result135)
                                     }
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 12))
 
-                                    Option::Some(array66)
+                                    Option::Some(array136)
                               }
                               _ => panic()
                         }
 
-                        let lifted72 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 20) {
+                        let lifted142 : Array[String]? = match mbt_ffi_load8_u((iter_base) + 20) {
                               0 => Option::None
                               1 => {
 
-                                    let array70 : Array[String] = [];
-                                    for index71 = 0; index71 < (mbt_ffi_load32((iter_base) + 28)); index71 = index71 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 24)) + (index71 * 8)
+                                    let array140 : Array[String] = [];
+                                    for index141 = 0; index141 < (mbt_ffi_load32((iter_base) + 28)); index141 = index141 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 24)) + (index141 * 8)
 
-                                          let result69 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                          let result139 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                          array70.push(result69)
+                                          array140.push(result139)
                                     }
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 24))
 
-                                    Option::Some(array70)
+                                    Option::Some(array140)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{allowed_schemes : lifted68, allowed_hosts : lifted72})
+                        @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{allowed_schemes : lifted138, allowed_hosts : lifted142})
                   }
                   28 => {
 
@@ -6295,148 +7755,148 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   30 => {
 
-                        let result73 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result143 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        let array75 : Array[String] = [];
-                        for index76 = 0; index76 < (mbt_ffi_load32((iter_base) + 20)); index76 = index76 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 16)) + (index76 * 8)
+                        let array145 : Array[String] = [];
+                        for index146 = 0; index146 < (mbt_ffi_load32((iter_base) + 20)); index146 = index146 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 16)) + (index146 * 8)
 
-                              let result74 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                              let result144 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                              array75.push(result74)
+                              array145.push(result144)
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 16))
 
-                        let lifted78 : @types.QuantityValue? = match mbt_ffi_load8_u((iter_base) + 24) {
+                        let lifted148 : @types.QuantityValue? = match mbt_ffi_load8_u((iter_base) + 24) {
                               0 => Option::None
                               1 => {
 
-                                    let result77 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 44), mbt_ffi_load32((iter_base) + 48))
+                                    let result147 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 44), mbt_ffi_load32((iter_base) + 48))
 
-                                    Option::Some(@types.QuantityValue::{mantissa : mbt_ffi_load64((iter_base) + 32), scale : mbt_ffi_load32((iter_base) + 40), unit : result77})
+                                    Option::Some(@types.QuantityValue::{mantissa : mbt_ffi_load64((iter_base) + 32), scale : mbt_ffi_load32((iter_base) + 40), unit : result147})
                               }
                               _ => panic()
                         }
 
-                        let lifted80 : @types.QuantityValue? = match mbt_ffi_load8_u((iter_base) + 56) {
+                        let lifted150 : @types.QuantityValue? = match mbt_ffi_load8_u((iter_base) + 56) {
                               0 => Option::None
                               1 => {
 
-                                    let result79 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 76), mbt_ffi_load32((iter_base) + 80))
+                                    let result149 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 76), mbt_ffi_load32((iter_base) + 80))
 
-                                    Option::Some(@types.QuantityValue::{mantissa : mbt_ffi_load64((iter_base) + 64), scale : mbt_ffi_load32((iter_base) + 72), unit : result79})
+                                    Option::Some(@types.QuantityValue::{mantissa : mbt_ffi_load64((iter_base) + 64), scale : mbt_ffi_load32((iter_base) + 72), unit : result149})
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{base_unit : result73, allowed_suffixes : array75, min : lifted78, max : lifted80})
+                        @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{base_unit : result143, allowed_suffixes : array145, min : lifted148, max : lifted150})
                   }
                   31 => {
 
-                        let array104 : Array[@types.UnionBranch] = [];
-                        for index105 = 0; index105 < (mbt_ffi_load32((iter_base) + 12)); index105 = index105 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index105 * 92)
+                        let array174 : Array[@types.UnionBranch] = [];
+                        for index175 = 0; index175 < (mbt_ffi_load32((iter_base) + 12)); index175 = index175 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index175 * 92)
 
-                              let result81 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                              let result151 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                              let lifted90 = match (mbt_ffi_load8_u((iter_base) + 12)) {
+                              let lifted160 = match (mbt_ffi_load8_u((iter_base) + 12)) {
                                     0 => {
 
-                                          let result82 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
+                                          let result152 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
 
-                                          @types.DiscriminatorRule::Prefix(result82)
+                                          @types.DiscriminatorRule::Prefix(result152)
                                     }
                                     1 => {
 
-                                          let result83 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
+                                          let result153 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
 
-                                          @types.DiscriminatorRule::Suffix(result83)
+                                          @types.DiscriminatorRule::Suffix(result153)
                                     }
                                     2 => {
 
-                                          let result84 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
+                                          let result154 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
 
-                                          @types.DiscriminatorRule::Contains(result84)
+                                          @types.DiscriminatorRule::Contains(result154)
                                     }
                                     3 => {
 
-                                          let result85 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
+                                          let result155 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
 
-                                          @types.DiscriminatorRule::Regex(result85)
+                                          @types.DiscriminatorRule::Regex(result155)
                                     }
                                     4 => {
 
-                                          let result86 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
+                                          let result156 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
 
-                                          let lifted88 : String? = match mbt_ffi_load8_u((iter_base) + 24) {
+                                          let lifted158 : String? = match mbt_ffi_load8_u((iter_base) + 24) {
                                                 0 => Option::None
                                                 1 => {
 
-                                                      let result87 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 28), mbt_ffi_load32((iter_base) + 32))
+                                                      let result157 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 28), mbt_ffi_load32((iter_base) + 32))
 
-                                                      Option::Some(result87)
+                                                      Option::Some(result157)
                                                 }
                                                 _ => panic()
                                           }
 
-                                          @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{field_name : result86, literal : lifted88})
+                                          @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{field_name : result156, literal : lifted158})
                                     }
                                     5 => {
 
-                                          let result89 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
+                                          let result159 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 16), mbt_ffi_load32((iter_base) + 20))
 
-                                          @types.DiscriminatorRule::FieldAbsent(result89)
+                                          @types.DiscriminatorRule::FieldAbsent(result159)
                                     }
                                     _ => panic()
                               }
 
-                              let lifted92 : String? = match mbt_ffi_load8_u((iter_base) + 36) {
+                              let lifted162 : String? = match mbt_ffi_load8_u((iter_base) + 36) {
                                     0 => Option::None
                                     1 => {
 
-                                          let result91 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 40), mbt_ffi_load32((iter_base) + 44))
+                                          let result161 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 40), mbt_ffi_load32((iter_base) + 44))
 
-                                          Option::Some(result91)
+                                          Option::Some(result161)
                                     }
                                     _ => panic()
                               }
 
-                              let array94 : Array[String] = [];
-                              for index95 = 0; index95 < (mbt_ffi_load32((iter_base) + 52)); index95 = index95 + 1 {
-                                    let iter_base = (mbt_ffi_load32((iter_base) + 48)) + (index95 * 8)
+                              let array164 : Array[String] = [];
+                              for index165 = 0; index165 < (mbt_ffi_load32((iter_base) + 52)); index165 = index165 + 1 {
+                                    let iter_base = (mbt_ffi_load32((iter_base) + 48)) + (index165 * 8)
 
-                                    let result93 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                    let result163 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                    array94.push(result93)
+                                    array164.push(result163)
                               }
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 48))
 
-                              let array97 : Array[String] = [];
-                              for index98 = 0; index98 < (mbt_ffi_load32((iter_base) + 60)); index98 = index98 + 1 {
-                                    let iter_base = (mbt_ffi_load32((iter_base) + 56)) + (index98 * 8)
+                              let array167 : Array[String] = [];
+                              for index168 = 0; index168 < (mbt_ffi_load32((iter_base) + 60)); index168 = index168 + 1 {
+                                    let iter_base = (mbt_ffi_load32((iter_base) + 56)) + (index168 * 8)
 
-                                    let result96 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                                    let result166 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                                    array97.push(result96)
+                                    array167.push(result166)
                               }
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 56))
 
-                              let lifted100 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
+                              let lifted170 : String? = match mbt_ffi_load8_u((iter_base) + 64) {
                                     0 => Option::None
                                     1 => {
 
-                                          let result99 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
+                                          let result169 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 68), mbt_ffi_load32((iter_base) + 72))
 
-                                          Option::Some(result99)
+                                          Option::Some(result169)
                                     }
                                     _ => panic()
                               }
 
-                              let lifted103 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 76) {
+                              let lifted173 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 76) {
                                     0 => Option::None
                                     1 => {
 
-                                          let lifted102 = match (mbt_ffi_load8_u((iter_base) + 80)) {
+                                          let lifted172 = match (mbt_ffi_load8_u((iter_base) + 80)) {
                                                 0 => {
 
                                                       @types.Role::Multimodal
@@ -6451,57 +7911,57 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                                                 }
                                                 3 => {
 
-                                                      let result101 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 84), mbt_ffi_load32((iter_base) + 88))
+                                                      let result171 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 84), mbt_ffi_load32((iter_base) + 88))
 
-                                                      @types.Role::Other(result101)
+                                                      @types.Role::Other(result171)
                                                 }
                                                 _ => panic()
                                           }
 
-                                          Option::Some(lifted102)
+                                          Option::Some(lifted172)
                                     }
                                     _ => panic()
                               }
 
-                              array104.push(@types.UnionBranch::{tag : result81, body : mbt_ffi_load32((iter_base) + 8), discriminator : lifted90, metadata : @types.MetadataEnvelope::{doc : lifted92, aliases : array94, examples : array97, deprecated : lifted100, role : lifted103}})
+                              array174.push(@types.UnionBranch::{tag : result151, body : mbt_ffi_load32((iter_base) + 8), discriminator : lifted160, metadata : @types.MetadataEnvelope::{doc : lifted162, aliases : array164, examples : array167, deprecated : lifted170, role : lifted173}})
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaTypeBody::UnionType(@types.UnionSpec::{branches : array104})
+                        @types.SchemaTypeBody::UnionType(@types.UnionSpec::{branches : array174})
                   }
                   32 => {
 
-                        let lifted107 : String? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted177 : String? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
-                                    let result106 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
+                                    let result176 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
 
-                                    Option::Some(result106)
+                                    Option::Some(result176)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::SecretType(@types.SecretSpec::{category : lifted107})
+                        @types.SchemaTypeBody::SecretType(@types.SecretSpec::{category : lifted177})
                   }
                   33 => {
 
-                        let lifted109 : String? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted179 : String? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
-                                    let result108 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
+                                    let result178 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
 
-                                    Option::Some(result108)
+                                    Option::Some(result178)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{resource_name : lifted109})
+                        @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{resource_name : lifted179})
                   }
                   34 => {
 
-                        let lifted110 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted180 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
@@ -6510,11 +7970,11 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::FutureType(lifted110)
+                        @types.SchemaTypeBody::FutureType(lifted180)
                   }
                   35 => {
 
-                        let lifted111 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted181 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
@@ -6523,58 +7983,58 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        @types.SchemaTypeBody::StreamType(lifted111)
+                        @types.SchemaTypeBody::StreamType(lifted181)
                   }
                   _ => panic()
             }
 
-            let lifted114 : String? = match mbt_ffi_load8_u((iter_base) + 88) {
+            let lifted184 : String? = match mbt_ffi_load8_u((iter_base) + 88) {
                   0 => Option::None
                   1 => {
 
-                        let result113 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 92), mbt_ffi_load32((iter_base) + 96))
+                        let result183 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 92), mbt_ffi_load32((iter_base) + 96))
 
-                        Option::Some(result113)
+                        Option::Some(result183)
                   }
                   _ => panic()
             }
 
-            let array116 : Array[String] = [];
-            for index117 = 0; index117 < (mbt_ffi_load32((iter_base) + 104)); index117 = index117 + 1 {
-                  let iter_base = (mbt_ffi_load32((iter_base) + 100)) + (index117 * 8)
+            let array186 : Array[String] = [];
+            for index187 = 0; index187 < (mbt_ffi_load32((iter_base) + 104)); index187 = index187 + 1 {
+                  let iter_base = (mbt_ffi_load32((iter_base) + 100)) + (index187 * 8)
 
-                  let result115 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                  let result185 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                  array116.push(result115)
+                  array186.push(result185)
             }
             mbt_ffi_free(mbt_ffi_load32((iter_base) + 100))
 
-            let array119 : Array[String] = [];
-            for index120 = 0; index120 < (mbt_ffi_load32((iter_base) + 112)); index120 = index120 + 1 {
-                  let iter_base = (mbt_ffi_load32((iter_base) + 108)) + (index120 * 8)
+            let array189 : Array[String] = [];
+            for index190 = 0; index190 < (mbt_ffi_load32((iter_base) + 112)); index190 = index190 + 1 {
+                  let iter_base = (mbt_ffi_load32((iter_base) + 108)) + (index190 * 8)
 
-                  let result118 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+                  let result188 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-                  array119.push(result118)
+                  array189.push(result188)
             }
             mbt_ffi_free(mbt_ffi_load32((iter_base) + 108))
 
-            let lifted122 : String? = match mbt_ffi_load8_u((iter_base) + 116) {
+            let lifted192 : String? = match mbt_ffi_load8_u((iter_base) + 116) {
                   0 => Option::None
                   1 => {
 
-                        let result121 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 120), mbt_ffi_load32((iter_base) + 124))
+                        let result191 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 120), mbt_ffi_load32((iter_base) + 124))
 
-                        Option::Some(result121)
+                        Option::Some(result191)
                   }
                   _ => panic()
             }
 
-            let lifted125 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 128) {
+            let lifted195 : @types.Role? = match mbt_ffi_load8_u((iter_base) + 128) {
                   0 => Option::None
                   1 => {
 
-                        let lifted124 = match (mbt_ffi_load8_u((iter_base) + 132)) {
+                        let lifted194 = match (mbt_ffi_load8_u((iter_base) + 132)) {
                               0 => {
 
                                     @types.Role::Multimodal
@@ -6589,48 +8049,48 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               }
                               3 => {
 
-                                    let result123 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 136), mbt_ffi_load32((iter_base) + 140))
+                                    let result193 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 136), mbt_ffi_load32((iter_base) + 140))
 
-                                    @types.Role::Other(result123)
+                                    @types.Role::Other(result193)
                               }
                               _ => panic()
                         }
 
-                        Option::Some(lifted124)
+                        Option::Some(lifted194)
                   }
                   _ => panic()
             }
 
-            array126.push(@types.SchemaTypeNode::{body : lifted112, metadata : @types.MetadataEnvelope::{doc : lifted114, aliases : array116, examples : array119, deprecated : lifted122, role : lifted125}})
+            array196.push(@types.SchemaTypeNode::{body : lifted182, metadata : @types.MetadataEnvelope::{doc : lifted184, aliases : array186, examples : array189, deprecated : lifted192, role : lifted195}})
       }
       mbt_ffi_free(mbt_ffi_load32((p0) + 16))
 
-      let array131 : Array[@types.SchemaTypeDef] = [];
-      for index132 = 0; index132 < (mbt_ffi_load32((p0) + 28)); index132 = index132 + 1 {
-            let iter_base = (mbt_ffi_load32((p0) + 24)) + (index132 * 24)
+      let array201 : Array[@types.SchemaTypeDef] = [];
+      for index202 = 0; index202 < (mbt_ffi_load32((p0) + 28)); index202 = index202 + 1 {
+            let iter_base = (mbt_ffi_load32((p0) + 24)) + (index202 * 24)
 
-            let result128 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
+            let result198 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 0), mbt_ffi_load32((iter_base) + 4))
 
-            let lifted130 : String? = match mbt_ffi_load8_u((iter_base) + 8) {
+            let lifted200 : String? = match mbt_ffi_load8_u((iter_base) + 8) {
                   0 => Option::None
                   1 => {
 
-                        let result129 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
+                        let result199 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
 
-                        Option::Some(result129)
+                        Option::Some(result199)
                   }
                   _ => panic()
             }
 
-            array131.push(@types.SchemaTypeDef::{id : result128, name : lifted130, body : mbt_ffi_load32((iter_base) + 20)})
+            array201.push(@types.SchemaTypeDef::{id : result198, name : lifted200, body : mbt_ffi_load32((iter_base) + 20)})
       }
       mbt_ffi_free(mbt_ffi_load32((p0) + 24))
 
-      let array163 : Array[@types.SchemaValueNode] = [];
-      for index164 = 0; index164 < (mbt_ffi_load32((p0) + 40)); index164 = index164 + 1 {
-            let iter_base = (mbt_ffi_load32((p0) + 36)) + (index164 * 32)
+      let array233 : Array[@types.SchemaValueNode] = [];
+      for index234 = 0; index234 < (mbt_ffi_load32((p0) + 40)); index234 = index234 + 1 {
+            let iter_base = (mbt_ffi_load32((p0) + 36)) + (index234 * 32)
 
-            let lifted162 = match (mbt_ffi_load8_u((iter_base) + 0)) {
+            let lifted232 = match (mbt_ffi_load8_u((iter_base) + 0)) {
                   0 => {
 
                         @types.SchemaValueNode::BoolValue((mbt_ffi_load8_u((iter_base) + 8) != 0))
@@ -6681,25 +8141,25 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   12 => {
 
-                        let result133 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result203 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        @types.SchemaValueNode::StringValue(result133)
+                        @types.SchemaValueNode::StringValue(result203)
                   }
                   13 => {
 
-                        let array134 : Array[Int] = [];
-                        for index135 = 0; index135 < (mbt_ffi_load32((iter_base) + 12)); index135 = index135 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index135 * 4)
+                        let array204 : Array[Int] = [];
+                        for index205 = 0; index205 < (mbt_ffi_load32((iter_base) + 12)); index205 = index205 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index205 * 4)
 
-                              array134.push(mbt_ffi_load32((iter_base) + 0))
+                              array204.push(mbt_ffi_load32((iter_base) + 0))
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaValueNode::RecordValue(array134)
+                        @types.SchemaValueNode::RecordValue(array204)
                   }
                   14 => {
 
-                        let lifted136 : Int? = match mbt_ffi_load8_u((iter_base) + 12) {
+                        let lifted206 : Int? = match mbt_ffi_load8_u((iter_base) + 12) {
                               0 => Option::None
                               1 => {
 
@@ -6708,7 +8168,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{case : (mbt_ffi_load32((iter_base) + 8)).reinterpret_as_uint(), payload : lifted136})
+                        @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{case : (mbt_ffi_load32((iter_base) + 8)).reinterpret_as_uint(), payload : lifted206})
                   }
                   15 => {
 
@@ -6716,67 +8176,67 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   16 => {
 
-                        let array137 : Array[Bool] = [];
-                        for index138 = 0; index138 < (mbt_ffi_load32((iter_base) + 12)); index138 = index138 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index138 * 1)
+                        let array207 : Array[Bool] = [];
+                        for index208 = 0; index208 < (mbt_ffi_load32((iter_base) + 12)); index208 = index208 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index208 * 1)
 
-                              array137.push((mbt_ffi_load8_u((iter_base) + 0) != 0))
+                              array207.push((mbt_ffi_load8_u((iter_base) + 0) != 0))
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaValueNode::FlagsValue(array137)
+                        @types.SchemaValueNode::FlagsValue(array207)
                   }
                   17 => {
 
-                        let array139 : Array[Int] = [];
-                        for index140 = 0; index140 < (mbt_ffi_load32((iter_base) + 12)); index140 = index140 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index140 * 4)
+                        let array209 : Array[Int] = [];
+                        for index210 = 0; index210 < (mbt_ffi_load32((iter_base) + 12)); index210 = index210 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index210 * 4)
 
-                              array139.push(mbt_ffi_load32((iter_base) + 0))
+                              array209.push(mbt_ffi_load32((iter_base) + 0))
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaValueNode::TupleValue(array139)
+                        @types.SchemaValueNode::TupleValue(array209)
                   }
                   18 => {
 
-                        let array141 : Array[Int] = [];
-                        for index142 = 0; index142 < (mbt_ffi_load32((iter_base) + 12)); index142 = index142 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index142 * 4)
+                        let array211 : Array[Int] = [];
+                        for index212 = 0; index212 < (mbt_ffi_load32((iter_base) + 12)); index212 = index212 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index212 * 4)
 
-                              array141.push(mbt_ffi_load32((iter_base) + 0))
+                              array211.push(mbt_ffi_load32((iter_base) + 0))
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaValueNode::ListValue(array141)
+                        @types.SchemaValueNode::ListValue(array211)
                   }
                   19 => {
 
-                        let array143 : Array[Int] = [];
-                        for index144 = 0; index144 < (mbt_ffi_load32((iter_base) + 12)); index144 = index144 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index144 * 4)
+                        let array213 : Array[Int] = [];
+                        for index214 = 0; index214 < (mbt_ffi_load32((iter_base) + 12)); index214 = index214 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index214 * 4)
 
-                              array143.push(mbt_ffi_load32((iter_base) + 0))
+                              array213.push(mbt_ffi_load32((iter_base) + 0))
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaValueNode::FixedListValue(array143)
+                        @types.SchemaValueNode::FixedListValue(array213)
                   }
                   20 => {
 
-                        let array145 : Array[@types.MapEntry] = [];
-                        for index146 = 0; index146 < (mbt_ffi_load32((iter_base) + 12)); index146 = index146 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index146 * 8)
+                        let array215 : Array[@types.MapEntry] = [];
+                        for index216 = 0; index216 < (mbt_ffi_load32((iter_base) + 12)); index216 = index216 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index216 * 8)
 
-                              array145.push(@types.MapEntry::{key : mbt_ffi_load32((iter_base) + 0), value : mbt_ffi_load32((iter_base) + 4)})
+                              array215.push(@types.MapEntry::{key : mbt_ffi_load32((iter_base) + 0), value : mbt_ffi_load32((iter_base) + 4)})
                         }
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        @types.SchemaValueNode::MapValue(array145)
+                        @types.SchemaValueNode::MapValue(array215)
                   }
                   21 => {
 
-                        let lifted147 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
+                        let lifted217 : Int? = match mbt_ffi_load8_u((iter_base) + 8) {
                               0 => Option::None
                               1 => {
 
@@ -6785,14 +8245,14 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                               _ => panic()
                         }
 
-                        @types.SchemaValueNode::OptionValue(lifted147)
+                        @types.SchemaValueNode::OptionValue(lifted217)
                   }
                   22 => {
 
-                        let lifted150 = match (mbt_ffi_load8_u((iter_base) + 8)) {
+                        let lifted220 = match (mbt_ffi_load8_u((iter_base) + 8)) {
                               0 => {
 
-                                    let lifted148 : Int? = match mbt_ffi_load8_u((iter_base) + 12) {
+                                    let lifted218 : Int? = match mbt_ffi_load8_u((iter_base) + 12) {
                                           0 => Option::None
                                           1 => {
 
@@ -6801,11 +8261,11 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                                           _ => panic()
                                     }
 
-                                    @types.ResultValuePayload::OkValue(lifted148)
+                                    @types.ResultValuePayload::OkValue(lifted218)
                               }
                               1 => {
 
-                                    let lifted149 : Int? = match mbt_ffi_load8_u((iter_base) + 12) {
+                                    let lifted219 : Int? = match mbt_ffi_load8_u((iter_base) + 12) {
                                           0 => Option::None
                                           1 => {
 
@@ -6814,58 +8274,58 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                                           _ => panic()
                                     }
 
-                                    @types.ResultValuePayload::ErrValue(lifted149)
+                                    @types.ResultValuePayload::ErrValue(lifted219)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaValueNode::ResultValue(lifted150)
+                        @types.SchemaValueNode::ResultValue(lifted220)
                   }
                   23 => {
 
-                        let result151 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result221 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        let lifted153 : String? = match mbt_ffi_load8_u((iter_base) + 16) {
+                        let lifted223 : String? = match mbt_ffi_load8_u((iter_base) + 16) {
                               0 => Option::None
                               1 => {
 
-                                    let result152 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
+                                    let result222 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
 
-                                    Option::Some(result152)
+                                    Option::Some(result222)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaValueNode::TextValue(@types.TextValuePayload::{text : result151, language : lifted153})
+                        @types.SchemaValueNode::TextValue(@types.TextValuePayload::{text : result221, language : lifted223})
                   }
                   24 => {
 
-                        let result154 = mbt_ffi_ptr2bytes(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result224 = mbt_ffi_ptr2bytes(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        let lifted156 : String? = match mbt_ffi_load8_u((iter_base) + 16) {
+                        let lifted226 : String? = match mbt_ffi_load8_u((iter_base) + 16) {
                               0 => Option::None
                               1 => {
 
-                                    let result155 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
+                                    let result225 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
 
-                                    Option::Some(result155)
+                                    Option::Some(result225)
                               }
                               _ => panic()
                         }
 
-                        @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{bytes : result154, mime_type : lifted156})
+                        @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{bytes : result224, mime_type : lifted226})
                   }
                   25 => {
 
-                        let result157 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result227 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        @types.SchemaValueNode::PathValue(result157)
+                        @types.SchemaValueNode::PathValue(result227)
                   }
                   26 => {
 
-                        let result158 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result228 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        @types.SchemaValueNode::UrlValue(result158)
+                        @types.SchemaValueNode::UrlValue(result228)
                   }
                   27 => {
 
@@ -6877,21 +8337,21 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   29 => {
 
-                        let result159 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
+                        let result229 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 20), mbt_ffi_load32((iter_base) + 24))
 
-                        @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{mantissa : mbt_ffi_load64((iter_base) + 8), scale : mbt_ffi_load32((iter_base) + 16), unit : result159})
+                        @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{mantissa : mbt_ffi_load64((iter_base) + 8), scale : mbt_ffi_load32((iter_base) + 16), unit : result229})
                   }
                   30 => {
 
-                        let result160 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result230 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{tag : result160, body : mbt_ffi_load32((iter_base) + 16)})
+                        @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{tag : result230, body : mbt_ffi_load32((iter_base) + 16)})
                   }
                   31 => {
 
-                        let result161 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
+                        let result231 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                        @types.SchemaValueNode::SecretValue(@types.SecretValuePayload::{secret_ref : result161})
+                        @types.SchemaValueNode::SecretValue(@types.SecretValuePayload::{secret_ref : result231})
                   }
                   32 => {
 
@@ -6900,11 +8360,11 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   _ => panic()
             }
 
-            array163.push(lifted162)
+            array233.push(lifted232)
       }
       mbt_ffi_free(mbt_ffi_load32((p0) + 36))
 
-      let lifted165 : @streams.InputStream? = match mbt_ffi_load8_u((p0) + 48) {
+      let lifted235 : @streams.InputStream? = match mbt_ffi_load8_u((p0) + 48) {
             0 => Option::None
             1 => {
 
@@ -6913,36 +8373,36 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
             _ => panic()
       }
 
-      let lifted183 = match (mbt_ffi_load8_u((p0) + 56)) {
+      let lifted253 = match (mbt_ffi_load8_u((p0) + 56)) {
             0 => {
 
-                  let result166 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 64), mbt_ffi_load32((p0) + 68))
+                  let result236 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 64), mbt_ffi_load32((p0) + 68))
 
-                  let result167 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 72), mbt_ffi_load32((p0) + 76))
+                  let result237 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 72), mbt_ffi_load32((p0) + 76))
 
-                  let lifted169 : String? = match mbt_ffi_load8_u((p0) + 80) {
+                  let lifted239 : String? = match mbt_ffi_load8_u((p0) + 80) {
                         0 => Option::None
                         1 => {
 
-                              let result168 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 84), mbt_ffi_load32((p0) + 88))
+                              let result238 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 84), mbt_ffi_load32((p0) + 88))
 
-                              Option::Some(result168)
+                              Option::Some(result238)
                         }
                         _ => panic()
                   }
 
-                  let lifted171 : String? = match mbt_ffi_load8_u((p0) + 92) {
+                  let lifted241 : String? = match mbt_ffi_load8_u((p0) + 92) {
                         0 => Option::None
                         1 => {
 
-                              let result170 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 96), mbt_ffi_load32((p0) + 100))
+                              let result240 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 96), mbt_ffi_load32((p0) + 100))
 
-                              Option::Some(result170)
+                              Option::Some(result240)
                         }
                         _ => panic()
                   }
 
-                  let lifted172 : Bool? = match mbt_ffi_load8_u((p0) + 104) {
+                  let lifted242 : Bool? = match mbt_ffi_load8_u((p0) + 104) {
                         0 => Option::None
                         1 => {
 
@@ -6951,59 +8411,59 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                         _ => panic()
                   }
 
-                  let lifted174 : String? = match mbt_ffi_load8_u((p0) + 108) {
+                  let lifted244 : String? = match mbt_ffi_load8_u((p0) + 108) {
                         0 => Option::None
                         1 => {
 
-                              let result173 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 112), mbt_ffi_load32((p0) + 116))
+                              let result243 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 112), mbt_ffi_load32((p0) + 116))
 
-                              Option::Some(result173)
+                              Option::Some(result243)
                         }
                         _ => panic()
                   }
 
-                  let lifted176 : String? = match mbt_ffi_load8_u((p0) + 120) {
+                  let lifted246 : String? = match mbt_ffi_load8_u((p0) + 120) {
                         0 => Option::None
                         1 => {
 
-                              let result175 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 124), mbt_ffi_load32((p0) + 128))
+                              let result245 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 124), mbt_ffi_load32((p0) + 128))
 
-                              Option::Some(result175)
+                              Option::Some(result245)
                         }
                         _ => panic()
                   }
 
-                  let lifted178 : String? = match mbt_ffi_load8_u((p0) + 132) {
+                  let lifted248 : String? = match mbt_ffi_load8_u((p0) + 132) {
                         0 => Option::None
                         1 => {
 
-                              let result177 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 136), mbt_ffi_load32((p0) + 140))
+                              let result247 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 136), mbt_ffi_load32((p0) + 140))
 
-                              Option::Some(result177)
+                              Option::Some(result247)
                         }
                         _ => panic()
                   }
 
-                  let lifted180 : String? = match mbt_ffi_load8_u((p0) + 144) {
+                  let lifted250 : String? = match mbt_ffi_load8_u((p0) + 144) {
                         0 => Option::None
                         1 => {
 
-                              let result179 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 148), mbt_ffi_load32((p0) + 152))
+                              let result249 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 148), mbt_ffi_load32((p0) + 152))
 
-                              Option::Some(result179)
+                              Option::Some(result249)
                         }
                         _ => panic()
                   }
 
-                  let result181 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 156), mbt_ffi_load32((p0) + 160))
+                  let result251 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 156), mbt_ffi_load32((p0) + 160))
 
-                  @common0.Principal::Oidc(@common0.OidcPrincipal::{sub : result166, issuer : result167, email : lifted169, name : lifted171, email_verified : lifted172, given_name : lifted174, family_name : lifted176, picture : lifted178, preferred_username : lifted180, claims : result181})
+                  @common0.Principal::Oidc(@common0.OidcPrincipal::{sub : result236, issuer : result237, email : lifted239, name : lifted241, email_verified : lifted242, given_name : lifted244, family_name : lifted246, picture : lifted248, preferred_username : lifted250, claims : result251})
             }
             1 => {
 
-                  let result182 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 80), mbt_ffi_load32((p0) + 84))
+                  let result252 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 80), mbt_ffi_load32((p0) + 84))
 
-                  @common0.Principal::Agent(@common0.AgentPrincipal::{agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((p0) + 64)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((p0) + 72)).reinterpret_as_uint64()}}, agent_id : result182}})
+                  @common0.Principal::Agent(@common0.AgentPrincipal::{agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((p0) + 64)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((p0) + 72)).reinterpret_as_uint64()}}, agent_id : result252}})
             }
             2 => {
 
@@ -7016,20 +8476,20 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
             _ => panic()
       }
 
-      let (result184) : (Result[@common.InvocationResult, @common.ToolError]) = invoke(result, array, @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array126, defs : array131, root : mbt_ffi_load32((p0) + 32)}, value : @types.SchemaValueTree::{value_nodes : array163, root : mbt_ffi_load32((p0) + 44)}}, lifted165, lifted183);
+      let (result254) : (Result[@common.InvocationResult, @common.ToolError]) = invoke(result, array, @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array196, defs : array201, root : mbt_ffi_load32((p0) + 32)}, value : @types.SchemaValueTree::{value_nodes : array233, root : mbt_ffi_load32((p0) + 44)}}, lifted235, lifted253);
       mbt_ffi_free(p0)
       let return_area = mbt_ffi_malloc(48)
 
-      match result184 {
+      match result254 {
             Ok(payload) => {
                   mbt_ffi_store8((return_area) + 0, (0))
-                  __wit_bindgen_lower_t522((return_area) + 4, payload)
+                  __wit_bindgen_lower_t528((return_area) + 4, payload)
 
                   ()
             }
-            Err(payload185) => {
+            Err(payload255) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t518((return_area) + 4, payload185)
+                  __wit_bindgen_lower_t524((return_area) + 4, payload255)
 
                   ()
             }
@@ -7055,16 +8515,206 @@ pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
                                           1 => ()
-                                          2 => ()
-                                          3 => ()
-                                          4 => ()
-                                          5 => ()
-                                          6 => ()
-                                          7 => ()
-                                          8 => ()
-                                          9 => ()
-                                          10 => ()
-                                          11 => ()
+                                          2 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          3 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          4 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          5 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          6 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          7 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          8 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          9 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          10 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          11 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
                                           12 => ()
                                           13 => ()
                                           14 => {
@@ -7702,16 +9352,206 @@ pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
                                           1 => ()
-                                          2 => ()
-                                          3 => ()
-                                          4 => ()
-                                          5 => ()
-                                          6 => ()
-                                          7 => ()
-                                          8 => ()
-                                          9 => ()
-                                          10 => ()
-                                          11 => ()
+                                          2 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          3 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          4 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          5 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          6 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          7 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          8 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          9 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          10 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
+                                          11 => {
+
+                                                match (mbt_ffi_load8_u((iter_base) + 8)) {
+                                                      0 => ()
+                                                      1 => {
+
+                                                            match (mbt_ffi_load8_u((iter_base) + 64)) {
+                                                                  0 => ()
+                                                                  1 => {
+                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+
+                                                                  }
+                                                                  _ => panic()
+                                                            }
+
+                                                      }
+                                                      _ => panic()
+                                                }
+
+                                          }
                                           12 => ()
                                           13 => ()
                                           14 => {
@@ -8545,7 +10385,83 @@ fn __wit_bindgen_lower_t25(ptr : Int, value : @types.ResultSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
+fn __wit_bindgen_lower_t26(ptr : Int, value : @types.NumericBound) -> Unit {
+
+      match value {
+            Signed(payload) => {
+                  mbt_ffi_store8((ptr) + 0, (0))
+                  mbt_ffi_store64((ptr) + 8, payload)
+
+                  ()
+            }
+            Unsigned(payload0) => {
+                  mbt_ffi_store8((ptr) + 0, (1))
+                  mbt_ffi_store64((ptr) + 8, (payload0).reinterpret_as_int64())
+
+                  ()
+            }
+            FloatBits(payload1) => {
+                  mbt_ffi_store8((ptr) + 0, (2))
+                  mbt_ffi_store64((ptr) + 8, (payload1).reinterpret_as_int64())
+
+                  ()
+            }
+      }
+
+}
+
+#doc(hidden)
+fn __wit_bindgen_lower_t28(ptr : Int, value : @types.NumericRestrictions) -> Unit {
+
+      match ((value).min) {
+            None => {
+                  mbt_ffi_store8((ptr) + 0, (0))
+
+                  ()
+            }
+            Some(payload0) => {
+                  mbt_ffi_store8((ptr) + 0, (1))
+                  __wit_bindgen_lower_t26((ptr) + 8, payload0)
+
+                  ()
+            }
+      }
+
+      match ((value).max) {
+            None => {
+                  mbt_ffi_store8((ptr) + 24, (0))
+
+                  ()
+            }
+            Some(payload2) => {
+                  mbt_ffi_store8((ptr) + 24, (1))
+                  __wit_bindgen_lower_t26((ptr) + 32, payload2)
+
+                  ()
+            }
+      }
+
+      match ((value).unit) {
+            None => {
+                  mbt_ffi_store8((ptr) + 48, (0))
+
+                  ()
+            }
+            Some(payload4) => {
+                  mbt_ffi_store8((ptr) + 48, (1))
+
+                  let ptr5 = mbt_ffi_str2ptr(payload4)
+                  mbt_ffi_store32((ptr) + 56, payload4.length())
+                  mbt_ffi_store32((ptr) + 52, ptr5)
+
+                  ()
+            }
+      }
+
+}
+
+#doc(hidden)
+fn __wit_bindgen_lower_t31(ptr : Int, value : @types.TextRestrictions) -> Unit {
 
       match ((value).languages) {
             None => {
@@ -8621,7 +10537,7 @@ fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t29(ptr : Int, value : @types.BinaryRestrictions) -> Unit {
+fn __wit_bindgen_lower_t32(ptr : Int, value : @types.BinaryRestrictions) -> Unit {
 
       match ((value).mime_types) {
             None => {
@@ -8680,7 +10596,7 @@ fn __wit_bindgen_lower_t29(ptr : Int, value : @types.BinaryRestrictions) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t32(ptr : Int, value : @types.PathSpec) -> Unit {
+fn __wit_bindgen_lower_t35(ptr : Int, value : @types.PathSpec) -> Unit {
       mbt_ffi_store8((ptr) + 0, (value).direction.ordinal())
       mbt_ffi_store8((ptr) + 1, (value).kind.ordinal())
 
@@ -8739,7 +10655,7 @@ fn __wit_bindgen_lower_t32(ptr : Int, value : @types.PathSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t33(ptr : Int, value : @types.UrlRestrictions) -> Unit {
+fn __wit_bindgen_lower_t36(ptr : Int, value : @types.UrlRestrictions) -> Unit {
 
       match ((value).allowed_schemes) {
             None => {
@@ -8796,7 +10712,7 @@ fn __wit_bindgen_lower_t33(ptr : Int, value : @types.UrlRestrictions) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t34(ptr : Int, value : @types.QuantityValue) -> Unit {
+fn __wit_bindgen_lower_t37(ptr : Int, value : @types.QuantityValue) -> Unit {
       mbt_ffi_store64((ptr) + 0, (value).mantissa)
       mbt_ffi_store32((ptr) + 8, (value).scale)
 
@@ -8807,7 +10723,7 @@ fn __wit_bindgen_lower_t34(ptr : Int, value : @types.QuantityValue) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
+fn __wit_bindgen_lower_t39(ptr : Int, value : @types.QuantitySpec) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).base_unit)
       mbt_ffi_store32((ptr) + 4, (value).base_unit.length())
@@ -8834,7 +10750,7 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
             }
             Some(payload2) => {
                   mbt_ffi_store8((ptr) + 16, (1))
-                  __wit_bindgen_lower_t34((ptr) + 24, payload2)
+                  __wit_bindgen_lower_t37((ptr) + 24, payload2)
 
                   ()
             }
@@ -8848,7 +10764,7 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 48, (1))
-                  __wit_bindgen_lower_t34((ptr) + 56, payload4)
+                  __wit_bindgen_lower_t37((ptr) + 56, payload4)
 
                   ()
             }
@@ -8857,7 +10773,7 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t37(ptr : Int, value : @types.FieldDiscriminator) -> Unit {
+fn __wit_bindgen_lower_t40(ptr : Int, value : @types.FieldDiscriminator) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).field_name)
       mbt_ffi_store32((ptr) + 4, (value).field_name.length())
@@ -8883,7 +10799,7 @@ fn __wit_bindgen_lower_t37(ptr : Int, value : @types.FieldDiscriminator) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit {
+fn __wit_bindgen_lower_t41(ptr : Int, value : @types.DiscriminatorRule) -> Unit {
 
       match value {
             Prefix(payload) => {
@@ -8924,7 +10840,7 @@ fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit 
             }
             FieldEquals(payload7) => {
                   mbt_ffi_store8((ptr) + 0, (4))
-                  __wit_bindgen_lower_t37((ptr) + 4, payload7)
+                  __wit_bindgen_lower_t40((ptr) + 4, payload7)
 
                   ()
             }
@@ -8942,25 +10858,25 @@ fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t39(ptr : Int, value : @types.UnionBranch) -> Unit {
+fn __wit_bindgen_lower_t42(ptr : Int, value : @types.UnionBranch) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).tag)
       mbt_ffi_store32((ptr) + 4, (value).tag.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
       mbt_ffi_store32((ptr) + 8, (value).body)
-      __wit_bindgen_lower_t38((ptr) + 12, (value).discriminator)
+      __wit_bindgen_lower_t41((ptr) + 12, (value).discriminator)
       __wit_bindgen_lower_t19((ptr) + 36, (value).metadata)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t41(ptr : Int, value : @types.UnionSpec) -> Unit {
+fn __wit_bindgen_lower_t44(ptr : Int, value : @types.UnionSpec) -> Unit {
 
       let address = mbt_ffi_malloc(((value).branches).length() * 92);
       for index = 0; index < ((value).branches).length(); index = index + 1 {
             let iter_elem : @types.UnionBranch = ((value).branches)[(index)]
             let iter_base = address + (index * 92);
-            __wit_bindgen_lower_t39((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t42((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).branches).length())
@@ -8969,7 +10885,7 @@ fn __wit_bindgen_lower_t41(ptr : Int, value : @types.UnionSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t42(ptr : Int, value : @types.SecretSpec) -> Unit {
+fn __wit_bindgen_lower_t45(ptr : Int, value : @types.SecretSpec) -> Unit {
 
       match ((value).category) {
             None => {
@@ -8991,7 +10907,7 @@ fn __wit_bindgen_lower_t42(ptr : Int, value : @types.SecretSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t43(ptr : Int, value : @types.QuotaTokenSpec) -> Unit {
+fn __wit_bindgen_lower_t46(ptr : Int, value : @types.QuotaTokenSpec) -> Unit {
 
       match ((value).resource_name) {
             None => {
@@ -9013,7 +10929,7 @@ fn __wit_bindgen_lower_t43(ptr : Int, value : @types.QuotaTokenSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
+fn __wit_bindgen_lower_t51(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
       match value {
             RefType(payload) => {
@@ -9027,53 +10943,193 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
                   ()
             }
-            S8Type => {
+            S8Type(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (2))
 
+                  match (payload1) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload3) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload3)
+
+                              ()
+                        }
+                  }
+
                   ()
             }
-            S16Type => {
+            S16Type(payload4) => {
                   mbt_ffi_store8((ptr) + 0, (3))
 
+                  match (payload4) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload6) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload6)
+
+                              ()
+                        }
+                  }
+
                   ()
             }
-            S32Type => {
+            S32Type(payload7) => {
                   mbt_ffi_store8((ptr) + 0, (4))
 
+                  match (payload7) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload9) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload9)
+
+                              ()
+                        }
+                  }
+
                   ()
             }
-            S64Type => {
+            S64Type(payload10) => {
                   mbt_ffi_store8((ptr) + 0, (5))
 
+                  match (payload10) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload12) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload12)
+
+                              ()
+                        }
+                  }
+
                   ()
             }
-            U8Type => {
+            U8Type(payload13) => {
                   mbt_ffi_store8((ptr) + 0, (6))
 
+                  match (payload13) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload15) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload15)
+
+                              ()
+                        }
+                  }
+
                   ()
             }
-            U16Type => {
+            U16Type(payload16) => {
                   mbt_ffi_store8((ptr) + 0, (7))
 
+                  match (payload16) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload18) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload18)
+
+                              ()
+                        }
+                  }
+
                   ()
             }
-            U32Type => {
+            U32Type(payload19) => {
                   mbt_ffi_store8((ptr) + 0, (8))
 
+                  match (payload19) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload21) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload21)
+
+                              ()
+                        }
+                  }
+
                   ()
             }
-            U64Type => {
+            U64Type(payload22) => {
                   mbt_ffi_store8((ptr) + 0, (9))
 
-                  ()
-            }
-            F32Type => {
-                  mbt_ffi_store8((ptr) + 0, (10))
+                  match (payload22) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload24) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload24)
+
+                              ()
+                        }
+                  }
 
                   ()
             }
-            F64Type => {
+            F32Type(payload25) => {
+                  mbt_ffi_store8((ptr) + 0, (10))
+
+                  match (payload25) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload27) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload27)
+
+                              ()
+                        }
+                  }
+
+                  ()
+            }
+            F64Type(payload28) => {
                   mbt_ffi_store8((ptr) + 0, (11))
+
+                  match (payload28) {
+                        None => {
+                              mbt_ffi_store8((ptr) + 8, (0))
+
+                              ()
+                        }
+                        Some(payload30) => {
+                              mbt_ffi_store8((ptr) + 8, (1))
+                              __wit_bindgen_lower_t28((ptr) + 16, payload30)
+
+                              ()
+                        }
+                  }
 
                   ()
             }
@@ -9087,138 +11143,138 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
                   ()
             }
-            RecordType(payload13) => {
+            RecordType(payload33) => {
                   mbt_ffi_store8((ptr) + 0, (14))
 
-                  let address = mbt_ffi_malloc((payload13).length() * 68);
-                  for index = 0; index < (payload13).length(); index = index + 1 {
-                        let iter_elem : @types.NamedFieldType = (payload13)[(index)]
+                  let address = mbt_ffi_malloc((payload33).length() * 68);
+                  for index = 0; index < (payload33).length(); index = index + 1 {
+                        let iter_elem : @types.NamedFieldType = (payload33)[(index)]
                         let iter_base = address + (index * 68);
                         __wit_bindgen_lower_t20((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload13).length())
+                  mbt_ffi_store32((ptr) + 12, (payload33).length())
                   mbt_ffi_store32((ptr) + 8, address)
 
                   ()
             }
-            VariantType(payload14) => {
+            VariantType(payload34) => {
                   mbt_ffi_store8((ptr) + 0, (15))
 
-                  let address15 = mbt_ffi_malloc((payload14).length() * 72);
-                  for index16 = 0; index16 < (payload14).length(); index16 = index16 + 1 {
-                        let iter_elem : @types.VariantCaseType = (payload14)[(index16)]
-                        let iter_base = address15 + (index16 * 72);
+                  let address35 = mbt_ffi_malloc((payload34).length() * 72);
+                  for index36 = 0; index36 < (payload34).length(); index36 = index36 + 1 {
+                        let iter_elem : @types.VariantCaseType = (payload34)[(index36)]
+                        let iter_base = address35 + (index36 * 72);
                         __wit_bindgen_lower_t22((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload14).length())
-                  mbt_ffi_store32((ptr) + 8, address15)
+                  mbt_ffi_store32((ptr) + 12, (payload34).length())
+                  mbt_ffi_store32((ptr) + 8, address35)
 
                   ()
             }
-            EnumType(payload17) => {
+            EnumType(payload37) => {
                   mbt_ffi_store8((ptr) + 0, (16))
 
-                  let address19 = mbt_ffi_malloc((payload17).length() * 8);
-                  for index20 = 0; index20 < (payload17).length(); index20 = index20 + 1 {
-                        let iter_elem : String = (payload17)[(index20)]
-                        let iter_base = address19 + (index20 * 8);
+                  let address39 = mbt_ffi_malloc((payload37).length() * 8);
+                  for index40 = 0; index40 < (payload37).length(); index40 = index40 + 1 {
+                        let iter_elem : String = (payload37)[(index40)]
+                        let iter_base = address39 + (index40 * 8);
 
-                        let ptr18 = mbt_ffi_str2ptr(iter_elem)
+                        let ptr38 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr18)
+                        mbt_ffi_store32((iter_base) + 0, ptr38)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload17).length())
-                  mbt_ffi_store32((ptr) + 8, address19)
+                  mbt_ffi_store32((ptr) + 12, (payload37).length())
+                  mbt_ffi_store32((ptr) + 8, address39)
 
                   ()
             }
-            FlagsType(payload21) => {
+            FlagsType(payload41) => {
                   mbt_ffi_store8((ptr) + 0, (17))
 
-                  let address23 = mbt_ffi_malloc((payload21).length() * 8);
-                  for index24 = 0; index24 < (payload21).length(); index24 = index24 + 1 {
-                        let iter_elem : String = (payload21)[(index24)]
-                        let iter_base = address23 + (index24 * 8);
+                  let address43 = mbt_ffi_malloc((payload41).length() * 8);
+                  for index44 = 0; index44 < (payload41).length(); index44 = index44 + 1 {
+                        let iter_elem : String = (payload41)[(index44)]
+                        let iter_base = address43 + (index44 * 8);
 
-                        let ptr22 = mbt_ffi_str2ptr(iter_elem)
+                        let ptr42 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr22)
+                        mbt_ffi_store32((iter_base) + 0, ptr42)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload21).length())
-                  mbt_ffi_store32((ptr) + 8, address23)
+                  mbt_ffi_store32((ptr) + 12, (payload41).length())
+                  mbt_ffi_store32((ptr) + 8, address43)
 
                   ()
             }
-            TupleType(payload25) => {
+            TupleType(payload45) => {
                   mbt_ffi_store8((ptr) + 0, (18))
 
-                  let address26 = mbt_ffi_malloc((payload25).length() * 4);
-                  for index27 = 0; index27 < (payload25).length(); index27 = index27 + 1 {
-                        let iter_elem : Int = (payload25)[(index27)]
-                        let iter_base = address26 + (index27 * 4);
+                  let address46 = mbt_ffi_malloc((payload45).length() * 4);
+                  for index47 = 0; index47 < (payload45).length(); index47 = index47 + 1 {
+                        let iter_elem : Int = (payload45)[(index47)]
+                        let iter_base = address46 + (index47 * 4);
                         mbt_ffi_store32((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload25).length())
-                  mbt_ffi_store32((ptr) + 8, address26)
+                  mbt_ffi_store32((ptr) + 12, (payload45).length())
+                  mbt_ffi_store32((ptr) + 8, address46)
 
                   ()
             }
-            ListType(payload28) => {
+            ListType(payload48) => {
                   mbt_ffi_store8((ptr) + 0, (19))
-                  mbt_ffi_store32((ptr) + 8, payload28)
+                  mbt_ffi_store32((ptr) + 8, payload48)
 
                   ()
             }
-            FixedListType(payload29) => {
+            FixedListType(payload49) => {
                   mbt_ffi_store8((ptr) + 0, (20))
-                  __wit_bindgen_lower_t23((ptr) + 8, payload29)
+                  __wit_bindgen_lower_t23((ptr) + 8, payload49)
 
                   ()
             }
-            MapType(payload30) => {
+            MapType(payload50) => {
                   mbt_ffi_store8((ptr) + 0, (21))
-                  __wit_bindgen_lower_t24((ptr) + 8, payload30)
+                  __wit_bindgen_lower_t24((ptr) + 8, payload50)
 
                   ()
             }
-            OptionType(payload31) => {
+            OptionType(payload51) => {
                   mbt_ffi_store8((ptr) + 0, (22))
-                  mbt_ffi_store32((ptr) + 8, payload31)
+                  mbt_ffi_store32((ptr) + 8, payload51)
 
                   ()
             }
-            ResultType(payload32) => {
+            ResultType(payload52) => {
                   mbt_ffi_store8((ptr) + 0, (23))
-                  __wit_bindgen_lower_t25((ptr) + 8, payload32)
+                  __wit_bindgen_lower_t25((ptr) + 8, payload52)
 
                   ()
             }
-            TextType(payload33) => {
+            TextType(payload53) => {
                   mbt_ffi_store8((ptr) + 0, (24))
-                  __wit_bindgen_lower_t28((ptr) + 8, payload33)
+                  __wit_bindgen_lower_t31((ptr) + 8, payload53)
 
                   ()
             }
-            BinaryType(payload34) => {
+            BinaryType(payload54) => {
                   mbt_ffi_store8((ptr) + 0, (25))
-                  __wit_bindgen_lower_t29((ptr) + 8, payload34)
+                  __wit_bindgen_lower_t32((ptr) + 8, payload54)
 
                   ()
             }
-            PathType(payload35) => {
+            PathType(payload55) => {
                   mbt_ffi_store8((ptr) + 0, (26))
-                  __wit_bindgen_lower_t32((ptr) + 8, payload35)
+                  __wit_bindgen_lower_t35((ptr) + 8, payload55)
 
                   ()
             }
-            UrlType(payload36) => {
+            UrlType(payload56) => {
                   mbt_ffi_store8((ptr) + 0, (27))
-                  __wit_bindgen_lower_t33((ptr) + 8, payload36)
+                  __wit_bindgen_lower_t36((ptr) + 8, payload56)
 
                   ()
             }
@@ -9232,42 +11288,42 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
                   ()
             }
-            QuantityType(payload39) => {
+            QuantityType(payload59) => {
                   mbt_ffi_store8((ptr) + 0, (30))
-                  __wit_bindgen_lower_t36((ptr) + 8, payload39)
+                  __wit_bindgen_lower_t39((ptr) + 8, payload59)
 
                   ()
             }
-            UnionType(payload40) => {
+            UnionType(payload60) => {
                   mbt_ffi_store8((ptr) + 0, (31))
-                  __wit_bindgen_lower_t41((ptr) + 8, payload40)
+                  __wit_bindgen_lower_t44((ptr) + 8, payload60)
 
                   ()
             }
-            SecretType(payload41) => {
+            SecretType(payload61) => {
                   mbt_ffi_store8((ptr) + 0, (32))
-                  __wit_bindgen_lower_t42((ptr) + 8, payload41)
+                  __wit_bindgen_lower_t45((ptr) + 8, payload61)
 
                   ()
             }
-            QuotaTokenType(payload42) => {
+            QuotaTokenType(payload62) => {
                   mbt_ffi_store8((ptr) + 0, (33))
-                  __wit_bindgen_lower_t43((ptr) + 8, payload42)
+                  __wit_bindgen_lower_t46((ptr) + 8, payload62)
 
                   ()
             }
-            FutureType(payload43) => {
+            FutureType(payload63) => {
                   mbt_ffi_store8((ptr) + 0, (34))
 
-                  match (payload43) {
+                  match (payload63) {
                         None => {
                               mbt_ffi_store8((ptr) + 8, (0))
 
                               ()
                         }
-                        Some(payload45) => {
+                        Some(payload65) => {
                               mbt_ffi_store8((ptr) + 8, (1))
-                              mbt_ffi_store32((ptr) + 12, payload45)
+                              mbt_ffi_store32((ptr) + 12, payload65)
 
                               ()
                         }
@@ -9275,18 +11331,18 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
                   ()
             }
-            StreamType(payload46) => {
+            StreamType(payload66) => {
                   mbt_ffi_store8((ptr) + 0, (35))
 
-                  match (payload46) {
+                  match (payload66) {
                         None => {
                               mbt_ffi_store8((ptr) + 8, (0))
 
                               ()
                         }
-                        Some(payload48) => {
+                        Some(payload68) => {
                               mbt_ffi_store8((ptr) + 8, (1))
-                              mbt_ffi_store32((ptr) + 12, payload48)
+                              mbt_ffi_store32((ptr) + 12, payload68)
 
                               ()
                         }
@@ -9299,20 +11355,20 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t48(ptr : Int, value : @types.SchemaTypeNode) -> Unit {
-      __wit_bindgen_lower_t47((ptr) + 0, (value).body)
+fn __wit_bindgen_lower_t52(ptr : Int, value : @types.SchemaTypeNode) -> Unit {
+      __wit_bindgen_lower_t51((ptr) + 0, (value).body)
       __wit_bindgen_lower_t19((ptr) + 88, (value).metadata)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t51(ptr : Int, value : @types.SchemaGraph) -> Unit {
+fn __wit_bindgen_lower_t55(ptr : Int, value : @types.SchemaGraph) -> Unit {
 
       let address = mbt_ffi_malloc(((value).type_nodes).length() * 144);
       for index = 0; index < ((value).type_nodes).length(); index = index + 1 {
             let iter_elem : @types.SchemaTypeNode = ((value).type_nodes)[(index)]
             let iter_base = address + (index * 144);
-            __wit_bindgen_lower_t48((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t52((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).type_nodes).length())
@@ -9332,7 +11388,7 @@ fn __wit_bindgen_lower_t51(ptr : Int, value : @types.SchemaGraph) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t53(ptr : Int, value : @types.VariantValuePayload) -> Unit {
+fn __wit_bindgen_lower_t57(ptr : Int, value : @types.VariantValuePayload) -> Unit {
       mbt_ffi_store32((ptr) + 0, ((value).case).reinterpret_as_int())
 
       match ((value).payload) {
@@ -9352,14 +11408,14 @@ fn __wit_bindgen_lower_t53(ptr : Int, value : @types.VariantValuePayload) -> Uni
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t54(ptr : Int, value : @types.MapEntry) -> Unit {
+fn __wit_bindgen_lower_t58(ptr : Int, value : @types.MapEntry) -> Unit {
       mbt_ffi_store32((ptr) + 0, (value).key)
       mbt_ffi_store32((ptr) + 4, (value).value)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t55(ptr : Int, value : @types.ResultValuePayload) -> Unit {
+fn __wit_bindgen_lower_t59(ptr : Int, value : @types.ResultValuePayload) -> Unit {
 
       match value {
             OkValue(payload) => {
@@ -9405,7 +11461,7 @@ fn __wit_bindgen_lower_t55(ptr : Int, value : @types.ResultValuePayload) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t56(ptr : Int, value : @types.TextValuePayload) -> Unit {
+fn __wit_bindgen_lower_t60(ptr : Int, value : @types.TextValuePayload) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).text)
       mbt_ffi_store32((ptr) + 4, (value).text.length())
@@ -9431,7 +11487,7 @@ fn __wit_bindgen_lower_t56(ptr : Int, value : @types.TextValuePayload) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t58(ptr : Int, value : @types.BinaryValuePayload) -> Unit {
+fn __wit_bindgen_lower_t62(ptr : Int, value : @types.BinaryValuePayload) -> Unit {
 
       let ptr0 = mbt_ffi_bytes2ptr((value).bytes)
 
@@ -9458,13 +11514,13 @@ fn __wit_bindgen_lower_t58(ptr : Int, value : @types.BinaryValuePayload) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t59(ptr : Int, value : @types.DurationValuePayload) -> Unit {
+fn __wit_bindgen_lower_t63(ptr : Int, value : @types.DurationValuePayload) -> Unit {
       mbt_ffi_store64((ptr) + 0, (value).nanoseconds)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t60(ptr : Int, value : @types.UnionValuePayload) -> Unit {
+fn __wit_bindgen_lower_t64(ptr : Int, value : @types.UnionValuePayload) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).tag)
       mbt_ffi_store32((ptr) + 4, (value).tag.length())
@@ -9474,7 +11530,7 @@ fn __wit_bindgen_lower_t60(ptr : Int, value : @types.UnionValuePayload) -> Unit 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t61(ptr : Int, value : @types.SecretValuePayload) -> Unit {
+fn __wit_bindgen_lower_t65(ptr : Int, value : @types.SecretValuePayload) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).secret_ref)
       mbt_ffi_store32((ptr) + 4, (value).secret_ref.length())
@@ -9483,7 +11539,7 @@ fn __wit_bindgen_lower_t61(ptr : Int, value : @types.SecretValuePayload) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
+fn __wit_bindgen_lower_t70(ptr : Int, value : @types.SchemaValueNode) -> Unit {
 
       match value {
             BoolValue(payload) => {
@@ -9584,7 +11640,7 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
             }
             VariantValue(payload14) => {
                   mbt_ffi_store8((ptr) + 0, (14))
-                  __wit_bindgen_lower_t53((ptr) + 8, payload14)
+                  __wit_bindgen_lower_t57((ptr) + 8, payload14)
 
                   ()
             }
@@ -9661,7 +11717,7 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
                   for index30 = 0; index30 < (payload28).length(); index30 = index30 + 1 {
                         let iter_elem : @types.MapEntry = (payload28)[(index30)]
                         let iter_base = address29 + (index30 * 8);
-                        __wit_bindgen_lower_t54((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t58((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 12, (payload28).length())
@@ -9690,19 +11746,19 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
             }
             ResultValue(payload34) => {
                   mbt_ffi_store8((ptr) + 0, (22))
-                  __wit_bindgen_lower_t55((ptr) + 8, payload34)
+                  __wit_bindgen_lower_t59((ptr) + 8, payload34)
 
                   ()
             }
             TextValue(payload35) => {
                   mbt_ffi_store8((ptr) + 0, (23))
-                  __wit_bindgen_lower_t56((ptr) + 8, payload35)
+                  __wit_bindgen_lower_t60((ptr) + 8, payload35)
 
                   ()
             }
             BinaryValue(payload36) => {
                   mbt_ffi_store8((ptr) + 0, (24))
-                  __wit_bindgen_lower_t58((ptr) + 8, payload36)
+                  __wit_bindgen_lower_t62((ptr) + 8, payload36)
 
                   ()
             }
@@ -9732,25 +11788,25 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
             }
             DurationValue(payload42) => {
                   mbt_ffi_store8((ptr) + 0, (28))
-                  __wit_bindgen_lower_t59((ptr) + 8, payload42)
+                  __wit_bindgen_lower_t63((ptr) + 8, payload42)
 
                   ()
             }
             QuantityValueNode(payload43) => {
                   mbt_ffi_store8((ptr) + 0, (29))
-                  __wit_bindgen_lower_t34((ptr) + 8, payload43)
+                  __wit_bindgen_lower_t37((ptr) + 8, payload43)
 
                   ()
             }
             UnionValue(payload44) => {
                   mbt_ffi_store8((ptr) + 0, (30))
-                  __wit_bindgen_lower_t60((ptr) + 8, payload44)
+                  __wit_bindgen_lower_t64((ptr) + 8, payload44)
 
                   ()
             }
             SecretValue(payload45) => {
                   mbt_ffi_store8((ptr) + 0, (31))
-                  __wit_bindgen_lower_t61((ptr) + 8, payload45)
+                  __wit_bindgen_lower_t65((ptr) + 8, payload45)
 
                   ()
             }
@@ -9767,13 +11823,13 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t68(ptr : Int, value : @types.SchemaValueTree) -> Unit {
+fn __wit_bindgen_lower_t72(ptr : Int, value : @types.SchemaValueTree) -> Unit {
 
       let address = mbt_ffi_malloc(((value).value_nodes).length() * 32);
       for index = 0; index < ((value).value_nodes).length(); index = index + 1 {
             let iter_elem : @types.SchemaValueNode = ((value).value_nodes)[(index)]
             let iter_base = address + (index * 32);
-            __wit_bindgen_lower_t66((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t70((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).value_nodes).length())
@@ -9783,14 +11839,14 @@ fn __wit_bindgen_lower_t68(ptr : Int, value : @types.SchemaValueTree) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t69(ptr : Int, value : @types.TypedSchemaValue) -> Unit {
-      __wit_bindgen_lower_t51((ptr) + 0, (value).graph)
-      __wit_bindgen_lower_t68((ptr) + 20, (value).value)
+fn __wit_bindgen_lower_t73(ptr : Int, value : @types.TypedSchemaValue) -> Unit {
+      __wit_bindgen_lower_t55((ptr) + 0, (value).graph)
+      __wit_bindgen_lower_t72((ptr) + 20, (value).value)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t466(ptr : Int, value : @common.CommandAnnotations) -> Unit {
+fn __wit_bindgen_lower_t470(ptr : Int, value : @common.CommandAnnotations) -> Unit {
       mbt_ffi_store8((ptr) + 0, (if (value).read_only { 1 } else { 0 }))
       mbt_ffi_store8((ptr) + 1, (if (value).destructive { 1 } else { 0 }))
       mbt_ffi_store8((ptr) + 2, (if (value).idempotent { 1 } else { 0 }))
@@ -9799,7 +11855,7 @@ fn __wit_bindgen_lower_t466(ptr : Int, value : @common.CommandAnnotations) -> Un
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t467(ptr : Int, value : @common.Repetition) -> Unit {
+fn __wit_bindgen_lower_t472(ptr : Int, value : @common.Repetition) -> Unit {
 
       match value {
             Repeated => {
@@ -9824,14 +11880,22 @@ fn __wit_bindgen_lower_t467(ptr : Int, value : @common.Repetition) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t468(ptr : Int, value : @common.RepeatableShape) -> Unit {
-      __wit_bindgen_lower_t467((ptr) + 0, (value).repetition)
-      mbt_ffi_store32((ptr) + 8, (value).type_)
+fn __wit_bindgen_lower_t473(ptr : Int, value : @common.RepeatableListShape) -> Unit {
+      __wit_bindgen_lower_t472((ptr) + 0, (value).repetition)
+      mbt_ffi_store32((ptr) + 8, (value).item_type)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t469(ptr : Int, value : @common.OptionShape) -> Unit {
+fn __wit_bindgen_lower_t474(ptr : Int, value : @common.RepeatableMapShape) -> Unit {
+      __wit_bindgen_lower_t472((ptr) + 0, (value).repetition)
+      mbt_ffi_store32((ptr) + 8, (value).map_type)
+      mbt_ffi_store8((ptr) + 12, (value).duplicate_key_policy.ordinal())
+
+}
+
+#doc(hidden)
+fn __wit_bindgen_lower_t475(ptr : Int, value : @common.OptionShape) -> Unit {
 
       match value {
             Scalar(payload) => {
@@ -9846,9 +11910,15 @@ fn __wit_bindgen_lower_t469(ptr : Int, value : @common.OptionShape) -> Unit {
 
                   ()
             }
-            Repeatable(payload1) => {
+            RepeatableList(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (2))
-                  __wit_bindgen_lower_t468((ptr) + 4, payload1)
+                  __wit_bindgen_lower_t473((ptr) + 4, payload1)
+
+                  ()
+            }
+            RepeatableMap(payload2) => {
+                  mbt_ffi_store8((ptr) + 0, (3))
+                  __wit_bindgen_lower_t474((ptr) + 4, payload2)
 
                   ()
             }
@@ -9857,19 +11927,19 @@ fn __wit_bindgen_lower_t469(ptr : Int, value : @common.OptionShape) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t470(ptr : Int, value : @common.BoolFlagShape) -> Unit {
+fn __wit_bindgen_lower_t476(ptr : Int, value : @common.BoolFlagShape) -> Unit {
       mbt_ffi_store8((ptr) + 0, (if (value).default { 1 } else { 0 }))
       mbt_ffi_store8((ptr) + 1, (if (value).negatable { 1 } else { 0 }))
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t472(ptr : Int, value : @common.FlagShape) -> Unit {
+fn __wit_bindgen_lower_t478(ptr : Int, value : @common.FlagShape) -> Unit {
 
       match value {
             BoolFlag(payload) => {
                   mbt_ffi_store8((ptr) + 0, (0))
-                  __wit_bindgen_lower_t470((ptr) + 4, payload)
+                  __wit_bindgen_lower_t476((ptr) + 4, payload)
 
                   ()
             }
@@ -9897,17 +11967,17 @@ fn __wit_bindgen_lower_t472(ptr : Int, value : @common.FlagShape) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t473(ptr : Int, value : @common.ValueIsRef) -> Unit {
+fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ValueIsRef) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t68((ptr) + 8, (value).value)
+      __wit_bindgen_lower_t72((ptr) + 8, (value).value)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t474(ptr : Int, value : @common.Ref) -> Unit {
+fn __wit_bindgen_lower_t480(ptr : Int, value : @common.Ref) -> Unit {
 
       match value {
             Present(payload) => {
@@ -9921,7 +11991,7 @@ fn __wit_bindgen_lower_t474(ptr : Int, value : @common.Ref) -> Unit {
             }
             ValueIs(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (1))
-                  __wit_bindgen_lower_t473((ptr) + 4, payload1)
+                  __wit_bindgen_lower_t479((ptr) + 4, payload1)
 
                   ()
             }
@@ -9930,13 +12000,13 @@ fn __wit_bindgen_lower_t474(ptr : Int, value : @common.Ref) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t476(ptr : Int, value : @common.RefGroup) -> Unit {
+fn __wit_bindgen_lower_t482(ptr : Int, value : @common.RefGroup) -> Unit {
 
       let address = mbt_ffi_malloc(((value).refs).length() * 24);
       for index = 0; index < ((value).refs).length(); index = index + 1 {
             let iter_elem : @common.Ref = ((value).refs)[(index)]
             let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).refs).length())
@@ -9945,14 +12015,14 @@ fn __wit_bindgen_lower_t476(ptr : Int, value : @common.RefGroup) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t478(ptr : Int, value : @common.ImpliesC) -> Unit {
+fn __wit_bindgen_lower_t484(ptr : Int, value : @common.ImpliesC) -> Unit {
       mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
 
       let address = mbt_ffi_malloc(((value).lhs).length() * 24);
       for index = 0; index < ((value).lhs).length(); index = index + 1 {
             let iter_elem : @common.Ref = ((value).lhs)[(index)]
             let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
@@ -9963,7 +12033,7 @@ fn __wit_bindgen_lower_t478(ptr : Int, value : @common.ImpliesC) -> Unit {
       for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
             let iter_elem : @common.Ref = ((value).rhs)[(index1)]
             let iter_base = address0 + (index1 * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 20, ((value).rhs).length())
@@ -9972,14 +12042,14 @@ fn __wit_bindgen_lower_t478(ptr : Int, value : @common.ImpliesC) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ForbidsC) -> Unit {
+fn __wit_bindgen_lower_t485(ptr : Int, value : @common.ForbidsC) -> Unit {
       mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
 
       let address = mbt_ffi_malloc(((value).lhs).length() * 24);
       for index = 0; index < ((value).lhs).length(); index = index + 1 {
             let iter_elem : @common.Ref = ((value).lhs)[(index)]
             let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
@@ -9989,7 +12059,7 @@ fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ForbidsC) -> Unit {
       for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
             let iter_elem : @common.Ref = ((value).rhs)[(index1)]
             let iter_base = address0 + (index1 * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 16, ((value).rhs).length())
@@ -9998,7 +12068,7 @@ fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ForbidsC) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
+fn __wit_bindgen_lower_t487(ptr : Int, value : @common.Constraint) -> Unit {
 
       match value {
             RequiresAll(payload) => {
@@ -10008,7 +12078,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.Ref = (payload)[(index)]
                         let iter_base = address + (index * 24);
-                        __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload).length())
@@ -10023,7 +12093,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index2 = 0; index2 < (payload0).length(); index2 = index2 + 1 {
                         let iter_elem : @common.Ref = (payload0)[(index2)]
                         let iter_base = address1 + (index2 * 24);
-                        __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload0).length())
@@ -10038,7 +12108,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index5 = 0; index5 < (payload3).length(); index5 = index5 + 1 {
                         let iter_elem : @common.Ref = (payload3)[(index5)]
                         let iter_base = address4 + (index5 * 24);
-                        __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t480((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload3).length())
@@ -10053,7 +12123,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index8 = 0; index8 < (payload6).length(); index8 = index8 + 1 {
                         let iter_elem : @common.RefGroup = (payload6)[(index8)]
                         let iter_base = address7 + (index8 * 8);
-                        __wit_bindgen_lower_t476((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t482((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload6).length())
@@ -10063,13 +12133,13 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
             }
             Implies(payload9) => {
                   mbt_ffi_store8((ptr) + 0, (4))
-                  __wit_bindgen_lower_t478((ptr) + 4, payload9)
+                  __wit_bindgen_lower_t484((ptr) + 4, payload9)
 
                   ()
             }
             Forbids(payload10) => {
                   mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t479((ptr) + 4, payload10)
+                  __wit_bindgen_lower_t485((ptr) + 4, payload10)
 
                   ()
             }
@@ -10078,7 +12148,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t483(ptr : Int, value : @common.Example) -> Unit {
+fn __wit_bindgen_lower_t489(ptr : Int, value : @common.Example) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).title)
       mbt_ffi_store32((ptr) + 4, (value).title.length())
@@ -10091,7 +12161,7 @@ fn __wit_bindgen_lower_t483(ptr : Int, value : @common.Example) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t485(ptr : Int, value : @common.Doc) -> Unit {
+fn __wit_bindgen_lower_t491(ptr : Int, value : @common.Doc) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).summary)
       mbt_ffi_store32((ptr) + 4, (value).summary.length())
@@ -10105,7 +12175,7 @@ fn __wit_bindgen_lower_t485(ptr : Int, value : @common.Doc) -> Unit {
       for index = 0; index < ((value).examples).length(); index = index + 1 {
             let iter_elem : @common.Example = ((value).examples)[(index)]
             let iter_base = address + (index * 16);
-            __wit_bindgen_lower_t483((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t489((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 20, ((value).examples).length())
@@ -10114,12 +12184,12 @@ fn __wit_bindgen_lower_t485(ptr : Int, value : @common.Doc) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t488(ptr : Int, value : @common.Positional) -> Unit {
+fn __wit_bindgen_lower_t494(ptr : Int, value : @common.Positional) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t491((ptr) + 8, (value).doc)
 
       match ((value).value_name) {
             None => {
@@ -10147,22 +12217,23 @@ fn __wit_bindgen_lower_t488(ptr : Int, value : @common.Positional) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 48, (1))
-                  __wit_bindgen_lower_t68((ptr) + 52, payload4)
+                  __wit_bindgen_lower_t72((ptr) + 52, payload4)
 
                   ()
             }
       }
       mbt_ffi_store8((ptr) + 64, (if (value).required { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 65, (if (value).accepts_stdio { 1 } else { 0 }))
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t489(ptr : Int, value : @common.TailPositional) -> Unit {
+fn __wit_bindgen_lower_t495(ptr : Int, value : @common.TailPositional) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t491((ptr) + 8, (value).doc)
 
       match ((value).value_name) {
             None => {
@@ -10214,17 +12285,18 @@ fn __wit_bindgen_lower_t489(ptr : Int, value : @common.TailPositional) -> Unit {
             }
       }
       mbt_ffi_store8((ptr) + 72, (if (value).verbatim { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 73, (if (value).accepts_stdio { 1 } else { 0 }))
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t492(ptr : Int, value : @common.Positionals) -> Unit {
+fn __wit_bindgen_lower_t498(ptr : Int, value : @common.Positionals) -> Unit {
 
       let address = mbt_ffi_malloc(((value).fixed).length() * 68);
       for index = 0; index < ((value).fixed).length(); index = index + 1 {
             let iter_elem : @common.Positional = ((value).fixed)[(index)]
             let iter_base = address + (index * 68);
-            __wit_bindgen_lower_t488((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t494((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).fixed).length())
@@ -10238,7 +12310,7 @@ fn __wit_bindgen_lower_t492(ptr : Int, value : @common.Positionals) -> Unit {
             }
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 8, (1))
-                  __wit_bindgen_lower_t489((ptr) + 12, payload0)
+                  __wit_bindgen_lower_t495((ptr) + 12, payload0)
 
                   ()
             }
@@ -10247,7 +12319,7 @@ fn __wit_bindgen_lower_t492(ptr : Int, value : @common.Positionals) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
+fn __wit_bindgen_lower_t501(ptr : Int, value : @common.OptionSpec) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).long)
       mbt_ffi_store32((ptr) + 4, (value).long.length())
@@ -10279,7 +12351,7 @@ fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
       }
       mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
       mbt_ffi_store32((ptr) + 16, address)
-      __wit_bindgen_lower_t485((ptr) + 24, (value).doc)
+      __wit_bindgen_lower_t491((ptr) + 24, (value).doc)
 
       match ((value).value_name) {
             None => {
@@ -10297,35 +12369,35 @@ fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
                   ()
             }
       }
-      __wit_bindgen_lower_t469((ptr) + 60, (value).shape)
+      __wit_bindgen_lower_t475((ptr) + 60, (value).shape)
 
       match ((value).default) {
             None => {
-                  mbt_ffi_store8((ptr) + 76, (0))
+                  mbt_ffi_store8((ptr) + 80, (0))
 
                   ()
             }
             Some(payload7) => {
-                  mbt_ffi_store8((ptr) + 76, (1))
-                  __wit_bindgen_lower_t68((ptr) + 80, payload7)
+                  mbt_ffi_store8((ptr) + 80, (1))
+                  __wit_bindgen_lower_t72((ptr) + 84, payload7)
 
                   ()
             }
       }
-      mbt_ffi_store8((ptr) + 92, (if (value).required { 1 } else { 0 }))
+      mbt_ffi_store8((ptr) + 96, (if (value).required { 1 } else { 0 }))
 
       match ((value).env_var) {
             None => {
-                  mbt_ffi_store8((ptr) + 96, (0))
+                  mbt_ffi_store8((ptr) + 100, (0))
 
                   ()
             }
             Some(payload9) => {
-                  mbt_ffi_store8((ptr) + 96, (1))
+                  mbt_ffi_store8((ptr) + 100, (1))
 
                   let ptr10 = mbt_ffi_str2ptr(payload9)
-                  mbt_ffi_store32((ptr) + 104, payload9.length())
-                  mbt_ffi_store32((ptr) + 100, ptr10)
+                  mbt_ffi_store32((ptr) + 108, payload9.length())
+                  mbt_ffi_store32((ptr) + 104, ptr10)
 
                   ()
             }
@@ -10334,7 +12406,7 @@ fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t496(ptr : Int, value : @common.FlagSpec) -> Unit {
+fn __wit_bindgen_lower_t502(ptr : Int, value : @common.FlagSpec) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).long)
       mbt_ffi_store32((ptr) + 4, (value).long.length())
@@ -10366,8 +12438,8 @@ fn __wit_bindgen_lower_t496(ptr : Int, value : @common.FlagSpec) -> Unit {
       }
       mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
       mbt_ffi_store32((ptr) + 16, address)
-      __wit_bindgen_lower_t485((ptr) + 24, (value).doc)
-      __wit_bindgen_lower_t472((ptr) + 48, (value).shape)
+      __wit_bindgen_lower_t491((ptr) + 24, (value).doc)
+      __wit_bindgen_lower_t478((ptr) + 48, (value).shape)
 
       match ((value).env_var) {
             None => {
@@ -10389,13 +12461,13 @@ fn __wit_bindgen_lower_t496(ptr : Int, value : @common.FlagSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t499(ptr : Int, value : @common.Globals) -> Unit {
+fn __wit_bindgen_lower_t505(ptr : Int, value : @common.Globals) -> Unit {
 
-      let address = mbt_ffi_malloc(((value).options).length() * 108);
+      let address = mbt_ffi_malloc(((value).options).length() * 112);
       for index = 0; index < ((value).options).length(); index = index + 1 {
             let iter_elem : @common.OptionSpec = ((value).options)[(index)]
-            let iter_base = address + (index * 108);
-            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+            let iter_base = address + (index * 112);
+            __wit_bindgen_lower_t501((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).options).length())
@@ -10405,7 +12477,7 @@ fn __wit_bindgen_lower_t499(ptr : Int, value : @common.Globals) -> Unit {
       for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
             let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
             let iter_base = address0 + (index1 * 72);
-            __wit_bindgen_lower_t496((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t502((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 12, ((value).flags).length())
@@ -10414,8 +12486,8 @@ fn __wit_bindgen_lower_t499(ptr : Int, value : @common.Globals) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t500(ptr : Int, value : @common.StreamSpec) -> Unit {
-      __wit_bindgen_lower_t485((ptr) + 0, (value).doc)
+fn __wit_bindgen_lower_t506(ptr : Int, value : @common.StreamSpec) -> Unit {
+      __wit_bindgen_lower_t491((ptr) + 0, (value).doc)
 
       let address = mbt_ffi_malloc(((value).mime).length() * 8);
       for index = 0; index < ((value).mime).length(); index = index + 1 {
@@ -10434,25 +12506,25 @@ fn __wit_bindgen_lower_t500(ptr : Int, value : @common.StreamSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t501(ptr : Int, value : @common.Formatter) -> Unit {
+fn __wit_bindgen_lower_t507(ptr : Int, value : @common.Formatter) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t491((ptr) + 8, (value).doc)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t503(ptr : Int, value : @common.ResultSpec) -> Unit {
+fn __wit_bindgen_lower_t509(ptr : Int, value : @common.ResultSpec) -> Unit {
       mbt_ffi_store32((ptr) + 0, (value).type_)
-      __wit_bindgen_lower_t485((ptr) + 4, (value).doc)
+      __wit_bindgen_lower_t491((ptr) + 4, (value).doc)
 
       let address = mbt_ffi_malloc(((value).formatters).length() * 32);
       for index = 0; index < ((value).formatters).length(); index = index + 1 {
             let iter_elem : @common.Formatter = ((value).formatters)[(index)]
             let iter_base = address + (index * 32);
-            __wit_bindgen_lower_t501((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t507((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 32, ((value).formatters).length())
@@ -10465,12 +12537,12 @@ fn __wit_bindgen_lower_t503(ptr : Int, value : @common.ResultSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t505(ptr : Int, value : @common.ErrorCase) -> Unit {
+fn __wit_bindgen_lower_t511(ptr : Int, value : @common.ErrorCase) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t491((ptr) + 8, (value).doc)
       mbt_ffi_store8((ptr) + 32, (value).kind.ordinal())
       mbt_ffi_store8((ptr) + 33, ((value).exit_code).to_int())
 
@@ -10491,14 +12563,14 @@ fn __wit_bindgen_lower_t505(ptr : Int, value : @common.ErrorCase) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
-      __wit_bindgen_lower_t492((ptr) + 0, (value).positionals)
+fn __wit_bindgen_lower_t517(ptr : Int, value : @common.CommandBody) -> Unit {
+      __wit_bindgen_lower_t498((ptr) + 0, (value).positionals)
 
-      let address = mbt_ffi_malloc(((value).options).length() * 108);
+      let address = mbt_ffi_malloc(((value).options).length() * 112);
       for index = 0; index < ((value).options).length(); index = index + 1 {
             let iter_elem : @common.OptionSpec = ((value).options)[(index)]
-            let iter_base = address + (index * 108);
-            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+            let iter_base = address + (index * 112);
+            __wit_bindgen_lower_t501((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 92, ((value).options).length())
@@ -10508,7 +12580,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
       for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
             let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
             let iter_base = address0 + (index1 * 72);
-            __wit_bindgen_lower_t496((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t502((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 100, ((value).flags).length())
@@ -10518,7 +12590,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
       for index3 = 0; index3 < ((value).constraints).length(); index3 = index3 + 1 {
             let iter_elem : @common.Constraint = ((value).constraints)[(index3)]
             let iter_base = address2 + (index3 * 28);
-            __wit_bindgen_lower_t481((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t487((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 108, ((value).constraints).length())
@@ -10532,7 +12604,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 112, (1))
-                  __wit_bindgen_lower_t500((ptr) + 116, payload4)
+                  __wit_bindgen_lower_t506((ptr) + 116, payload4)
 
                   ()
             }
@@ -10546,7 +12618,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload6) => {
                   mbt_ffi_store8((ptr) + 152, (1))
-                  __wit_bindgen_lower_t500((ptr) + 156, payload6)
+                  __wit_bindgen_lower_t506((ptr) + 156, payload6)
 
                   ()
             }
@@ -10560,7 +12632,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload8) => {
                   mbt_ffi_store8((ptr) + 192, (1))
-                  __wit_bindgen_lower_t503((ptr) + 196, payload8)
+                  __wit_bindgen_lower_t509((ptr) + 196, payload8)
 
                   ()
             }
@@ -10570,7 +12642,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
       for index10 = 0; index10 < ((value).errors).length(); index10 = index10 + 1 {
             let iter_elem : @common.ErrorCase = ((value).errors)[(index10)]
             let iter_base = address9 + (index10 * 44);
-            __wit_bindgen_lower_t505((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t511((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 244, ((value).errors).length())
@@ -10584,7 +12656,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload12) => {
                   mbt_ffi_store8((ptr) + 248, (1))
-                  __wit_bindgen_lower_t466((ptr) + 249, payload12)
+                  __wit_bindgen_lower_t470((ptr) + 249, payload12)
 
                   ()
             }
@@ -10593,7 +12665,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
+fn __wit_bindgen_lower_t520(ptr : Int, value : @common.CommandNode) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
@@ -10611,8 +12683,8 @@ fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
       }
       mbt_ffi_store32((ptr) + 12, ((value).aliases).length())
       mbt_ffi_store32((ptr) + 8, address)
-      __wit_bindgen_lower_t485((ptr) + 16, (value).doc)
-      __wit_bindgen_lower_t499((ptr) + 40, (value).globals)
+      __wit_bindgen_lower_t491((ptr) + 16, (value).doc)
+      __wit_bindgen_lower_t505((ptr) + 40, (value).globals)
 
       let address2 = mbt_ffi_malloc(((value).subcommands).length() * 4);
       for index3 = 0; index3 < ((value).subcommands).length(); index3 = index3 + 1 {
@@ -10632,7 +12704,7 @@ fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 64, (1))
-                  __wit_bindgen_lower_t511((ptr) + 68, payload4)
+                  __wit_bindgen_lower_t517((ptr) + 68, payload4)
 
                   ()
             }
@@ -10641,13 +12713,13 @@ fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t516(ptr : Int, value : @common.CommandTree) -> Unit {
+fn __wit_bindgen_lower_t522(ptr : Int, value : @common.CommandTree) -> Unit {
 
       let address = mbt_ffi_malloc(((value).nodes).length() * 324);
       for index = 0; index < ((value).nodes).length(); index = index + 1 {
             let iter_elem : @common.CommandNode = ((value).nodes)[(index)]
             let iter_base = address + (index * 324);
-            __wit_bindgen_lower_t514((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t520((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).nodes).length())
@@ -10656,18 +12728,18 @@ fn __wit_bindgen_lower_t516(ptr : Int, value : @common.CommandTree) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t517(ptr : Int, value : @common.Tool) -> Unit {
+fn __wit_bindgen_lower_t523(ptr : Int, value : @common.Tool) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).version)
       mbt_ffi_store32((ptr) + 4, (value).version.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t516((ptr) + 8, (value).commands)
-      __wit_bindgen_lower_t51((ptr) + 16, (value).schema)
+      __wit_bindgen_lower_t522((ptr) + 8, (value).commands)
+      __wit_bindgen_lower_t55((ptr) + 16, (value).schema)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t518(ptr : Int, value : @common.ToolError) -> Unit {
+fn __wit_bindgen_lower_t524(ptr : Int, value : @common.ToolError) -> Unit {
 
       match value {
             InvalidToolName(payload) => {
@@ -10726,7 +12798,7 @@ fn __wit_bindgen_lower_t518(ptr : Int, value : @common.ToolError) -> Unit {
             }
             CustomError(payload9) => {
                   mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t69((ptr) + 4, payload9)
+                  __wit_bindgen_lower_t73((ptr) + 4, payload9)
 
                   ()
             }
@@ -10735,7 +12807,7 @@ fn __wit_bindgen_lower_t518(ptr : Int, value : @common.ToolError) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t522(ptr : Int, value : @common.InvocationResult) -> Unit {
+fn __wit_bindgen_lower_t528(ptr : Int, value : @common.InvocationResult) -> Unit {
 
       match ((value).result) {
             None => {
@@ -10745,7 +12817,7 @@ fn __wit_bindgen_lower_t522(ptr : Int, value : @common.InvocationResult) -> Unit
             }
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 0, (1))
-                  __wit_bindgen_lower_t69((ptr) + 4, payload0)
+                  __wit_bindgen_lower_t73((ptr) + 4, payload0)
 
                   ()
             }
@@ -10770,37 +12842,12 @@ fn __wit_bindgen_lower_t522(ptr : Int, value : @common.InvocationResult) -> Unit
 }
 
 ///|
-extern "wasm" fn mbt_ffi_store16(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store16)
-
-///|
-extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
-#|(func (param i32) (result i64) local.get 0 i64.load)
-
-///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-#|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-#|(func (param i32) (result i32) local.get 0)
+extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.extend8_s)
 
 ///|
 extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
 #|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
-
-///|
-extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
-#|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
@@ -10810,16 +12857,65 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
 #| local.get 0)
 
 ///|
+extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
+#|(func (param i32) (result i64) local.get 0 i64.load)
+
+///|
+extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.extend16_s)
+
+///|
+extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load16_u)
+
+///|
+extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
+#|(func (param i32) (result f32) local.get 0 f32.load)
+
+///|
+extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load16_s)
+
+///|
+extern "wasm" fn mbt_ffi_store16(offset : Int, value : Int) =
+#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store16)
+
+///|
 extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
 #|(func (param i32) (result f64) local.get 0 f64.load)
 
 ///|
-extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.extend8_s)
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+#|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load8_s)
+
+///|
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+#|(func (param i32) local.get 0 call $moonbit.decref)
 
 ///|
 extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
 #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+
+///|
+extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
+#|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load8_u)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
@@ -10829,10 +12925,6 @@ extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
 #| local.get 0)
 
 ///|
-extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load16_u)
-
-///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
 #|(func (param i32) (result i32) (local i32)
 #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
@@ -10840,31 +12932,11 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
 #| local.get 1)
 
 ///|
-extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
-#|(func (param i32) (result f32) local.get 0 f32.load)
-
-///|
-extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
-#|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
-
-///|
-extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
-
-///|
 #owned(bytes)
 extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
 #|(func (param i32) (result i32) local.get 0)
 
 ///|
-extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load8_s)
-
-///|
-extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load16_s)
-
-///|
-extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.extend16_s)
+extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
+#|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
 

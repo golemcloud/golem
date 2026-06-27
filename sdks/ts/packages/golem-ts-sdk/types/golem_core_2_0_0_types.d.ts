@@ -180,6 +180,36 @@ declare module 'golem:core/types@2.0.0' {
     err?: TypeNodeIndex;
   };
   /**
+   * --- Numeric restrictions ---
+   * A numeric bound usable across every numeric representation. Float bounds
+   * carry canonical IEEE-754 `f64` bits (NaN/inf rejected, -0.0 normalized);
+   * comparisons decode the bits to `f64` and compare numerically.
+   */
+  export type NumericBound = 
+  {
+    tag: 'signed'
+    val: bigint
+  } |
+  {
+    tag: 'unsigned'
+    val: bigint
+  } |
+  {
+    tag: 'float-bits'
+    val: bigint
+  };
+  /**
+   * Inline numeric refinement. `none` on a numeric type means unconstrained
+   * (the common case). The empty restriction set is never encoded as `some`:
+   * producers normalize it to `none`, decoders normalize a decoded empty to
+   * `none`. `unit` is schema/help metadata only.
+   */
+  export type NumericRestrictions = {
+    min?: NumericBound;
+    max?: NumericBound;
+    unit?: string;
+  };
+  /**
    * --- Text / Binary restrictions ---
    */
   export type TextRestrictions = {
@@ -356,33 +386,43 @@ declare module 'golem:core/types@2.0.0' {
   } |
   {
     tag: 's8-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 's16-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 's32-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 's64-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u8-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u16-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u32-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u64-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'f32-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'f64-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'char-type'

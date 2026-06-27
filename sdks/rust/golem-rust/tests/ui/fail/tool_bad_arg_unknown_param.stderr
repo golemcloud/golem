@@ -1,0 +1,5 @@
+error: #[arg(...)] refers to unknown parameter `missing`; the method has no such parameter
+ --> tests/ui/fail/tool_bad_arg_unknown_param.rs:7:11
+  |
+7 |     #[arg(missing = "option")]
+  |           ^^^^^^^

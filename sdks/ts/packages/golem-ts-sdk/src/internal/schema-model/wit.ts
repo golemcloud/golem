@@ -42,6 +42,8 @@ import {
   type SchemaValue,
   type TypedSchemaValue,
   type TypeId,
+  type NumericRestrictions,
+  type NumericBound,
   emptyMetadata,
 } from './model';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
@@ -51,6 +53,54 @@ import { SchemaDecodeError, SchemaEncodeError } from './errors';
 // ============================================================
 // Schema type / graph
 // ============================================================
+
+// Numeric `SchemaType` variants (`s8`..`f64`) carry an inline
+// `option<numeric-restrictions>`. The model type and the WIT carrier are the
+// same generated `NumericRestrictions` shape, so the codec normalizes in both
+// directions to mirror the Rust `NumericRestrictions::normalize` invariants: an
+// empty restriction set (no bounds, empty/absent unit) collapses to `undefined`
+// (`none`), an empty `unit` is dropped, and a float bound of `-0.0` is
+// canonicalized to `+0.0` bits so equal restrictions compare equal.
+
+const NUMERIC_BOUND_BITS_VIEW = new DataView(new ArrayBuffer(8));
+
+/** Canonicalize a numeric bound: collapse `-0.0` float bits to `+0.0` bits. */
+function canonicalizeNumericBound(bound: NumericBound): NumericBound {
+  if (bound.tag === 'float-bits') {
+    NUMERIC_BOUND_BITS_VIEW.setBigUint64(0, BigInt.asUintN(64, bound.val), true);
+    if (NUMERIC_BOUND_BITS_VIEW.getFloat64(0, true) === 0) {
+      return { tag: 'float-bits', val: 0n };
+    }
+  }
+  return bound;
+}
+
+/**
+ * Normalize an `option<numeric-restrictions>` carrier, returning `undefined`
+ * (WIT `none`) for the empty restriction set. Used for both encode (model →
+ * WIT) and decode (WIT → model) since the two shapes are identical.
+ */
+function normalizeNumericRestrictions(
+  restrictions: NumericRestrictions | undefined,
+): NumericRestrictions | undefined {
+  if (restrictions === undefined) {
+    return undefined;
+  }
+  const out: NumericRestrictions = {};
+  if (restrictions.min !== undefined) {
+    out.min = canonicalizeNumericBound(restrictions.min);
+  }
+  if (restrictions.max !== undefined) {
+    out.max = canonicalizeNumericBound(restrictions.max);
+  }
+  if (restrictions.unit !== undefined && restrictions.unit !== '') {
+    out.unit = restrictions.unit;
+  }
+  if (out.min === undefined && out.max === undefined && out.unit === undefined) {
+    return undefined;
+  }
+  return out;
+}
 
 /**
  * Incremental encoder for a single flat {@link WitSchemaGraph} that holds
@@ -105,25 +155,25 @@ export class GraphEncoder {
       case 'bool':
         return { tag: 'bool-type' };
       case 's8':
-        return { tag: 's8-type' };
+        return { tag: 's8-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 's16':
-        return { tag: 's16-type' };
+        return { tag: 's16-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 's32':
-        return { tag: 's32-type' };
+        return { tag: 's32-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 's64':
-        return { tag: 's64-type' };
+        return { tag: 's64-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 'u8':
-        return { tag: 'u8-type' };
+        return { tag: 'u8-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 'u16':
-        return { tag: 'u16-type' };
+        return { tag: 'u16-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 'u32':
-        return { tag: 'u32-type' };
+        return { tag: 'u32-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 'u64':
-        return { tag: 'u64-type' };
+        return { tag: 'u64-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 'f32':
-        return { tag: 'f32-type' };
+        return { tag: 'f32-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 'f64':
-        return { tag: 'f64-type' };
+        return { tag: 'f64-type', val: normalizeNumericRestrictions(body.restrictions) };
       case 'char':
         return { tag: 'char-type' };
       case 'string':
@@ -282,25 +332,25 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
       case 'bool-type':
         return { tag: 'bool' };
       case 's8-type':
-        return { tag: 's8' };
+        return { tag: 's8', restrictions: normalizeNumericRestrictions(body.val) };
       case 's16-type':
-        return { tag: 's16' };
+        return { tag: 's16', restrictions: normalizeNumericRestrictions(body.val) };
       case 's32-type':
-        return { tag: 's32' };
+        return { tag: 's32', restrictions: normalizeNumericRestrictions(body.val) };
       case 's64-type':
-        return { tag: 's64' };
+        return { tag: 's64', restrictions: normalizeNumericRestrictions(body.val) };
       case 'u8-type':
-        return { tag: 'u8' };
+        return { tag: 'u8', restrictions: normalizeNumericRestrictions(body.val) };
       case 'u16-type':
-        return { tag: 'u16' };
+        return { tag: 'u16', restrictions: normalizeNumericRestrictions(body.val) };
       case 'u32-type':
-        return { tag: 'u32' };
+        return { tag: 'u32', restrictions: normalizeNumericRestrictions(body.val) };
       case 'u64-type':
-        return { tag: 'u64' };
+        return { tag: 'u64', restrictions: normalizeNumericRestrictions(body.val) };
       case 'f32-type':
-        return { tag: 'f32' };
+        return { tag: 'f32', restrictions: normalizeNumericRestrictions(body.val) };
       case 'f64-type':
-        return { tag: 'f64' };
+        return { tag: 'f64', restrictions: normalizeNumericRestrictions(body.val) };
       case 'char-type':
         return { tag: 'char' };
       case 'string-type':

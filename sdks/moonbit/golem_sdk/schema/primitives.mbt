@@ -77,7 +77,7 @@ pub impl IntoSchema for Int with type_id() {
 
 ///|
 pub impl IntoSchema for Int with register_in(_b) {
-  @model.schema_type(S32)
+  @model.schema_type(S32(None))
 }
 
 ///|
@@ -105,7 +105,7 @@ pub impl IntoSchema for UInt with type_id() {
 
 ///|
 pub impl IntoSchema for UInt with register_in(_b) {
-  @model.schema_type(U32)
+  @model.schema_type(U32(None))
 }
 
 ///|
@@ -133,7 +133,7 @@ pub impl IntoSchema for Int64 with type_id() {
 
 ///|
 pub impl IntoSchema for Int64 with register_in(_b) {
-  @model.schema_type(S64)
+  @model.schema_type(S64(None))
 }
 
 ///|
@@ -161,7 +161,7 @@ pub impl IntoSchema for UInt64 with type_id() {
 
 ///|
 pub impl IntoSchema for UInt64 with register_in(_b) {
-  @model.schema_type(U64)
+  @model.schema_type(U64(None))
 }
 
 ///|
@@ -189,7 +189,7 @@ pub impl IntoSchema for Float with type_id() {
 
 ///|
 pub impl IntoSchema for Float with register_in(_b) {
-  @model.schema_type(F32)
+  @model.schema_type(F32(None))
 }
 
 ///|
@@ -217,7 +217,7 @@ pub impl IntoSchema for Double with type_id() {
 
 ///|
 pub impl IntoSchema for Double with register_in(_b) {
-  @model.schema_type(F64)
+  @model.schema_type(F64(None))
 }
 
 ///|
@@ -245,7 +245,7 @@ pub impl IntoSchema for Byte with type_id() {
 
 ///|
 pub impl IntoSchema for Byte with register_in(_b) {
-  @model.schema_type(U8)
+  @model.schema_type(U8(None))
 }
 
 ///|

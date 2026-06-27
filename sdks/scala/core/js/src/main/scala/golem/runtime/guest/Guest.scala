@@ -216,7 +216,7 @@ object Guest {
     js.Dynamic.literal(
       "discoverTools" -> (() => discoverTools()),
       "getTool"       -> ((name: String) => getTool(name)),
-      "invoke" -> (
+      "invoke"        -> (
         (
           toolName: String,
           _commandPath: js.Array[String],

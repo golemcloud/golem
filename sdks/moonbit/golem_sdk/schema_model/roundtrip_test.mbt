@@ -24,19 +24,49 @@ fn rt_graph(g : SchemaGraph) -> SchemaGraph raise {
 }
 
 ///|
+fn encoded_body(st : SchemaType) -> @types.SchemaTypeBody raise {
+  let wit = schema_graph_to_wit({ defs: [], root: st })
+  wit.type_nodes[wit.root].body
+}
+
+///|
+fn ub(v : UInt64) -> @types.NumericBound {
+  @types.Unsigned(v)
+}
+
+///|
+fn sb(v : Int64) -> @types.NumericBound {
+  @types.Signed(v)
+}
+
+///|
+fn fb(bits : UInt64) -> @types.NumericBound {
+  @types.FloatBits(bits)
+}
+
+///|
+fn nr(
+  min? : @types.NumericBound,
+  max? : @types.NumericBound,
+  unit? : String,
+) -> @types.NumericRestrictions {
+  { min, max, unit }
+}
+
+///|
 test "primitive types round-trip" {
   let prims : Array[SchemaTypeBody] = [
     Bool,
-    S8,
-    S16,
-    S32,
-    S64,
-    U8,
-    U16,
-    U32,
-    U64,
-    F32,
-    F64,
+    S8(None),
+    S16(None),
+    S32(None),
+    S64(None),
+    U8(None),
+    U16(None),
+    U32(None),
+    U64(None),
+    F32(None),
+    F64(None),
     Char,
     String,
     Datetime,
@@ -49,23 +79,85 @@ test "primitive types round-trip" {
 }
 
 ///|
+test "numeric restrictions golden vectors round-trip" {
+  let i64_max = 9_223_372_036_854_775_807L
+  let u64_max = 18_446_744_073_709_551_615UL
+  let cases : Array[SchemaType] = [
+    schema_type(U32(None)),
+    schema_type(U32(Some(nr(min=ub(1UL))))),
+    schema_type(U32(Some(nr(min=ub(1UL), unit="items")))),
+    schema_type(U32(Some(nr(min=ub(0UL), max=ub(100UL))))),
+    schema_type(U32(Some(nr(min=ub(0UL), max=ub(100UL), unit="percent")))),
+    schema_type(S64(Some(nr(min=sb(0L), max=sb(i64_max))))),
+    schema_type(S64(Some(nr(min=sb(0L), max=sb(i64_max), unit="ns")))),
+    schema_type(U64(Some(nr(min=ub(u64_max - 1UL), max=ub(u64_max))))),
+    schema_type(
+      U64(Some(nr(min=ub(u64_max - 1UL), max=ub(u64_max), unit="bytes"))),
+    ),
+    schema_type(F64(Some(nr(min=fb(0UL))))),
+    schema_type(F64(Some(nr(min=fb(0UL), unit="seconds")))),
+    schema_type(S8(Some(nr(min=sb(-1L), max=sb(1L))))),
+    schema_type(F32(Some(nr(max=fb(4_609_434_218_613_702_656UL))))),
+  ]
+  inspect(
+    cases.map(rt_type),
+    content=(
+      #|[{body: U32(None), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(1)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(1)), max: None, unit: Some(items)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(0)), max: Some(Unsigned(100)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(0)), max: Some(Unsigned(100)), unit: Some(percent)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: S64(Some({min: Some(Signed(0)), max: Some(Signed(9223372036854775807)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: S64(Some({min: Some(Signed(0)), max: Some(Signed(9223372036854775807)), unit: Some(ns)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U64(Some({min: Some(Unsigned(18446744073709551614)), max: Some(Unsigned(18446744073709551615)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U64(Some({min: Some(Unsigned(18446744073709551614)), max: Some(Unsigned(18446744073709551615)), unit: Some(bytes)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: F64(Some({min: Some(FloatBits(0)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: F64(Some({min: Some(FloatBits(0)), max: None, unit: Some(seconds)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: S8(Some({min: Some(Signed(-1)), max: Some(Signed(1)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: F32(Some({min: None, max: Some(FloatBits(4609434218613702656)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}]
+    ),
+  )
+}
+
+///|
+test "numeric restrictions canonicalization" {
+  inspect(
+    encoded_body(schema_type(U32(Some(nr())))),
+    content=(
+      #|U32Type(None)
+    ),
+  )
+  inspect(
+    rt_type(schema_type(U32(Some(nr(unit=""))))),
+    content=(
+      #|{body: U32(None), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+    ),
+  )
+  inspect(
+    rt_type(schema_type(U32(Some(nr(min=ub(1UL), unit=""))))),
+    content=(
+      #|{body: U32(Some({min: Some(Unsigned(1)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+    ),
+  )
+  inspect(
+    rt_type(schema_type(F64(Some(nr(min=fb(9_223_372_036_854_775_808UL)))))),
+    content=(
+      #|{body: F64(Some({min: Some(FloatBits(0)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+    ),
+  )
+}
+
+///|
 test "composite types round-trip" {
   let inner = schema_type(
     Record([
-      field("id", schema_type(S64)),
+      field("id", schema_type(S64(None))),
       field("name", schema_type(String)),
       field("tags", schema_type(List(schema_type(String)))),
       field("maybe", schema_type(Option(schema_type(Bool)))),
       field(
         "outcome",
-        schema_type(Result(Some(schema_type(S32)), Some(schema_type(String)))),
+        schema_type(
+          Result(Some(schema_type(S32(None))), Some(schema_type(String))),
+        ),
       ),
-      field("pairs", schema_type(Map(schema_type(String), schema_type(U32)))),
-      field("fixed", schema_type(FixedList(schema_type(U8), 4))),
+      field(
+        "pairs",
+        schema_type(Map(schema_type(String), schema_type(U32(None)))),
+      ),
+      field("fixed", schema_type(FixedList(schema_type(U8(None)), 4))),
       field(
         "triple",
         schema_type(
-          Tuple([schema_type(Bool), schema_type(Char), schema_type(F64)]),
+          Tuple([schema_type(Bool), schema_type(Char), schema_type(F64(None))]),
         ),
       ),
       field("flags", schema_type(Flags(["a", "b", "c"]))),
@@ -74,7 +166,7 @@ test "composite types round-trip" {
         "shape",
         schema_type(
           Variant([
-            variant_case("circle", payload=schema_type(F64)),
+            variant_case("circle", payload=schema_type(F64(None))),
             variant_case("point"),
           ]),
         ),
@@ -135,7 +227,7 @@ test "Ref maps to ref-type by first-seen def index" {
   let g : SchemaGraph = {
     defs: [
       { id: "Zulu", name: None, body: schema_type(String) },
-      { id: "Bravo", name: None, body: schema_type(S32) },
+      { id: "Bravo", name: None, body: schema_type(S32(None)) },
     ],
     root: schema_type(
       Tuple([schema_type(Ref("Zulu")), schema_type(Ref("Bravo"))]),
@@ -172,7 +264,7 @@ test "self-recursive type closes via reserve/commit" {
             "cons",
             payload=schema_type(
               Record([
-                field("head", schema_type(S32)),
+                field("head", schema_type(S32(None))),
                 field("tail", b.ref_("IntList")),
               ]),
             ),
@@ -300,7 +392,7 @@ test "merge_agent_graphs dedups shared defs and rejects conflicts" {
   let shared : SchemaTypeDef = {
     id: "Shared",
     name: None,
-    body: schema_type(S32),
+    body: schema_type(S32(None)),
   }
   let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")) }
   let g2 : SchemaGraph = {
@@ -356,7 +448,7 @@ test "semantic and capability types round-trip" {
   let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu") }
   let branch_a : UnionBranch = {
     tag: "a",
-    body: schema_type(S32),
+    body: schema_type(S32(None)),
     discriminator: @types.DiscriminatorRule::Prefix("a:"),
     metadata: empty_metadata(),
   }
@@ -375,7 +467,7 @@ test "semantic and capability types round-trip" {
       field("quantity", schema_type(Quantity(qty_s))),
       field("secret", schema_type(Secret(secret_s))),
       field("quota", schema_type(QuotaToken(quota_s))),
-      field("future_some", schema_type(Future(Some(schema_type(S32))))),
+      field("future_some", schema_type(Future(Some(schema_type(S32(None)))))),
       field("future_none", schema_type(Future(None))),
       field("stream_some", schema_type(Stream(Some(schema_type(String))))),
       field("stream_none", schema_type(Stream(None))),
@@ -390,7 +482,7 @@ test "encode_merged_agent_graph shares one pool across roots" {
   let shared : SchemaTypeDef = {
     id: "Shared",
     name: None,
-    body: schema_type(S32),
+    body: schema_type(S32(None)),
   }
   let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")) }
   let g2 : SchemaGraph = {

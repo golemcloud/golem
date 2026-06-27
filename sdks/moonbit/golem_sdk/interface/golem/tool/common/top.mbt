@@ -9,20 +9,45 @@ pub(all) struct CommandAnnotations {
       read_only : Bool; destructive : Bool; idempotent : Bool; open_world : Bool
 } derive(Show, Eq)
 ///|
+/// Resolution policy for a repeated key in a `repeatable-map` option.
+pub(all) enum DuplicateKeyPolicy {
+      REJECT; LAST_WINS
+} derive(Show, Eq)
+
+pub fn DuplicateKeyPolicy::ordinal(self : DuplicateKeyPolicy) -> Int {
+      match self {
+            REJECT => 0
+            LAST_WINS => 1
+      }
+}
+
+pub fn DuplicateKeyPolicy::from(self : Int) -> DuplicateKeyPolicy {
+      match self {
+            0 => REJECT
+            1 => LAST_WINS
+            _ => panic()
+      }
+}
+///|
 pub(all) enum Repetition {
       Repeated
       Delimited(Char)
       Either(Char)
 } derive(Show, Eq)
 ///|
-pub(all) struct RepeatableShape {
-      repetition : Repetition; type_ : Int
+pub(all) struct RepeatableListShape {
+      repetition : Repetition; item_type : Int
+} derive(Show, Eq)
+///|
+pub(all) struct RepeatableMapShape {
+      repetition : Repetition; map_type : Int; duplicate_key_policy : DuplicateKeyPolicy
 } derive(Show, Eq)
 ///|
 pub(all) enum OptionShape {
       Scalar(Int)
       OptionalScalar(Int)
-      Repeatable(RepeatableShape)
+      RepeatableList(RepeatableListShape)
+      RepeatableMap(RepeatableMapShape)
 } derive(Show, Eq)
 ///|
 pub(all) struct BoolFlagShape {
@@ -113,11 +138,11 @@ pub(all) struct Doc {
 } derive(Show, Eq)
 ///|
 pub(all) struct Positional {
-      name : String; doc : Doc; value_name : String?; type_ : Int; default : @types.SchemaValueTree?; required : Bool
+      name : String; doc : Doc; value_name : String?; type_ : Int; default : @types.SchemaValueTree?; required : Bool; accepts_stdio : Bool
 } derive(Show, Eq)
 ///|
 pub(all) struct TailPositional {
-      name : String; doc : Doc; value_name : String?; item_type : Int; min : UInt; max : UInt?; separator : String?; verbatim : Bool
+      name : String; doc : Doc; value_name : String?; item_type : Int; min : UInt; max : UInt?; separator : String?; verbatim : Bool; accepts_stdio : Bool
 } derive(Show, Eq)
 ///|
 /// Positionals (variadic only at the tail, structurally)

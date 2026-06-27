@@ -60,19 +60,19 @@ sealed trait WitSchemaTypeBody extends Product with Serializable
 object WitSchemaTypeBody {
   final case class RefType(defIndex: Int) extends WitSchemaTypeBody
 
-  case object BoolType   extends WitSchemaTypeBody
-  case object S8Type     extends WitSchemaTypeBody
-  case object S16Type    extends WitSchemaTypeBody
-  case object S32Type    extends WitSchemaTypeBody
-  case object S64Type    extends WitSchemaTypeBody
-  case object U8Type     extends WitSchemaTypeBody
-  case object U16Type    extends WitSchemaTypeBody
-  case object U32Type    extends WitSchemaTypeBody
-  case object U64Type    extends WitSchemaTypeBody
-  case object F32Type    extends WitSchemaTypeBody
-  case object F64Type    extends WitSchemaTypeBody
-  case object CharType   extends WitSchemaTypeBody
-  case object StringType extends WitSchemaTypeBody
+  case object BoolType                                                       extends WitSchemaTypeBody
+  final case class S8Type(restrictions: Option[NumericRestrictions] = None)  extends WitSchemaTypeBody
+  final case class S16Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class S32Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class S64Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class U8Type(restrictions: Option[NumericRestrictions] = None)  extends WitSchemaTypeBody
+  final case class U16Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class U32Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class U64Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class F32Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class F64Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  case object CharType                                                       extends WitSchemaTypeBody
+  case object StringType                                                     extends WitSchemaTypeBody
 
   final case class RecordType(fields: Vector[WitNamedFieldType])  extends WitSchemaTypeBody
   final case class VariantType(cases: Vector[WitVariantCaseType]) extends WitSchemaTypeBody

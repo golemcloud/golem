@@ -145,16 +145,16 @@ pub(all) struct SchemaType {
 pub(all) enum SchemaTypeBody {
   Ref(String)
   Bool
-  S8
-  S16
-  S32
-  S64
-  U8
-  U16
-  U32
-  U64
-  F32
-  F64
+  S8(@types.NumericRestrictions?)
+  S16(@types.NumericRestrictions?)
+  S32(@types.NumericRestrictions?)
+  S64(@types.NumericRestrictions?)
+  U8(@types.NumericRestrictions?)
+  U16(@types.NumericRestrictions?)
+  U32(@types.NumericRestrictions?)
+  U64(@types.NumericRestrictions?)
+  F32(@types.NumericRestrictions?)
+  F64(@types.NumericRestrictions?)
   Char
   String
   Record(Array[NamedFieldType])

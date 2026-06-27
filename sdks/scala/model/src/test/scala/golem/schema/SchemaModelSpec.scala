@@ -247,6 +247,74 @@ object SchemaModelSpec extends ZIOSpecDefault {
           val rootBody = wit.typeNodes(wit.root).body
           // "a.point" sorts before "z.point", so its def index is 0.
           assertTrue(rootBody == WitSchemaTypeBody.RefType(0))
+        },
+        test("numeric restrictions golden vectors round-trip and normalize") {
+          import NumericBound._
+          import SchemaTypeBody._
+
+          def u(v: Long)                                                                                         = Unsigned(v)
+          def s(v: Long)                                                                                         = Signed(v)
+          def f(v: Double)                                                                                       = FloatBits(java.lang.Double.doubleToRawLongBits(v))
+          def r(min: Option[NumericBound] = None, max: Option[NumericBound] = None, unit: Option[String] = None) =
+            NumericRestrictions(min, max, unit).normalize
+          def roundTrip(body: SchemaTypeBody): SchemaTypeBody =
+            SchemaWire
+              .schemaGraphFromWit(SchemaWire.schemaGraphToWit(SchemaGraph(ListMap.empty, SchemaType(body))))
+              .root
+              .body
+
+          val cases = List(
+            U32Type(None),
+            U32Type(r(min = Some(u(1L)))),
+            U32Type(r(min = Some(u(1L)), unit = Some("items"))),
+            U32Type(r(min = Some(u(0L)), max = Some(u(100L)))),
+            U32Type(r(min = Some(u(0L)), max = Some(u(100L)), unit = Some("percent"))),
+            S64Type(r(min = Some(s(0L)), max = Some(s(Long.MaxValue)))),
+            S64Type(r(min = Some(s(0L)), max = Some(s(Long.MaxValue)), unit = Some("ns"))),
+            U64Type(r(min = Some(u(-2L)), max = Some(u(-1L)))),
+            U64Type(r(min = Some(u(-2L)), max = Some(u(-1L)), unit = Some("bytes"))),
+            F64Type(r(min = Some(f(0.0d)))),
+            F64Type(r(min = Some(f(0.0d)), unit = Some("seconds"))),
+            S8Type(r(min = Some(s(-1L)), max = Some(s(1L)))),
+            F32Type(r(max = Some(f(1.5d))))
+          )
+
+          assertTrue(cases.forall(body => roundTrip(body) == body))
+        },
+        test("numeric restrictions canonicalization drops empty values and negative zero") {
+          import NumericBound._
+          import SchemaTypeBody._
+
+          val negZero   = java.lang.Double.doubleToRawLongBits(-0.0d)
+          val emptyWire = WitSchemaGraph(
+            Vector(
+              WitSchemaTypeNode(WitSchemaTypeBody.U32Type(Some(NumericRestrictions.empty)), MetadataEnvelope.empty)
+            ),
+            Vector.empty,
+            0
+          )
+          val emptyUnit      = NumericRestrictions(unit = Some(""))
+          val boundEmptyUnit = NumericRestrictions(min = Some(Unsigned(1L)), unit = Some(""))
+          val negZeroWire    = WitSchemaGraph(
+            Vector(
+              WitSchemaTypeNode(
+                WitSchemaTypeBody.F64Type(Some(NumericRestrictions(min = Some(FloatBits(negZero))))),
+                MetadataEnvelope.empty
+              )
+            ),
+            Vector.empty,
+            0
+          )
+
+          assertTrue(
+            NumericRestrictions.empty.normalize.isEmpty,
+            emptyUnit.normalize.isEmpty,
+            boundEmptyUnit.normalize.contains(NumericRestrictions(min = Some(Unsigned(1L)))),
+            SchemaWire.schemaGraphFromWit(emptyWire).root.body == U32Type(None),
+            SchemaWire.schemaGraphFromWit(negZeroWire).root.body == F64Type(
+              Some(NumericRestrictions(min = Some(FloatBits(0L))))
+            )
+          )
         }
       ),
       suite("value tree wire roundtrip")(

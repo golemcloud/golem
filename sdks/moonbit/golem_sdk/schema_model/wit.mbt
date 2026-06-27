@@ -43,6 +43,49 @@ fn u16_in_range(u : UInt) -> Bool {
   u <= 65535
 }
 
+///|
+fn canonicalize_numeric_bound(
+  bound : @types.NumericBound,
+) -> @types.NumericBound {
+  match bound {
+    @types.FloatBits(bits) =>
+      // IEEE-754 f64 has exactly two zero bit patterns; canonicalize -0.0 to +0.0.
+      if bits == 0UL || bits == 9_223_372_036_854_775_808UL {
+        @types.FloatBits(0UL)
+      } else {
+        bound
+      }
+    _ => bound
+  }
+}
+
+///|
+fn normalize_numeric_restrictions(
+  restrictions : @types.NumericRestrictions?,
+) -> @types.NumericRestrictions? {
+  match restrictions {
+    None => None
+    Some(r) => {
+      let unit = match r.unit {
+        Some("") => None
+        other => other
+      }
+      let normalized : @types.NumericRestrictions = {
+        min: r.min.map(canonicalize_numeric_bound),
+        max: r.max.map(canonicalize_numeric_bound),
+        unit,
+      }
+      if normalized.min is None &&
+        normalized.max is None &&
+        normalized.unit is None {
+        None
+      } else {
+        Some(normalized)
+      }
+    }
+  }
+}
+
 // ============================================================
 // Schema type / graph — encode (recursive -> flat)
 // ============================================================
@@ -131,16 +174,16 @@ fn GraphEncoder::encode_body(
           raise EncodeError("schema graph references unknown type id '\{id}'")
       }
     Bool => @types.BoolType
-    S8 => @types.S8Type
-    S16 => @types.S16Type
-    S32 => @types.S32Type
-    S64 => @types.S64Type
-    U8 => @types.U8Type
-    U16 => @types.U16Type
-    U32 => @types.U32Type
-    U64 => @types.U64Type
-    F32 => @types.F32Type
-    F64 => @types.F64Type
+    S8(r) => @types.S8Type(normalize_numeric_restrictions(r))
+    S16(r) => @types.S16Type(normalize_numeric_restrictions(r))
+    S32(r) => @types.S32Type(normalize_numeric_restrictions(r))
+    S64(r) => @types.S64Type(normalize_numeric_restrictions(r))
+    U8(r) => @types.U8Type(normalize_numeric_restrictions(r))
+    U16(r) => @types.U16Type(normalize_numeric_restrictions(r))
+    U32(r) => @types.U32Type(normalize_numeric_restrictions(r))
+    U64(r) => @types.U64Type(normalize_numeric_restrictions(r))
+    F32(r) => @types.F32Type(normalize_numeric_restrictions(r))
+    F64(r) => @types.F64Type(normalize_numeric_restrictions(r))
     Char => @types.CharType
     String => @types.StringType
     Record(fields) =>
@@ -371,16 +414,16 @@ fn GraphDecoder::body_of(
   match body {
     @types.RefType(di) => Ref(self.def_id(di))
     @types.BoolType => Bool
-    @types.S8Type => S8
-    @types.S16Type => S16
-    @types.S32Type => S32
-    @types.S64Type => S64
-    @types.U8Type => U8
-    @types.U16Type => U16
-    @types.U32Type => U32
-    @types.U64Type => U64
-    @types.F32Type => F32
-    @types.F64Type => F64
+    @types.S8Type(r) => S8(normalize_numeric_restrictions(r))
+    @types.S16Type(r) => S16(normalize_numeric_restrictions(r))
+    @types.S32Type(r) => S32(normalize_numeric_restrictions(r))
+    @types.S64Type(r) => S64(normalize_numeric_restrictions(r))
+    @types.U8Type(r) => U8(normalize_numeric_restrictions(r))
+    @types.U16Type(r) => U16(normalize_numeric_restrictions(r))
+    @types.U32Type(r) => U32(normalize_numeric_restrictions(r))
+    @types.U64Type(r) => U64(normalize_numeric_restrictions(r))
+    @types.F32Type(r) => F32(normalize_numeric_restrictions(r))
+    @types.F64Type(r) => F64(normalize_numeric_restrictions(r))
     @types.CharType => Char
     @types.StringType => String
     @types.RecordType(fields) =>
