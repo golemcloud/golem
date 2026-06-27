@@ -139,12 +139,12 @@ pub fn Reservation::drop(self : Reservation) -> Unit {
 /// (`SchemaType::quota-token` / `SchemaValue::quota-token`), so its schema is a
 /// single capability node rather than a structural record. Mirrors the Rust SDK
 /// `impl IntoSchema for QuotaToken`.
-pub impl @schema.IntoSchema for QuotaToken with type_id() {
+pub impl @schema.IntoSchema for QuotaToken with fn type_id() {
   "golem.core.QuotaToken"
 }
 
 ///|
-pub impl @schema.IntoSchema for QuotaToken with register_in(_b) {
+pub impl @schema.IntoSchema for QuotaToken with fn register_in(_b) {
   @model.schema_type(QuotaToken({ resource_name: None }))
 }
 
@@ -153,7 +153,7 @@ pub impl @schema.IntoSchema for QuotaToken with register_in(_b) {
 /// underlying owned resource is not moved here; it is taken out of the handle
 /// exactly once when the resulting `SchemaValue` is encoded into a WIT
 /// `schema-value-tree`. Mirrors the Rust/TS SDK `to_value` / `_toSchemaValue`.
-pub impl @schema.IntoSchema for QuotaToken with to_value(self) {
+pub impl @schema.IntoSchema for QuotaToken with fn to_value(self) {
   QuotaToken(self.handle)
 }
 
@@ -161,7 +161,7 @@ pub impl @schema.IntoSchema for QuotaToken with to_value(self) {
 /// Reconstruct a token from a decoded schema value's opaque handle. Mirrors the
 /// Rust SDK `impl FromSchema for QuotaToken` / TS `_fromSchemaValue`: only a
 /// `SchemaValue::quota-token` reconstructs a token.
-pub impl @schema.FromSchema for QuotaToken with from_value(v) {
+pub impl @schema.FromSchema for QuotaToken with fn from_value(v) {
   match v {
     QuotaToken(handle) => { handle, }
     other =>

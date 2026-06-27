@@ -29,6 +29,10 @@ pub(all) struct BinaryValuePayload {
   mime_type : String?
 } derive(Eq, Show)
 
+pub(all) struct CardId {
+  uuid : Uuid
+} derive(Eq, Show)
+
 pub(all) struct ComponentId {
   uuid : Uuid
 } derive(Eq, Show)
@@ -136,9 +140,6 @@ pub fn QuotaToken::drop(Self) -> Unit
 pub(all) struct QuotaTokenSpec {
   resource_name : String?
 } derive(Eq, Show)
-
-pub(all) struct Secret(Int) derive(Eq, Show)
-pub fn Secret::drop(Self) -> Unit
 
 pub(all) struct ResultSpec {
   ok : Int?
@@ -254,7 +255,11 @@ pub(all) struct SchemaValueTree {
   root : Int
 } derive(Eq, Show)
 
+pub(all) struct Secret(Int) derive(Eq, Show)
+pub fn Secret::drop(Self) -> Unit
+
 pub(all) struct SecretSpec {
+  inner : Int
   category : String?
 } derive(Eq, Show)
 
@@ -315,3 +320,4 @@ pub(all) struct VariantValuePayload {
 // Type aliases
 
 // Traits
+

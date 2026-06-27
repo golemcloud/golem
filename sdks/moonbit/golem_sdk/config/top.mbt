@@ -40,6 +40,19 @@ fn[T : @schema.IntoSchema] schema_graph_of(
 }
 
 ///|
+/// Build the config lookup graph for `Secret[T]`: the host returns an opaque
+/// secret handle whose declared inner payload is `T`'s schema graph.
+fn[T : @schema.IntoSchema] secret_schema_graph_of(
+  tag : @schema.TypeTag[T],
+) -> @model.SchemaGraph raise @common.AgentError {
+  let inner = schema_graph_of(tag)
+  {
+    defs: inner.defs,
+    root: @model.schema_type(Secret({ inner: inner.root, category: None })),
+  }
+}
+
+///|
 /// Load and decode a configuration value of type `T` from the given key path.
 ///
 /// Pipeline (mirrors Rust `Secret::get` / `ConfigSchema::load` leaf):
@@ -68,7 +81,49 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] load_config_value(
 pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(
   self : Secret[T],
 ) -> T raise @common.AgentError {
-  load_config_value(self.key)
+  let tag = (@schema.TypeTag::{  } : @schema.TypeTag[T])
+  let inner_graph = schema_graph_of(tag)
+  let secret_graph = secret_schema_graph_of(tag)
+  let secret_wire_graph = @model.schema_graph_to_wit(secret_graph) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let secret_wire_value = @host.get_config_value(self.key, secret_wire_graph)
+  let secret_model_value = @model.schema_value_from_wit(secret_wire_value) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let handle = match secret_model_value {
+    Secret(handle) => handle
+    other =>
+      raise @common.AgentError::InvalidInput(
+        "expected secret handle from config, got \{@schema.value_kind(other)}",
+      )
+  }
+  let inner_wire_graph = @model.schema_graph_to_wit(inner_graph) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let raw_handle = match handle.take() {
+    Some(h) => h
+    None =>
+      raise @common.AgentError::InvalidInput(
+        "secret handle has already been transferred and can no longer be revealed",
+      )
+  }
+  let reveal_result = @reveal.reveal(raw_handle, inner_wire_graph)
+  raw_handle.drop()
+  let revealed_wire_value = match reveal_result {
+    Ok(v) => v
+    Err(e) => {
+      let msg = e.to_string()
+      raise @common.AgentError::InvalidInput("secret reveal failed: \{msg}")
+    }
+  }
+  let revealed_model_value = @model.schema_value_from_wit(revealed_wire_value) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let decoded : T = @schema.from_value_as(revealed_model_value) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  decoded
 }
 
 ///|
@@ -102,8 +157,8 @@ pub fn[T : ConfigField] load_field(
 /// for `#derive.config` structs; the SDK provides impls for primitives, the
 /// standard compounds, and `Secret[T]`.
 pub(open) trait ConfigField {
-  collect_entries(path : Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
-  load(path : Array[String]) -> Self raise @common.AgentError
+  fn collect_entries(path : Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
+  fn load(path : Array[String]) -> Self raise @common.AgentError
 }
 
 ///|
@@ -122,7 +177,8 @@ fn[T : @schema.IntoSchema] local_entry(
 }
 
 ///|
-/// Single `SECRET` config declaration whose value type is `T`'s schema graph.
+/// Single `SECRET` config declaration whose value type is `Secret[T]` with
+/// inner payload `T`'s schema graph.
 fn[T : @schema.IntoSchema] shared_entry(
   tag : @schema.TypeTag[T],
   path : Array[String],
@@ -131,144 +187,144 @@ fn[T : @schema.IntoSchema] shared_entry(
     {
       source: @common.AgentConfigSource::SECRET,
       path,
-      value_type: schema_graph_of(tag),
+      value_type: secret_schema_graph_of(tag),
     },
   ]
 }
 
 ///|
-pub impl ConfigField for String with collect_entries(path) {
+pub impl ConfigField for String with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[String]), path)
 }
 
 ///|
-pub impl ConfigField for String with load(path) {
+pub impl ConfigField for String with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Bool with collect_entries(path) {
+pub impl ConfigField for Bool with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Bool]), path)
 }
 
 ///|
-pub impl ConfigField for Bool with load(path) {
+pub impl ConfigField for Bool with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Int with collect_entries(path) {
+pub impl ConfigField for Int with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Int]), path)
 }
 
 ///|
-pub impl ConfigField for Int with load(path) {
+pub impl ConfigField for Int with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for UInt with collect_entries(path) {
+pub impl ConfigField for UInt with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[UInt]), path)
 }
 
 ///|
-pub impl ConfigField for UInt with load(path) {
+pub impl ConfigField for UInt with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Int64 with collect_entries(path) {
+pub impl ConfigField for Int64 with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Int64]), path)
 }
 
 ///|
-pub impl ConfigField for Int64 with load(path) {
+pub impl ConfigField for Int64 with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for UInt64 with collect_entries(path) {
+pub impl ConfigField for UInt64 with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[UInt64]), path)
 }
 
 ///|
-pub impl ConfigField for UInt64 with load(path) {
+pub impl ConfigField for UInt64 with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Float with collect_entries(path) {
+pub impl ConfigField for Float with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Float]), path)
 }
 
 ///|
-pub impl ConfigField for Float with load(path) {
+pub impl ConfigField for Float with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Double with collect_entries(path) {
+pub impl ConfigField for Double with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Double]), path)
 }
 
 ///|
-pub impl ConfigField for Double with load(path) {
+pub impl ConfigField for Double with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Byte with collect_entries(path) {
+pub impl ConfigField for Byte with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Byte]), path)
 }
 
 ///|
-pub impl ConfigField for Byte with load(path) {
+pub impl ConfigField for Byte with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Char with collect_entries(path) {
+pub impl ConfigField for Char with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Char]), path)
 }
 
 ///|
-pub impl ConfigField for Char with load(path) {
+pub impl ConfigField for Char with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl ConfigField for Bytes with collect_entries(path) {
+pub impl ConfigField for Bytes with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Bytes]), path)
 }
 
 ///|
-pub impl ConfigField for Bytes with load(path) {
+pub impl ConfigField for Bytes with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T? with collect_entries(
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T? with fn collect_entries(
   path,
 ) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[T?]), path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T? with load(
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T? with fn load(
   path,
 ) {
   load_config_value(path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T] with collect_entries(
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T] with fn collect_entries(
   path,
 ) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Array[T]]), path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T] with load(
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T] with fn load(
   path,
 ) {
   load_config_value(path)
@@ -278,7 +334,7 @@ pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T] w
 pub impl[
   T : @schema.IntoSchema + @schema.FromSchema,
   E : @schema.IntoSchema + @schema.FromSchema,
-] ConfigField for Result[T, E] with collect_entries(path) {
+] ConfigField for Result[T, E] with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{  } : @schema.TypeTag[Result[T, E]]), path)
 }
 
@@ -286,19 +342,19 @@ pub impl[
 pub impl[
   T : @schema.IntoSchema + @schema.FromSchema,
   E : @schema.IntoSchema + @schema.FromSchema,
-] ConfigField for Result[T, E] with load(path) {
+] ConfigField for Result[T, E] with fn load(path) {
   load_config_value(path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Secret[T] with collect_entries(
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Secret[T] with fn collect_entries(
   path,
 ) {
   shared_entry((@schema.TypeTag::{  } : @schema.TypeTag[T]), path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Secret[T] with load(
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Secret[T] with fn load(
   path,
 ) {
   { key: path }
