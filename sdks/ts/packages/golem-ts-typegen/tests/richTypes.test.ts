@@ -105,4 +105,154 @@ describe('rich semantic author types', () => {
     );
     expect(types.every((type) => type.kind === 'unresolved-type')).toBe(true);
   });
+
+  it('preserves recursive back-edges through Secret<T> payloads', () => {
+    const project = new Project({ tsConfigFilePath: 'tsconfig.json' });
+    const wellKnown = createWellKnownTypes(project, './tests/sdkPlaceholder.ts');
+    const sf = project.createSourceFile(
+      '__secret_recursion_test__.ts',
+      `
+        import { Secret } from './tests/sdkPlaceholder.ts';
+
+        type SecretNode = {
+          next: Secret<SecretNode>;
+        };
+
+        class Test {
+          node!: SecretNode;
+        }
+      `,
+      { overwrite: true },
+    );
+
+    const nodeProp = sf.getClassOrThrow('Test').getInstancePropertyOrThrow('node');
+    const nodeType = getTypeFromTsMorph(nodeProp.getType(), false, wellKnown);
+
+    expect(nodeType.kind).toBe('object');
+    if (nodeType.kind !== 'object') return;
+
+    const next = nodeType.properties.find((p) => p.getName() === 'next');
+    expect(next).toBeDefined();
+    if (!next) return;
+
+    const nextType = next.getTypeAtLocation(next.getValueDeclarationOrThrow());
+    expect(nextType.kind).toBe('secret');
+    if (nextType.kind !== 'secret') return;
+
+    expect(nextType.element).toMatchObject({
+      kind: 'others',
+      name: 'SecretNode',
+      recursive: true,
+    });
+  });
+
+  it('treats explicit Secret<T> | undefined config members as optional secret handles', () => {
+    const project = new Project({ tsConfigFilePath: 'tsconfig.json' });
+    const wellKnown = createWellKnownTypes(project, './tests/sdkPlaceholder.ts');
+    const sf = project.createSourceFile(
+      '__explicit_optional_secret_config_test__.ts',
+      `
+        import { Config, Secret } from './tests/sdkPlaceholder.ts';
+
+        class Test {
+          config!: Config<{
+            optionalSecret: Secret<string> | undefined;
+          }>;
+        }
+      `,
+      { overwrite: true },
+    );
+
+    const configProp = sf.getClassOrThrow('Test').getInstancePropertyOrThrow('config');
+    const configType = getTypeFromTsMorph(configProp.getType(), false, wellKnown);
+
+    expect(configType.kind).toBe('config');
+    if (configType.kind !== 'config') return;
+
+    expect(configType.properties).toEqual([
+      {
+        path: ['optionalSecret'],
+        secret: true,
+        secretHandleOptional: true,
+        type: { kind: 'string', name: undefined, owner: undefined, optional: false },
+      },
+    ]);
+  });
+
+  it('does not use explicit Secret<T> | undefined config members to prune required config groups', () => {
+    const project = new Project({ tsConfigFilePath: 'tsconfig.json' });
+    const wellKnown = createWellKnownTypes(project, './tests/sdkPlaceholder.ts');
+    const sf = project.createSourceFile(
+      '__explicit_optional_secret_required_group_test__.ts',
+      `
+        import { Config, Secret } from './tests/sdkPlaceholder.ts';
+
+        class Test {
+          config!: Config<{
+            group: {
+              optionalSecret: Secret<string> | undefined;
+              requiredPlain: string;
+            };
+          }>;
+        }
+      `,
+      { overwrite: true },
+    );
+
+    const configProp = sf.getClassOrThrow('Test').getInstancePropertyOrThrow('config');
+    const configType = getTypeFromTsMorph(configProp.getType(), false, wellKnown);
+
+    expect(configType.kind).toBe('config');
+    if (configType.kind !== 'config') return;
+
+    expect(configType.properties).toEqual(
+      expect.arrayContaining([
+        {
+          path: ['group', 'optionalSecret'],
+          secret: true,
+          secretHandleOptional: true,
+          type: { kind: 'string', name: undefined, owner: undefined, optional: false },
+        },
+        {
+          path: ['group', 'requiredPlain'],
+          secret: false,
+          type: { kind: 'string', name: undefined, owner: undefined, optional: false },
+        },
+      ]),
+    );
+    expect(configType.requiredMembers).toEqual([
+      { path: ['group'], requiredKeys: ['requiredPlain'] },
+    ]);
+  });
+
+  it('review repro: explicit optional secret is not a required group key', () => {
+    const project = new Project({ tsConfigFilePath: 'tsconfig.json' });
+    const wellKnown = createWellKnownTypes(project, './tests/sdkPlaceholder.ts');
+    const sf = project.createSourceFile(
+      '__review_optional_secret_group_required_keys_test__.ts',
+      `
+        import { Config, Secret } from './tests/sdkPlaceholder.ts';
+
+        class Test {
+          config!: Config<{
+            group: {
+              maybeApiKey: Secret<string> | undefined;
+              endpoint: string;
+            };
+          }>;
+        }
+      `,
+      { overwrite: true },
+    );
+
+    const configProp = sf.getClassOrThrow('Test').getInstancePropertyOrThrow('config');
+    const configType = getTypeFromTsMorph(configProp.getType(), false, wellKnown);
+
+    expect(configType.kind).toBe('config');
+    if (configType.kind !== 'config') return;
+
+    expect(configType.requiredMembers).toEqual([
+      { path: ['group'], requiredKeys: ['endpoint'] },
+    ]);
+  });
 });

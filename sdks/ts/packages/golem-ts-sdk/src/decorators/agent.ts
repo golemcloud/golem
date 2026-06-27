@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { AgentType, AgentMode, Principal, Snapshotting } from 'golem:agent/common@2.0.0';
-import { SchemaValue } from '../internal/schema-model';
+import { SchemaValue, schemaValueFromWit } from '../internal/schema-model';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -29,6 +29,8 @@ import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegis
 import { createCustomError } from '../internal/agentError';
 import { AgentConstructorRegistry } from '../internal/registry/agentConstructorRegistry';
 import {
+  cloneWitValueTree,
+  consumeOwnedHandlesFromClone,
   decodeInputRecord,
   precompileOutputCodec,
   precompileParamCodecs,
@@ -367,6 +369,54 @@ export function agent(options?: AgentDecoratorOptions) {
     );
 
     AgentInitiatorRegistry.register(agentTypeName, {
+      initiateFromWit: (constructorInput, principal: Principal) => {
+        const agentId = getRawSelfAgentId();
+        if (!agentId.value.startsWith(agentTypeName.value)) {
+          const error = createCustomError(
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.value}", got "${agentId.value}"`,
+          );
+
+          return {
+            tag: 'err',
+            val: error,
+          };
+        }
+
+        let deserializedConstructorArgs: any[];
+        let constructorValue: SchemaValue;
+        try {
+          const constructorInputClone = cloneWitValueTree(constructorInput);
+          constructorValue = schemaValueFromWit(constructorInputClone);
+          deserializedConstructorArgs = decodeInputRecord(
+            constructorValue,
+            enrichedConstructor.params,
+            principal,
+          );
+          consumeOwnedHandlesFromClone(constructorInput, constructorInputClone);
+        } catch (e) {
+          const error = createCustomError(
+            `Failed to deserialize constructor arguments for agent ${agentClassName.value}: ${e instanceof Error ? e.message : e}`,
+          );
+
+          return {
+            tag: 'err',
+            val: error,
+          };
+        }
+
+        const instance = new ctor(...deserializedConstructorArgs);
+        instance.getId = () => agentId;
+
+        return {
+          tag: 'ok',
+          val: new ResolvedAgent(
+            instance,
+            agentClassName,
+            agentId,
+            constructorValue,
+          ),
+        };
+      },
       initiate: (constructorInput: SchemaValue, principal: Principal) => {
         let deserializedConstructorArgs: any[];
         try {

@@ -318,6 +318,8 @@ declare module 'golem:core/types@2.0.0' {
    * --- Capability nodes ---
    */
   export type SecretSpec = {
+    /** Revealed payload type carried by this secret handle. */
+    inner: TypeNodeIndex;
     /** Optional categorisation (e.g., `"api-key"`, `"oauth-token"`). */
     category?: string;
   };

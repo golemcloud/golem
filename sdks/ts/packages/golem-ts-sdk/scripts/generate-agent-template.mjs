@@ -53,6 +53,23 @@ function useForkedWitBindgen(cargoTomlPath) {
   rmSync(join(cargoTomlPath, '..', 'Cargo.lock'), { force: true });
 }
 
+function splitMergedGuestInvoke(libRsPath) {
+  const original = readFileSync(libRsPath, 'utf8');
+  const toolInvokePath = `"golem:tool@0.1.0",\n                    &["guest", "invoke"],`;
+  const count = original.split(toolInvokePath).length - 1;
+  if (count !== 1) {
+    throw new Error(
+      `Expected exactly one merged tool guest invoke path in ${libRsPath}, found ${count}. ` +
+        `The wasm-rquickjs skeleton may have changed; update generate-agent-template.mjs.`,
+    );
+  }
+
+  writeFileSync(
+    libRsPath,
+    original.replace(toolInvokePath, `"golem:tool@0.1.0",\n                    &["guest", "invokeTool"],`),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // The TypeScript SDK is fully migrated to golem:core@2.0.0 and no longer ships
 // golem:core@1.5.0 in its WIT (dropped by the `wit-sdks` task in Makefile.toml).
@@ -112,3 +129,4 @@ if (result.status !== 0) {
 }
 
 useForkedWitBindgen(resolve(process.cwd(), 'agent-template', 'Cargo.toml'));
+splitMergedGuestInvoke(resolve(process.cwd(), 'agent-template', 'src', 'lib.rs'));

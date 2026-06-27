@@ -30,6 +30,7 @@ import { cachedConfigSchema } from './mapping/types/configSchemaCache';
 import { serializeGraph } from './mapping/values/schemaValue';
 import { TypeScope } from './mapping/types/scope';
 import { ParsedAgentId } from '../agentId';
+import { Secret } from '../agentConfig';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
@@ -174,6 +175,14 @@ class WasmRpcProxyHandlerShared {
     }
 
     const userArgs = args.slice(0, userParams.length);
+    for (let i = 0; i < userArgs.length; i++) {
+      if (containsSecretValue(userArgs[i])) {
+        throw new Error(
+          `Remote agent constructor parameter \`${userParams[i].name}\` cannot contain Secret<T>; owned secrets cannot be used to derive stable agent ids`,
+        );
+      }
+    }
+
     const constructorTree = encodeInputRecordToWit(userArgs, userParams);
 
     const agentConfigEntries: TypedAgentConfigValue[] = [];
@@ -420,23 +429,27 @@ function serializeRpcConfigObject(
     );
   }
 
-  for (const prop of configProperties) {
-    if (prop.secret) {
-      continue;
-    }
+  rejectSecretOnlyConfigGroups(rpcValue, configProperties);
 
+  for (const prop of configProperties) {
+    const propTypeHasSecret = configTypeContainsSecret(prop.type);
     let current: unknown = rpcValue;
     let missing = false;
 
-    for (const key of prop.path) {
+    for (let i = 0; i < prop.path.length; i++) {
+      const key = prop.path[i];
       if (current === null || typeof current !== 'object') {
         throw new Error(`Expected object while traversing config path ${prop.path.join('.')}`);
       }
 
       const record = current as Record<string, unknown>;
+      const hasKey = Object.prototype.hasOwnProperty.call(record, key);
       current = record[key];
 
-      if (current === undefined || current === null) {
+      if (current === undefined || (current === null && i < prop.path.length - 1)) {
+        if ((prop.secret || propTypeHasSecret) && hasKey) {
+          break;
+        }
         missing = true;
         break;
       }
@@ -444,6 +457,24 @@ function serializeRpcConfigObject(
 
     if (missing) {
       continue;
+    }
+
+    if (prop.secret) {
+      throw new Error(
+        `Config override for secret property \`${prop.path.join('.')}\` is not allowed; secret config values cannot be overridden through getWithConfig`,
+      );
+    }
+
+    if (propTypeHasSecret) {
+      throw new Error(
+        `Config override for property \`${prop.path.join('.')}\` cannot contain Secret<T>; secret config values cannot be overridden through getWithConfig`,
+      );
+    }
+
+    if (containsSecretValue(current)) {
+      throw new Error(
+        `Config override for property \`${prop.path.join('.')}\` cannot contain Secret<T>; secret config values cannot be overridden through getWithConfig`,
+      );
     }
 
     const scope = TypeScope.object('config', prop.path.at(-1)!, prop.type.optional);
@@ -465,4 +496,141 @@ function serializeRpcConfigObject(
   }
 
   return result;
+}
+
+function rejectSecretOnlyConfigGroups(
+  rpcValue: unknown,
+  configProperties: Type.ConfigProperty[],
+): void {
+  const groups = new Map<string, string[]>();
+  for (const prop of configProperties) {
+    for (let length = 1; length < prop.path.length; length++) {
+      const groupPath = prop.path.slice(0, length);
+      groups.set(configPathKey(groupPath), groupPath);
+    }
+  }
+
+  for (const groupPath of groups.values()) {
+    const group = getOwnPathValue(rpcValue, groupPath);
+    if (!group.exists || group.value === undefined || group.value === null) continue;
+    if (typeof group.value !== 'object') continue;
+
+    const descendants = configProperties.filter((prop) => pathStartsWith(prop.path, groupPath));
+    if (
+      descendants.length > 0 &&
+      descendants.every((prop) => prop.secret || configTypeContainsSecret(prop.type))
+    ) {
+      throw new Error(
+        `Config override for secret-only group \`${groupPath.join('.')}\` is not allowed; secret config values cannot be overridden through getWithConfig`,
+      );
+    }
+  }
+}
+
+function pathStartsWith(path: readonly string[], prefix: readonly string[]): boolean {
+  return prefix.length < path.length && prefix.every((part, i) => path[i] === part);
+}
+
+function getOwnPathValue(value: unknown, path: readonly string[]): { exists: boolean; value: unknown } {
+  let current = value;
+  for (const key of path) {
+    if (current === null || typeof current !== 'object') return { exists: false, value: undefined };
+    const record = current as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      return { exists: false, value: undefined };
+    }
+    current = record[key];
+  }
+  return { exists: true, value: current };
+}
+
+function configPathKey(path: readonly string[]): string {
+  return path.join('\0');
+}
+
+function configTypeContainsSecret(
+  type: Type.Type | undefined,
+  seen: WeakSet<object> = new WeakSet(),
+): boolean {
+  if (type === null || typeof type !== 'object') return false;
+  if (seen.has(type)) return false;
+  seen.add(type);
+
+  const shaped = type as Type.Type & Record<string, any>;
+  switch (shaped.kind) {
+    case 'secret':
+      return true;
+    case 'array':
+      return configTypeContainsSecret(shaped.element, seen);
+    case 'map': {
+      const key = shaped.key ?? shaped.typeArgs?.[0];
+      const value = shaped.value ?? shaped.typeArgs?.[1];
+      return configTypeContainsSecret(key, seen) || configTypeContainsSecret(value, seen);
+    }
+    case 'tuple':
+      return shaped.elements?.some((element: Type.Type) => configTypeContainsSecret(element, seen)) ?? false;
+    case 'object':
+    case 'interface':
+      return (
+        shaped.properties?.some((property: any) =>
+          configTypeContainsSecret(configPropertyType(property), seen),
+        ) ?? false
+      );
+    case 'union':
+      return (
+        (shaped.types ?? shaped.unionTypes)?.some((member: Type.Type) =>
+          configTypeContainsSecret(member, seen),
+        ) ?? false
+      );
+    case 'config':
+      return (
+        shaped.properties?.some(
+          (property: Type.ConfigProperty) =>
+            property.secret || configTypeContainsSecret(property.type, seen),
+        ) ?? false
+      );
+    default:
+      return false;
+  }
+}
+
+function configPropertyType(property: any): Type.Type | undefined {
+  if (property.type) return property.type;
+  if (property.typeAtLocation) return property.typeAtLocation;
+  if (typeof property.getTypeAtLocation === 'function') {
+    return property.getTypeAtLocation(property.getValueDeclarationOrThrow?.());
+  }
+  return undefined;
+}
+
+function containsSecretValue(value: unknown, seen: WeakSet<object> = new WeakSet()): boolean {
+  if (value instanceof Secret) return true;
+  if (value === null || typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsSecretValue(entry, seen));
+  }
+
+  if (value instanceof Map) {
+    for (const [key, entry] of value) {
+      if (containsSecretValue(key, seen) || containsSecretValue(entry, seen)) return true;
+    }
+    return false;
+  }
+
+  if (value instanceof Set) {
+    for (const entry of value) {
+      if (containsSecretValue(entry, seen)) return true;
+    }
+    return false;
+  }
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (containsSecretValue((value as Record<PropertyKey, unknown>)[key], seen)) return true;
+  }
+
+  return false;
 }

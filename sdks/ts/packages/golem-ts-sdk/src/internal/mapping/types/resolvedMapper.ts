@@ -187,6 +187,8 @@ function mapTypeInner(type: TsType, scope: TypeScope | undefined, state: MapperS
 
     case 'principal':
       return mapPrincipal(state);
+    case 'secret':
+      return mapSecret(type, scope, state);
     case 'quota-token':
       return mapQuotaToken();
     case 'path':
@@ -789,6 +791,16 @@ function mapQuotaToken(): EitherR {
   // `quota-token` schema type, never to a structural record. The runtime value
   // is an owned handle (see `GuestQuotaTokenHandle`) carried by ownership.
   return Either.right(r.quotaToken({}));
+}
+
+function mapSecret(
+  type: Extract<TsType, { kind: 'secret' }>,
+  scope: TypeScope | undefined,
+  state: MapperState,
+): EitherR {
+  const inner = mapType(type.element, undefined, state);
+  if (Either.isLeft(inner)) return inner;
+  return Either.right(r.secret(inner.val));
 }
 
 function mapPrincipal(state: MapperState): EitherR {

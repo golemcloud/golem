@@ -49,6 +49,7 @@ import { RuntimeOutput, RuntimeParam, RuntimeTypeInfo } from '../typeInfoInterna
 import { resolvedGraphToSchemaType } from '../mapping/types/schemaType';
 import { mapTsTypeToResolvedGraph } from '../mapping/types/resolvedMapper';
 import { TypeScope } from '../mapping/types/scope';
+import { secretConfigSchemaGraph } from '../mapping/types/configSchemaCache';
 import {
   multimodalSchemaType,
   unstructuredBinarySchemaType,
@@ -105,7 +106,21 @@ export function resolveAgentConfig(
     if (param.type.kind !== 'config') continue;
 
     for (const prop of param.type.properties) {
-      const scope = TypeScope.object(param.name, prop.path.at(-1)!, prop.type.optional);
+      const handleOptional =
+        prop.secret &&
+        (prop.secretHandleOptional ??
+          isOptionalSecretHandle(param.type.requiredMembers, prop.path, prop.type.optional));
+      const payloadOptional =
+        prop.secret && prop.secretHandleOptional !== undefined
+          ? prop.type.optional
+          : prop.secret
+            ? prop.type.optional && !handleOptional
+            : prop.type.optional;
+      const scope = TypeScope.object(
+        param.name,
+        prop.path.at(-1)!,
+        payloadOptional,
+      );
       const graphEither = mapTsTypeToResolvedGraph(prop.type, scope);
       if (Either.isLeft(graphEither)) {
         return Either.left(
@@ -113,15 +128,47 @@ export function resolveAgentConfig(
         );
       }
 
+      const valueGraph = resolvedGraphToSchemaType(graphEither.val).graph;
+
       entries.push({
         source: prop.secret ? 'secret' : 'local',
         path: prop.path,
-        valueGraph: resolvedGraphToSchemaType(graphEither.val).graph,
+        valueGraph: prop.secret ? secretConfigSchemaGraph(valueGraph, handleOptional) : valueGraph,
       });
     }
   }
 
   return Either.right(entries);
+}
+
+function isRequiredConfigPath(
+  requiredMembers: readonly { path: string[]; requiredKeys: string[] }[],
+  path: readonly string[],
+): boolean {
+  const parentPath = path.slice(0, -1);
+  const key = path.at(-1);
+  return requiredMembers.some(
+    (entry) =>
+      entry.path.length === parentPath.length &&
+      entry.path.every((part, i) => part === parentPath[i]) &&
+      key !== undefined &&
+      entry.requiredKeys.includes(key),
+  );
+}
+
+function isOptionalSecretHandle(
+  requiredMembers: readonly { path: string[]; requiredKeys: string[] }[],
+  path: readonly string[],
+  typeOptional: boolean,
+): boolean {
+  if (!typeOptional) return false;
+  if (!isRequiredConfigPath(requiredMembers, path)) return true;
+
+  for (let length = 1; length < path.length; length++) {
+    if (!isRequiredConfigPath(requiredMembers, path.slice(0, length))) return true;
+  }
+
+  return false;
 }
 
 /**
