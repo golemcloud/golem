@@ -22,7 +22,8 @@ use crate::schema::schema_type::{
     SchemaType, SecretSpec, TextRestrictions, UnionBranch, UrlRestrictions,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, QuotaTokenValuePayload, ResultValuePayload, SchemaValue, TextValuePayload,
+    BinaryValuePayload, QuotaTokenValuePayload, ResultValuePayload, SchemaValue,
+    SecretValuePayload, TextValuePayload,
 };
 use std::collections::HashSet;
 use std::error::Error;
@@ -233,6 +234,11 @@ pub enum ValueError {
         path: ValuePath,
         reason: String,
     },
+    SecretCategoryMismatch {
+        path: ValuePath,
+        expected: String,
+        found: Option<String>,
+    },
     QuotaTokenResourceMismatch {
         path: ValuePath,
         expected: String,
@@ -412,6 +418,15 @@ impl Display for ValueError {
             ValueError::QuantityOutOfRange { path, reason } => {
                 write!(f, "quantity value at {path} is out of range ({reason})")
             }
+            ValueError::SecretCategoryMismatch {
+                path,
+                expected,
+                found,
+            } => write!(
+                f,
+                "secret value at {path} expected category `{expected}`, found `{}`",
+                found.as_deref().unwrap_or("<none>")
+            ),
             ValueError::QuotaTokenResourceMismatch {
                 path,
                 expected,
@@ -1047,12 +1062,20 @@ fn check_quantity(
 }
 
 fn check_secret(
-    _spec: &SecretSpec,
-    _payload: &impl std::fmt::Debug,
+    spec: &SecretSpec,
+    payload: &SecretValuePayload,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
-    let _ = (path, errors);
+    if let Some(expected) = &spec.category
+        && payload.category.as_ref() != Some(expected)
+    {
+        errors.push(ValueError::SecretCategoryMismatch {
+            path: path.snapshot(),
+            expected: expected.clone(),
+            found: payload.category.clone(),
+        });
+    }
 }
 
 fn check_quota_token(

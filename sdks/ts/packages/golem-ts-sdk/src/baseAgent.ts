@@ -486,17 +486,19 @@ type TransformGetArgsWithConfig<
       : TransformGetArgsWithConfig<Tail, [...NonConfig, Head], Configs>
   : [...NonConfig, ...Configs];
 
-type RpcConfigInput<T> = T extends Config<infer C>
-  ? keyof RemoveSecretFields<C> extends never
-    ? Record<PropertyKey, never>
-    : RpcConfigInputObject<RemoveSecretFields<C>>
-  : T;
+type RpcConfigInput<T> =
+  T extends Config<infer C>
+    ? keyof RemoveSecretFields<C> extends never
+      ? Record<PropertyKey, never>
+      : RpcConfigInputObject<RemoveSecretFields<C>>
+    : T;
 
-type RpcConfigInputInner<T> = IsUnion<T> extends true
-  ? HasSecret<T> extends true
-    ? never
-    : RpcConfigInputInnerNonUnion<T>
-  : RpcConfigInputInnerNonUnion<T>;
+type RpcConfigInputInner<T> =
+  IsUnion<T> extends true
+    ? HasSecret<T> extends true
+      ? never
+      : RpcConfigInputInnerNonUnion<T>
+    : RpcConfigInputInnerNonUnion<T>;
 
 type RpcConfigInputInnerNonUnion<T> = T extends readonly unknown[]
   ? HasSecret<T> extends true
@@ -508,15 +510,15 @@ type RpcConfigInputInnerNonUnion<T> = T extends readonly unknown[]
       : HasSecret<V> extends true
         ? never
         : T
-  : T extends ReadonlySet<infer V>
-    ? HasSecret<V> extends true
-      ? never
-      : T
-  : [T] extends [object]
-    ? keyof RemoveSecretFields<T> extends never
-      ? never
-      : RpcConfigInputObject<RemoveSecretFields<T>>
-    : T;
+    : T extends ReadonlySet<infer V>
+      ? HasSecret<V> extends true
+        ? never
+        : T
+      : [T] extends [object]
+        ? keyof RemoveSecretFields<T> extends never
+          ? never
+          : RpcConfigInputObject<RemoveSecretFields<T>>
+        : T;
 
 type RpcConfigInputObject<T> = {
   [K in keyof T]?: RpcConfigInputInner<T[K]>;
@@ -526,8 +528,8 @@ type RemoveSecretFields<T> = {
   [K in keyof T as HasDirectSecret<NonNullable<T[K]>> extends true
     ? never
     : RpcConfigInputInner<NonNullable<T[K]>> extends never
-    ? never
-    : K]: T[K];
+      ? never
+      : K]: T[K];
 };
 
 type HasDirectSecret<T> = [Extract<T, Secret<any>>] extends [never] ? false : true;
@@ -536,20 +538,20 @@ type HasSecret<T> = true extends HasSecretBranch<T> ? true : false;
 
 type HasSecretBranch<T> = T extends unknown
   ? [Extract<T, Secret<any>>] extends [never]
-  ? T extends readonly (infer Element)[]
-    ? HasSecret<Element>
-    : T extends ReadonlyMap<infer K, infer V>
-      ? HasSecret<K> extends true
-        ? true
-        : HasSecret<V>
-    : T extends ReadonlySet<infer V>
-      ? HasSecret<V>
-    : T extends object
-      ? true extends { [K in keyof T]: HasSecret<T[K]> }[keyof T]
-        ? true
-        : false
-      : false
-  : true
+    ? T extends readonly (infer Element)[]
+      ? HasSecret<Element>
+      : T extends ReadonlyMap<infer K, infer V>
+        ? HasSecret<K> extends true
+          ? true
+          : HasSecret<V>
+        : T extends ReadonlySet<infer V>
+          ? HasSecret<V>
+          : T extends object
+            ? true extends { [K in keyof T]: HasSecret<T[K]> }[keyof T]
+              ? true
+              : false
+            : false
+    : true
   : never;
 
 type IsUnion<T, U = T> = T extends unknown ? ([U] extends [T] ? false : true) : never;

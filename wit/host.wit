@@ -26,7 +26,6 @@ world golem {
   import golem:quota/types@1.5.0;
   import golem:secrets/types@0.1.0;
   import golem:secrets/reveal@0.1.0;
-  import golem:secrets/create@0.1.0;
   import golem:tool/host@0.1.0;
 
   // Agent guest-export interfaces the executor invokes through bindgen-typed

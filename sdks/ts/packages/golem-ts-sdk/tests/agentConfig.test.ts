@@ -340,6 +340,36 @@ describe('optional secret config runtime loading', () => {
     expect(config.value).toEqual({ items: [] });
   });
 
+  it('preserves an all-optional non-secret config group as an empty object', async () => {
+    const getConfigValue = vi.fn(() => ({
+      valueNodes: [{ tag: 'option-value', val: undefined }],
+      root: 0,
+    }));
+
+    vi.resetModules();
+    vi.doMock('golem:agent/host@2.0.0', () => ({ getConfigValue }));
+
+    const { Config } = await import('../src/agentConfig');
+
+    const config = new Config(
+      [
+        {
+          path: ['group', 'x'],
+          secret: false,
+          type: { kind: 'number', optional: true },
+        },
+        {
+          path: ['group', 'y'],
+          secret: false,
+          type: { kind: 'string', optional: true },
+        },
+      ],
+      [],
+    );
+
+    expect(config.value).toEqual({ group: { x: undefined, y: undefined } });
+  });
+
   it('review repro: required null option config value is preserved as a present group member', async () => {
     const getConfigValue = vi.fn(() => ({
       valueNodes: [{ tag: 'option-value', val: undefined }],

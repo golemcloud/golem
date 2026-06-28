@@ -16,6 +16,10 @@ use super::*;
 
 mod schema_native_tests {
     use super::*;
+    use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
+    use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
+    use crate::model::{AgentId, ComponentId};
+    use crate::schema::IntoTypedSchemaValue;
     use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
     use crate::schema::metadata::MetadataEnvelope;
     use crate::schema::schema_type::{
@@ -25,7 +29,7 @@ mod schema_native_tests {
     };
     use crate::schema::schema_value::{
         BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-        SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
+        SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
     };
     use chrono::{TimeZone, Utc};
     use golem_schema::EnvironmentId;
@@ -360,7 +364,13 @@ mod schema_native_tests {
                     scale: 1,
                     unit: "kg".into(),
                 }),
-                crate::schema::conversion::secret_to_value("secret:ref".to_string()),
+                SchemaValue::Secret(SecretValuePayload {
+                    secret_id: Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
+                    config_key: Some(vec!["secret".to_string(), "ref".to_string()]),
+                    version: 7,
+                    resolved_at: dt,
+                    category: Some("api-key".to_string()),
+                }),
                 SchemaValue::QuotaToken(quota),
                 SchemaValue::Map {
                     entries: vec![
@@ -371,8 +381,53 @@ mod schema_native_tests {
             ],
         );
         let formatted = roundtrip(&v);
-        assert!(formatted.starts_with("@t\"hello\",@t[hu]\"szia\",@b[]\"AQID\",@b[text/plain]\"YWJj\",@p\"/tmp/a b\",@u\"https://example.com/a?b=c\",@dt\"2025-04-12T13:14:15.000000000Z\",@dur\"PT1.5S\",@qty\"12.3kg\",@secret\"secret:ref\",@qt\"quota-token:"));
+        assert!(formatted.starts_with("@t\"hello\",@t[hu]\"szia\",@b[]\"AQID\",@b[text/plain]\"YWJj\",@p\"/tmp/a b\",@u\"https://example.com/a?b=c\",@dt\"2025-04-12T13:14:15.000000000Z\",@dur\"PT1.5S\",@qty\"12.3kg\",@secret\"secret:{"));
+        assert!(
+            formatted.contains("\\\"secretId\\\":\\\"00000000-0000-0000-0000-000000000123\\\"")
+        );
+        assert!(formatted.contains("\\\"configKey\\\":[\\\"secret\\\",\\\"ref\\\"]"));
+        assert!(formatted.contains("\\\"version\\\":7"));
         assert!(formatted.ends_with(",m[(\"a\",1),(\"b\",2)]"));
+    }
+
+    #[test]
+    fn secret_reveal_payloads_roundtrip_and_format() {
+        let secret_id = Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap();
+
+        let request = HostRequestSecretReveal {
+            secret_id,
+            expected_type: SchemaGraph::anonymous(SchemaType::string()),
+        }
+        .into_typed_schema_value()
+        .expect("secret reveal request must be schema-encodable");
+        let formatted_request = roundtrip(&request);
+        assert!(!formatted_request.is_empty());
+
+        let response = HostResponseSecretRevealed {
+            secret_id,
+            pinned_revision: 7,
+            resolved_at: SerializableDateTime {
+                seconds: 1_700_000_000,
+                nanoseconds: 0,
+            },
+            result: Ok(()),
+            audit: SecretRevealAudit {
+                calling_agent: AgentId {
+                    component_id: ComponentId(Uuid::nil()),
+                    agent_id: "agent-1".to_string(),
+                },
+                config_key: Some(vec!["db".to_string(), "password".to_string()]),
+                timestamp: SerializableDateTime {
+                    seconds: 1_700_000_001,
+                    nanoseconds: 0,
+                },
+            },
+        }
+        .into_typed_schema_value()
+        .expect("secret revealed response must be schema-encodable");
+        let formatted_response = roundtrip(&response);
+        assert!(!formatted_response.is_empty());
+        assert!(formatted_response.contains("password"));
     }
 
     #[test]

@@ -37,4 +37,32 @@ const patched = lines
     return true;
   });
 
+const guestNamespace = [
+  '  export namespace guest {',
+  '    export function initialize(agentType: string, input: SchemaValueTree, principal: Principal): Promise<void>;',
+  '    export function invoke(methodName: string, input: SchemaValueTree, principal: Principal): Promise<SchemaValueTree | undefined>;',
+  '    export function getDefinition(): Promise<AgentType>;',
+  '    export function discoverAgentTypes(): Promise<AgentType[]>;',
+  '    export function discoverTools(): Promise<Tool[]>;',
+  '    export function getTool(name: string): Promise<Tool>;',
+  '    export function invokeTool(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: InputStream | undefined, principal: Principal): Promise<InvocationResult>;',
+  '    export type SchemaValueTree = golemAgent200Guest.SchemaValueTree;',
+  '    export type AgentError = golemAgent200Guest.AgentError;',
+  '    export type AgentType = golemAgent200Guest.AgentType;',
+  '    export type Principal = golemAgent200Guest.Principal;',
+  '    export type Tool = golemTool010Guest.Tool;',
+  '    export type ToolError = golemTool010Guest.ToolError;',
+  '    export type InvocationResult = golemTool010Guest.InvocationResult;',
+  '    export type TypedSchemaValue = golemTool010Guest.TypedSchemaValue;',
+  '    export type InputStream = golemTool010Guest.InputStream;',
+  '  }',
+];
+
+const moduleEnd = patched.lastIndexOf('}');
+if (moduleEnd === -1) {
+  throw new Error(`Could not find the end of the agent-guest declaration in ${exportsPath}.`);
+}
+
+patched.splice(moduleEnd, 0, ...guestNamespace);
+
 fs.writeFileSync(exportsPath, patched.join('\n'), 'utf8');

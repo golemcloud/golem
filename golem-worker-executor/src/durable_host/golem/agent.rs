@@ -38,7 +38,7 @@ use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::graph::TypedSchemaValue;
-use golem_common::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec};
+use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
 use golem_common::schema::schema_value::{SchemaValue, SecretValuePayload};
 use golem_common::schema::validation::subtyping::is_equivalent_cross_graph;
 use golem_common::schema::validation::value::validate_value;
@@ -151,13 +151,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Resolve a secret-backed agent-config value. The stored
-    /// [`AgentSecret`] carries its own [`SchemaGraph`] (with possibly
-    /// recursive named types reached via [`SchemaType::Ref`]); the
-    /// guest-supplied `expected_type` is inline (no refs).
-    /// Compatibility between the two is checked via
-    /// [`schema_types_compatible`], which resolves refs against the
-    /// secret's graph.
+    /// Resolve a secret-backed agent-config value. Stored [`AgentSecret`]
+    /// schemas describe the plaintext payload type while guest config expects
+    /// an opaque `secret<T>` handle. Compatibility is checked against the
+    /// expected secret's inner type before a durable secret handle is returned.
     async fn resolve_secret_config(
         &mut self,
         path: Vec<String>,
@@ -231,15 +228,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         ));
                     }
                     Some(secret) => {
-                        let stored_secret_spec = secret_spec(&secret.secret_type)
-                            .map_err(|err| anyhow!("secret key {path_str} has invalid type: {err}"))?;
-
+                        let stored_secret_inner = resolve_schema_ref(
+                            &secret.secret_type,
+                            &secret.secret_type.root,
+                        );
                         if !schema_types_compatible(
                             &secret.secret_type,
-                            &stored_secret_spec.inner,
+                            stored_secret_inner,
                             &expected_graph,
                             &expected_secret_spec.inner,
-                        ) || stored_secret_spec.category != expected_secret_spec.category
+                        )
                         {
                             return Err(anyhow!(
                                 "declared and expected type for config key {path_str} are not compatible"
@@ -247,7 +245,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
 
                         if let Some(secret_value) = &secret.secret_value {
-                            validate_value(&secret.secret_type, &stored_secret_spec.inner, secret_value)
+                            validate_value(&secret.secret_type, stored_secret_inner, secret_value)
                                 .map_err(|errors| {
                                     anyhow!(
                                         "secret key {path_str} has invalid stored value: {}",
@@ -274,7 +272,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             config_key: Some(secret.path.0.clone()),
                             version: secret.revision.get(),
                             resolved_at: Utc::now(),
-                            category: stored_secret_spec.category.clone(),
+                            category: expected_secret_spec.category.clone(),
                         });
 
                         if optional {
@@ -433,13 +431,6 @@ fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a
     ty
 }
 
-fn secret_spec<'a>(graph: &'a SchemaGraph) -> anyhow::Result<&'a SecretSpec> {
-    match resolve_schema_ref(graph, &graph.root) {
-        SchemaType::Secret { spec, .. } => Ok(spec),
-        other => Err(anyhow!("stored secret type must be secret, got {other:?}")),
-    }
-}
-
 fn validate_secret_config_result_shape(
     path_str: &str,
     optional: bool,
@@ -456,52 +447,6 @@ fn validate_secret_config_result_shape(
         _ => Err(anyhow!(
             "persisted secret config response for key {path_str} has invalid shape"
         )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_r::test;
-
-    fn secret_snapshot_value() -> SchemaValue {
-        SchemaValue::Secret(SecretValuePayload {
-            secret_id: uuid::Uuid::nil(),
-            config_key: None,
-            version: 1,
-            resolved_at: Utc::now(),
-            category: None,
-        })
-    }
-
-    #[test]
-    fn secret_config_replay_shape_rejects_plaintext_values() {
-        validate_secret_config_result_shape("apiKey", false, &secret_snapshot_value()).unwrap();
-        validate_secret_config_result_shape(
-            "apiKey",
-            true,
-            &SchemaValue::Option {
-                inner: Some(Box::new(secret_snapshot_value())),
-            },
-        )
-        .unwrap();
-        validate_secret_config_result_shape("apiKey", true, &SchemaValue::Option { inner: None })
-            .unwrap();
-
-        validate_secret_config_result_shape(
-            "apiKey",
-            false,
-            &SchemaValue::String("plaintext".to_string()),
-        )
-        .expect_err("required secret config replay must not accept plaintext");
-        validate_secret_config_result_shape(
-            "apiKey",
-            true,
-            &SchemaValue::Option {
-                inner: Some(Box::new(SchemaValue::String("plaintext".to_string()))),
-            },
-        )
-        .expect_err("optional secret config replay must not accept plaintext");
     }
 }
 
@@ -750,5 +695,51 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             encode_value(&schema_value)
         }
         .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn secret_snapshot_value() -> SchemaValue {
+        SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: None,
+            version: 1,
+            resolved_at: Utc::now(),
+            category: None,
+        })
+    }
+
+    #[test]
+    fn secret_config_replay_shape_rejects_plaintext_values() {
+        validate_secret_config_result_shape("apiKey", false, &secret_snapshot_value()).unwrap();
+        validate_secret_config_result_shape(
+            "apiKey",
+            true,
+            &SchemaValue::Option {
+                inner: Some(Box::new(secret_snapshot_value())),
+            },
+        )
+        .unwrap();
+        validate_secret_config_result_shape("apiKey", true, &SchemaValue::Option { inner: None })
+            .unwrap();
+
+        validate_secret_config_result_shape(
+            "apiKey",
+            false,
+            &SchemaValue::String("plaintext".to_string()),
+        )
+        .expect_err("required secret config replay must not accept plaintext");
+        validate_secret_config_result_shape(
+            "apiKey",
+            true,
+            &SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String("plaintext".to_string()))),
+            },
+        )
+        .expect_err("optional secret config replay must not accept plaintext");
     }
 }

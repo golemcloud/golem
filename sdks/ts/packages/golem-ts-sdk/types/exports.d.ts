@@ -13,7 +13,7 @@ declare module 'agent-guest' {
    * writes, config-store updates, etc.) persists per the agent's normal
    * rules and is independent of the tool calling convention.
    */
-  export namespace guest {
+  export namespace golemTool010Guest {
     /**
      * Enumerate the tools this component exposes. The returned metadata
      * is complete (full command tree and schema graph).
@@ -78,7 +78,7 @@ declare module 'agent-guest' {
     export type Snapshot = golemApi150Host.Snapshot;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
-  export namespace guest {
+  export namespace golemAgent200Guest {
     /**
      * Initializes the agent of a given type with the given constructor parameters.
      * If called a second time, it fails.
@@ -108,5 +108,25 @@ declare module 'agent-guest' {
     export type SchemaValueTree = golemCore200Types.SchemaValueTree;
     export type AgentError = golemAgent200Common.AgentError;
     export type AgentType = golemAgent200Common.AgentType;
+    export type Principal = golemAgent200Common.Principal;
+    export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
+  }
+  export namespace guest {
+    export function initialize(agentType: string, input: SchemaValueTree, principal: Principal): Promise<void>;
+    export function invoke(methodName: string, input: SchemaValueTree, principal: Principal): Promise<SchemaValueTree | undefined>;
+    export function getDefinition(): Promise<AgentType>;
+    export function discoverAgentTypes(): Promise<AgentType[]>;
+    export function discoverTools(): Promise<Tool[]>;
+    export function getTool(name: string): Promise<Tool>;
+    export function invokeTool(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: InputStream | undefined, principal: Principal): Promise<InvocationResult>;
+    export type SchemaValueTree = golemAgent200Guest.SchemaValueTree;
+    export type AgentError = golemAgent200Guest.AgentError;
+    export type AgentType = golemAgent200Guest.AgentType;
+    export type Principal = golemAgent200Guest.Principal;
+    export type Tool = golemTool010Guest.Tool;
+    export type ToolError = golemTool010Guest.ToolError;
+    export type InvocationResult = golemTool010Guest.InvocationResult;
+    export type TypedSchemaValue = golemTool010Guest.TypedSchemaValue;
+    export type InputStream = golemTool010Guest.InputStream;
   }
 }

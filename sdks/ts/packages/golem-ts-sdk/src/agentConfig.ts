@@ -145,7 +145,9 @@ export class Config<T> {
   private loadConfig(): T {
     const root: Record<string, any> = {};
     const propertyPaths = new Set(
-      this.properties.map((prop) => configPathKey(prop.path)),
+      this.properties
+        .filter((prop) => !prop.secret)
+        .map((prop) => configPathKey(prop.path)),
     );
 
     for (const prop of this.properties) {
@@ -217,7 +219,7 @@ function pruneUndefinedObjects(
         value[key] = undefined;
       }
     }
-    if (value[key] !== undefined) {
+    if (value[key] !== undefined || preservePaths.has(configPathKey(childPath))) {
       hasPresentValue = true;
     }
   }

@@ -1101,6 +1101,37 @@ fn test_binary_profile() -> String {
 }
 
 fn test_binary_path(profile: &str, binary_name: &str) -> PathBuf {
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(dir) = current_exe.parent()
+    {
+        let current_profile_dir = if dir.file_name() == Some(OsStr::new("deps")) {
+            dir.parent()
+        } else {
+            Some(dir)
+        };
+        if let Some(target_dir) = current_profile_dir.and_then(Path::parent) {
+            let profile_dir = target_dir.join(profile);
+            let path = profile_dir.join(format!("{binary_name}{}", std::env::consts::EXE_SUFFIX));
+            if path.exists() {
+                return path;
+            }
+        }
+    }
+
+    if let Some(path) = std::env::var_os("CARGO_MAKE_CRATE_TARGET_DIRECTORY")
+        .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+        .map(PathBuf::from)
+        .map(|target_dir| {
+            target_dir.join(format!(
+                "{profile}/{binary_name}{}",
+                std::env::consts::EXE_SUFFIX
+            ))
+        })
+        .filter(|path| path.exists())
+    {
+        return path;
+    }
+
     let path = workspace_path().join(format!(
         "target/{profile}/{binary_name}{}",
         std::env::consts::EXE_SUFFIX

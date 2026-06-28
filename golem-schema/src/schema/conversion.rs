@@ -579,10 +579,12 @@ pub fn secret_from_value(
             SchemaValue::Secret(p) => {
                 let synthetic_epoch =
                     ::chrono::DateTime::from_timestamp(0, 0).expect("epoch timestamp is valid");
-                if p.version == 0 && p.resolved_at == synthetic_epoch && p.category.is_none() {
-                    if let Some([secret_ref]) = p.config_key.as_deref() {
-                        return Ok(secret_ref.clone());
-                    }
+                if p.version == 0
+                    && p.resolved_at == synthetic_epoch
+                    && p.category.is_none()
+                    && let Some([secret_ref]) = p.config_key.as_deref()
+                {
+                    return Ok(secret_ref.clone());
                 }
                 Ok(p.secret_id.to_string())
             }

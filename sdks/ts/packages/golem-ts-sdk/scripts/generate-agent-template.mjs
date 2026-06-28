@@ -53,21 +53,52 @@ function useForkedWitBindgen(cargoTomlPath) {
   rmSync(join(cargoTomlPath, '..', 'Cargo.lock'), { force: true });
 }
 
-function splitMergedGuestInvoke(libRsPath) {
+function useGuestEntryPoints(libRsPath) {
   const original = readFileSync(libRsPath, 'utf8');
-  const toolInvokePath = `"golem:tool@0.1.0",\n                    &["guest", "invoke"],`;
-  const count = original.split(toolInvokePath).length - 1;
-  if (count !== 1) {
-    throw new Error(
-      `Expected exactly one merged tool guest invoke path in ${libRsPath}, found ${count}. ` +
-        `The wasm-rquickjs skeleton may have changed; update generate-agent-template.mjs.`,
-    );
+  const replacements = [
+    [
+      `"golem:agent@2.0.0",\n                    &["golemAgent200Guest", "initialize"],`,
+      `"golem:agent@2.0.0",\n                    &["guest", "initialize"],`,
+    ],
+    [
+      `"golem:agent@2.0.0",\n                    &["golemAgent200Guest", "invoke"],`,
+      `"golem:agent@2.0.0",\n                    &["guest", "invoke"],`,
+    ],
+    [
+      `"golem:agent@2.0.0",\n                    &["golemAgent200Guest", "getDefinition"],`,
+      `"golem:agent@2.0.0",\n                    &["guest", "getDefinition"],`,
+    ],
+    [
+      `"golem:agent@2.0.0",\n                    &["golemAgent200Guest", "discoverAgentTypes"],`,
+      `"golem:agent@2.0.0",\n                    &["guest", "discoverAgentTypes"],`,
+    ],
+    [
+      `"golem:tool@0.1.0",\n                    &["golemTool010Guest", "discoverTools"],`,
+      `"golem:tool@0.1.0",\n                    &["guest", "discoverTools"],`,
+    ],
+    [
+      `"golem:tool@0.1.0",\n                    &["golemTool010Guest", "getTool"],`,
+      `"golem:tool@0.1.0",\n                    &["guest", "getTool"],`,
+    ],
+    [
+      `"golem:tool@0.1.0",\n                    &["golemTool010Guest", "invoke"],`,
+      `"golem:tool@0.1.0",\n                    &["guest", "invokeTool"],`,
+    ],
+  ];
+
+  let updated = original;
+  for (const [from, to] of replacements) {
+    const count = updated.split(from).length - 1;
+    if (count !== 1) {
+      throw new Error(
+        `Expected exactly one generated guest path '${from}' in ${libRsPath}, found ${count}. ` +
+          `The wasm-rquickjs skeleton may have changed; update generate-agent-template.mjs.`,
+      );
+    }
+    updated = updated.replace(from, to);
   }
 
-  writeFileSync(
-    libRsPath,
-    original.replace(toolInvokePath, `"golem:tool@0.1.0",\n                    &["guest", "invokeTool"],`),
-  );
+  writeFileSync(libRsPath, updated);
 }
 
 // ---------------------------------------------------------------------------
@@ -129,4 +160,4 @@ if (result.status !== 0) {
 }
 
 useForkedWitBindgen(resolve(process.cwd(), 'agent-template', 'Cargo.toml'));
-splitMergedGuestInvoke(resolve(process.cwd(), 'agent-template', 'src', 'lib.rs'));
+useGuestEntryPoints(resolve(process.cwd(), 'agent-template', 'src', 'lib.rs'));

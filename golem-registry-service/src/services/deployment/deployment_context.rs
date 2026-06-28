@@ -26,6 +26,7 @@ use crate::model::agent_secret::{
 };
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
+use crate::services::agent_secret::schema_contains_host_managed_capability;
 use crate::services::deployment::route_compilation::validate_path_segments;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
@@ -42,6 +43,7 @@ use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation,
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::agent::reachable_defs;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::render;
 use golem_common::schema::schema_type::SchemaType;
@@ -356,8 +358,14 @@ impl DeploymentContext {
                 // The agent-type-declared secret value type is already a
                 // schema-native `SchemaType`; pair it with the agent's shared
                 // graph defs so any `SchemaType::Ref` inside resolves.
-                let config_secret_schema =
-                    stored_agent_secret_schema(&agent_type.agent_type.schema, &config.value_type);
+                let config_secret_schema = ok_or_continue!(
+                    stored_agent_secret_schema(
+                        &canonical_agent_secret_path,
+                        &agent_type.agent_type.schema,
+                        &config.value_type,
+                    ),
+                    errors
+                );
 
                 match seen_secrets.entry(canonical_agent_secret_path.clone()) {
                     hash_map::Entry::Vacant(e) => {
@@ -585,28 +593,9 @@ fn parse_default_secret_value(
     default: Option<&&DeploymentAgentSecretDefault>,
     schema: &SchemaGraph,
 ) -> Result<Option<golem_common::schema::schema_value::SchemaValue>, DeployValidationError> {
-    let value_type = match resolve_schema_ref(schema, &schema.root) {
-        SchemaType::Secret { spec, .. } => &spec.inner,
-        SchemaType::Option { inner, .. } => match resolve_schema_ref(schema, inner) {
-            SchemaType::Secret { spec, .. } => &spec.inner,
-            other => {
-                return Err(DeployValidationError::AgentSecretDefaultTypeMismatch {
-                    path: path.clone(),
-                    errors: vec![format!("secret type must be secret, got {other:?}")],
-                });
-            }
-        },
-        other => {
-            return Err(DeployValidationError::AgentSecretDefaultTypeMismatch {
-                path: path.clone(),
-                errors: vec![format!("secret type must be secret, got {other:?}")],
-            });
-        }
-    };
-
     default
         .map(|sd| {
-            render::from_json_value(schema, value_type, &sd.secret_value).map_err(|e| {
+            render::from_json_value(schema, &schema.root, &sd.secret_value).map_err(|e| {
                 DeployValidationError::AgentSecretDefaultTypeMismatch {
                     path: path.clone(),
                     errors: vec![e.to_string()],
@@ -616,19 +605,35 @@ fn parse_default_secret_value(
         .transpose()
 }
 
-fn stored_agent_secret_schema(agent_graph: &SchemaGraph, config_type: &SchemaType) -> SchemaGraph {
+fn stored_agent_secret_schema(
+    path: &CanonicalAgentSecretPath,
+    agent_graph: &SchemaGraph,
+    config_type: &SchemaType,
+) -> Result<SchemaGraph, DeployValidationError> {
     let root = match resolve_schema_ref(agent_graph, config_type) {
-        SchemaType::Secret { spec, .. } => SchemaType::secret(spec.clone()),
+        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
         SchemaType::Option { inner, .. } => match resolve_schema_ref(agent_graph, inner) {
-            SchemaType::Secret { spec, .. } => SchemaType::secret(spec.clone()),
-            _ => config_type.clone(),
+            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
+            _ => {
+                return Err(DeployValidationError::AgentSecretInvalidConfigType {
+                    path: path.clone(),
+                });
+            }
         },
-        _ => config_type.clone(),
+        _ => {
+            return Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() });
+        }
     };
 
-    SchemaGraph {
-        defs: agent_graph.defs.clone(),
+    let schema = SchemaGraph {
+        defs: reachable_defs(agent_graph, &root),
         root,
+    };
+
+    if schema_contains_host_managed_capability(&schema) {
+        Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() })
+    } else {
+        Ok(schema)
     }
 }
 
@@ -725,6 +730,44 @@ pub fn extract_registered_agent_types(
     Ok(agent_types)
 }
 
+fn validate_final_http_api_router(
+    domain: &Domain,
+    compiled_routes: &[UnboundCompiledRoute],
+    errors: &mut Vec<DeployValidationError>,
+) {
+    let mut router = golem_service_base::custom_api::router::Router::new();
+
+    for compiled_route in compiled_routes {
+        let method: http::Method = ok_or_continue!(
+            compiled_route.method.clone().try_into().map_err(|_| {
+                DeployValidationError::InvalidHttpMethod {
+                    method: compiled_route.method.clone(),
+                }
+            }),
+            errors
+        );
+
+        ok_or_continue!(
+            validate_path_segments(&compiled_route.path, domain).map_err(|e| {
+                DeployValidationError::HttpApiDeploymentInvalidRoute {
+                    domain: domain.clone(),
+                    path: compiled_route.path.clone(),
+                    error: e.to_string(),
+                }
+            },),
+            errors
+        );
+
+        if !router.add_route(method, compiled_route.path.clone(), ()) {
+            errors.push(DeployValidationError::RouteIsAmbiguous {
+                domain: domain.clone(),
+                method: compiled_route.method.clone(),
+                path: compiled_route.path.clone(),
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,7 +781,9 @@ mod tests {
     use golem_common::schema::agent::{
         AgentConfigDeclarationSchema, AgentConstructorSchema, InputSchema,
     };
-    use golem_common::schema::schema_type::{SchemaType, SecretSpec};
+    use golem_common::schema::graph::SchemaTypeDef;
+    use golem_common::schema::metadata::TypeId;
+    use golem_common::schema::schema_type::{QuotaTokenSpec, SchemaType, SecretSpec};
     use golem_common::schema::schema_value::SchemaValue;
     use serde_json::json;
     use test_r::test;
@@ -825,6 +870,8 @@ mod tests {
             inner: Box::new(SchemaType::string()),
             category: None,
         }));
+        let schema = stored_agent_secret_schema(&path, &schema, &schema.root)
+            .expect("secret<T> config declarations should be accepted");
 
         let parsed = parse_default_secret_value(&path, Some(&&default), &schema)
             .expect("plaintext defaults for secret<T> should be parsed as T");
@@ -843,6 +890,8 @@ mod tests {
             inner: Box::new(SchemaType::string()),
             category: None,
         })));
+        let schema = stored_agent_secret_schema(&path, &schema, &schema.root)
+            .expect("option<secret<T>> config declarations should be accepted");
 
         let parsed = parse_default_secret_value(&path, Some(&&default), &schema)
             .expect("plaintext defaults for option<secret<T>> should be parsed as T");
@@ -851,7 +900,127 @@ mod tests {
     }
 
     #[test]
-    fn optional_secret_default_creation_stores_secret_schema_not_option_schema() {
+    fn non_secret_config_declaration_is_rejected() {
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        let agent_type = agent_type_with_secret_config(
+            agent_type_name.clone(),
+            config_path.clone(),
+            SchemaType::string(),
+        );
+        let mut registered_agent_types = HashMap::new();
+        registered_agent_types.insert(
+            agent_type_name,
+            InProgressDeployedRegisteredAgentType {
+                agent_type,
+                implemented_by: test_implementer(),
+                webhook_domain_and_segments: None,
+            },
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types,
+        };
+        let mut errors = Vec::new();
+
+        let (creations, updates, replacements) = context
+            .deployment_agent_secret_creations_and_updates(
+                Vec::new(),
+                Vec::new(),
+                false,
+                &mut errors,
+            );
+
+        assert!(creations.is_empty());
+        assert!(updates.is_empty());
+        assert!(replacements.is_empty());
+        assert_eq!(
+            errors,
+            vec![DeployValidationError::AgentSecretInvalidConfigType {
+                path: CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+            }]
+        );
+    }
+
+    #[test]
+    fn nested_secret_payload_config_declaration_is_rejected() {
+        let path = CanonicalAgentSecretPath(vec!["apiKey".to_string()]);
+        let schema = SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: None,
+            })),
+            category: None,
+        }));
+
+        let result = stored_agent_secret_schema(&path, &schema, &schema.root);
+
+        assert_eq!(
+            result,
+            Err(DeployValidationError::AgentSecretInvalidConfigType { path })
+        );
+    }
+
+    #[test]
+    fn nested_quota_token_payload_config_declaration_is_rejected() {
+        let path = CanonicalAgentSecretPath(vec!["quota".to_string()]);
+        let schema = SchemaGraph::anonymous(SchemaType::option(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::quota_token(QuotaTokenSpec {
+                resource_name: Some("credits".to_string()),
+            })),
+            category: None,
+        })));
+
+        let result = stored_agent_secret_schema(&path, &schema, &schema.root);
+
+        assert_eq!(
+            result,
+            Err(DeployValidationError::AgentSecretInvalidConfigType { path })
+        );
+    }
+
+    #[test]
+    fn referenced_secret_declaration_projects_away_outer_secret_def() {
+        let path = CanonicalAgentSecretPath(vec!["apiKey".to_string()]);
+        let outer_id = TypeId::new("api-key-secret");
+        let inner_id = TypeId::new("api-key-inner");
+        let schema = SchemaGraph {
+            defs: vec![
+                SchemaTypeDef {
+                    id: outer_id.clone(),
+                    name: None,
+                    body: SchemaType::secret(SecretSpec {
+                        inner: Box::new(SchemaType::ref_to(inner_id.clone())),
+                        category: None,
+                    }),
+                },
+                SchemaTypeDef {
+                    id: inner_id.clone(),
+                    name: None,
+                    body: SchemaType::string(),
+                },
+            ],
+            root: SchemaType::string(),
+        };
+
+        let stored_schema =
+            stored_agent_secret_schema(&path, &schema, &SchemaType::ref_to(outer_id))
+                .expect("ref to secret<T> should be accepted and stored as plaintext T");
+
+        assert!(matches!(stored_schema.root, SchemaType::Ref { .. }));
+        assert_eq!(stored_schema.defs.len(), 1);
+        assert_eq!(stored_schema.defs[0].id, inner_id);
+        assert!(matches!(
+            stored_schema.defs[0].body,
+            SchemaType::String { .. }
+        ));
+    }
+
+    #[test]
+    fn optional_secret_default_creation_stores_plaintext_inner_schema_not_option_schema() {
         let agent_type_name = AgentTypeName("vault".to_string());
         let config_path = vec!["apiKey".to_string()];
         let agent_type = agent_type_with_secret_config(
@@ -904,20 +1073,15 @@ mod tests {
             Some(SchemaValue::String("s3cr3t".to_string()))
         );
         match resolve_schema_ref(&creations[0].secret_type, &creations[0].secret_type.root) {
-            SchemaType::Secret { spec, .. } => {
-                assert!(matches!(
-                    resolve_schema_ref(&creations[0].secret_type, &spec.inner),
-                    SchemaType::String { .. }
-                ));
-            }
+            SchemaType::String { .. } => {}
             other => panic!(
-                "deployment-created agent secrets must be stored as secret<T>, not {other:?}"
+                "deployment-created agent secrets must be stored as plaintext T, not {other:?}"
             ),
         }
     }
 
     #[test]
-    fn optional_secret_declaration_accepts_existing_stored_secret_schema() {
+    fn optional_secret_declaration_accepts_existing_stored_plaintext_schema() {
         let agent_type_name = AgentTypeName("vault".to_string());
         let config_path = vec!["apiKey".to_string()];
         let agent_type = agent_type_with_secret_config(
@@ -946,10 +1110,7 @@ mod tests {
         };
         let existing_secret = stored_agent_secret(
             &config_path,
-            SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
-                inner: Box::new(SchemaType::string()),
-                category: None,
-            })),
+            SchemaGraph::anonymous(SchemaType::string()),
             Some(SchemaValue::String("already-set".to_string())),
         );
         let mut errors = Vec::new();
@@ -964,49 +1125,10 @@ mod tests {
 
         assert!(
             errors.is_empty(),
-            "option<secret<T>> declarations should accept existing stored secret<T>; got {errors:?}"
+            "option<secret<T>> declarations should accept existing stored plaintext T; got {errors:?}"
         );
         assert_eq!(creations.len(), 0);
         assert_eq!(updates.len(), 0);
         assert_eq!(replacements.len(), 0);
-    }
-
-}
-
-fn validate_final_http_api_router(
-    domain: &Domain,
-    compiled_routes: &[UnboundCompiledRoute],
-    errors: &mut Vec<DeployValidationError>,
-) {
-    let mut router = golem_service_base::custom_api::router::Router::new();
-
-    for compiled_route in compiled_routes {
-        let method: http::Method = ok_or_continue!(
-            compiled_route.method.clone().try_into().map_err(|_| {
-                DeployValidationError::InvalidHttpMethod {
-                    method: compiled_route.method.clone(),
-                }
-            }),
-            errors
-        );
-
-        ok_or_continue!(
-            validate_path_segments(&compiled_route.path, domain).map_err(|e| {
-                DeployValidationError::HttpApiDeploymentInvalidRoute {
-                    domain: domain.clone(),
-                    path: compiled_route.path.clone(),
-                    error: e.to_string(),
-                }
-            },),
-            errors
-        );
-
-        if !router.add_route(method, compiled_route.path.clone(), ()) {
-            errors.push(DeployValidationError::RouteIsAmbiguous {
-                domain: domain.clone(),
-                method: compiled_route.method.clone(),
-                path: compiled_route.path.clone(),
-            })
-        }
     }
 }

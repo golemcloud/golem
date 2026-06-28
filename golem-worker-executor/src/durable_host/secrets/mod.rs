@@ -89,19 +89,15 @@ fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a
     ty
 }
 
-fn secret_inner_type<'a>(graph: &'a SchemaGraph) -> anyhow::Result<&'a SchemaType> {
-    match resolve_schema_ref(graph, &graph.root) {
-        SchemaType::Secret { spec, .. } => Ok(&spec.inner),
-        other => Err(anyhow!("stored secret type must be secret, got {other:?}")),
-    }
+fn secret_inner_type(graph: &SchemaGraph) -> &SchemaType {
+    resolve_schema_ref(graph, &graph.root)
 }
 
 fn validate_expected_type(
     secret: &AgentSecret,
     expected_graph: &SchemaGraph,
 ) -> Result<(), SecretRevealError> {
-    let pinned_inner = secret_inner_type(&secret.secret_type)
-        .map_err(|err| SecretRevealError::Internal(err.to_string()))?;
+    let pinned_inner = secret_inner_type(&secret.secret_type);
 
     if is_equivalent_cross_graph(
         &secret.secret_type,
@@ -122,8 +118,7 @@ fn validate_secret_value(
     secret: &AgentSecret,
     value: &SchemaValue,
 ) -> Result<(), SecretRevealError> {
-    let pinned_inner = secret_inner_type(&secret.secret_type)
-        .map_err(|err| SecretRevealError::Internal(err.to_string()))?;
+    let pinned_inner = secret_inner_type(&secret.secret_type);
 
     validate_value(&secret.secret_type, pinned_inner, value)
         .map_err(|_| SecretRevealError::Internal("stored secret value is invalid".to_string()))
@@ -377,7 +372,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
 mod tests {
     use super::*;
     use golem_common::schema::graph::SchemaGraph;
-    use golem_common::schema::schema_type::{SchemaType, SecretSpec};
+    use golem_common::schema::schema_type::SchemaType;
     use golem_service_base::model::agent_secret::AgentSecret;
     use test_r::test;
 
@@ -389,13 +384,7 @@ mod tests {
                 "apiKey".to_string(),
             ]),
             revision: AgentSecretRevision::INITIAL,
-            secret_type: SchemaGraph::anonymous(SchemaType::Secret {
-                spec: SecretSpec {
-                    inner: Box::new(inner),
-                    category: None,
-                },
-                metadata: Default::default(),
-            }),
+            secret_type: SchemaGraph::anonymous(inner),
             secret_value: Some(value),
         }
     }

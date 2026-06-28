@@ -21,7 +21,7 @@ use crate::schema::schema_type::{
 };
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::subtyping::is_assignable;
 use crate::schema::validation::value::{ValueError, ValuePathSegment, validate_value};
@@ -399,6 +399,49 @@ fn primitive_shape_mismatch_is_reported() {
     let errors =
         validate_value(&graph, &SchemaType::s32(), &SchemaValue::S64(1)).expect_err("should fail");
     assert!(matches!(&errors[0], ValueError::ShapeMismatch { .. }));
+}
+
+#[test]
+fn secret_schema_rejects_plaintext_value() {
+    let ty = SchemaType::secret(SecretSpec::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+
+    let errors = validate_value(
+        &graph,
+        &ty,
+        &SchemaValue::String("plaintext-secret".to_string()),
+    )
+    .expect_err("plaintext must not validate as a secret handle");
+
+    assert_eq!(errors.len(), 1);
+    assert!(matches!(
+        &errors[0],
+        ValueError::ShapeMismatch { expected, found, .. }
+            if expected == "secret" && found == "string"
+    ));
+}
+
+#[test]
+fn secret_category_mismatch_is_reported() {
+    let ty = SchemaType::secret(SecretSpec {
+        inner: Box::new(SchemaType::string()),
+        category: Some("api-key".to_string()),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::Secret(SecretValuePayload {
+        secret_id: uuid::Uuid::nil(),
+        config_key: Some(vec!["secret".to_string()]),
+        version: 1,
+        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        category: Some("password".to_string()),
+    });
+
+    let errors = validate_value(&graph, &ty, &value)
+        .expect_err("secret category must match the schema category");
+    assert_eq!(
+        errors[0].to_string(),
+        "secret value at  expected category `api-key`, found `password`"
+    );
 }
 
 #[test]

@@ -211,7 +211,7 @@ pub trait RegistryService: Send + Sync {
         _revision: AgentSecretRevision,
     ) -> Result<Option<AgentSecret>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
-            "get_agent_secret_revision is not supported by this registry service".to_string(),
+            "get_agent_secret_revision is not supported by this registry service",
         ))
     }
 

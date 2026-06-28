@@ -595,7 +595,7 @@ fn typed_reject_decoder_drains_handle_before_decoding_invalid_graph() {
 }
 
 #[test]
-fn secrets_create_interface_is_imported_by_host_and_sdk_worlds() {
+fn secrets_types_and_reveal_interfaces_are_imported_by_host_and_sdk_worlds() {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("golem-common is a workspace member");
@@ -606,19 +606,46 @@ fn secrets_create_interface_is_imported_by_host_and_sdk_worlds() {
         "sdks/scala/wit/main.wit",
         "sdks/moonbit/golem_sdk/wit/main.wit",
     ];
-    let missing = world_files
+
+    let missing_types = world_files
         .iter()
         .filter(|path| {
             let contents = std::fs::read_to_string(workspace_root.join(path))
                 .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
-            !contents.contains("import golem:secrets/create@0.1.0;")
+            !contents.contains("import golem:secrets/types@0.1.0;")
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    let missing_reveal = world_files
+        .iter()
+        .filter(|path| {
+            let contents = std::fs::read_to_string(workspace_root.join(path))
+                .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+            !contents.contains("import golem:secrets/reveal@0.1.0;")
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    let imported_create = world_files
+        .iter()
+        .filter(|path| {
+            let contents = std::fs::read_to_string(workspace_root.join(path))
+                .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+            contents.contains("import golem:secrets/create@0.1.0;")
         })
         .copied()
         .collect::<Vec<_>>();
 
     assert!(
-        missing.is_empty(),
-        "golem:secrets/create@0.1.0 is missing from these host/SDK worlds: {missing:?}"
+        missing_types.is_empty(),
+        "golem:secrets/types@0.1.0 is missing from these host/SDK worlds: {missing_types:?}"
+    );
+    assert!(
+        missing_reveal.is_empty(),
+        "golem:secrets/reveal@0.1.0 is missing from these host/SDK worlds: {missing_reveal:?}"
+    );
+    assert!(
+        imported_create.is_empty(),
+        "golem:secrets/create@0.1.0 must stay deferred but is imported by these host/SDK worlds: {imported_create:?}"
     );
 }
 

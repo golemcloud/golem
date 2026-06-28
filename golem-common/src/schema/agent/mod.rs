@@ -138,7 +138,7 @@ pub fn typed_schema_value_with_projected_defs(
 /// Dangling refs (no matching def in `graph`) are skipped; validation of the
 /// value against the projected graph reports them. Each reachable id is emitted
 /// once, first-def-wins on duplicate ids, matching [`SchemaGraph::lookup`].
-fn reachable_defs<'a>(graph: &'a SchemaGraph, root: &'a SchemaType) -> Vec<SchemaTypeDef> {
+pub fn reachable_defs<'a>(graph: &'a SchemaGraph, root: &'a SchemaType) -> Vec<SchemaTypeDef> {
     // Seed the worklist from refs in the synthesized root. The common
     // primitive/no-ref input returns here without building any lookup index.
     let mut stack: Vec<&'a TypeId> = Vec::new();
