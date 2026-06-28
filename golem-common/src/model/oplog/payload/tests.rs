@@ -21,7 +21,8 @@ use crate::model::oplog::types::{
     SerializableDateTime, SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
     SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
     SerializableP3CliErrorCode, SerializableP3DescriptorType, SerializableP3DirectoryEntry,
-    SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpClientSend,
+    SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
+    SerializableP3HttpClientSend,
     SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult,
     SerializableP3HttpRequestOptions, SerializableP3HttpScheme,
     SerializableP3IpAddress, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
@@ -36,7 +37,8 @@ use crate::model::oplog::{
     HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
     HostResponseP3CliStream, HostResponseP3FileSystemByteStream,
     HostResponseP3FileSystemDirectoryEntryStream, HostResponseP3FileSystemStat,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientSendResult,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientSendResult,
     HostResponseP3KeyvalueIncomingValueStream,
     HostResponseP3MonotonicClockUnit, HostResponseP3SocketsTcpStream,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
@@ -367,11 +369,11 @@ fn p3_http_client_send_host_payload_pairs_roundtrip() {
 
 #[test]
 fn p3_http_client_consume_body_host_payload_pairs_roundtrip() {
-    // Clean close with trailers: body bytes + delivered trailers round-trip.
+    // Clean close with trailers: the delivered trailers round-trip in the
+    // parent `consume-body` terminal.
     assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBody>(
         HostRequestNoInput {},
         HostResponseP3HttpClientConsumeBodyResult {
-            contents: b"hello body bytes".to_vec(),
             result: SerializableP3HttpConsumeBodyResult::Trailers(Some(HashMap::from([(
                 "x-trailer".to_string(),
                 vec![b"trailer-value".to_vec()],
@@ -383,21 +385,47 @@ fn p3_http_client_consume_body_host_payload_pairs_roundtrip() {
     assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBody>(
         HostRequestNoInput {},
         HostResponseP3HttpClientConsumeBodyResult {
-            contents: b"body without trailers".to_vec(),
             result: SerializableP3HttpConsumeBodyResult::Trailers(None),
         },
     );
 
-    // Errored body: the partial bytes observed before the error are still
-    // recorded and replay, and the ErrorCode round-trips (surfaced to the
-    // guest via the trailers future in p3).
+    // Errored body: the ErrorCode round-trips (surfaced to the guest via the
+    // trailers future in p3). The partial bytes observed before the error are
+    // recorded as `Data` chunks, not here.
     assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBody>(
         HostRequestNoInput {},
         HostResponseP3HttpClientConsumeBodyResult {
-            contents: b"partial".to_vec(),
             result: SerializableP3HttpConsumeBodyResult::HttpError(
                 SerializableHttpErrorCode::HttpResponseBodySize(Some(123)),
             ),
+        },
+    );
+}
+
+#[test]
+fn p3_http_client_consume_body_chunk_host_payload_pairs_roundtrip() {
+    // A body data chunk recorded before its bytes are delivered to the guest.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Data(b"a body chunk".to_vec()),
+        },
+    );
+
+    // An empty data chunk still round-trips (although the implementation never
+    // records empty frames).
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Data(Vec::new()),
+        },
+    );
+
+    // The terminal marker that ends the recorded body stream.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::End,
         },
     );
 }

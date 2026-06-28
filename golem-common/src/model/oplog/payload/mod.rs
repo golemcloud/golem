@@ -31,7 +31,8 @@ use crate::model::oplog::payload::types::{
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
-    SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpClientSend,
+    SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpBodyChunk,
+    SerializableP3HttpClientSend,
     SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult, SerializableP3IpAddresses,
     SerializableP3IpNameLookupError,
     SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
@@ -513,8 +514,10 @@ oplog_payload! {
             result: SerializableP3HttpClientSendResult
         },
         P3HttpClientConsumeBodyResult {
-            contents: Vec<u8>,
             result: SerializableP3HttpConsumeBodyResult
+        },
+        P3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk
         }
     }
 }
@@ -677,7 +680,8 @@ pub mod host_functions {
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
-        (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult)
+        (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
+        (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk)
     }
 }
 

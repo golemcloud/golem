@@ -1570,21 +1570,19 @@ pub enum SerializableP3HttpClientSendResult {
 }
 
 /// Terminal of a p3 response `consume-body` — the End payload of the
-/// `P3HttpClientConsumeBody` oplog pair (step 5).
+/// `P3HttpClientConsumeBody` oplog pair.
 ///
-/// The response body *bytes* are recorded separately in the End payload's
-/// `contents` field and replayed lazily; this enum captures only how the body
-/// stream terminated:
+/// The response body *bytes* are not recorded here; they are persisted
+/// chunk-by-chunk as [`SerializableP3HttpBodyChunk`] child calls under the
+/// `consume-body` batched scope and replayed lazily. This enum captures only
+/// how the body stream terminated:
 ///
-/// * `Trailers(None)` — the body closed cleanly with no trailers.
+/// * `Trailers(None)` — the body closed cleanly with no trailers (also used
+///   when the guest dropped the stream before it completed).
 /// * `Trailers(Some(..))` — the body closed cleanly and delivered trailers.
 /// * `HttpError(..)` — the body errored before completing. In p3 a body error
 ///   is surfaced to the guest via the trailers future's `ErrorCode`, not via
 ///   the body stream, so it round-trips here rather than on the stream.
-///
-/// `contents` is recorded regardless of this terminal (partial bytes on
-/// error/cancel must replay), so an `HttpError` terminal can still carry the
-/// bytes that were observed before the failure.
 #[derive(
     Debug,
     Clone,
@@ -1597,6 +1595,29 @@ pub enum SerializableP3HttpClientSendResult {
 pub enum SerializableP3HttpConsumeBodyResult {
     Trailers(Option<HashMap<String, Vec<Vec<u8>>>>),
     HttpError(SerializableHttpErrorCode),
+}
+
+/// One persisted unit of a P3 HTTP response body stream.
+///
+/// The body is recorded chunk-by-chunk as child durable calls under the
+/// `consume-body` batched scope (mirroring the per-read durability of the P2
+/// incoming body stream): every non-empty upstream frame becomes a `Data`
+/// chunk, persisted before its bytes are delivered to the guest, and a single
+/// `End` chunk terminates the recorded stream so replay knows when to stop
+/// reading children. The trailers / body-error terminal is carried by the
+/// parent `consume-body` call's [`SerializableP3HttpConsumeBodyResult`].
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpBodyChunk {
+    Data(Vec<u8>),
+    End,
 }
 
 /// A subset of AgentMetadata visible for guests (and serializable to oplog)

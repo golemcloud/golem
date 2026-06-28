@@ -4000,8 +4000,8 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use http_body::Frame;
     use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
+    use http_body::Frame;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
@@ -4085,9 +4085,7 @@ mod tests {
     async fn poll_p3_send_request_io_with_open_body(
         connection_pool: Option<HttpConnectionPool>,
     ) -> Poll<Result<(), ErrorCode>> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
@@ -4130,9 +4128,7 @@ mod tests {
             .expect("send_request should return response headers successfully");
         let mut io = Box::into_pin(io);
 
-        let poll = io
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()));
+        let poll = io.as_mut().poll(&mut Context::from_waker(Waker::noop()));
 
         let _ = server_done_tx.send(());
         server.await.unwrap();
