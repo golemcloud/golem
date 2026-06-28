@@ -22,7 +22,7 @@ use crate::schema::agent::{
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, VariantCaseType};
-use crate::schema::schema_value::{SchemaValue, VariantValuePayload};
+use crate::schema::schema_value::{SchemaValue, SecretValuePayload, VariantValuePayload};
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -624,7 +624,13 @@ fn projected_helper_keeps_defs_reachable_from_secret_inner() {
         inner: Box::new(SchemaType::ref_to(TypeId::new("SecretInner"))),
         category: None,
     });
-    let value = crate::schema::conversion::secret_to_value("api-key".to_string());
+    let value = SchemaValue::Secret(SecretValuePayload {
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        category: None,
+    });
 
     let typed = typed_schema_value_with_projected_defs(&graph, root, value);
 

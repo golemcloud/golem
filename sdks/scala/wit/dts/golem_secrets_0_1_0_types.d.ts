@@ -48,14 +48,13 @@ declare module 'golem:secrets/types@0.1.0' {
   export type SecretMetadata = {
     /**
      * Config-key path the secret resolved from, when applicable.
-     * `none` for secrets minted by `golem:secrets/create` or
-     * returned in tool-result position.
+     * `none` for secrets returned in tool-result position.
      */
     configKey?: string[];
     /**
      * Pinned version captured at resolve-time. `none` for
-     * dynamic-origin secrets (created from a string or returned
-     * from a tool that didn't itself have a versioned source).
+     * dynamic-origin secrets (e.g. returned from a tool that
+     * didn't itself have a versioned source).
      */
     version?: SecretVersion;
     /** Time of resolution. */

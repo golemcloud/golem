@@ -245,16 +245,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
 
                         if let Some(secret_value) = &secret.secret_value {
+                            // The validation errors can embed fragments of the
+                            // stored plaintext (e.g. an invalid URL value), so
+                            // they are never surfaced; the message stays generic.
                             validate_value(&secret.secret_type, stored_secret_inner, secret_value)
-                                .map_err(|errors| {
-                                    anyhow!(
-                                        "secret key {path_str} has invalid stored value: {}",
-                                        errors
-                                            .into_iter()
-                                            .map(|error| error.to_string())
-                                            .collect::<Vec<_>>()
-                                            .join("; ")
-                                    )
+                                .map_err(|_| {
+                                    anyhow!("secret key {path_str} has invalid stored value")
                                 })?;
                         }
 

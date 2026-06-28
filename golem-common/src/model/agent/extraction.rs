@@ -280,10 +280,7 @@ fn is_secret_resource(interface_name: &str, resource_name: &str) -> bool {
     resource_name == "secret"
         && matches!(
             interface_name,
-            "golem:core/types@2.0.0"
-                | "golem:secrets/types@0.1.0"
-                | "golem:secrets/reveal@0.1.0"
-                | "golem:secrets/create@0.1.0"
+            "golem:core/types@2.0.0" | "golem:secrets/types@0.1.0" | "golem:secrets/reveal@0.1.0"
         )
 }
 

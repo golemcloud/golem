@@ -23,7 +23,8 @@ use crate::schema::schema_type::{
     SecretSpec, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    QuotaTokenValuePayload, SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    QuotaTokenValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
@@ -673,21 +674,16 @@ fn multimodal_variant_list_round_trips_through_json() {
     assert!(schema_values_eq(&decoded, &value));
 }
 
-#[test]
-fn secret_ref_value_round_trip_preserves_opaque_identifier() {
-    use crate::schema::conversion::{FromSchema, IntoSchema, SecretRef};
-
-    let original = SecretRef::new("opaque-name").expect("valid SecretRef");
-    let value = original.to_value();
-    let decoded = SecretRef::from_value(&value).expect("from_value");
-
-    assert_eq!(decoded.as_str(), original.as_str());
-}
-
 // ------------------------------------------------------------------ redaction
 
 fn secret_value() -> SchemaValue {
-    crate::schema::conversion::secret_to_value("shhh-do-not-log".to_string())
+    SchemaValue::Secret(SecretValuePayload {
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        category: None,
+    })
 }
 
 fn quota_token_value() -> SchemaValue {

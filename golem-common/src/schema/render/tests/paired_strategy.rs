@@ -27,7 +27,7 @@ use crate::schema::schema_type::{
 };
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use chrono::{TimeZone, Utc};
 use proptest::collection::vec;
@@ -122,12 +122,14 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                 unit: "kg".to_string(),
             }),
         )),
-        "[a-z][a-z0-9-]{0,8}".prop_map(|r: String| (
+        Just((
             SchemaType::secret(SecretSpec::default()),
-            crate::schema::conversion::secret_to_value(if r.is_empty() {
-                "x".to_string()
-            } else {
-                r
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: None,
+                version: 0,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
             }),
         )),
         "[a-z][a-z0-9-]{0,4}".prop_map(|r: String| {

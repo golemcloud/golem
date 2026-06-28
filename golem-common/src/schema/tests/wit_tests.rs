@@ -625,12 +625,14 @@ fn secrets_types_and_reveal_interfaces_are_imported_by_host_and_sdk_worlds() {
         })
         .copied()
         .collect::<Vec<_>>();
+    // `golem:secrets/create@0.1.0` is not implemented; the interface must not be
+    // imported by any host/SDK world (it is removed from the WIT deps entirely).
     let imported_create = world_files
         .iter()
         .filter(|path| {
             let contents = std::fs::read_to_string(workspace_root.join(path))
                 .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
-            contents.contains("import golem:secrets/create@0.1.0;")
+            contents.contains("golem:secrets/create")
         })
         .copied()
         .collect::<Vec<_>>();
@@ -645,7 +647,7 @@ fn secrets_types_and_reveal_interfaces_are_imported_by_host_and_sdk_worlds() {
     );
     assert!(
         imported_create.is_empty(),
-        "golem:secrets/create@0.1.0 must stay deferred but is imported by these host/SDK worlds: {imported_create:?}"
+        "golem:secrets/create is not implemented and must not be referenced by these host/SDK worlds: {imported_create:?}"
     );
 }
 

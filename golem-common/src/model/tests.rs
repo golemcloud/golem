@@ -505,13 +505,19 @@ fn agent_status_record_agent_mode_is_not_serialized() {
 #[test]
 fn agent_invocation_result_redacted_debug_hides_capability_material() {
     use crate::model::AgentInvocationResult;
-    use crate::schema::SchemaValue;
+    use crate::schema::{SchemaValue, SecretValuePayload};
 
     let result = AgentInvocationResult::AgentMethod {
         output: SchemaValue::Record {
             fields: vec![
                 SchemaValue::String("svc".to_string()),
-                crate::schema::conversion::secret_to_value("shhh-do-not-log".to_string()),
+                SchemaValue::Secret(SecretValuePayload {
+                    secret_id: uuid::Uuid::nil(),
+                    config_key: None,
+                    version: 0,
+                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    category: None,
+                }),
             ],
         },
     };

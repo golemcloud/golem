@@ -804,12 +804,11 @@ mod secret_spec_tests {
     use test_r::test;
 
     #[test]
-    fn secret_ref_value_round_trip_preserves_opaque_identifier_legacy_serde_secret_spec_defaults_inner()
-     {
+    fn secret_spec_defaults_inner_to_string_when_absent() {
         let decoded: SecretSpec = serde_json::from_value(serde_json::json!({
             "category": "api-key"
         }))
-        .expect("legacy SecretSpec JSON without inner should deserialize");
+        .expect("SecretSpec JSON without inner should deserialize");
 
         assert_eq!(decoded.inner.as_ref(), &SchemaType::string());
         assert_eq!(decoded.category.as_deref(), Some("api-key"));

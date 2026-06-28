@@ -20,7 +20,9 @@ use crate::schema::render::cli_text::{
 use crate::schema::schema_type::{
     NamedFieldType, QuotaTokenSpec, SchemaType, SecretSpec, TextRestrictions,
 };
-use crate::schema::schema_value::{QuotaTokenValuePayload, SchemaValue, TextValuePayload};
+use crate::schema::schema_value::{
+    QuotaTokenValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
+};
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
 use test_r::test;
@@ -105,7 +107,13 @@ fn value_list_renders_with_brackets() {
 fn secret_value_is_redacted_by_default() {
     let ty = SchemaType::secret(SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
-    let value = crate::schema::conversion::secret_to_value("shhh".to_string());
+    let value = SchemaValue::Secret(SecretValuePayload {
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        category: None,
+    });
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
     assert_eq!(text, "<redacted: secret>");
     let unredacted =
@@ -148,7 +156,13 @@ fn capability_value_is_redacted_inside_record() {
     let value = SchemaValue::Record {
         fields: vec![
             SchemaValue::String("svc".to_string()),
-            crate::schema::conversion::secret_to_value("shhh".to_string()),
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: None,
+                version: 0,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
+            }),
         ],
     };
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");

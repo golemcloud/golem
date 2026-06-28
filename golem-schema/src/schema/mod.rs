@@ -36,8 +36,6 @@ pub mod wit;
 #[cfg(any(test, feature = "proptest"))]
 pub mod proptest_strategies;
 
-#[cfg(not(all(feature = "guest", not(feature = "host"))))]
-pub use conversion::SecretRef;
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,
     Quantity, QuantityUnit, SchemaBuilder, merge_agent_graphs, try_into_schema_graph,

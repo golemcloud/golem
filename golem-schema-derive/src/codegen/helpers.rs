@@ -240,11 +240,6 @@ pub fn to_value_expr(item_attrs: &ItemAttrs, ty: &Type, value_expr: TokenStream)
                 #private::SchemaValue::Quantity(::std::clone::Clone::clone(&(#value_expr)))
             }
         }
-        Some(RichSpec::Secret(_)) => {
-            quote! {
-                #private::secret_to_value(::std::clone::Clone::clone(&(#value_expr)))
-            }
-        }
         Some(RichSpec::QuotaToken(_)) => {
             quote! {
                 #private::SchemaValue::QuotaToken(::std::clone::Clone::clone(&(#value_expr)))
@@ -309,14 +304,6 @@ pub fn from_value_expr(item_attrs: &ItemAttrs, ty: &Type, value_expr: TokenStrea
                             "quantity", #private::value_kind(other), #ctx_lit,
                         ),
                     ),
-                }
-            }
-        }
-        Some(RichSpec::Secret(_)) => {
-            quote! {
-                {
-                    let __decoded: #ty = #private::secret_from_value(#value_expr, #ctx_lit)?;
-                    __decoded
                 }
             }
         }
@@ -419,15 +406,6 @@ fn rich_spec_to_body(rich: &RichSpec) -> TokenStream {
                     allowed_suffixes: ::std::vec![ #( ::std::string::String::from(#suffix_lits) ),* ],
                     min: #min,
                     max: #max,
-                })
-            }
-        }
-        RichSpec::Secret(spec) => {
-            let category = option_string(spec.category.as_deref());
-            quote! {
-                #private::SchemaType::secret(#private::SecretSpec {
-                    inner: ::std::boxed::Box::new(#private::SchemaType::string()),
-                    category: #category,
                 })
             }
         }

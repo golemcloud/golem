@@ -145,8 +145,11 @@ fn validate_agent_secret_value(
         secret_value,
     )
     .map_err(
-        |errors| AgentSecretError::AgentSecretValueDoesNotMatchType {
-            errors: errors.iter().map(|e| e.to_string()).collect(),
+        // The raw validation errors can embed the secret plaintext (e.g.
+        // `ValueError::UrlInvalid` echoes the offending value), so we surface
+        // a generic message instead of the per-error detail.
+        |_errors| AgentSecretError::AgentSecretValueDoesNotMatchType {
+            errors: vec!["value does not conform to the declared secret type".to_string()],
         },
     )
 }
@@ -264,6 +267,33 @@ mod tests {
         let schema = SchemaGraph::anonymous(SchemaType::string());
 
         validate_plaintext_agent_secret_type(&schema).unwrap();
+    }
+
+    #[test]
+    fn agent_secret_value_validation_error_never_echoes_plaintext() {
+        use golem_common::schema::schema_type::UrlRestrictions;
+        use golem_common::schema::schema_value::SchemaValue;
+
+        let plaintext = "super-secret-plaintext-not-a-url";
+        let schema = SchemaGraph::anonymous(SchemaType::url(UrlRestrictions::default()));
+
+        let err = validate_agent_secret_value(
+            &schema,
+            &SchemaValue::Url {
+                url: plaintext.to_string(),
+            },
+        )
+        .expect_err("an invalid url value must be rejected");
+
+        assert!(
+            !err.to_string().contains(plaintext),
+            "secret plaintext leaked into Display: {err}"
+        );
+        assert!(
+            !err.to_safe_string().contains(plaintext),
+            "secret plaintext leaked into SafeDisplay: {}",
+            err.to_safe_string()
+        );
     }
 
     #[test]
@@ -389,8 +419,12 @@ impl AgentSecretService {
                 sv,
             )
             .map_err(
-                |errors| AgentSecretError::AgentSecretValueDoesNotMatchType {
-                    errors: errors.iter().map(|e| e.to_string()).collect(),
+                // The raw validation errors can embed the secret plaintext, so
+                // we surface a generic message instead of the per-error detail.
+                |_errors| AgentSecretError::AgentSecretValueDoesNotMatchType {
+                    errors: vec![
+                        "value does not conform to the declared secret type".to_string(),
+                    ],
                 },
             )?;
         }

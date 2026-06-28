@@ -130,12 +130,14 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                 unit: "kg".to_string(),
             })
         )),
-        "[a-z][a-z0-9-]{0,8}".prop_map(|r: String| (
+        Just((
             SchemaType::secret(SecretSpec::default()),
-            crate::schema::conversion::secret_to_value(if r.is_empty() {
-                "x".to_string()
-            } else {
-                r
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: None,
+                version: 0,
+                resolved_at: Utc::now(),
+                category: None,
             })
         )),
         "[a-z][a-z0-9-]{0,4}".prop_map(|r: String| {

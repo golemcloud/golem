@@ -29,8 +29,6 @@
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
-#[cfg(not(all(feature = "guest", not(feature = "host"))))]
-use crate::schema::schema_value::SecretValuePayload;
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
@@ -62,12 +60,8 @@ mod serde_json_types;
 mod url;
 
 mod quantity;
-#[cfg(not(all(feature = "guest", not(feature = "host"))))]
-mod secret;
 
 pub use quantity::{Quantity, QuantityUnit};
-#[cfg(not(all(feature = "guest", not(feature = "host"))))]
-pub use secret::SecretRef;
 
 // =====================================================================
 // Trait surface
@@ -537,63 +531,6 @@ pub fn url_from_value(v: &SchemaValue, context: &'static str) -> Result<String, 
             value_kind(other),
             context,
         )),
-    }
-}
-
-pub fn secret_to_value(secret_ref: String) -> SchemaValue {
-    #[cfg(all(feature = "guest", not(feature = "host")))]
-    {
-        let _ = secret_ref;
-        panic!("secret references cannot be forged on a guest; use GuestSecretHandle")
-    }
-    #[cfg(not(all(feature = "guest", not(feature = "host"))))]
-    {
-        let secret_id = uuid::Uuid::parse_str(&secret_ref).unwrap_or_else(|_| {
-            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, secret_ref.as_bytes())
-        });
-        SchemaValue::Secret(SecretValuePayload {
-            secret_id,
-            config_key: Some(vec![secret_ref]),
-            version: 0,
-            resolved_at: ::chrono::DateTime::from_timestamp(0, 0)
-                .expect("epoch timestamp is valid"),
-            category: None,
-        })
-    }
-}
-
-pub fn secret_from_value(
-    v: &SchemaValue,
-    context: &'static str,
-) -> Result<String, FromSchemaError> {
-    #[cfg(all(feature = "guest", not(feature = "host")))]
-    {
-        let _ = v;
-        Err(FromSchemaError::custom(format!(
-            "{context}: secret handles cannot be inspected on a guest"
-        )))
-    }
-    #[cfg(not(all(feature = "guest", not(feature = "host"))))]
-    {
-        match v {
-            SchemaValue::Secret(p) => {
-                let synthetic_epoch =
-                    ::chrono::DateTime::from_timestamp(0, 0).expect("epoch timestamp is valid");
-                if p.version == 0
-                    && p.resolved_at == synthetic_epoch
-                    && p.category.is_none()
-                    && let Some([secret_ref]) = p.config_key.as_deref()
-                {
-                    return Ok(secret_ref.clone());
-                }
-                Ok(p.secret_id.to_string())
-            }
-            other => Err(FromSchemaError::shape_mismatch(
-                "secret",
-                value_kind(other),
-                context,
-            )),
-        }
     }
 }
 
@@ -1307,33 +1244,6 @@ impl<T: FromSchema> FromSchema for std::ops::Bound<T> {
 // =====================================================================
 // Tests
 // =====================================================================
-
-#[cfg(test)]
-mod secret_ref_tests {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    fn secret_ref_value_round_trip_preserves_opaque_identifier() {
-        let secret = SecretRef::new("opaque-name").unwrap();
-        let decoded = SecretRef::from_value(&secret.to_value()).unwrap();
-        assert_eq!(decoded, secret);
-    }
-
-    #[test]
-    fn secret_ref_value_round_trip_preserves_uuid_identifier() {
-        let secret = SecretRef::new("00000000-0000-0000-0000-000000000001").unwrap();
-        let decoded = SecretRef::from_value(&secret.to_value()).unwrap();
-        assert_eq!(decoded, secret);
-    }
-
-    #[test]
-    fn secret_ref_value_round_trip_preserves_uuid_identifier_uppercase() {
-        let secret = SecretRef::new("00000000-0000-0000-0000-0000000000AB").unwrap();
-        let decoded = SecretRef::from_value(&secret.to_value()).unwrap();
-        assert_eq!(decoded, secret);
-    }
-}
 
 #[cfg(test)]
 mod result_unit_tests {

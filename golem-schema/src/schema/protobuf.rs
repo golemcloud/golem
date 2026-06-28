@@ -1096,8 +1096,7 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn secret_ref_value_round_trip_preserves_opaque_identifier_legacy_proto_secret_spec_defaults_inner()
-     {
+    fn proto_secret_spec_defaults_inner_to_string_when_absent() {
         let proto = proto::SchemaType {
             metadata: None,
             body: Some(Body::SecretType(Box::new(proto::SecretSpec {
@@ -1106,7 +1105,7 @@ mod tests {
             }))),
         };
 
-        let decoded = SchemaType::try_from(proto).expect("legacy SecretSpec without inner");
+        let decoded = SchemaType::try_from(proto).expect("SecretSpec without inner");
 
         assert_eq!(
             decoded,

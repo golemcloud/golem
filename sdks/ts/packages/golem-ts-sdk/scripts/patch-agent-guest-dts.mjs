@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 
 const packageRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const exportsPath = path.join(packageRoot, 'types', 'exports.d.ts');

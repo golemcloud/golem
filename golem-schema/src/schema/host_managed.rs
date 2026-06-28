@@ -84,8 +84,8 @@ impl HostManagedKind {
 /// neither leak its trusted snapshot nor be lowered to a live owned handle.
 /// Quota tokens have no value representation in the WIT wire form other than an
 /// owned handle, so the only safe rendering is an ordinary string. Secrets carry
-/// a `secret-ref` reference that is likewise capability-identifying authority
-/// data, so they are redacted the same way.
+/// an opaque snapshot (secret id, pinned version, and metadata) that is likewise
+/// capability-identifying authority data, so they are redacted the same way.
 ///
 /// The result is a well-formed [`SchemaValue`] in which every capability leaf
 /// has become a [`SchemaValue::String`]. Pair it with
@@ -398,12 +398,18 @@ mod tests {
     use super::*;
     use crate::model::EnvironmentId;
     use crate::schema::schema_type::{QuotaTokenSpec, SecretSpec};
-    use crate::schema::schema_value::QuotaTokenValuePayload;
+    use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
     use chrono::{TimeZone, Utc};
     use test_r::test;
 
     fn secret_value() -> SchemaValue {
-        crate::schema::conversion::secret_to_value("shhh-do-not-log".to_string())
+        SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: None,
+            version: 0,
+            resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+            category: None,
+        })
     }
 
     fn quota_token_value() -> SchemaValue {

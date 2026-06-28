@@ -114,16 +114,14 @@ pub fn ensure_required_agent_secrets_are_configured(
                     )));
                 }
                 if let Some(secret_value) = &agent_secret.secret_value {
+                    // Validation errors can embed fragments of the stored
+                    // plaintext (e.g. an invalid URL value), so they are never
+                    // surfaced; the message stays generic.
                     validate_value(secret_graph, &secret_graph.root, secret_value).map_err(
-                        |errors| {
+                        |_| {
                             WorkerExecutorError::invalid_request(format!(
-                                "Required agent secret {} has invalid value: {}",
-                                config_entry.path.join("."),
-                                errors
-                                    .into_iter()
-                                    .map(|error| error.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join("; ")
+                                "Required agent secret {} has invalid value",
+                                config_entry.path.join(".")
                             ))
                         },
                     )?;
@@ -318,7 +316,7 @@ mod tests {
     use golem_common::schema::agent::{
         AgentConfigDeclarationSchema, AgentConstructorSchema, InputSchema,
     };
-    use golem_common::schema::schema_type::SecretSpec;
+    use golem_common::schema::schema_type::{SecretSpec, UrlRestrictions};
     use golem_service_base::model::agent_secret::AgentSecret;
     use golem_service_base::model::component::Component;
     use std::collections::{BTreeMap, HashMap};
@@ -494,6 +492,108 @@ mod tests {
                 )
                 .to_string()
                 .contains("invalid value")
+        );
+    }
+
+    #[test]
+    fn secret_validation_error_never_echoes_stored_plaintext() {
+        const SECRET_PLAINTEXT: &str = "super-secret-plaintext-not-a-url";
+
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        // A `Secret<Url>` whose stored plaintext is not a valid URL: the
+        // underlying `ValueError` would embed the raw URL string, so the
+        // mapped error must not.
+        let secret_type = SchemaGraph::anonymous(SchemaType::url(UrlRestrictions::default()));
+        let agent_type = AgentTypeSchema {
+            type_name: agent_type_name.clone(),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: Vec::new(),
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Secret,
+                path: config_path.clone(),
+                value_type: SchemaType::secret(SecretSpec {
+                    inner: Box::new(SchemaType::url(UrlRestrictions::default())),
+                    category: None,
+                }),
+            }],
+        };
+
+        let metadata = ComponentMetadata::from_parts(
+            Default::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![agent_type],
+            BTreeMap::new(),
+        );
+        let component = Component {
+            id: ComponentId::new(),
+            revision: ComponentRevision::INITIAL,
+            environment_id: EnvironmentId::new(),
+            component_name: ComponentName("component".to_string()),
+            hash: Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            application_name: ApplicationName("app".to_string()),
+            environment_name: EnvironmentName::try_from("dev").unwrap(),
+            component_size: 0,
+            metadata,
+            created_at: chrono::Utc::now(),
+            wasm_hash: Hash::empty(),
+            object_store_key: String::new(),
+        };
+        let agent_id = ParsedAgentId::new(
+            agent_type_name,
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: vec![] },
+            ),
+            None,
+        );
+        let mut agent_secrets = HashMap::new();
+        agent_secrets.insert(
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+            AgentSecret {
+                id: AgentSecretId::new(),
+                environment_id: EnvironmentId::new(),
+                path: CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+                revision: AgentSecretRevision::INITIAL,
+                secret_type,
+                secret_value: Some(SchemaValue::Url {
+                    url: SECRET_PLAINTEXT.to_string(),
+                }),
+            },
+        );
+
+        let message = ensure_required_agent_secrets_are_configured(
+            &agent_secrets,
+            Some(&agent_id),
+            &component,
+        )
+        .expect_err("invalid stored plaintext must be rejected")
+        .to_string();
+
+        assert!(
+            message.contains("invalid value"),
+            "expected a generic invalid-value error, got: {message}"
+        );
+        assert!(
+            !message.contains(SECRET_PLAINTEXT),
+            "secret plaintext leaked into the validation error: {message}"
         );
     }
 }
