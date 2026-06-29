@@ -390,6 +390,7 @@ pub fn preferred_source_language_for_setup(
         Some(GuestLanguage::TypeScript) => SourceLanguage::TypeScript,
         Some(GuestLanguage::Scala) => SourceLanguage::Scala,
         Some(GuestLanguage::MoonBit) => SourceLanguage::MoonBit,
+        Some(GuestLanguage::TypeScriptFluent) => SourceLanguage::TypeScript,
         None => SourceLanguage::Other(String::new()),
     }
 }

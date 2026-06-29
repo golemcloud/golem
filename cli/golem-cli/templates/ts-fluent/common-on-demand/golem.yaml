@@ -1,0 +1,51 @@
+# golem-app-manifest-header
+
+componentTemplates:
+  ts-fluent:
+    presets:
+      optimized:
+        default: true
+        build:
+        - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts-fluent/rollup.config.component.mjs"
+          dir: "{{ componentDir }}"
+          env:
+            GOLEM_APP_ROOT: "{{ appRootDir }}"
+            GOLEM_TEMP: "{{ golemTempDir }}"
+            GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/common/ts-fluent/rollup.config.component.mjs"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ appRootDir }}/package.json"
+          targets:
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
+          module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      quick:
+        build:
+        - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts-fluent/rollup.config.component.mjs"
+          dir: "{{ componentDir }}"
+          env:
+            GOLEM_APP_ROOT: "{{ appRootDir }}"
+            GOLEM_TEMP: "{{ golemTempDir }}"
+            GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/common/ts-fluent/rollup.config.component.mjs"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ appRootDir }}/package.json"
+          targets:
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
+          module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+customCommands:
+  ts-npm-install:
+  - command: npm install

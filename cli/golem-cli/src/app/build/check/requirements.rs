@@ -111,7 +111,13 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     },
 ];
 
-const TYPESCRIPT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[
+const TS_FLUENT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] =
+    &[TsConfigSettingRequirement {
+        path: &["compilerOptions", "moduleResolution"],
+        expected_literal: Some("\"bundler\""),
+    }];
+
+const TS_DECORATOR_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[
     TsConfigSettingRequirement {
         path: &["compilerOptions", "moduleResolution"],
         expected_literal: Some("\"bundler\""),
@@ -176,11 +182,18 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
     match language {
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
         GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
+        GuestLanguage::TypeScriptFluent => TYPESCRIPT_TOOL_REQUIREMENTS,
         GuestLanguage::Scala => SCALA_TOOL_REQUIREMENTS,
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
     }
 }
 
-pub fn typescript_tsconfig_requirements() -> &'static [TsConfigSettingRequirement] {
-    TYPESCRIPT_TSCONFIG_REQUIREMENTS
+pub fn typescript_tsconfig_requirements(
+    language: GuestLanguage,
+) -> &'static [TsConfigSettingRequirement] {
+    match language {
+        GuestLanguage::TypeScript => TS_DECORATOR_TSCONFIG_REQUIREMENTS,
+        GuestLanguage::TypeScriptFluent => TS_FLUENT_TSCONFIG_REQUIREMENTS,
+        _ => &[],
+    }
 }

@@ -85,7 +85,8 @@
     "ts-morph": "^26.0.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.39.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "zod": "^4.4.3"
   },
   "private": false,
   "repository": "https://github.com/golemcloud/golem"

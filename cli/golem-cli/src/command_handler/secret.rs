@@ -263,6 +263,7 @@ impl SecretCommandHandler {
                     GuestLanguage::TypeScript => SourceLanguage::TypeScript,
                     GuestLanguage::Scala => SourceLanguage::Scala,
                     GuestLanguage::MoonBit => SourceLanguage::MoonBit,
+                    GuestLanguage::TypeScriptFluent => SourceLanguage::TypeScript,
                 };
             }
         }

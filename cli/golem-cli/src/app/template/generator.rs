@@ -309,6 +309,7 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                             Transform::ApplicationName,
                         ]
                     }
+                    (false, "package.json") => vec![Transform::TsSdk],
                     (false, "Cargo.toml") => vec![Transform::ComponentName, Transform::RustSdk],
                     (false, "build.sbt") => vec![
                         Transform::ComponentName,
@@ -509,6 +510,7 @@ fn transform(
                     "GOLEM_TS_TYPESCRIPT_VERSION",
                     versions::ts_dep::TYPESCRIPT.to_string(),
                 );
+                replacements.insert("GOLEM_TS_ZOD_VERSION", versions::ts_dep::ZOD.to_string());
             }
         }
     }

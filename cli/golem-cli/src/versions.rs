@@ -49,6 +49,7 @@ pub mod ts_dep {
     pub const ROLLUP: &str = "^4.50.1";
     pub const TSLIB: &str = "^2.8.1";
     pub const TYPESCRIPT: &str = "^5.9.2";
+    pub const ZOD: &str = "^4.4.3";
 }
 
 // Keep this aligned with the Rust component template

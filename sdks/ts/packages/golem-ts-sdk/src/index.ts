@@ -61,6 +61,25 @@ export * from './host/transaction';
 export * from './host/checkpoint';
 export { Config, Secret } from './agentConfig';
 
+// Experimental fluent / config-object authoring surface (issue #3449), built on
+// Standard Schema. Exported from the main entry so it is part of the bundle
+// baked into `agent_guest.wasm` (and thus shares the runtime registries).
+// Unstable; will eventually replace the `@agent()` decorator surface.
+export { defineAgent, method, registerSchemaWalker } from './fluent';
+export type {
+  AgentDefinition,
+  AgentImplementation,
+  AgentSpec,
+  IdRecord,
+  InitContext,
+  MethodsRecord,
+  MethodSpec,
+  InputRecord,
+  StandardSchemaV1,
+  FluentCodec,
+  SchemaWalker,
+} from './fluent';
+
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
 
