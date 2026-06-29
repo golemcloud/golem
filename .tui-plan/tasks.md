@@ -10,6 +10,15 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - `[!]` blocked
 - `[-]` deferred or dropped
 
+## Completed Goal: Action And Help Rules
+
+- [x] Add action IDs, categories, scopes, execution kind, and palette visibility.
+- [x] Derive palette filtering from visible actions and include category/scope/execution text in search.
+- [x] Derive footer, leader hints, and help from registered action metadata.
+- [x] Keep raw input controls as explicit context-help controls.
+- [x] Make Agent inspect help reachable.
+- [x] Add focused action/help drift tests and a small test driver.
+
 ## Current Goal: Scoped Logging And Context Executor Foundation
 
 - [ ] Introduce a scoped `LogContext` that can capture output without changing global logging for unrelated work.

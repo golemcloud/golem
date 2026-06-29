@@ -244,3 +244,21 @@ Research notes:
 - Global or static state that matters for TUI concurrency includes CLI logging state, buffered logging, terminal width caching, program lookup caching, cargo target-dir caching, SDK override caching, and per-application agent type caches.
 - Existing CLI logging uses global `LOG_STATE` and `LOG_STATE_BUFFER`; `LogIndent` and `LogOutput` mutate global state on construction/drop.
 - Many command handlers hold logging scopes across `.await`, so a correct logging design must bind scopes to a context and preserve them across async execution.
+
+Action And Help Rules completed.
+
+Current status:
+
+- Extended TUI action metadata with stable IDs, categories, scopes, execution kind, and palette visibility.
+- Kept `TuiActionKind` as the local execution enum while using `TuiActionId` for UI derivation.
+- Made palette search use palette-visible actions and include category, scope, and execution kind text.
+- Derived footer shortcuts, normal leader hints, REPL leader hints, and help content from registered actions.
+- Kept raw input controls such as scrolling, filtering, pane focus, and stdin routing as explicit context-help rows.
+- Made `?` reachable from Agent inspect mode.
+- Added a small test-only `TuiTestDriver` for key input and configurable frame assertions.
+- Added focused tests for unique action IDs, palette visibility/category search, footer and leader drift, global help, Agent inspect help, REPL leader help, and command interaction help.
+
+Validation:
+
+- `cargo test -p golem-cli --lib -- tui::`
+- `cargo check -p golem-cli`
