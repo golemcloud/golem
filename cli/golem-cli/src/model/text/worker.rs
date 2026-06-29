@@ -32,7 +32,6 @@ use comfy_table::{
     Cell, CellAlignment, Color as ComfyColor, ColumnConstraint, ContentArrangement,
     Table as ComfyTable,
 };
-use golem_common::model::AgentStatus;
 use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::{
     MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
@@ -40,6 +39,7 @@ use golem_common::model::oplog::{
     PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
+use golem_common::model::{AgentStatus, Timestamp};
 use golem_common::schema::TypedSchemaValue;
 use indoc::indoc;
 use itertools::Itertools;
@@ -582,36 +582,14 @@ impl TextOutput for PublicOplogEntry {
                     ));
                 }
             }
-            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
-                PublicAgentInvocation::AgentMethodInvocation(inner) => {
-                    logln(format!(
-                        "{} {}",
-                        format_message_highlight("INVOKE"),
-                        format_id(&inner.method_name),
-                    ));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                    logln(format!(
-                        "{pad}idempotency key:   {}",
-                        format_id(&inner.idempotency_key),
-                    ));
-                    logln(format!("{pad}input:"));
-                    log_typed_schema_value(pad, &inner.function_input, &SourceLanguage::default());
-                }
-                other => {
-                    logln(format!(
-                        "{} {:?}",
-                        format_message_highlight("INVOKE"),
-                        other,
-                    ));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                }
-            },
+            PublicOplogEntry::AgentInvocationStarted(params) => {
+                log_agent_invocation(
+                    AgentInvocationRenderKind::Started,
+                    pad,
+                    &params.timestamp,
+                    &params.invocation,
+                );
+            }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 let variant_label = match &params.result {
                     PublicAgentInvocationResult::AgentInitialization(_) => "initialization",
@@ -726,66 +704,14 @@ impl TextOutput for PublicOplogEntry {
                 ));
             }
 
-            PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
-                PublicAgentInvocation::AgentInitialization(inner_params) => {
-                    logln(format_message_highlight("ENQUEUED AGENT INITIALIZATION"));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                    logln(format!(
-                        "{pad}idempotency key:   {}",
-                        format_id(&inner_params.idempotency_key),
-                    ));
-                }
-                PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
-                    logln(format!(
-                        "{} {}",
-                        format_message_highlight("ENQUEUED INVOCATION"),
-                        format_id(&inner_params.method_name),
-                    ));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                    logln(format!(
-                        "{pad}idempotency key:   {}",
-                        format_id(&inner_params.idempotency_key),
-                    ));
-                }
-                PublicAgentInvocation::SaveSnapshot(_) => {
-                    logln(format_message_highlight("ENQUEUED SAVE SNAPSHOT"));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                }
-                PublicAgentInvocation::LoadSnapshot(_) => {
-                    logln(format_message_highlight("ENQUEUED LOAD SNAPSHOT"));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                }
-                PublicAgentInvocation::ProcessOplogEntries(_) => {
-                    logln(format_message_highlight("ENQUEUED PROCESS OPLOG ENTRIES"));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                }
-                PublicAgentInvocation::ManualUpdate(inner_params) => {
-                    logln(format_message_highlight("ENQUEUED MANUAL UPDATE"));
-                    logln(format!(
-                        "{pad}at:                {}",
-                        format_id(&params.timestamp)
-                    ));
-                    logln(format!(
-                        "{pad}target revision:   {}",
-                        format_id(&inner_params.target_revision),
-                    ));
-                }
-            },
+            PublicOplogEntry::PendingAgentInvocation(params) => {
+                log_agent_invocation(
+                    AgentInvocationRenderKind::Pending,
+                    pad,
+                    &params.timestamp,
+                    &params.invocation,
+                );
+            }
             PublicOplogEntry::PendingUpdate(params) => {
                 logln(format_message_highlight("ENQUEUED UPDATE"));
                 logln(format!(
@@ -1219,14 +1145,174 @@ fn log_plugin_description(pad: &str, value: &PluginInstallationDescription) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum AgentInvocationRenderKind {
+    Started,
+    Pending,
+}
+
+fn log_agent_invocation(
+    kind: AgentInvocationRenderKind,
+    pad: &str,
+    timestamp: &Timestamp,
+    invocation: &PublicAgentInvocation,
+) {
+    for line in render_agent_invocation(kind, pad, timestamp, invocation) {
+        logln(line);
+    }
+}
+
+fn render_agent_invocation(
+    kind: AgentInvocationRenderKind,
+    pad: &str,
+    timestamp: &Timestamp,
+    invocation: &PublicAgentInvocation,
+) -> Vec<String> {
+    let mut lines = vec![
+        render_agent_invocation_header(kind, invocation),
+        format!("{pad}at:                {}", format_id(timestamp)),
+    ];
+
+    match invocation {
+        PublicAgentInvocation::AgentInitialization(params) => {
+            lines.push(format!(
+                "{pad}idempotency key:   {}",
+                format_id(&params.idempotency_key)
+            ));
+            lines.push(format!("{pad}input:"));
+            lines.push(render_typed_schema_value_line(
+                pad,
+                &params.constructor_parameters,
+                &SourceLanguage::default(),
+            ));
+        }
+        PublicAgentInvocation::AgentMethodInvocation(params) => {
+            lines.push(format!(
+                "{pad}idempotency key:   {}",
+                format_id(&params.idempotency_key)
+            ));
+            lines.push(format!("{pad}input:"));
+            lines.push(render_typed_schema_value_line(
+                pad,
+                &params.function_input,
+                &SourceLanguage::default(),
+            ));
+        }
+        PublicAgentInvocation::SaveSnapshot(_) => {}
+        PublicAgentInvocation::LoadSnapshot(params) => {
+            lines.extend(render_snapshot_data_lines(pad, &params.snapshot));
+        }
+        PublicAgentInvocation::ProcessOplogEntries(params) => {
+            lines.push(format!(
+                "{pad}idempotency key:   {}",
+                format_id(&params.idempotency_key)
+            ));
+        }
+        PublicAgentInvocation::ManualUpdate(params) => {
+            lines.push(format!(
+                "{pad}target revision:   {}",
+                format_id(&params.target_revision)
+            ));
+        }
+    }
+
+    lines
+}
+
+fn render_agent_invocation_header(
+    kind: AgentInvocationRenderKind,
+    invocation: &PublicAgentInvocation,
+) -> String {
+    match (kind, invocation) {
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::AgentInitialization(_)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE"),
+                format_id("initialize")
+            )
+        }
+        (
+            AgentInvocationRenderKind::Started,
+            PublicAgentInvocation::AgentMethodInvocation(params),
+        ) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE"),
+                format_id(&params.method_name)
+            )
+        }
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::SaveSnapshot(_)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE"),
+                format_id("save snapshot")
+            )
+        }
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::LoadSnapshot(_)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE"),
+                format_id("load snapshot")
+            )
+        }
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::ProcessOplogEntries(_)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE"),
+                format_id("process oplog entries")
+            )
+        }
+        (AgentInvocationRenderKind::Started, PublicAgentInvocation::ManualUpdate(_)) => {
+            format!(
+                "{} {}",
+                format_message_highlight("INVOKE"),
+                format_id("manual update")
+            )
+        }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::AgentInitialization(_)) => {
+            format_message_highlight("ENQUEUED AGENT INITIALIZATION")
+        }
+        (
+            AgentInvocationRenderKind::Pending,
+            PublicAgentInvocation::AgentMethodInvocation(params),
+        ) => {
+            format!(
+                "{} {}",
+                format_message_highlight("ENQUEUED INVOCATION"),
+                format_id(&params.method_name)
+            )
+        }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::SaveSnapshot(_)) => {
+            format_message_highlight("ENQUEUED SAVE SNAPSHOT")
+        }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::LoadSnapshot(_)) => {
+            format_message_highlight("ENQUEUED LOAD SNAPSHOT")
+        }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::ProcessOplogEntries(_)) => {
+            format_message_highlight("ENQUEUED PROCESS OPLOG ENTRIES")
+        }
+        (AgentInvocationRenderKind::Pending, PublicAgentInvocation::ManualUpdate(_)) => {
+            format_message_highlight("ENQUEUED MANUAL UPDATE")
+        }
+    }
+}
+
 fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
     golem_common::schema::render::value_to_cli_text(value.graph(), value.root_type(), value.value())
         .unwrap_or_else(|err| format!("<rendering error: {err}>"))
 }
 
 fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue, source_language: &SourceLanguage) {
+    logln(render_typed_schema_value_line(pad, value, source_language));
+}
+
+fn render_typed_schema_value_line(
+    pad: &str,
+    value: &TypedSchemaValue,
+    source_language: &SourceLanguage,
+) -> String {
     let rendered = crate::agent_id_display::render_typed_schema_value(value, source_language);
-    logln(format!("{pad}  {rendered}"));
+    format!("{pad}  {rendered}")
 }
 
 // TODO: pretty print
@@ -1246,29 +1332,26 @@ fn log_optional_error(pad: &str, error: &Option<String>) {
 }
 
 fn log_snapshot_data(pad: &str, snapshot: &PublicSnapshotData) {
+    for line in render_snapshot_data_lines(pad, snapshot) {
+        logln(line);
+    }
+}
+
+fn render_snapshot_data_lines(pad: &str, snapshot: &PublicSnapshotData) -> Vec<String> {
     match snapshot {
-        PublicSnapshotData::Raw(raw) => {
-            logln(format!(
-                "{pad}mime type:         {}",
-                format_id(&raw.mime_type)
-            ));
-            logln(format!(
-                "{pad}data:              ({} bytes)",
-                raw.data.len()
-            ));
-        }
-        PublicSnapshotData::Json(json) => {
-            logln(format!(
-                "{pad}data:              {}",
-                serde_json::to_string_pretty(&json.data)
-                    .unwrap_or_else(|_| format!("{:?}", json.data))
-            ));
-        }
+        PublicSnapshotData::Raw(raw) => vec![
+            format!("{pad}mime type:         {}", format_id(&raw.mime_type)),
+            format!("{pad}data:              ({} bytes)", raw.data.len()),
+        ],
+        PublicSnapshotData::Json(json) => vec![format!(
+            "{pad}data:              {}",
+            serde_json::to_string_pretty(&json.data).unwrap_or_else(|_| format!("{:?}", json.data))
+        )],
         PublicSnapshotData::Multipart(multipart) => {
-            logln(format!(
+            let mut lines = vec![format!(
                 "{pad}mime type:         {}",
                 format_id(&multipart.mime_type)
-            ));
+            )];
             for part in &multipart.parts {
                 let data_summary = match &part.data {
                     MultipartPartData::Json(json) => serde_json::to_string_pretty(&json.data)
@@ -1277,11 +1360,227 @@ fn log_snapshot_data(pad: &str, snapshot: &PublicSnapshotData) {
                         format!("({} bytes)", raw.data.len())
                     }
                 };
-                logln(format!(
+                lines.push(format!(
                     "{pad}part:              {} [{}]: {}",
                     part.name, part.content_type, data_summary
                 ));
             }
+            lines
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::{
+        AgentInitializationParameters, AgentMethodInvocationParameters, LoadSnapshotParameters,
+        ManualUpdateParameters, ProcessOplogEntriesParameters, RawSnapshotData,
+    };
+    use golem_common::model::{Empty, IdempotencyKey};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use test_r::test;
+
+    fn timestamp() -> Timestamp {
+        Timestamp::from(0)
+    }
+
+    fn typed_string_value(value: &str) -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::string()),
+            SchemaValue::String(value.to_string()),
+        )
+    }
+
+    fn agent_initialization() -> PublicAgentInvocation {
+        PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
+            idempotency_key: IdempotencyKey::new("init-key".to_string()),
+            constructor_parameters: typed_string_value("constructor"),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["trace-state".to_string()],
+            invocation_context: vec![],
+        })
+    }
+
+    fn agent_method_invocation() -> PublicAgentInvocation {
+        PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+            idempotency_key: IdempotencyKey::new("method-key".to_string()),
+            method_name: "generated-method".to_string(),
+            function_input: typed_string_value("input"),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["trace-state".to_string()],
+            invocation_context: vec![],
+        })
+    }
+
+    fn save_snapshot() -> PublicAgentInvocation {
+        PublicAgentInvocation::SaveSnapshot(Empty {})
+    }
+
+    fn load_snapshot() -> PublicAgentInvocation {
+        PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
+            snapshot: PublicSnapshotData::Raw(RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            }),
+        })
+    }
+
+    fn process_oplog_entries() -> PublicAgentInvocation {
+        PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
+            idempotency_key: IdempotencyKey::new("process-key".to_string()),
+        })
+    }
+
+    fn manual_update() -> PublicAgentInvocation {
+        PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
+            target_revision: ComponentRevision::new(5).unwrap(),
+        })
+    }
+
+    fn render_for_test(
+        kind: AgentInvocationRenderKind,
+        invocation: &PublicAgentInvocation,
+    ) -> String {
+        let rendered =
+            render_agent_invocation(kind, "          ", &timestamp(), invocation).join("\n");
+        strip_ansi_escapes::strip_str(rendered)
+    }
+
+    fn assert_contains_all(rendered: &str, expected: &[&str]) {
+        for expected in expected {
+            assert!(
+                rendered.contains(expected),
+                "expected rendered output to contain {expected:?}, got:\n{rendered}"
+            );
+        }
+    }
+
+    fn assert_debug_noise_absent(rendered: &str) {
+        for forbidden in [
+            "AgentInitializationParameters",
+            "AgentMethodInvocationParameters",
+            "LoadSnapshotParameters",
+            "ProcessOplogEntriesParameters",
+            "ManualUpdateParameters",
+            "PublicLocalSpanData",
+            "trace_states",
+            "invocation_context",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "rendered output contains debug-only text {forbidden:?}:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn started_public_agent_invocations_render_without_debug_dump() {
+        let cases = [
+            (
+                agent_initialization(),
+                vec![
+                    "INVOKE initialize",
+                    "idempotency key:   init-key",
+                    "input:",
+                    "constructor",
+                ],
+            ),
+            (
+                agent_method_invocation(),
+                vec![
+                    "INVOKE generated-method",
+                    "idempotency key:   method-key",
+                    "input:",
+                    "input",
+                ],
+            ),
+            (save_snapshot(), vec!["INVOKE save snapshot"]),
+            (
+                load_snapshot(),
+                vec![
+                    "INVOKE load snapshot",
+                    "mime type:         application/octet-stream",
+                    "data:              (3 bytes)",
+                ],
+            ),
+            (
+                process_oplog_entries(),
+                vec![
+                    "INVOKE process oplog entries",
+                    "idempotency key:   process-key",
+                ],
+            ),
+            (
+                manual_update(),
+                vec!["INVOKE manual update", "target revision:   5"],
+            ),
+        ];
+
+        for (invocation, expected) in cases {
+            let rendered = render_for_test(AgentInvocationRenderKind::Started, &invocation);
+            assert_contains_all(&rendered, &expected);
+            assert_debug_noise_absent(&rendered);
+            assert!(
+                !rendered.contains("entries:"),
+                "process-oplog-entry count must not be rendered without a public count field:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_public_agent_invocations_render_without_debug_dump() {
+        let cases = [
+            (
+                agent_initialization(),
+                vec![
+                    "ENQUEUED AGENT INITIALIZATION",
+                    "idempotency key:   init-key",
+                    "input:",
+                    "constructor",
+                ],
+            ),
+            (
+                agent_method_invocation(),
+                vec![
+                    "ENQUEUED INVOCATION generated-method",
+                    "idempotency key:   method-key",
+                    "input:",
+                    "input",
+                ],
+            ),
+            (save_snapshot(), vec!["ENQUEUED SAVE SNAPSHOT"]),
+            (
+                load_snapshot(),
+                vec![
+                    "ENQUEUED LOAD SNAPSHOT",
+                    "mime type:         application/octet-stream",
+                    "data:              (3 bytes)",
+                ],
+            ),
+            (
+                process_oplog_entries(),
+                vec![
+                    "ENQUEUED PROCESS OPLOG ENTRIES",
+                    "idempotency key:   process-key",
+                ],
+            ),
+            (
+                manual_update(),
+                vec!["ENQUEUED MANUAL UPDATE", "target revision:   5"],
+            ),
+        ];
+
+        for (invocation, expected) in cases {
+            let rendered = render_for_test(AgentInvocationRenderKind::Pending, &invocation);
+            assert_contains_all(&rendered, &expected);
+            assert_debug_noise_absent(&rendered);
+            assert!(
+                !rendered.contains("entries:"),
+                "process-oplog-entry count must not be rendered without a public count field:\n{rendered}"
+            );
         }
     }
 }
