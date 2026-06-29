@@ -356,7 +356,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            ensure_rpc_target_activated(self, self_).await?;
+            if let Err(err) = ensure_rpc_target_activated(self, self_).await {
+                handle.abandon_for_trap();
+                return Err(err);
+            }
 
             let retry_properties =
                 RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
@@ -515,7 +518,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            ensure_rpc_target_activated(self, self_).await?;
+            if let Err(err) = ensure_rpc_target_activated(self, self_).await {
+                handle.abandon_for_trap();
+                return Err(err);
+            }
 
             let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &method_name);
             let result = loop {
@@ -838,7 +844,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // (which is stable across an incomplete-replay re-execution), so both live paths reproduce
         // the same key and `ScheduleId`.
         let idempotency_key;
-        let handle;
+        let mut handle;
         if begun.is_live() {
             idempotency_key = self.derive_idempotency_key(begin_index);
 
@@ -873,7 +879,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         }
 
         let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);
-        let target_worker_fingerprint = ensure_rpc_target_activated(self, this).await?;
+        let target_worker_fingerprint = match ensure_rpc_target_activated(self, this).await {
+            Ok(fingerprint) => fingerprint,
+            Err(err) => {
+                handle.abandon_for_trap();
+                return Err(err);
+            }
+        };
 
         let stack = InvocationContextStack::new(
             self.state.invocation_context.trace_id.clone(),
@@ -1586,6 +1598,46 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     Ok(entry)
 }
 
+/// Activates the remote RPC target by creating a fresh demand and verifying that the live
+/// fingerprint matches the one persisted at construction time. Failures are returned as
+/// [`ClassifiedHostError`]s so every call site classifies activation errors the same way: a
+/// `create_demand` failure inherits its transient/permanent kind from [`classify_rpc_error`], while
+/// a fingerprint change is always permanent.
+async fn activate_rpc_target(
+    rpc: &dyn Rpc,
+    remote_agent_id: &OwnedAgentId,
+    created_by: AccountId,
+    agent_id: &AgentId,
+    env: &[(String, String)],
+    stack: InvocationContextStack,
+    config: Vec<AgentConfigEntryDto>,
+    auth_ctx: &AuthCtx,
+    expected_fingerprint: AgentFingerprint,
+) -> Result<Box<dyn RpcDemand>, Error> {
+    let demand = rpc
+        .create_demand(
+            remote_agent_id,
+            created_by,
+            agent_id,
+            env,
+            stack,
+            config,
+            auth_ctx,
+        )
+        .await
+        .map_err(|err| classified_host_error(classify_rpc_error(&err), err.to_string()))?;
+    let target_fingerprint = demand.fingerprint();
+    if target_fingerprint != expected_fingerprint {
+        return Err(classified_host_error(
+            HostFailureKind::Permanent,
+            format!(
+                "RPC target activation fingerprint changed during replay: persisted={expected_fingerprint}, live={target_fingerprint}"
+            ),
+        ));
+    }
+    Ok(demand)
+}
+
 async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     this: Resource<WasmRpcEntry>,
@@ -1612,24 +1664,19 @@ async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     };
 
     let stack = ctx.clone_as_inherited_stack(&span_id);
-    let demand = ctx
-        .rpc()
-        .create_demand(
-            &remote_agent_id,
-            ctx.created_by(),
-            ctx.agent_id(),
-            &env,
-            stack,
-            config,
-            &ctx.agent_auth_ctx(),
-        )
-        .await?;
-    let target_fingerprint = demand.fingerprint();
-    if target_fingerprint != replayed_target_fingerprint {
-        return Err(anyhow::anyhow!(
-            "RPC target activation fingerprint changed during replay: persisted={replayed_target_fingerprint}, live={target_fingerprint}"
-        ));
-    }
+    let rpc = ctx.rpc();
+    let demand = activate_rpc_target(
+        rpc.as_ref(),
+        &remote_agent_id,
+        ctx.created_by(),
+        ctx.agent_id(),
+        &env,
+        stack,
+        config,
+        &ctx.agent_auth_ctx(),
+        replayed_target_fingerprint,
+    )
+    .await?;
 
     let entry = ctx.table().get_mut(&this)?;
     let payload = entry.payload.downcast_mut::<WasmRpcEntryPayload>().unwrap();
@@ -1736,33 +1783,19 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let target_activation = target_activation.clone();
         async move {
             let _demand = if let Some(target_activation) = target_activation {
-                let demand = rpc
-                    .create_demand(
-                        &remote_agent_id,
-                        created_by,
-                        &agent_id,
-                        &target_activation.env,
-                        stack.clone(),
-                        target_activation.config,
-                        &auth_ctx,
-                    )
-                    .await
-                    .map_err(|err| {
-                        RpcTaskError::Host(classified_host_error(
-                            classify_rpc_error(&err),
-                            err.to_string(),
-                        ))
-                    })?;
-                let target_fingerprint = demand.fingerprint();
-                if target_fingerprint != target_activation.target_fingerprint {
-                    return Err(RpcTaskError::Host(classified_host_error(
-                        HostFailureKind::Permanent,
-                        format!(
-                            "RPC target activation fingerprint changed during replay: persisted={}, live={}",
-                            target_activation.target_fingerprint, target_fingerprint
-                        ),
-                    )));
-                }
+                let demand = activate_rpc_target(
+                    rpc.as_ref(),
+                    &remote_agent_id,
+                    created_by,
+                    &agent_id,
+                    &target_activation.env,
+                    stack.clone(),
+                    target_activation.config,
+                    &auth_ctx,
+                    target_activation.target_fingerprint,
+                )
+                .await
+                .map_err(RpcTaskError::Host)?;
                 Some(demand)
             } else {
                 None
