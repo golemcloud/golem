@@ -34,7 +34,6 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-
 /// Builds a manifest-style status-code retry policy:
 ///
 ///   countBox(maxRetries = 1000, inner = periodic(<delay>))

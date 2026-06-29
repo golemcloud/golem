@@ -14,7 +14,9 @@
 
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor_test_utils::{LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies};
+use golem_worker_executor_test_utils::{
+    LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies,
+};
 use test_r::{inherit_test_dep, timeout_suite};
 
 use crate::Tracing;

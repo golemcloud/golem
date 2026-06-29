@@ -21,8 +21,8 @@ use golem_worker_executor_test_utils::{
     WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 

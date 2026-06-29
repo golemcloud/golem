@@ -20,8 +20,8 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
-use test_r::{inherit_test_dep, test, timeout};
 use std::time::{Duration, SystemTime};
+use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

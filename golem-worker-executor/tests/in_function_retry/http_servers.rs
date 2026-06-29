@@ -337,7 +337,8 @@ fn decoded_chunked_body_len(mut body: &[u8]) -> usize {
 /// 3. The third connection must receive the full body again. Before the fix,
 ///    the awaiting-response retry reconstructed only chunks after the previous
 ///    retry error and resent a suffix of the body.
-pub(crate) async fn start_body_retry_then_response_retry_http_server() -> (u16, Arc<Mutex<Vec<usize>>>) {
+pub(crate) async fn start_body_retry_then_response_retry_http_server()
+-> (u16, Arc<Mutex<Vec<usize>>>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let body_lengths = Arc::new(Mutex::new(Vec::new()));
@@ -412,7 +413,9 @@ pub(crate) async fn start_body_retry_then_response_retry_http_server() -> (u16, 
 /// The first `fail_count` connections are dropped immediately.
 /// Subsequent connections get a valid HTTP 200 response.
 /// Returns `(port, connection_counter)`.
-pub(crate) async fn start_failing_http_server_any_method(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
+pub(crate) async fn start_failing_http_server_any_method(
+    fail_count: usize,
+) -> (u16, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let counter = Arc::new(AtomicUsize::new(0));
