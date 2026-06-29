@@ -36,9 +36,18 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [ ] Move Agents list refresh from nested JSON CLI output to a direct typed call using the context executor and a neutral worker-list helper.
 - [ ] Replace Agent inspect oplog/stream nested CLI with direct streaming providers.
 - [ ] Split stable action/help/test-driver pieces out of `app.rs` after the rules settle.
+- [ ] DX/UX hardening: design a lightweight documentation system for TUI actions, shortcuts, help surfaces, and interaction conventions after logging/context execution and direct ops refresh fundamentals are stable.
 - [ ] Design environment switching and non-manifest modes.
 - [ ] Define dev/ops workspace navigation and context-help behavior.
 - [ ] Plan the TUI role for local observability from issue #3456.
+
+## Deferred Goal: DX/UX Hardening
+
+- [ ] Define the source-of-truth format for documenting actions, shortcuts, scopes, availability rules, and help text.
+- [ ] Decide which user-facing surfaces are generated from that source: help, palette metadata, footer hints, docs, and test expectations.
+- [ ] Add drift checks so shortcut/action documentation cannot silently diverge from the registered TUI actions.
+- [ ] Review interaction conventions for leader actions, raw controls, focus modes, details panels, and refresh-heavy ops views.
+- [ ] Keep this behind the current fundamentals: scoped logging/context execution, selected context handling, and the first direct typed ops provider.
 
 ## Ongoing Validation
 

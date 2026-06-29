@@ -262,3 +262,8 @@ Validation:
 
 - `cargo test -p golem-cli --lib -- tui::`
 - `cargo check -p golem-cli`
+
+Review follow-up:
+
+- The action/help cleanup is enough for now, but a later DX/UX hardening goal should design a lightweight documentation system around TUI actions, shortcuts, help surfaces, and interaction conventions.
+- That hardening work is intentionally not next; it should come after the fundamentals are stable, especially scoped logging/context execution and the first direct typed ops refresh path.
