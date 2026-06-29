@@ -16,7 +16,7 @@ Add an `mcp` section to `golem.yaml` choosing which agents to deploy to which su
 mcp:
   deployments:
     local:
-      - domain: mcp-demo.localhost:9007
+      - subdomain: mcp-demo  # resolves to mcp-demo.localhost:9007 by default
         agents:
           CounterAgent: {}
 ```

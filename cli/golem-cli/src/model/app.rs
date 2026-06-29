@@ -16,7 +16,7 @@ use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProp
 use crate::bridge_gen::bridge_client_directory_name;
 use crate::fs;
 use crate::log::LogColorize;
-use crate::model::app::app_builder::{build_application, build_environments};
+use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
@@ -320,9 +320,52 @@ impl<T: Default> Default for WithSource<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct ApplicationNameAndEnvironments {
+pub struct ApplicationPreload {
     pub application_name: WithSource<ApplicationName>,
     pub environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    pub local_server: Option<WithSource<app_raw::LocalServer>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedLocalServer {
+    pub router_addr: Option<String>,
+    pub router_port: Option<u16>,
+    pub custom_request_port: Option<u16>,
+    pub mcp_port: Option<u16>,
+    pub ports_file: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
+    pub agent_filesystem_root: Option<PathBuf>,
+}
+
+impl ResolvedLocalServer {
+    pub fn from_raw_with_source(
+        local_server: &WithSource<app_raw::LocalServer>,
+        app_root_dir: &Path,
+    ) -> Self {
+        let base_dir = local_server.source.parent().unwrap_or(app_root_dir);
+        Self::from_raw_with_base_dir(&local_server.value, base_dir)
+    }
+
+    pub fn from_raw_with_base_dir(local_server: &app_raw::LocalServer, base_dir: &Path) -> Self {
+        Self {
+            router_addr: local_server.router_addr.clone(),
+            router_port: local_server.router_port,
+            custom_request_port: local_server.custom_request_port,
+            mcp_port: local_server.mcp_port,
+            ports_file: local_server
+                .ports_file
+                .as_ref()
+                .map(|path| fs::absolute_lexical_path_from_base_dir(path, base_dir)),
+            data_dir: local_server
+                .data_dir
+                .as_ref()
+                .map(|path| fs::absolute_lexical_path_from_base_dir(path, base_dir)),
+            agent_filesystem_root: local_server
+                .agent_filesystem_root
+                .as_ref()
+                .map(|path| fs::absolute_lexical_path_from_base_dir(path, base_dir)),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -433,10 +476,10 @@ impl Application {
         }
     }
 
-    pub fn environments_from_raw_apps(
+    pub fn preload_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<ApplicationNameAndEnvironments> {
-        build_environments(apps)
+    ) -> ValidatedResult<ApplicationPreload> {
+        build_application_preload(apps)
     }
 
     pub fn language_templates_from_raw_apps(
@@ -480,6 +523,7 @@ impl Application {
         root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Self> {
@@ -487,6 +531,7 @@ impl Application {
             root_dir,
             application_name,
             environments,
+            local_server,
             component_presets,
             apps,
         )
@@ -2215,7 +2260,7 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerApplyContext,
+        Application, ApplicationPreload, ComponentLayer, ComponentLayerApplyContext,
         ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
         ComponentPresetName, ComponentPresetSelector, ComponentProperties,
         PartitionedComponentPresets, TEMP_DIR, WithSource,
@@ -2249,6 +2294,7 @@ mod app_builder {
         root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Application> {
@@ -2256,16 +2302,17 @@ mod app_builder {
             root_dir,
             application_name,
             environments,
+            local_server,
             component_presets,
             apps,
         )
     }
 
-    // Load only environments
-    pub fn build_environments(
+    // Load manifest fields needed before full application loading.
+    pub fn build_application_preload(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<ApplicationNameAndEnvironments> {
-        AppBuilder::build_environments(apps)
+    ) -> ValidatedResult<ApplicationPreload> {
+        AppBuilder::build_application_preload(apps)
     }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -2281,6 +2328,7 @@ mod app_builder {
         RetryPolicyDefaults(EnvironmentName),
         ResourceDefaults(EnvironmentName),
         Bridge,
+        LocalServer,
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -2298,6 +2346,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
+                UniqueSourceCheckedEntityKey::LocalServer => property,
             }
         }
 
@@ -2344,8 +2393,169 @@ mod app_builder {
                     )
                 }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
+                UniqueSourceCheckedEntityKey::LocalServer => {
+                    "localServer".log_color_highlight().to_string()
+                }
             }
         }
+    }
+
+    fn resolve_http_api_domain(
+        validation: &mut ValidationBuilder,
+        deployment: &app_raw::HttpApiDeployment,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        local_server: Option<&WithSource<app_raw::LocalServer>>,
+        source: &Path,
+    ) -> Option<Domain> {
+        resolve_deployment_domain(
+            validation,
+            deployment.domain.as_ref(),
+            deployment.subdomain.as_ref(),
+            environment_name,
+            environment,
+            local_server.map(|local_server| &local_server.value),
+            |local_server| local_server.and_then(|local_server| local_server.custom_request_port),
+            crate::config::DEFAULT_LOCAL_CUSTOM_REQUEST_PORT,
+            crate::config::CLOUD_HTTP_API_DOMAIN,
+            "HTTP API",
+            source,
+        )
+    }
+
+    fn resolve_mcp_domain(
+        validation: &mut ValidationBuilder,
+        deployment: &app_raw::McpDeployment,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        local_server: Option<&WithSource<app_raw::LocalServer>>,
+        source: &Path,
+    ) -> Option<Domain> {
+        resolve_deployment_domain(
+            validation,
+            deployment.domain.as_ref(),
+            deployment.subdomain.as_ref(),
+            environment_name,
+            environment,
+            local_server.map(|local_server| &local_server.value),
+            |local_server| local_server.and_then(|local_server| local_server.mcp_port),
+            crate::config::DEFAULT_LOCAL_MCP_PORT,
+            crate::config::CLOUD_MCP_DOMAIN,
+            "MCP",
+            source,
+        )
+    }
+
+    fn resolve_deployment_domain(
+        validation: &mut ValidationBuilder,
+        domain: Option<&app_raw::DeploymentDomain>,
+        subdomain: Option<&app_raw::DeploymentSubdomain>,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        local_server: Option<&app_raw::LocalServer>,
+        local_port: impl Fn(Option<&app_raw::LocalServer>) -> Option<u16>,
+        default_local_port: u16,
+        cloud_domain: &str,
+        deployment_kind: &str,
+        source: &Path,
+    ) -> Option<Domain> {
+        match (domain, subdomain) {
+            (Some(domain), None) => {
+                let raw = domain.as_str();
+                Some(Domain(raw.to_string()))
+            }
+            (None, Some(subdomain)) => {
+                let label = subdomain.as_str();
+                if !is_valid_deployment_subdomain(label) {
+                    validation.add_error(invalid_deployment_subdomain_error(label, source));
+                    return None;
+                }
+
+                let Some(environment) = environment else {
+                    validation.add_error(format!(
+                        "Cannot resolve {} deployment subdomain {} in {} because environment {} is not defined.",
+                        deployment_kind,
+                        label.log_color_highlight(),
+                        source.display().to_string().log_color_highlight(),
+                        environment_name.0.log_color_highlight(),
+                    ));
+                    return None;
+                };
+
+                let resolved_domain = match environment.server.as_ref() {
+                    Some(app_raw::Server::Custom(_)) => {
+                        validation.add_error(format!(
+                            "Cannot use {} deployment subdomain {} in {} for custom server environment {}. Use the {} field with a full domain instead.",
+                            deployment_kind,
+                            label.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                            environment_name.0.log_color_highlight(),
+                            "domain".log_color_highlight(),
+                        ));
+                        return None;
+                    }
+                    Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Cloud)) => {
+                        Domain(format!("{label}.{cloud_domain}"))
+                    }
+                    Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Local)) | None => {
+                        let local_port = local_port(local_server).unwrap_or(default_local_port);
+                        Domain(format!("{label}.localhost:{}", local_port))
+                    }
+                };
+
+                Some(resolved_domain)
+            }
+            (Some(_), Some(subdomain)) => {
+                validation.add_error(format!(
+                    "Deployment in {} cannot define both {} and {}. Use {} for a full domain, or {} for a built-in local/cloud server subdomain.",
+                    source.display().to_string().log_color_highlight(),
+                    "domain".log_color_highlight(),
+                    "subdomain".log_color_highlight(),
+                    "domain".log_color_highlight(),
+                    "subdomain".log_color_highlight(),
+                ));
+                if !is_valid_deployment_subdomain(subdomain.as_str()) {
+                    validation.add_error(invalid_deployment_subdomain_error(
+                        subdomain.as_str(),
+                        source,
+                    ));
+                }
+                None
+            }
+            (None, None) => {
+                validation.add_error(format!(
+                    "Deployment in {} must define either {} or {}.",
+                    source.display().to_string().log_color_highlight(),
+                    "domain".log_color_highlight(),
+                    "subdomain".log_color_highlight(),
+                ));
+                None
+            }
+        }
+    }
+
+    fn is_valid_deployment_subdomain(label: &str) -> bool {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+            && label
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+            && label
+                .chars()
+                .last()
+                .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    }
+
+    fn invalid_deployment_subdomain_error(label: &str, source: &Path) -> String {
+        format!(
+            "Invalid deployment subdomain {} in {}. Use a single lowercase DNS label without dots, ports, or URL schemes.",
+            label.log_color_highlight(),
+            source.display().to_string().log_color_highlight(),
+        )
     }
 
     #[derive(Default)]
@@ -2354,6 +2564,8 @@ mod app_builder {
         app: Option<WithSource<ApplicationName>>,
         default_environment_names: BTreeSet<EnvironmentName>,
         environments: IndexMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
+        deployment_domain_local_server: Option<WithSource<app_raw::LocalServer>>,
 
         // "Consts" for component templating
         app_root_dir_str: String,
@@ -2399,18 +2611,23 @@ mod app_builder {
     }
 
     impl AppBuilder {
-        // NOTE: build_app DOES NOT include environments, those are preloaded with build_environments, so
-        //       flows that do not use manifest otherwise won't get blocked by high-level validation errors,
+        // NOTE: build_app receives preloaded application fields, so flows that do not otherwise
+        //       need the full manifest are not blocked by high-level validation errors,
         //       and we do not "steal" manifest loading logs from those which do use the manifest fully.
         fn build_app(
             app_root_dir: PathBuf,
             application_name: WithSource<ApplicationName>,
             environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+            local_server: Option<WithSource<app_raw::LocalServer>>,
             component_presets: ComponentPresetSelector,
             apps: Vec<app_raw::ApplicationWithSource>,
         ) -> ValidatedResult<Application> {
             let mut validation = ValidationBuilder::default();
-            let mut builder = Self::default();
+            let mut builder = Self {
+                environments: environments.clone().into_iter().collect(),
+                deployment_domain_local_server: local_server,
+                ..Self::default()
+            };
 
             match Ok::<&PathBuf, anyhow::Error>(&app_root_dir).and_then(|app_root_dir| {
                 Ok((
@@ -2470,14 +2687,14 @@ mod app_builder {
 
         // NOTE: Unlike build_app, here we do not consume the source apps, so they can be
         //       used for build_app. For more info on this separation, see build_app.
-        fn build_environments(
+        fn build_application_preload(
             apps: &[app_raw::ApplicationWithSource],
-        ) -> ValidatedResult<ApplicationNameAndEnvironments> {
+        ) -> ValidatedResult<ApplicationPreload> {
             let mut builder = Self::default();
             let mut validation = ValidationBuilder::default();
 
             for app in apps {
-                builder.add_raw_app_environments_only(&mut validation, app);
+                builder.add_raw_app_preload_only(&mut validation, app);
             }
 
             if builder.default_environment_names.len() > 1 {
@@ -2518,9 +2735,10 @@ mod app_builder {
                 }
             };
 
-            validation.build(ApplicationNameAndEnvironments {
+            validation.build(ApplicationPreload {
                 application_name,
                 environments: builder.environments.into_iter().collect(),
+                local_server: builder.local_server,
             })
         }
 
@@ -2615,6 +2833,19 @@ mod app_builder {
                     if let Some(http_api) = app.application.http_api {
                         for (environment, deployments) in http_api.deployments {
                             for api_deployment in deployments {
+                                let Some(domain) = resolve_http_api_domain(
+                                    validation,
+                                    &api_deployment,
+                                    &environment,
+                                    self.environments.get(&environment),
+                                    self.deployment_domain_local_server
+                                        .as_ref()
+                                        .or(self.local_server.as_ref()),
+                                    &app.source,
+                                ) else {
+                                    continue;
+                                };
+
                                 let deployments =
                                     self.http_api_deployments.entry(environment.clone()).or_default();
 
@@ -2630,7 +2861,7 @@ mod app_builder {
                                     )
                                     .collect();
 
-                                deployments.entry(api_deployment.domain).or_insert(WithSource::new(
+                                deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
                                         webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
@@ -2649,6 +2880,19 @@ mod app_builder {
                     if let Some(mcp) = app.application.mcp {
                         for (environment, deployments) in mcp.deployments {
                             for mcp_deployment in deployments {
+                                let Some(domain) = resolve_mcp_domain(
+                                    validation,
+                                    &mcp_deployment,
+                                    &environment,
+                                    self.environments.get(&environment),
+                                    self.deployment_domain_local_server
+                                        .as_ref()
+                                        .or(self.local_server.as_ref()),
+                                    &app.source,
+                                ) else {
+                                    continue;
+                                };
+
                                 let mcp_deployments =
                                     self.mcp_deployments.entry(environment.clone()).or_default();
 
@@ -2659,7 +2903,7 @@ mod app_builder {
                                     }))
                                     .collect();
 
-                                mcp_deployments.entry(mcp_deployment.domain.clone()).or_insert(WithSource::new(
+                                mcp_deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     McpDeploymentDeployProperties { agents },
                                 ));
@@ -2782,7 +3026,7 @@ mod app_builder {
                 });
         }
 
-        fn add_raw_app_environments_only(
+        fn add_raw_app_preload_only(
             &mut self,
             validation: &mut ValidationBuilder,
             app: &app_raw::ApplicationWithSource,
@@ -2840,7 +3084,74 @@ mod app_builder {
                             );
                         }
                     }
+
+                    if let Some(local_server) = &app.application.local_server {
+                        match &self.local_server {
+                            Some(existing) => validation.add_error(format!(
+                                "{} {} is defined in multiple sources: {}, {}",
+                                UniqueSourceCheckedEntityKey::LocalServer.entity_kind(),
+                                UniqueSourceCheckedEntityKey::LocalServer.entity_name(),
+                                existing.source.log_color_highlight(),
+                                app.source.log_color_highlight()
+                            )),
+                            None => {
+                                Self::validate_local_server_ports(
+                                    validation,
+                                    local_server,
+                                    &app.source,
+                                );
+                                self.local_server =
+                                    Some(WithSource::new(app.source.clone(), local_server.clone()));
+                            }
+                        }
+                    }
                 },
+            );
+        }
+
+        fn validate_local_server_ports(
+            validation: &mut ValidationBuilder,
+            local_server: &app_raw::LocalServer,
+            source: &Path,
+        ) {
+            fn validate_port(
+                validation: &mut ValidationBuilder,
+                value: Option<u16>,
+                manifest_field_name: &str,
+                cli_flag_name: &str,
+                source: &Path,
+            ) {
+                if value == Some(0) {
+                    validation.add_error(format!(
+                        "{} in {} must be nonzero. Port 0 is only allowed when passed directly as {} to {}.",
+                        manifest_field_name.log_color_highlight(),
+                        source.display().to_string().log_color_highlight(),
+                        format!("{cli_flag_name} 0").log_color_highlight(),
+                        "golem server run".log_color_highlight(),
+                    ));
+                }
+            }
+
+            validate_port(
+                validation,
+                local_server.router_port,
+                "localServer.routerPort",
+                "--router-port",
+                source,
+            );
+            validate_port(
+                validation,
+                local_server.custom_request_port,
+                "localServer.customRequestPort",
+                "--custom-request-port",
+                source,
+            );
+            validate_port(
+                validation,
+                local_server.mcp_port,
+                "localServer.mcpPort",
+                "--mcp-port",
+                source,
             );
         }
 
@@ -3256,12 +3567,13 @@ mod app_builder {
 mod test {
     use crate::fs;
     use crate::model::app::{
-        Application, ApplicationNameAndEnvironments, ComponentPresetSelector,
-        includes_from_yaml_file,
+        Application, ApplicationPreload, ComponentPresetSelector, includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::EnvironmentName;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -4054,6 +4366,377 @@ mod test {
         );
     }
 
+    #[test]
+    fn deployment_subdomains_resolve_for_local_and_cloud() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              customRequestPort: 9016
+              mcpPort: 9017
+
+            environments:
+              local:
+                server: local
+              implicit:
+                default: true
+              cloud:
+                server: cloud
+
+            httpApi:
+              deployments:
+                local:
+                  - subdomain: hello-api
+                implicit:
+                  - subdomain: implicit-api
+                cloud:
+                  - subdomain: hello-api
+
+            mcp:
+              deployments:
+                local:
+                  - subdomain: hello-mcp
+                implicit:
+                  - subdomain: implicit-mcp
+                cloud:
+                  - subdomain: hello-mcp
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert!(
+            app.http_api_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-api.localhost:9016".to_string()))
+        );
+        assert!(
+            app.http_api_deployments(&EnvironmentName("cloud".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-api.apps.golem.cloud".to_string()))
+        );
+        assert!(
+            app.http_api_deployments(&EnvironmentName("implicit".to_string()))
+                .unwrap()
+                .contains_key(&Domain("implicit-api.localhost:9016".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-mcp.localhost:9017".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("cloud".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-mcp.mcps.golem.cloud".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("implicit".to_string()))
+                .unwrap()
+                .contains_key(&Domain("implicit-mcp.localhost:9017".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_domains_keep_full_domains_unchanged() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: api.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: mcp.example.com
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert!(
+            app.http_api_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("api.example.com".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("mcp.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_subdomains_use_default_local_ports_without_local_server() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - subdomain: hello-api
+
+            mcp:
+              deployments:
+                local:
+                  - subdomain: hello-mcp
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert!(
+            app.http_api_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-api.localhost:9006".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-mcp.localhost:9007".to_string()))
+        );
+    }
+
+    #[test]
+    fn local_server_rejects_zero_manifest_ports() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              routerPort: 0
+              customRequestPort: 0
+              mcpPort: 0
+              portsFile: .golem/ports.json
+
+            environments:
+              local:
+                server: local
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(app_name_and_envs.is_none());
+        assert_eq!(errors.len(), 3, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("localServer.routerPort")
+                    && error.contains("--router-port 0")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("localServer.customRequestPort")
+                    && error.contains("--custom-request-port 0")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors.iter().any(
+                |error| error.contains("localServer.mcpPort") && error.contains("--mcp-port 0")
+            ),
+            "\n{}",
+            errors.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn deployment_subdomains_reject_invalid_values() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - subdomain: hello.api
+                  - subdomain: Hello
+                  - subdomain: http://hello
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 3, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.contains("Invalid deployment subdomain"))
+        );
+    }
+
+    #[test]
+    fn deployment_subdomains_reject_custom_server_environments() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              custom:
+                server:
+                  url: http://localhost:9881
+                  workerUrl: http://localhost:9881
+                  allowInsecure: true
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                custom:
+                  - subdomain: hello-api
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("custom", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("Cannot use HTTP API deployment subdomain"),
+            "\n{}",
+            errors.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn deployment_entries_require_exactly_one_domain_field() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: api.example.com
+                    subdomain: hello-api
+                  - agents: {}
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 2, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("cannot define both"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must define either"))
+        );
+    }
+
     fn component_applied_layers_trace(component: &crate::model::app::Component<'_>) -> Vec<String> {
         component
             .applied_layers()
@@ -4138,21 +4821,23 @@ mod test {
         let raw_apps = vec![raw_app];
 
         let (app_name_and_envs, warns, errors) =
-            Application::environments_from_raw_apps(&raw_apps).into_product();
+            Application::preload_from_raw_apps(&raw_apps).into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
-        let Some(ApplicationNameAndEnvironments {
+        let Some(ApplicationPreload {
             application_name,
             environments,
+            local_server,
         }) = app_name_and_envs
         else {
-            panic!("expected Some(ApplicationNameAndEnvironments)")
+            panic!("expected Some(ApplicationPreload)")
         };
 
         let (app, warns, errors) = Application::from_raw_apps(
             std::env::current_dir().unwrap(),
             application_name,
             environments,
+            local_server,
             selector.clone(),
             raw_apps,
         )
@@ -4160,6 +4845,50 @@ mod test {
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
         (app.unwrap(), tmp_dir)
+    }
+
+    #[test]
+    fn local_server_is_singleton_across_manifest_sources() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let root = tmp_dir.path().join("golem.yaml");
+        let included = tmp_dir.path().join("included.yaml");
+
+        fs::write(
+            &root,
+            indoc! {r#"
+                app: test-app
+                localServer:
+                  routerPort: 9882
+                environments:
+                  local:
+                    server: local
+            "#},
+        )
+        .unwrap();
+        fs::write(
+            &included,
+            indoc! {r#"
+                localServer:
+                  routerPort: 9883
+            "#},
+        )
+        .unwrap();
+
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&root).unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_file(&included).unwrap(),
+        ];
+
+        let (_app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("localServer"),
+            "unexpected error: {}",
+            errors[0]
+        );
     }
 
     #[test]
