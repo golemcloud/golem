@@ -90,6 +90,12 @@ impl<Ctx: WorkerCtx> client::HostWithStore for DurableP3<Ctx> {
                 .map_err(HttpError::trap)?
             {
                 CallReplayOutcome::Replayed(response) => {
+                    // The live path consumes the request inside `WasiHttp::send`.
+                    // On replay we never call `send`, so consume it here (delete
+                    // it, drain its outgoing body) before returning the recorded
+                    // response — otherwise the request leaks and a guest
+                    // streaming a body or awaiting its transmission future hangs.
+                    consume_replayed_request::<Ctx, U>(store, req).await?;
                     return replay_send_response::<Ctx, U>(store, response.result);
                 }
                 CallReplayOutcome::Incomplete(live_handle) => handle = live_handle,
@@ -143,6 +149,124 @@ impl<Ctx: WorkerCtx> client::HostWithStore for DurableP3<Ctx> {
 
 fn borrow_resource<T: 'static>(resource: &Resource<T>) -> Resource<T> {
     Resource::new_borrow(resource.rep())
+}
+
+/// Consume a request resource on the replay path, mirroring what the live
+/// `WasiHttp::send` does to the request minus the network send.
+///
+/// The live path deletes the request from the table, converts it with
+/// `into_http` (wiring the outgoing body stream and its content-length
+/// validation), and drives the body in the background while returning the
+/// response head. On replay we never call `send`, so we reproduce the request
+/// side here: delete the request, convert it, and spawn a task that drains the
+/// body. This
+/// * deletes the request resource (matching live), so it does not leak;
+/// * reads the guest's outgoing body stream so a guest streaming a body larger
+///   than the channel buffer does not block on a reader that never reads;
+/// * resolves the guest-held request-body transmission future with the same
+///   deterministic result as the live path (e.g. an `HttpRequestBodySize`
+///   error for a content-length mismatch), because that validation lives in
+///   `into_http`/`GuestBody`, not in the network send.
+///
+/// The drain runs in a spawned task rather than inline: live `WasiHttp::send`
+/// polls its body-I/O future once and, if it is still pending, spawns a task to
+/// finish it instead of blocking the response (`p3/host/handler.rs`). Draining
+/// inline here would deadlock a guest that awaits the recorded response before
+/// finishing its request-body upload.
+///
+/// The drain's `ErrorCode` is not the `client::send` result — the recorded
+/// response head is the authoritative `client::send` outcome — but it *is* the
+/// guest-held request-body transmission result. Live `WasiHttp::send` wires the
+/// transmission future to its request I/O result; on replay we wire it to the
+/// drain result via a `oneshot` channel so a deterministic outgoing-body
+/// failure (e.g. a guest trailers future that resolves to an `ErrorCode`, with
+/// no `content-length` validation wrapper to surface it) replays to the guest
+/// instead of an unconditional `Ok(())`.
+///
+/// This drain-derived result is a best-effort *interim*: the transmission
+/// result is not recorded, and it is genuinely non-deterministic on live (it
+/// depends on whether/how far the network read the body, which the recorded
+/// `client::send` success/error does not capture). So replay can diverge from a
+/// particular live run in either direction — a live transport error that
+/// dropped the body unread resolves `Ok(())` whereas the replay drain surfaces
+/// a body-validation error, and a non-deterministic mid-body network error
+/// cannot be reproduced and replays as `Ok(())`. Recording the transmission
+/// result itself is the follow-up that closes this gap; item #8 stays blocked
+/// on it (see `request_body_transmission_result_depends_on_unrecorded_body_read`).
+async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    req: Resource<Request>,
+) -> HttpResult<()> {
+    let (drain_result_tx, drain_result_rx) = oneshot::channel::<Result<(), ErrorCode>>();
+    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+    let body = http_store.with(
+        |mut access| -> HttpResult<UnsyncBoxBody<Bytes, ErrorCode>> {
+            let request = access
+                .get()
+                .table
+                .delete(req)
+                .context("failed to delete replayed p3 HTTP request from table")
+                .map_err(wasmtime::Error::from_anyhow)
+                .map_err(HttpError::trap)?;
+            let (http_request, _options) = request.into_http_with_getter(
+                access.as_context_mut(),
+                // Resolve the transmission future with the drain's result. If
+                // the drain task is dropped before sending (e.g. worker
+                // teardown), fall back to `Ok(())`.
+                async move { drain_result_rx.await.unwrap_or(Ok(())) },
+                wasi_http_view::<Ctx, U>,
+            )?;
+            Ok(http_request.into_body())
+        },
+    )?;
+    store.spawn(ReplayRequestBodyDrain::<Ctx>::new(body, drain_result_tx));
+    Ok(())
+}
+
+/// Drives an outgoing request body to completion, discarding each frame as it
+/// is read, and returns its terminal result. Frames are dropped one at a time
+/// (rather than accumulated with `collect`) so draining a large replayed upload
+/// does not buffer the whole body in memory; the bytes are not needed because
+/// the recorded response head is already authoritative.
+async fn drain_request_body(mut body: UnsyncBoxBody<Bytes, ErrorCode>) -> Result<(), ErrorCode> {
+    while let Some(frame) = body.frame().await {
+        frame?;
+    }
+    Ok(())
+}
+
+/// Background task that drains a replayed request's outgoing body to completion
+/// (no network) and reports the drain result to the request transmission
+/// future. See [`consume_replayed_request`] for why this runs off the `send`
+/// return path and how its result is wired back to the guest.
+struct ReplayRequestBodyDrain<Ctx> {
+    body: UnsyncBoxBody<Bytes, ErrorCode>,
+    result_tx: oneshot::Sender<Result<(), ErrorCode>>,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx> ReplayRequestBodyDrain<Ctx> {
+    fn new(
+        body: UnsyncBoxBody<Bytes, ErrorCode>,
+        result_tx: oneshot::Sender<Result<(), ErrorCode>>,
+    ) -> Self {
+        Self {
+            body,
+            result_tx,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for ReplayRequestBodyDrain<Ctx>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    async fn run(self, _accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+        let _ = self.result_tx.send(drain_request_body(self.body).await);
+        Ok(())
+    }
 }
 
 fn serialize_request<Ctx: WorkerCtx, U: Send>(
@@ -1624,5 +1748,433 @@ impl<Ctx: WorkerCtx> types::HostResponseWithStore for DurableP3<Ctx> {
     fn drop<U>(mut store: Access<U, Self>, res: Resource<Response>) -> wasmtime::Result<()> {
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostResponseWithStore>::drop(store, res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+    use http_body_util::Full;
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::{test, timeout};
+    use wasmtime::{AsContextMut, Engine, Store};
+    use wasmtime_wasi::ResourceTable;
+    use wasmtime_wasi_http::p3::{WasiHttpCtxView, WasiHttpHooks};
+    use wasmtime_wasi_http::{FieldMap, WasiHttpCtx};
+
+    #[derive(Default)]
+    struct TestHttpCtx {
+        table: ResourceTable,
+        ctx: WasiHttpCtx,
+        hooks: TestHttpHooks,
+    }
+
+    #[derive(Default)]
+    struct TestHttpHooks;
+
+    impl WasiHttpHooks for TestHttpHooks {}
+
+    impl WasiHttpView for TestHttpCtx {
+        fn http(&mut self) -> WasiHttpCtxView<'_> {
+            WasiHttpCtxView {
+                hooks: &mut self.hooks,
+                table: &mut self.table,
+                ctx: &mut self.ctx,
+            }
+        }
+    }
+
+    struct TrackedChunk {
+        live_chunks: Arc<AtomicUsize>,
+        bytes: [u8; 1],
+    }
+
+    impl TrackedChunk {
+        fn new(live_chunks: Arc<AtomicUsize>) -> Self {
+            live_chunks.fetch_add(1, Ordering::SeqCst);
+            Self {
+                live_chunks,
+                bytes: [b'x'],
+            }
+        }
+    }
+
+    impl AsRef<[u8]> for TrackedChunk {
+        fn as_ref(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+
+    impl Drop for TrackedChunk {
+        fn drop(&mut self) {
+            self.live_chunks.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    struct RetainDetectingBody {
+        remaining: usize,
+        live_chunks: Arc<AtomicUsize>,
+    }
+
+    impl RetainDetectingBody {
+        fn new(chunks: usize) -> Self {
+            Self {
+                remaining: chunks,
+                live_chunks: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl http_body::Body for RetainDetectingBody {
+        type Data = Bytes;
+        type Error = ErrorCode;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            if self.remaining == 0 {
+                return Poll::Ready(None);
+            }
+            if self.live_chunks.load(Ordering::SeqCst) != 0 {
+                self.remaining = 0;
+                return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(
+                    "previous request-body frame was retained until a later poll".to_string(),
+                )))));
+            }
+            self.remaining -= 1;
+            Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from_owner(
+                TrackedChunk::new(self.live_chunks.clone()),
+            )))))
+        }
+    }
+
+    fn short_content_length_request() -> (
+        wasmtime_wasi_http::p3::Request,
+        impl Future<Output = Result<(), ErrorCode>> + Send + 'static,
+    ) {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("4"));
+
+        wasmtime_wasi_http::p3::Request::new(
+            http::Method::POST,
+            Some(http::uri::Scheme::HTTP),
+            Some(http::uri::Authority::from_static("example.com")),
+            Some(http::uri::PathAndQuery::from_static("/upload")),
+            FieldMap::new_immutable(headers),
+            None,
+            Full::new(Bytes::from_static(b"x"))
+                .map_err(|never| match never {})
+                .boxed_unsync(),
+        )
+    }
+
+    /// A request whose outgoing body deterministically fails with an
+    /// `ErrorCode`, carrying no `content-length` header. Without a content-length
+    /// validation wrapper, this error can only reach the guest through the
+    /// transmission future, not through `into_http`'s content-length channel.
+    fn erroring_body_request_without_content_length() -> (
+        wasmtime_wasi_http::p3::Request,
+        impl Future<Output = Result<(), ErrorCode>> + Send + 'static,
+    ) {
+        let body = http_body_util::StreamBody::new(futures::stream::once(async {
+            Err::<http_body::Frame<Bytes>, ErrorCode>(ErrorCode::HttpProtocolError)
+        }))
+        .boxed_unsync();
+
+        wasmtime_wasi_http::p3::Request::new(
+            http::Method::POST,
+            Some(http::uri::Scheme::HTTP),
+            Some(http::uri::Authority::from_static("example.com")),
+            Some(http::uri::PathAndQuery::from_static("/upload")),
+            FieldMap::new_immutable(HeaderMap::new()),
+            None,
+            body,
+        )
+    }
+
+    /// Every `SerializableHttpErrorCode` variant, each carrying a distinct
+    /// payload so a mismatched arm between `serialize_error_code` and
+    /// `deserialize_error_code` (or a dropped payload field) is detected.
+    fn all_serializable_error_codes() -> Vec<SerializableHttpErrorCode> {
+        use SerializableHttpErrorCode::*;
+        vec![
+            DnsTimeout,
+            DnsError(SerializableDnsErrorPayload {
+                rcode: Some("NXDOMAIN".to_string()),
+                info_code: Some(3),
+            }),
+            DestinationNotFound,
+            DestinationUnavailable,
+            DestinationIpProhibited,
+            DestinationIpUnroutable,
+            ConnectionRefused,
+            ConnectionTerminated,
+            ConnectionTimeout,
+            ConnectionReadTimeout,
+            ConnectionWriteTimeout,
+            ConnectionLimitReached,
+            TlsProtocolError,
+            TlsCertificateError,
+            TlsAlertReceived(SerializableTlsAlertReceivedPayload {
+                alert_id: Some(42),
+                alert_message: Some("handshake failure".to_string()),
+            }),
+            HttpRequestDenied,
+            HttpRequestLengthRequired,
+            HttpRequestBodySize(Some(1024)),
+            HttpRequestMethodInvalid,
+            HttpRequestUriInvalid,
+            HttpRequestUriTooLong,
+            HttpRequestHeaderSectionSize(Some(8192)),
+            HttpRequestHeaderSize(Some(SerializableFieldSizePayload {
+                field_name: Some("authorization".to_string()),
+                field_size: Some(64),
+            })),
+            HttpRequestTrailerSectionSize(Some(256)),
+            HttpRequestTrailerSize(SerializableFieldSizePayload {
+                field_name: Some("x-checksum".to_string()),
+                field_size: Some(32),
+            }),
+            HttpResponseIncomplete,
+            HttpResponseHeaderSectionSize(Some(4096)),
+            HttpResponseHeaderSize(SerializableFieldSizePayload {
+                field_name: Some("content-type".to_string()),
+                field_size: Some(16),
+            }),
+            HttpResponseBodySize(Some(2048)),
+            HttpResponseTrailerSectionSize(Some(128)),
+            HttpResponseTrailerSize(SerializableFieldSizePayload {
+                field_name: Some("x-trailer".to_string()),
+                field_size: Some(8),
+            }),
+            HttpResponseTransferCoding(Some("chunked".to_string())),
+            HttpResponseContentCoding(Some("gzip".to_string())),
+            HttpResponseTimeout,
+            HttpUpgradeFailed,
+            HttpProtocolError,
+            LoopDetected,
+            ConfigurationError,
+            InternalError(Some("boom".to_string())),
+        ]
+    }
+
+    /// `deserialize_error_code` and `serialize_error_code` must be inverses so a
+    /// transport `ErrorCode` recorded on the live path replays back to the guest
+    /// unchanged. The roundtrip goes through the live p3 `ErrorCode` and back.
+    #[test]
+    fn error_code_conversion_roundtrips_through_p3() {
+        for serializable in all_serializable_error_codes() {
+            let roundtripped = serialize_error_code(&deserialize_error_code(serializable.clone()));
+            assert_eq!(roundtripped, serializable);
+        }
+    }
+
+    /// Response/trailer headers must replay with the same names, values, and
+    /// per-name multiplicity. Header names are lower-cased by `http::HeaderName`,
+    /// so the inputs here are already lower-case to make the roundtrip exact.
+    #[test]
+    fn headers_conversion_roundtrips() {
+        let mut headers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+        headers.insert("content-type".to_string(), vec![b"text/plain".to_vec()]);
+        headers.insert(
+            "set-cookie".to_string(),
+            vec![b"a=1".to_vec(), b"b=2".to_vec()],
+        );
+        let roundtripped = serialize_headers(&deserialize_headers(headers.clone()));
+        assert_eq!(roundtripped, headers);
+    }
+
+    /// The `consume-body` terminal (clean trailers, absent trailers, or a body
+    /// `ErrorCode`) must replay unchanged.
+    #[test]
+    fn consume_body_result_conversion_roundtrips() {
+        let cases = vec![
+            SerializableP3HttpConsumeBodyResult::Trailers(None),
+            SerializableP3HttpConsumeBodyResult::Trailers(Some(HashMap::from([(
+                "x-trailer".to_string(),
+                vec![b"value".to_vec()],
+            )]))),
+            SerializableP3HttpConsumeBodyResult::HttpError(
+                SerializableHttpErrorCode::ConnectionRefused,
+            ),
+        ];
+        for result in cases {
+            let roundtripped =
+                serialize_consume_body_result(&deserialize_consume_body_result(result.clone()));
+            assert_eq!(roundtripped, result);
+        }
+    }
+
+    /// Replay request-body draining must be a streaming drain: its purpose is to
+    /// unblock guest uploads and resolve the request transmission future, not to
+    /// retain the whole upload in memory. This body reports an error if a prior
+    /// data frame is still live when the next frame is polled; the frame-by-frame
+    /// `drain_request_body` passes, while `BodyExt::collect` would retain all
+    /// frames until EOF and fail.
+    #[test]
+    #[timeout("10s")]
+    async fn replay_request_body_drain_does_not_retain_frames_until_eof() {
+        let body = RetainDetectingBody::new(2).boxed_unsync();
+        let result = drain_request_body(body).await;
+        assert!(
+            matches!(result, Ok(())),
+            "replay request drain must discard each frame as it is read; got {result:?}"
+        );
+    }
+
+    /// Interim regression guard for how `consume_replayed_request` resolves the
+    /// guest's request-body transmission future while that result is not yet
+    /// recorded in the oplog.
+    ///
+    /// A naive `HostRequestWithStore::drop` resolves the future to `Ok(())` (a
+    /// dropped `result_tx` is treated as success), losing any drain-observed
+    /// body error — here a `content-length: 4` header with a 1-byte body, which
+    /// content-length validation reports as `HttpRequestBodySize`.
+    /// `consume_replayed_request` instead deletes the request and drains its
+    /// body via `into_http` (in a spawned task), resolving the transmission
+    /// future from the drain result. This pins that drain-derived policy so the
+    /// replay path is not regressed back to the `drop` shortcut.
+    ///
+    /// This is a *replay-local* invariant, not "matches live": whether live
+    /// actually surfaced this error depends on whether the network read the
+    /// body, which is not recorded (see
+    /// `request_body_transmission_result_depends_on_unrecorded_body_read`).
+    ///
+    /// Note: this exercises a host-backed body (`Body::Host`) as a stand-in.
+    /// Driving a real guest body stream (`Body::Guest`) on replay needs a
+    /// wasip3 HTTP component harness, which does not exist in-repo yet.
+    #[test]
+    async fn replay_request_consume_drain_surfaces_deterministic_body_error() {
+        let engine = Engine::default();
+
+        // The `drop` shortcut loses the deterministic error — the bug we avoid.
+        let (drop_request, drop_transmission) = short_content_length_request();
+        let mut drop_store = Store::new(&engine, TestHttpCtx::default());
+        let drop_handle = drop_store
+            .data_mut()
+            .table
+            .push(drop_request)
+            .expect("request should be pushed to the resource table");
+        let drop_access =
+            Access::<TestHttpCtx, WasiHttp>::new(drop_store.as_context_mut(), TestHttpCtx::http);
+        <WasiHttp as types::HostRequestWithStore>::drop(drop_access, drop_handle)
+            .expect("request drop should succeed");
+        let drop_transmission_result = drop_transmission.await;
+        assert!(
+            matches!(drop_transmission_result, Ok(())),
+            "dropping the request loses the deterministic body transmission error, got {drop_transmission_result:?}"
+        );
+
+        // The delete + `into_http` + drain sequence used by
+        // `consume_replayed_request` preserves the error.
+        let (replay_request, replay_transmission) = short_content_length_request();
+        let mut replay_store = Store::new(&engine, TestHttpCtx::default());
+        let (replay_http_request, _) = replay_request
+            .into_http(&mut replay_store, async { Ok(()) })
+            .expect("request should convert to an HTTP request");
+        let _ = replay_http_request.into_body().collect().await;
+        let replay_transmission_result = replay_transmission.await;
+        assert!(
+            matches!(
+                replay_transmission_result,
+                Err(ErrorCode::HttpRequestBodySize(_))
+            ),
+            "replay consume must preserve the live request body transmission error, got {replay_transmission_result:?}"
+        );
+    }
+
+    /// Documents why the request-body transmission future cannot be replayed
+    /// exactly without recording its result: the *same* request shape yields two
+    /// different transmission results depending only on whether the outgoing
+    /// body is read, and that fact is not in the oplog.
+    ///
+    /// * Dropped unread — models a live transport failure that occurs before the
+    ///   body is read (e.g. connection refused). Content-length validation never
+    ///   runs, so the transmission future resolves `Ok(())`.
+    /// * Drained to EOF — what the replay path does, and what a live send that
+    ///   reads the body does. The short body fails content-length validation, so
+    ///   the transmission future resolves `Err(HttpRequestBodySize)`.
+    ///
+    /// `client::send` records only the response head, not which of these
+    /// occurred, so the drain-derived replay result (see
+    /// `replay_request_consume_drain_surfaces_deterministic_body_error`) is a
+    /// best-effort interim. Recording the transmission result itself is the
+    /// follow-up that closes this gap; item #8 stays blocked on it.
+    #[test]
+    async fn request_body_transmission_result_depends_on_unrecorded_body_read() {
+        let engine = Engine::default();
+
+        // Dropped unread: no content-length validation runs, resolves `Ok(())`.
+        let (dropped_request, dropped_transmission) = short_content_length_request();
+        let mut dropped_store = Store::new(&engine, TestHttpCtx::default());
+        let (dropped_http_request, _) = dropped_request
+            .into_http(&mut dropped_store, async { Ok(()) })
+            .expect("request should convert to an HTTP request");
+        drop(dropped_http_request);
+        let dropped_result = dropped_transmission.await;
+        assert!(
+            matches!(dropped_result, Ok(())),
+            "dropping the body unread should not surface content-length validation, got {dropped_result:?}"
+        );
+
+        // Drained to EOF: the short body fails content-length validation.
+        let (drained_request, drained_transmission) = short_content_length_request();
+        let mut drained_store = Store::new(&engine, TestHttpCtx::default());
+        let (drained_http_request, _) = drained_request
+            .into_http(&mut drained_store, async { Ok(()) })
+            .expect("request should convert to an HTTP request");
+        let _ = drained_http_request.into_body().collect().await;
+        let drained_result = drained_transmission.await;
+        assert!(
+            matches!(drained_result, Err(ErrorCode::HttpRequestBodySize(_))),
+            "draining the short body should surface content-length validation, got {drained_result:?}"
+        );
+    }
+
+    /// The replay request drain must feed deterministic outgoing-body failures
+    /// back to the guest's request-body transmission future even when there is
+    /// no `content-length` validation wrapper to carry the error. Live `send`
+    /// wires the transmission future to the request I/O result, so replay must
+    /// wire it to the local drain result (`consume_replayed_request` does this
+    /// via a `oneshot`) instead of resolving it with an unconditional `Ok(())`.
+    ///
+    /// This mirrors the `consume_replayed_request` wiring with a host body that
+    /// deterministically errors and no content-length header. A naive
+    /// `async { Ok(()) }` transmission future would lose the error.
+    #[test]
+    async fn replay_request_consume_preserves_body_error_without_content_length() {
+        let engine = Engine::default();
+        let (request, transmission) = erroring_body_request_without_content_length();
+        let mut replay_store = Store::new(&engine, TestHttpCtx::default());
+
+        // Mirror the fixed `consume_replayed_request`: wire the transmission
+        // future to the drain result via a oneshot, drain the body, then report
+        // the drain result.
+        let (drain_result_tx, drain_result_rx) = oneshot::channel::<Result<(), ErrorCode>>();
+        let (replay_http_request, _) = request
+            .into_http(&mut replay_store, async move {
+                drain_result_rx.await.unwrap_or(Ok(()))
+            })
+            .expect("request should convert to an HTTP request");
+        let drain_result = replay_http_request.into_body().collect().await.map(|_| ());
+        assert!(
+            matches!(drain_result, Err(ErrorCode::HttpProtocolError)),
+            "body drain should observe the deterministic error, got {drain_result:?}"
+        );
+        let _ = drain_result_tx.send(drain_result);
+
+        let replay_transmission_result = transmission.await;
+        assert!(
+            matches!(
+                replay_transmission_result,
+                Err(ErrorCode::HttpProtocolError)
+            ),
+            "replay consume must propagate deterministic body errors to the request body transmission future, got {replay_transmission_result:?}"
+        );
     }
 }
