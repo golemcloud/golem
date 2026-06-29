@@ -1264,8 +1264,8 @@ fn map_schema_errors(
 /// well-formedness check walks, so it can seed pure-alias suppression.
 fn collect_structural_ref_ids(ty: &SchemaType, out: &mut HashSet<TypeId>) {
     match ty {
-        SchemaType::Ref { id, .. } if graph.lookup(id).is_none() => {
-            out.push(id.to_string());
+        SchemaType::Ref { id, .. } => {
+            out.insert(id.clone());
         }
         SchemaType::Record { fields, .. } => {
             for field in fields {
