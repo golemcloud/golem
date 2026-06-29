@@ -21,10 +21,10 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 
 ## Current Goal: Scoped Logging And Context Executor Foundation
 
-- [ ] Introduce a scoped `LogContext` that can capture output without changing global logging for unrelated work.
-- [ ] Make `LogIndent` and `LogOutput` restore the context they were created against, including across `.await`.
-- [ ] Add async capture and spawn helpers that propagate logging context and tracing span.
-- [ ] Add focused logging tests for two concurrent captures, indentation across `.await`, scoped output mode, and global fallback behavior.
+- [x] Introduce a scoped `LogContext` that can capture output without changing global logging for unrelated work.
+- [x] Make `LogIndent` and `LogOutput` restore the context they were created against, including across `.await`.
+- [x] Add async capture and spawn helpers that propagate logging context and tracing span.
+- [x] Add focused logging tests for two concurrent captures, indentation across `.await`, scoped output mode, and global fallback behavior.
 - [ ] Replace the temporary provider shape with a smaller context executor that owns context generation, background execution, and logging scope only.
 - [ ] Keep view-specific request building and `TuiEvent` mapping in the views or app state, not in the executor.
 - [ ] Remove TUI-specific handler APIs and extract neutral data-returning helpers only when they are useful for both CLI and TUI call paths.

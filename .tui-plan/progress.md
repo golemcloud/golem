@@ -267,3 +267,21 @@ Review follow-up:
 
 - The action/help cleanup is enough for now, but a later DX/UX hardening goal should design a lightweight documentation system around TUI actions, shortcuts, help surfaces, and interaction conventions.
 - That hardening work is intentionally not next; it should come after the fundamentals are stable, especially scoped logging/context execution and the first direct typed ops refresh path.
+
+Scoped logging foundation implemented.
+
+Current status:
+
+- Replaced the single global CLI log state with a global fallback `LogContext` plus Tokio task-local scoped contexts.
+- Added captured logging output for future direct TUI handler execution.
+- Made `LogIndent` and `LogOutput` restore the context they were created against, including when dropped from another async scope.
+- Added scoped `LogContext::scope`, `LogContext::spawn`, `buffered_lines`, and `take_buffered_lines`.
+- Kept existing logging call sites working through the active context fallback.
+- Left the context executor and direct Agents refresh for the next implementation slice.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib -- log --report-time`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli --lib -- tui:: --report-time`
