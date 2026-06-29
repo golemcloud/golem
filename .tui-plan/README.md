@@ -1,43 +1,45 @@
 # Golem CLI TUI Plan
 
-This directory tracks the plan, decisions, task breakdown, and progress for adding a cross-platform terminal UI to `golem-cli`, exposed as `golem tui` and `golem-cli tui`.
+This directory tracks the active product and implementation plan for the terminal UI in `cli/golem-cli`, exposed as `golem tui` and `golem-cli tui`.
 
-The TUI should help users monitor and manage Golem environments without leaving the terminal. It should support switching between environments, running multiple workflows in parallel, launching and embedding the Golem REPL, and discovering commands through a searchable command palette.
+The TUI is no longer just a scaffold. It currently has Dashboard, Agents, Output, Server, and REPL views; PTY-backed build/deploy/clean, server, REPL, and agent inspect workflows; a command palette; a Golem-branded dark theme; and focused render/state tests.
 
-## Product Goals
+## Current Direction
 
-- Provide a modern TUI experience for day-to-day Golem development and operations.
-- Work on macOS, Linux, and Windows.
-- Treat local, cloud, and custom environments uniformly through environment selection.
-- Make commands discoverable through search, while still supporting direct shortcuts.
-- Support multiple views or tabs so users can monitor and act without tmux.
-- Support theme selection and graceful color fallback based on terminal capabilities.
-- Include a test framework that makes rendered interactive screens inspectable and reproducible.
+The next work should invest in foundations that make larger UX and feature goals safe:
 
-## Initial Technical Direction
+- A rule-based action system for long names, shortcuts, palette entries, help, footer hints, scopes, and availability.
+- A test driver and high-level scenario tests that reduce regressions between manual TUI reviews.
+- A TUI-owned context model for manifest, local, cloud, custom, and non-manifest modes.
+- A scoped logging context so concurrent direct handler calls can capture logs without global cross-talk.
+- A clear split between dev workflows and ops/resource exploration.
+- A future observability home for [golemcloud/golem#3456](https://github.com/golemcloud/golem/issues/3456), initially as a TUI launcher/status/control surface unless the POC proves the TUI should own more.
 
-- Implement in `cli/golem-cli`, so both `golem-cli tui` and the recommended `golem tui` entry point work.
-- Use `ratatui` for rendering and `crossterm` for terminal control and events.
-- Prefer nested CLI sessions for early workflow integration when that is the fastest path to useful behavior.
-- Choose direct API calls per task when they are simple, stable, and avoid unnecessary output parsing.
-- Use existing command metadata and fuzzy matching for command discovery.
-- Reuse existing PTY and interactive-test dependencies where possible.
+## Main Arcs
+
+1. Action and help rules.
+2. Test driver and regression harness.
+3. Scoped logging and context execution.
+4. Context and environment model.
+5. Dev/ops workspace structure.
+6. Local observability workflow for issue #3456.
 
 ## Key Decisions
 
-- The TUI is not `golem`-only. It belongs in `golem-cli` and is exposed through both binaries.
-- Environment switching is a first-class TUI concept. Local and remote should be handled by the same workflow wherever possible.
-- Nested CLI execution is acceptable, especially early, because it preserves existing behavior and allows multiple environment-bound workflows.
-- Direct API integration is decided case by case.
-- The REPL starts as a managed embedded or nested interactive workflow, with deeper internal integration deferred until needed.
-- Code should stay simple, reviewable, and low on moving parts. Avoid abstractions, framework layers, and tests that do not directly improve confidence or iteration speed.
-- From the first scaffold, prioritize agentic coding loops: deterministic render output, compact smoke checks, and failure artifacts that make bugs inspectable without manual terminal interaction.
+- Keep the TUI in `golem-cli` so both entry points use the same implementation.
+- Prefer nested CLI/PTTY workflows where they preserve existing dev/interactive behavior; ops/resource exploration should move toward direct typed calls.
+- Treat the initial CLI `Context` as input, not permanent global truth. The TUI needs its own selected context and each job needs an immutable launch context.
+- Do not centralize all TUI event mapping in a generic data provider. Use a small context executor that handles context/logging/background execution while each view owns its request and event mapping.
+- Do not add TUI-specific command handler methods such as `list_agents_for_tui`. Extract or expose neutral data-returning helpers and let CLI rendering plus TUI mapping sit at the edges.
+- Derive visible shortcuts and help from action metadata wherever possible.
+- Grow architecture through small stable seams, not a broad rewrite of `app.rs`.
+- Keep tests focused on behavior and inspectable frame output instead of large brittle snapshots.
 
 ## Document Index
 
-- `architecture.md`: runtime, module boundaries, data flow, and integration strategy.
-- `ui-system.md`: visual system, views, navigation, palette, shortcuts, and themes.
-- `testing.md`: render tests, PTY tests, frame capture, and manual inspection workflow.
-- `phases.md`: milestone plan and acceptance criteria.
-- `tasks.md`: actionable task backlog.
-- `progress.md`: running implementation notes and status.
+- `architecture.md`: runtime, action rules, context model, job model, and module direction.
+- `ui-system.md`: visual system, action/help rules, shortcuts, and dev/ops workspace split.
+- `testing.md`: TUI driver strategy, scenario coverage, and validation commands.
+- `phases.md`: prioritized arcs and acceptance criteria.
+- `tasks.md`: active goal-sized backlog.
+- `progress.md`: running implementation notes and validation history.

@@ -1,131 +1,113 @@
 # Architecture
 
-The TUI should be a thin interactive shell over existing Golem behavior at first. It should not duplicate the CLI command stack unless direct integration is clearly better for a specific task.
+The TUI is a keyboard-first shell over existing Golem behavior. It should stay simple internally while moving duplicated rules into explicit models.
 
-## Entry Point
+## Runtime
 
-Add a top-level `Tui` variant to `GolemCliSubcommand` in `cli/golem-cli/src/command.rs`.
+The runtime owns terminal setup and drives one event loop over:
 
-Dispatch through `CommandHandler` to a new `TuiCommandHandler` in `cli/golem-cli/src/command_handler/tui.rs`.
+- terminal key, mouse, and resize events;
+- background refresh completions;
+- nested CLI/PTTY output and process exits;
+- explicit scheduled events such as spinners or auto-refresh ticks.
 
-The handler creates the existing `Context`, then starts the TUI runtime.
+The runtime should redraw only after events. Avoid a global polling render loop.
 
-## Module Layout
+## Action Model
 
-Planned source layout:
+Actions are the source of truth for user-visible commands. Each action should have:
 
-```text
-cli/golem-cli/src/tui/
-  mod.rs
-  app.rs
-  action.rs
-  command_palette.rs
-  data.rs
-  event.rs
-  terminal.rs
-  theme.rs
-  widgets.rs
-  repl.rs
-  nested_cli.rs
-  views/
-    mod.rs
-    dashboard.rs
-    environments.rs
-    components.rs
-    agents.rs
-    repl.rs
-```
+- stable ID;
+- long label;
+- optional shortcut;
+- category or workspace: navigation, dev, ops, settings, REPL, system;
+- scope: global, leader, view-specific, focused workflow, or system;
+- availability rule and reason, when that becomes necessary;
+- execution kind.
 
-## Runtime Model
+Palette rows, footer hints, leader hints, and help should derive from this model wherever possible. Raw input controls that are not actions yet, such as text entry or scroll keys, can remain explicit context-help controls.
 
-The runtime owns the terminal and drives a loop with these inputs:
+## Context Model
 
-- terminal key and mouse events
-- terminal resize events
-- background task results
-- nested CLI session output
+The initial CLI `Context` should be treated as bootstrap input. The TUI needs an explicit selected context that can later represent:
 
-The runtime updates `TuiApp` state, then renders a full frame.
+- manifest environment;
+- explicit local mode;
+- explicit cloud mode;
+- custom named environment;
+- config-only or non-manifest mode.
 
-Keep the runtime small. Prefer one straightforward event loop and plain state structs over callback-heavy abstractions or generic framework layers.
+Every nested job should capture an immutable launch context. Switching the selected UI context must not change the meaning of an already-running build, deploy, server, REPL, or inspection job.
 
-The runtime should be event-oriented. It should block waiting for terminal input when there is no background work, and redraw only after input, resize, nested CLI output, background task completion, or explicit scheduled refresh events. Avoid a fixed polling render loop.
+Direct TUI queries should also run against an immutable context snapshot. The selected context can change later, but in-flight results must carry the context identity and request generation that produced them so stale results are ignored.
 
-When periodic refresh is needed, model it as an explicit event source for the view or job that needs it, not as a global frame tick.
+`Context` is not a pure value today. It contains lazy clients, app context state, and caches, and context construction can have manifest/config side effects. Future context switching should create or cache separate `Arc<Context>` snapshots rather than mutating a live context in place.
 
-## Terminal Lifecycle
+## Logging Context
 
-Terminal setup should be guarded so raw mode, alternate screen, cursor visibility, and mouse/focus modes are restored after normal exit, errors, and panics where possible.
+The CLI logging system is currently effectively global. That conflicts with concurrent TUI jobs that call command handlers directly, because one refresh should not steal another refresh's log output, indentation, or buffered error text.
 
-The existing worker watch mode already has alternate-screen cleanup patterns, but the TUI should own a separate reusable guard.
+Introduce a proper scoped logging context before broad direct handler use:
 
-## State Model
+- a `LogContext` owns output mode, indentation, stashed indentation, and captured/buffered lines;
+- `LogIndent` and `LogOutput` bind to the active context when they are created and restore that same context when dropped;
+- log lookup checks a scoped context first and falls back to the existing global CLI behavior for normal command execution;
+- async direct TUI work runs inside a logging scope and returns captured logs with the typed result when needed.
 
-`TuiApp` should contain:
+The scope should not be thread-local only. It needs async-aware propagation across `.await`, and spawned work should use an explicit helper that carries both the logging context and tracing span. A reasonable lookup order is tracing span extension, Tokio task-local, thread-local, then global fallback.
 
-- selected environment and profile context
-- active tab or view
-- command palette state
-- focus target
-- theme and color capability
-- status notifications
-- nested CLI sessions
-- last known data snapshots per view
-- refresh state and pending task IDs
+## Context Executor
 
-State should be easy to inspect in tests and debug dumps. Avoid hiding important behavior behind trait objects unless there is a concrete need.
+Use a small TUI context executor rather than a central provider that absorbs every view's event logic.
 
-## Environment Model
+The executor should:
 
-Environment selection should be independent of whether the target is local, cloud, or custom.
+- hold the selected `Arc<Context>` snapshot and target generation;
+- run a caller-provided async closure against that context on background runtime infrastructure;
+- install the scoped logging context for that closure;
+- send the caller-provided completion event back to the TUI loop;
+- avoid creating a new Tokio runtime per request.
 
-Each view/action should receive an explicit environment context instead of assuming the process-level selected environment forever.
+Views stay responsible for request-specific decisions. For example, the Agents view should choose the agent list mode, call a neutral worker-list data helper, map typed rows into `AgentListItem`, and decide which `TuiEvent` to emit.
 
-For nested CLI execution, this means commands should be spawned with explicit flags when needed, such as `--environment`, `--local`, `--cloud`, `--config-dir`, and app manifest flags.
+## Jobs
 
-## Integration Strategy
+Nested CLI jobs should carry:
 
-Prefer nested CLI sessions initially when they provide immediate reuse of existing workflows:
+- job ID and kind;
+- command line and working directory;
+- launch context;
+- PTY runtime;
+- lifecycle state;
+- output buffer or terminal screen;
+- scroll/follow state;
+- exit code and last error.
 
-- commands with complex output or prompts
-- commands that already manage deployment/build/repl behavior
-- parallel workflows against different environments
-- commands where behavior stability matters more than structured data
+Finite commands, server, REPL, and agent inspect jobs should converge on shared lifecycle rules where practical, without forcing unrelated UI details into one abstraction.
 
-Prefer direct API calls when they are simple and avoid fragile output parsing:
+## Dev And Ops Split
 
-- listing visible environments
-- loading local profiles and config
-- reading manifest environment definitions
-- polling health/status endpoints
-- fetching structured component or agent lists when existing client calls are already straightforward
+Dev workflows are application/manifest-oriented: build, deploy, clean, server, REPL, manifest exploration.
 
-Expose data-returning helpers from existing command handlers only when needed and keep current CLI output behavior unchanged.
+Ops workflows are environment/resource-oriented: agents, components, resources, logs, streams, inspections, and future observability.
 
-When both a direct call and a nested CLI command are viable, choose the option that produces the smallest understandable change for the current task. Revisit only when the simpler choice blocks usability or testing.
+The shell stays shared: context bar, tabs, palette, jobs/output, help, and notifications.
 
-## Nested CLI Sessions
+Dev workflows may keep using nested CLI/PTTY execution when that preserves interactive behavior, especially build, deploy, clean, server, and REPL flows. Ops and resource exploration workflows should use direct handler/client calls by default and must not parse nested CLI output for refresh-heavy views.
 
-Nested CLI sessions should be represented as stateful jobs with:
+Nested CLI in ops views is only a temporary implementation gap. Each remaining use should be tracked explicitly until it has a typed provider or streaming provider replacement. Agent inspect oplog/stream remains transitional ops debt until a direct streaming/oplog provider is added.
 
-- command line and working directory
-- environment variables
-- PTY or piped process mode
-- output buffer
-- current lifecycle state
-- focused input routing status
-- exit status and error summary
+Direct ops calls should run through the context executor, return typed results into the TUI event loop, carry an immutable target/context identity, and let views ignore stale results by generation.
 
-PTY mode is required for interactive children such as `golem repl` and commands with prompts. Piped mode is enough for non-interactive commands whose output is rendered into an output pane.
+Command handler integration should use neutral data-returning helpers. Do not add `for_tui` methods to handlers. Extract shared internal logic when needed so the existing CLI command path renders/logs results while TUI callers receive typed data directly.
 
-## REPL Integration
+## Module Direction
 
-The first REPL implementation can be nested and PTY-backed. Input is routed to the REPL only when the REPL pane is focused.
+Do not start with a broad rewrite. Extract stable seams as they become useful:
 
-Later, if needed, shared REPL internals can be extracted from `ReplHandler` and `TypeScriptRepl`, but that should not block the initial TUI.
-
-## Server Commands
-
-The TUI lives in `golem-cli`, which may compile without `server-commands`. Local server management actions should therefore be feature-aware.
-
-When running through `golem`, the existing `server-commands` feature is enabled and local server actions can call or nest `golem server ...` workflows.
+- `actions` for action metadata and availability;
+- `context` for selected/launch context;
+- `jobs` for nested lifecycle state;
+- `context_executor` or similarly named module for scoped context/logging/background execution;
+- `help` for derived context help;
+- view modules after behavior is rule-driven enough to move safely.

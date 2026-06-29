@@ -1,126 +1,82 @@
 # UI System
 
-The TUI should feel like a modern terminal application: keyboard-first, searchable, responsive, and usable without memorizing commands.
+The TUI should feel consistent: command names, shortcut keys, palette rows, help, and footer hints should agree because they are derived from the same rules.
 
-## Core Layout
+## Layout
 
-The default screen should have:
+- Header: selected application/context/environment/server information.
+- Tabs: Dashboard, Agents, Output, Server, REPL, with running indicators where relevant.
+- Body: active workflow or resource view.
+- Footer: high-value global actions and state flags.
+- Modal overlays: command palette and help.
 
-- top context bar with selected profile, application, environment, and server kind
-- tab strip for major views
-- main content area
-- optional side panel for details or command results
-- bottom status bar with shortcuts and background activity
+## Action Rules
 
-## Views
+Every user command should have one long name and, where useful, one shortcut.
 
-Initial views:
+Action metadata should define:
 
-- Dashboard: selected context, health summary, recent tasks, quick actions.
-- Environments: manifest environments, visible remote environments, selected target.
-- Components: deployed components for the selected environment.
-- Agents: agent list, filters, selected agent details.
-- Commands: searchable command/action catalog.
-- REPL: embedded or nested `golem repl` session.
-- Output: logs and nested command output buffers.
+- stable ID;
+- long label;
+- shortcut;
+- category/workspace;
+- scope;
+- availability;
+- execution kind.
 
-Views should be cheap to add and should not own terminal lifecycle directly.
+Visible surfaces should use those definitions:
 
-## Navigation
+- palette shows searchable long names and shortcuts;
+- footer shows the most important global actions;
+- leader hint shows leader-scoped settings/actions;
+- help groups actions by scope and adds raw input controls where needed.
 
-Initial key model:
+## Context Help Rules
 
-- `q`: quit when no modal input is active
-- `Esc`: close modal, blur input, or cancel current transient action
-- `Tab` / `Shift-Tab`: cycle focus or tabs depending on context
-- `[` / `]`: previous or next tab
-- `Ctrl-P`: open command palette
-- `:`: open command palette in command mode
-- `/`: search or filter current view
-- `Enter`: activate selected item
-- `?`: show shortcuts/help
+Help is scoped by current mode, view, and focus:
 
-Exact shortcuts can change as the UI becomes concrete. Searchable commands are the stable discovery mechanism; shortcuts are accelerators.
+- global controls are always available;
+- leader controls appear under the leader section;
+- view-specific controls appear only for the relevant view or subview;
+- focused workflows, such as REPL and agent inspect, must have reachable help;
+- raw controls such as typing, scrolling, and selection can be explicit help controls until they become actions.
 
-## Command Palette
+## Dev And Ops Workspaces
 
-The palette should combine:
+Dev workflows:
 
-- built-in TUI actions
-- selected CLI commands from `CliCommandMetadata`
-- context-aware actions from the current view
-- recently used commands
+- build;
+- deploy;
+- clean;
+- server management;
+- REPL;
+- manifest exploration.
 
-Each command should include:
+Ops workflows:
 
-- display label
-- optional shortcut
-- category
-- description
-- availability state
-- execution mode: internal action, direct API, nested CLI PTY, nested CLI piped
+- agent list and inspect;
+- components and resources;
+- logs and streams;
+- future local observability and metrics.
 
-Unavailable commands should be visible when useful, with a short reason.
+The command palette can bridge both, but footer/context help should stay focused on the current workspace.
 
-## Multi-Environment Workflows
+Ops/resource views should eventually use direct typed calls through a context executor. The executor handles context/logging/background mechanics, while the view keeps control over modes, local filtering, selection, details, and event mapping.
 
-The UI should allow the user to keep multiple environment-bound workflows visible or resumable.
+## Context And Environment UX
 
-This favors nested CLI jobs because each job can carry explicit environment flags and its own output buffer.
+Future environment switching should distinguish:
 
-The selected environment in the context bar controls default actions, but a job should retain the environment it was started with.
+- manifest environment;
+- local explicit mode;
+- cloud explicit mode;
+- custom named environment;
+- non-manifest/config-only mode.
 
-## Themes
+The header should show the selected context clearly. Jobs must show the context they launched with.
 
-Themes should be centralized and semantic. Widgets should ask for semantic styles rather than hard-coded colors.
+## Accessibility
 
-Initial semantic roles:
-
-- background
-- foreground
-- muted
-- border
-- selected
-- focused
-- success
-- warning
-- error
-- info
-- accent
-- command
-
-Initial themes:
-
-- default dark
-- high contrast
-- monochrome fallback
-
-## Color Capability
-
-Detect terminal color capability and choose graceful defaults.
-
-Inputs to consider:
-
-- `NO_COLOR`
-- `TERM=dumb`
-- `COLORTERM=truecolor` or `COLORTERM=24bit`
-- `TERM` values containing `256color`
-- Windows terminal behavior through `crossterm`
-- explicit future theme/config override
-
-Capability levels:
-
-- no color
-- ANSI 16 color
-- ANSI 256 color
-- truecolor
-
-The TUI should remain readable at every level.
-
-## Accessibility And Usability
-
-- Do not rely on color alone for status.
-- Keep selected/focused states visually distinct in monochrome.
-- Avoid flicker during refreshes.
-- Preserve terminal state on exit.
-- Provide explicit confirmation for destructive actions.
+- Do not rely on color alone for running/selected/error state.
+- Keep labels stable and avoid layout reflow when toggles change.
+- Preserve nested CLI and REPL ANSI output; theme only the surrounding chrome.

@@ -186,3 +186,61 @@ Validation:
 - `cargo check -p golem-cli`
 - `cargo test -p golem-cli tui::app::tests`
 - RustRover build check for `cli/golem-cli/src/tui/app.rs`
+
+## 2026-06-29
+
+Planning reset and first foundation goal implemented.
+
+Decisions recorded:
+
+- Future TUI work is organized around six arcs: action/help rules, test driver/regression harness, scoped logging/context execution, context/environment model, dev/ops workspace structure, and local observability for issue #3456.
+- The immediate implementation goal is "Action Rules And TUI Test Driver Foundation".
+- The TUI should derive visible command names and shortcuts from action metadata where practical.
+- Raw input controls such as text entry and scrolling can remain explicit help controls until they become actions.
+
+Current status:
+
+- Reworked `.tui-plan` documents around the current implementation state and foundation-first arcs.
+- Extended `TuiAction` with stable IDs, categories, scopes, and palette visibility.
+- Made palette filtering respect palette visibility and include action category text in fuzzy matching.
+- Derived footer command labels/shortcuts and leader workflow shortcuts from the action registry.
+- Replaced the static help body with generated sections backed by registered actions plus explicit raw input controls.
+- Made Agent inspect help reachable with `?`.
+- Added a test-only `TuiTestDriver` with key input, frame capture, visible/absent text assertions, and failure dumps.
+- Added high-level driver scenarios for global action help, leader action help, palette/action-registry consistency, Agent inspect scoped help, and REPL leader help.
+- The new driver initially caught that full-help assertions were invalid at 24 rows because the help modal clipped lower sections; the driver now uses a taller frame for full-help scenarios while existing 100x24 tests remain unchanged.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli --lib -- tui::`
+
+Direct Agents Provider Foundation was explored, then reverted.
+
+Decisions recorded:
+
+- Ops/resource exploration should use direct typed calls by default.
+- Nested CLI remains appropriate for dev/interactive workflows where PTY behavior matters.
+- Remaining ops nested CLI uses, including Agent inspect oplog/stream, are transitional debt until direct streaming providers exist.
+- A central `TuiOpsProvider`/`TuiDataProvider` is the wrong shape if it absorbs every view's request and event mapping.
+- The next direct-call foundation should be a smaller context executor: context snapshot selection, target generation, background async execution, logging scope, and completion delivery.
+- Views should keep request-specific logic. For Agents, the view/app state should own mode selection, local mapping to rows, stale result handling, filtering, details, and events.
+- Command handlers should not grow TUI-specific methods such as `list_agents_for_tui`. Extract or expose neutral data-returning helpers and keep CLI rendering at the CLI edge.
+- Proper logging context is required before broad direct handler use. Thread-local logging alone is insufficient because existing `LogIndent` scopes commonly cross `.await` and TUI work may run concurrently.
+- Logging context should be explicit and async-aware: a scoped `LogContext` owns output mode, indentation, buffers, and captured lines; lookup can use tracing span extensions and Tokio task-local scope before falling back to global CLI logging.
+- Future environment switching should replace context snapshots instead of mutating a live `Context`.
+
+Current status:
+
+- Reverted the premature provider implementation, including the central provider module, `WorkerCommandHandler::list_agents_for_tui`, and typed Agents refresh event wiring.
+- Updated `.tui-plan` to make scoped logging and a context executor the next foundation before moving Agents list to direct typed calls.
+- Kept the hard architecture rule: dev/interactive workflows may continue using nested CLI/PTTY, while ops/resource refresh-heavy views should move away from parsing nested CLI output.
+
+Research notes:
+
+- `Context` contains lazy clients, app context state, and caches; it should be treated as a context snapshot rather than a mutable global target.
+- `Context::new` and environment/app resolution can have side effects such as manifest upgrades, app context initialization, component selection mutation, and server-side environment/app creation.
+- Global or static state that matters for TUI concurrency includes CLI logging state, buffered logging, terminal width caching, program lookup caching, cargo target-dir caching, SDK override caching, and per-application agent type caches.
+- Existing CLI logging uses global `LOG_STATE` and `LOG_STATE_BUFFER`; `LogIndent` and `LogOutput` mutate global state on construction/drop.
+- Many command handlers hold logging scopes across `.await`, so a correct logging design must bind scopes to a context and preserve them across async execution.
