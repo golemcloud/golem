@@ -2206,77 +2206,38 @@ impl WorkerCommandHandler {
         let mut workers = Vec::<AgentMetadata>::new();
         let mut final_result_cursor = Option::<ScanCursor>::None;
 
-        // When a structured mode overlay is provided (--mode all), the string
-        // filter GET endpoint cannot express the required `Or` composition, so
-        // the structured `find_workers_metadata` POST endpoint is used instead.
-        if let Some(mode_overlay) = mode_overlay {
-            let string_filter = match filters {
-                Some(filters) if !filters.is_empty() => Some(
-                    AgentFilter::from(filters.to_vec())
-                        .map_err(|e| anyhow::anyhow!("Invalid agent filter: {e}"))?,
-                ),
-                _ => None,
-            };
-            let combined = match string_filter {
-                Some(f) => f.and(mode_overlay.clone()),
-                None => mode_overlay.clone(),
-            };
+        // The structured `find_workers_metadata` POST endpoint is used for all
+        // listing: string filters are converted to a structured `AgentFilter`
+        // and combined with the optional mode overlay (`--mode all`), which the
+        // string-filter GET endpoint cannot express as it only supports `And`
+        // composition.
+        let string_filter = match filters {
+            Some(filters) if !filters.is_empty() => Some(
+                AgentFilter::from(filters.to_vec())
+                    .map_err(|e| anyhow::anyhow!("Invalid agent filter: {e}"))?,
+            ),
+            _ => None,
+        };
+        let filter = match (string_filter, mode_overlay) {
+            (Some(f), Some(mode_overlay)) => Some(f.and(mode_overlay.clone())),
+            (Some(f), None) => Some(f),
+            (None, Some(mode_overlay)) => Some(mode_overlay.clone()),
+            (None, None) => None,
+        };
 
-            let mut current_scan_cursor = start_scan_cursor.cloned();
-            loop {
-                let result_cursor = {
-                    let results = clients
-                        .worker
-                        .find_workers_metadata(
-                            &component_id.0,
-                            &WorkersMetadataRequest {
-                                filter: Some(combined.clone()),
-                                cursor: current_scan_cursor.clone(),
-                                count: max_count.or(Some(self.ctx.http_batch_size())),
-                                precise: Some(precise),
-                            },
-                        )
-                        .await
-                        .map_service_error()?;
-
-                    workers.extend(
-                        results
-                            .workers
-                            .into_iter()
-                            .map(|meta| AgentMetadata::from(component_name.clone(), meta)),
-                    );
-
-                    results.cursor
-                };
-
-                match result_cursor {
-                    Some(next_cursor) => {
-                        if max_count.is_none() {
-                            current_scan_cursor = Some(next_cursor);
-                        } else {
-                            final_result_cursor = Some(next_cursor);
-                            break;
-                        }
-                    }
-                    None => break,
-                }
-            }
-
-            return Ok((workers, final_result_cursor));
-        }
-
-        let start_scan_cursor = start_scan_cursor.map(scan_cursor_to_string);
-        let mut current_scan_cursor = start_scan_cursor.clone();
+        let mut current_scan_cursor = start_scan_cursor.cloned();
         loop {
             let result_cursor = {
                 let results = clients
                     .worker
-                    .get_workers_metadata(
+                    .find_workers_metadata(
                         &component_id.0,
-                        filters,
-                        current_scan_cursor.as_deref(),
-                        max_count.or(Some(self.ctx.http_batch_size())),
-                        Some(precise),
+                        &WorkersMetadataRequest {
+                            filter: filter.clone(),
+                            cursor: current_scan_cursor.clone(),
+                            count: max_count.or(Some(self.ctx.http_batch_size())),
+                            precise: Some(precise),
+                        },
                     )
                     .await
                     .map_service_error()?;
@@ -2294,15 +2255,13 @@ impl WorkerCommandHandler {
             match result_cursor {
                 Some(next_cursor) => {
                     if max_count.is_none() {
-                        current_scan_cursor = Some(scan_cursor_to_string(&next_cursor));
+                        current_scan_cursor = Some(next_cursor);
                     } else {
                         final_result_cursor = Some(next_cursor);
                         break;
                     }
                 }
-                None => {
-                    break;
-                }
+                None => break,
             }
         }
 
