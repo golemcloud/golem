@@ -36,6 +36,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_blob_archive;
 pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
@@ -109,6 +110,7 @@ tag_suite!(storage_quota, group1);
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
+sequential_suite!(oplog_blob_archive);
 
 timeout_suite!(in_function_retry, "2 minutes");
 

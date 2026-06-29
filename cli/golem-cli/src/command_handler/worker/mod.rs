@@ -61,7 +61,7 @@ use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
-    UpdateWorkerRequest,
+    UpdateWorkerRequest, WorkersMetadataRequest,
 };
 use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
@@ -860,6 +860,11 @@ impl WorkerCommandHandler {
             bail!("Refresh mode is only supported with --format text");
         }
 
+        let mode_overlay = if mode == AgentListMode::All && !user_set_mode_filter(&filters) {
+            Some(all_modes_filter())
+        } else {
+            None
+        };
         let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
             .resolve_list_components(agent_type_name, component_name, filters)
@@ -869,6 +874,7 @@ impl WorkerCommandHandler {
             self.list_with_refresh(
                 &components,
                 &filters,
+                mode_overlay.as_ref(),
                 scan_cursor.as_ref(),
                 max_count,
                 precise,
@@ -880,6 +886,7 @@ impl WorkerCommandHandler {
                 .list_agents(
                     &components,
                     &filters,
+                    mode_overlay.as_ref(),
                     scan_cursor.as_ref(),
                     max_count,
                     precise,
@@ -895,6 +902,7 @@ impl WorkerCommandHandler {
         &self,
         components: &[ComponentDto],
         filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
         scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
@@ -910,7 +918,15 @@ impl WorkerCommandHandler {
 
                 // Fetch first — while the previous frame is still visible
                 let output = self
-                    .list_agents(components, filters, scan_cursor, max_count, precise, true)
+                    .list_agents(
+                        components,
+                        filters,
+                        mode_overlay,
+                        scan_cursor,
+                        max_count,
+                        precise,
+                        true,
+                    )
                     .await
                     .and_then(|view| {
                         self.ctx
@@ -1036,6 +1052,7 @@ impl WorkerCommandHandler {
         &self,
         components: &[ComponentDto],
         filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
         scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
@@ -1066,6 +1083,7 @@ impl WorkerCommandHandler {
                     &component.component_name,
                     &component.id,
                     Some(filters),
+                    mode_overlay,
                     scan_cursor,
                     max_count,
                     precise,
@@ -1807,6 +1825,7 @@ impl WorkerCommandHandler {
                 Some(&agent_filters),
                 None,
                 None,
+                None,
                 false,
             )
             .await?;
@@ -2033,7 +2052,7 @@ impl WorkerCommandHandler {
         component_id: &ComponentId,
     ) -> anyhow::Result<()> {
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, false)
+            .list_component_workers(component_name, component_id, None, None, None, None, false)
             .await?;
 
         if workers.is_empty() {
@@ -2076,7 +2095,7 @@ impl WorkerCommandHandler {
         show_skip: bool,
     ) -> anyhow::Result<usize> {
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, false)
+            .list_component_workers(component_name, component_id, None, None, None, None, false)
             .await?;
 
         if workers.is_empty() {
@@ -2178,6 +2197,7 @@ impl WorkerCommandHandler {
         component_name: &ComponentName,
         component_id: &ComponentId,
         filters: Option<&[String]>,
+        mode_overlay: Option<&AgentFilter>,
         start_scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
@@ -2186,18 +2206,38 @@ impl WorkerCommandHandler {
         let mut workers = Vec::<AgentMetadata>::new();
         let mut final_result_cursor = Option::<ScanCursor>::None;
 
-        let start_scan_cursor = start_scan_cursor.map(scan_cursor_to_string);
-        let mut current_scan_cursor = start_scan_cursor.clone();
+        // The structured `find_workers_metadata` POST endpoint is used for all
+        // listing: string filters are converted to a structured `AgentFilter`
+        // and combined with the optional mode overlay (`--mode all`), which the
+        // string-filter GET endpoint cannot express as it only supports `And`
+        // composition.
+        let string_filter = match filters {
+            Some(filters) if !filters.is_empty() => Some(
+                AgentFilter::from(filters.to_vec())
+                    .map_err(|e| anyhow::anyhow!("Invalid agent filter: {e}"))?,
+            ),
+            _ => None,
+        };
+        let filter = match (string_filter, mode_overlay) {
+            (Some(f), Some(mode_overlay)) => Some(f.and(mode_overlay.clone())),
+            (Some(f), None) => Some(f),
+            (None, Some(mode_overlay)) => Some(mode_overlay.clone()),
+            (None, None) => None,
+        };
+
+        let mut current_scan_cursor = start_scan_cursor.cloned();
         loop {
             let result_cursor = {
                 let results = clients
                     .worker
-                    .get_workers_metadata(
+                    .find_workers_metadata(
                         &component_id.0,
-                        filters,
-                        current_scan_cursor.as_deref(),
-                        max_count.or(Some(self.ctx.http_batch_size())),
-                        Some(precise),
+                        &WorkersMetadataRequest {
+                            filter: filter.clone(),
+                            cursor: current_scan_cursor.clone(),
+                            count: max_count.or(Some(self.ctx.http_batch_size())),
+                            precise: Some(precise),
+                        },
                     )
                     .await
                     .map_service_error()?;
@@ -2215,15 +2255,13 @@ impl WorkerCommandHandler {
             match result_cursor {
                 Some(next_cursor) => {
                     if max_count.is_none() {
-                        current_scan_cursor = Some(scan_cursor_to_string(&next_cursor));
+                        current_scan_cursor = Some(next_cursor);
                     } else {
                         final_result_cursor = Some(next_cursor);
                         break;
                     }
                 }
-                None => {
-                    break;
-                }
+                None => break,
             }
         }
 
@@ -2931,9 +2969,12 @@ fn secret_config_paths_for_agent_type(
 /// the user-supplied `--mode` flag, unless the user already provided their own
 /// `mode ...` filter via `--filter`.
 ///
-/// `AgentListMode::All` never injects a filter (the listing then includes both
-/// modes). For `Durable` / `Ephemeral`, the corresponding equality filter is
-/// prepended so the executor can use it to scan only the matching mode.
+/// `AgentListMode::All` never injects a string filter here; instead
+/// [`all_modes_filter`] returns a structured `Or` overlay that the listing
+/// path sends via the structured `find_workers_metadata` endpoint so the
+/// executor scans both durable and ephemeral oplogs. For `Durable` /
+/// `Ephemeral`, the corresponding equality filter is prepended so the
+/// executor narrows the oplog scan to only the matching mode.
 fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
     let user_set_mode = filters
         .iter()
@@ -2950,6 +2991,27 @@ fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<Stri
     out.push(mode_filter.to_string());
     out.extend(filters);
     out
+}
+
+/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint,
+/// meaning the caller should not add its own mode overlay.
+fn user_set_mode_filter(filters: &[String]) -> bool {
+    filters
+        .iter()
+        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()))
+}
+
+/// Structured filter matching agents in either durability mode, used for
+/// `--mode all` so the executor scans both durable and ephemeral oplogs
+/// (its `modes_from_filter` returns `None` for an `Or` containing `Mode`),
+/// while the post-scan matcher accepts both modes. Sent via the structured
+/// `find_workers_metadata` endpoint because the string-filter GET endpoint
+/// only supports `And` composition.
+fn all_modes_filter() -> AgentFilter {
+    AgentFilter::new_or(vec![
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+    ])
 }
 
 fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
