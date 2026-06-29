@@ -35,6 +35,7 @@ pub mod durability_overhead;
 pub mod latency;
 pub mod sleep;
 pub mod throughput;
+pub mod throughput_saturation;
 
 // Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
 pub use cleanup::{cleanup_account, cleanup_env_and_app, cleanup_user_state};

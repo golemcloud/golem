@@ -3,6 +3,12 @@ name = "it_agent_counters"
 version = "0.0.1"
  edition = "2024"
 
+# Standalone workspace root: this component is excluded from the golem-oss
+# workspace, and when built nested inside another repo's workspace (e.g. the
+# cloud-perf CI checkout under golem-cloud) cargo would otherwise walk up and
+# attach it to that unrelated workspace. An empty table stops that search.
+[workspace]
+
 [profile.release]
 opt-level = "s"
 lto = true

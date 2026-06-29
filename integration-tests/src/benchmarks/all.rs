@@ -21,7 +21,7 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult,
+    BenchmarkSuiteResult, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -133,6 +133,30 @@ async fn main() {
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
+    benchmarks_by_name.insert(
+        "throughput-saturation-counters",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationCounters,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-saturation-echo-rust",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoRust,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-saturation-echo-ts",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoTs,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
 
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
@@ -233,9 +257,16 @@ async fn main() {
                 // no else: we already validated all names above
             }
 
-            // Attach the run_id to result metadata (cloud mode only).
+            // Attach the run_id and run_metadata to result metadata (cloud mode only).
             if let Some(run_id) = cloud_bench_run_id() {
                 suite_result.run_id = Some(format!("bench-{run_id}"));
+
+                // Read GOLEM_BENCH_* env vars set by the buildspec before invoking
+                // the binary. Missing vars produce None rather than failing the run.
+                let metadata = RunMetadata::from_env();
+                if !metadata.is_empty() {
+                    suite_result.run_metadata = Some(metadata);
+                }
             }
 
             if let Some(path) = save_to_json {
