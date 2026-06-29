@@ -106,6 +106,13 @@ pub fn validate_config_types(
       None => ()
     }
   }
+  // Cross-package nested config references are not supported: override types,
+  // walkers, and `ConfigField` impls are all generated with bare type names into
+  // each package, so a nested config field must live in the same package as its
+  // owner. Reject qualified references to config types in other packages early
+  // (rather than silently treating them as opaque leaves, which would mis-encode
+  // the override paths).
+  reject_cross_package_config_refs(config_types)
   let config_type_names : Map[String, ConfigTypeInfo] = {}
   for ct in config_types {
     config_type_names[ct.name] = ct
@@ -113,6 +120,103 @@ pub fn validate_config_types(
   for ct in config_types {
     validate_no_config_cycles(ct.name, ct, config_type_names, [])
   }
+}
+
+///|
+/// Rejects fields that reference a `#derive.config` type defined in another
+/// package via a qualified name (e.g. `@models.DbConfig`). Cross-package config
+/// nesting is unsupported (see `validate_config_types`).
+fn reject_cross_package_config_refs(
+  config_types : Array[ConfigTypeInfo],
+) -> Unit raise AgentParseError {
+  let by_qualified : Map[String, ConfigTypeInfo] = {}
+  for ct in config_types {
+    if ct.package.length() > 0 {
+      let alias = last_path_segment(ct.package)
+      by_qualified["@\{alias}.\{ct.name}"] = ct
+    }
+  }
+  if by_qualified.is_empty() {
+    return
+  }
+  for ct in config_types {
+    for field in ct.fields {
+      let (field_name, pt) = field
+      check_no_cross_package_config_ref(ct, field_name, pt, by_qualified)
+    }
+  }
+}
+
+///|
+fn check_no_cross_package_config_ref(
+  owner : ConfigTypeInfo,
+  field_name : String,
+  pt : ParamType,
+  by_qualified : Map[String, ConfigTypeInfo],
+) -> Unit raise AgentParseError {
+  match pt {
+    Simple(name) =>
+      match by_qualified.get(name) {
+        Some(resolved) =>
+          if resolved.package != owner.package {
+            raise AgentParseError(
+              "Config type '\{owner.name}' field '\{field_name}' references #derive.config type '\{name}' in another package; cross-package nested config is not supported — move the nested config into the same package as '\{owner.name}'",
+            )
+          }
+        None => ()
+      }
+    Optional(inner) =>
+      check_no_cross_package_config_ref(owner, field_name, inner, by_qualified)
+    List(inner) =>
+      check_no_cross_package_config_ref(owner, field_name, inner, by_qualified)
+    ResultType(ok, err) => {
+      check_no_cross_package_config_ref(owner, field_name, ok, by_qualified)
+      check_no_cross_package_config_ref(owner, field_name, err, by_qualified)
+    }
+    Tuple(elems) =>
+      for e in elems {
+        check_no_cross_package_config_ref(owner, field_name, e, by_qualified)
+      }
+    Parameterized(_, params) =>
+      for p in params {
+        check_no_cross_package_config_ref(owner, field_name, p, by_qualified)
+      }
+    _ => ()
+  }
+}
+
+///|
+/// Returns true if `ct` contributes at least one **overridable** leaf — i.e. a
+/// non-`Secret` field, recursing through nested `#derive.config` fields. A
+/// struct whose only fields are secrets (directly or through nested all-secret
+/// config structs) has no overridable leaves, so it must NOT get an `*Override`
+/// type / walker / client `_with_config` variant (otherwise the generated code
+/// would reference an override type that is never emitted).
+pub fn config_has_overridable_fields(
+  ct : ConfigTypeInfo,
+  by_name : Map[String, ConfigTypeInfo],
+) -> Bool {
+  for field in ct.fields {
+    let (_, pt) = field
+    if is_secret_type(pt) {
+      continue
+    }
+    match pt {
+      Simple(name) =>
+        match by_name.get(name) {
+          // Nested config: overridable only if the nested struct is.
+          Some(nested) =>
+            if config_has_overridable_fields(nested, by_name) {
+              return true
+            }
+          // Plain leaf type.
+          None => return true
+        }
+      // Any container / compound leaf is overridable.
+      _ => return true
+    }
+  }
+  false
 }
 
 ///|
@@ -210,6 +314,14 @@ fn reject_nested_config(
   inner : ParamType,
   all_types : Map[String, ConfigTypeInfo],
 ) -> Unit raise AgentParseError {
+  // `Secret[T]` is only meaningful as a *direct* field of a `#derive.config`
+  // struct (the SDK provides `ConfigField for Secret[T]`, not `IntoSchema`).
+  // Reject it inside any container to avoid confusing downstream trait errors.
+  if is_secret_type(inner) {
+    raise AgentParseError(
+      "Secret in field '\{field_name}' — Secret[T] cannot be nested inside \{container}; use it only as a direct #derive.config field",
+    )
+  }
   match inner {
     Simple(name) =>
       if all_types.get(name) is Some(_) {

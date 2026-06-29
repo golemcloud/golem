@@ -13,11 +13,30 @@
 // limitations under the License.
 
 import util from 'node:util';
+import { GolemServiceError, type GolemAgentErrorDetails } from '@golemcloud/golem-ts-bridge';
 import pc from 'picocolors';
 import { getTerminalWidth, writeln } from './process';
 
+const nodeInspectCustom = Symbol.for('nodejs.util.inspect.custom');
 export const INFO_PREFIX = pc.bold(pc.red('>'));
 export const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
+
+export function installGolemServiceErrorInspect() {
+  Object.defineProperty(GolemServiceError.prototype, nodeInspectCustom, {
+    value(this: GolemServiceError) {
+      return formatGolemServiceError({
+        message: this.message,
+        stack: this.stack,
+        status: this.status,
+        statusText: this.statusText,
+        ...getServiceResponseFields(this),
+        agentError: getAgentError(this),
+      });
+    },
+    enumerable: false,
+    configurable: true,
+  });
+}
 
 export function logSnippetInfo(message: string | string[]) {
   const availableLineLength = getTerminalWidth() - INFO_PREFIX_LENGTH;
@@ -317,10 +336,210 @@ export function formatAsTable(items: string[]): string {
 }
 
 export function formatEvalError(error: unknown) {
+  const golemError = asGolemServiceError(error);
+  if (golemError) {
+    return formatGolemServiceError(golemError);
+  }
+
   if (error instanceof Error) {
     return error.stack ?? error.message;
   }
   return String(error);
+}
+
+type GolemServiceErrorLike = {
+  message: string;
+  stack?: string;
+  status?: number;
+  statusText?: string;
+  code?: string;
+  messages?: string[];
+  responseFallback?: string[];
+  agentError?: GolemAgentErrorDetails;
+};
+
+function asGolemServiceError(error: unknown): GolemServiceErrorLike | undefined {
+  if (error instanceof GolemServiceError) {
+    return {
+      message: error.message,
+      stack: error.stack,
+      status: error.status,
+      statusText: error.statusText,
+      ...getServiceResponseFields(error),
+      agentError: getAgentError(error),
+    };
+  }
+  if (!isRecord(error)) return undefined;
+  if (error.name !== 'GolemServiceError') return undefined;
+  if (typeof error.message !== 'string') return undefined;
+
+  return {
+    message: error.message,
+    stack: typeof error.stack === 'string' ? error.stack : undefined,
+    agentError: error instanceof GolemServiceError ? getAgentError(error) : undefined,
+  };
+}
+
+function formatGolemServiceError(error: GolemServiceErrorLike): string {
+  const lines = formatServiceResponse(error);
+
+  if (error.agentError?.cause.trim()) {
+    const stderr = trimEmptyLines(error.agentError.stderr.split('\n'));
+    if (stderr.length > 0) {
+      lines.push('');
+      lines.push(pc.dim('Stderr:'));
+      lines.push(...stderr.map(formatStderrLine));
+    }
+
+    lines.push('');
+    lines.push(pc.dim('Cause:'));
+    lines.push(...formatCauseLines(error.agentError.cause));
+  }
+
+  const bridgeStack = formatBridgeStack(error.stack, error.message);
+  if (bridgeStack.length > 0) {
+    lines.push('');
+    lines.push(pc.dim('Bridge stack:'));
+    lines.push(...bridgeStack);
+  }
+
+  return lines.join('\n');
+}
+
+function formatServiceResponse(error: GolemServiceErrorLike): string[] {
+  if (error.status !== undefined) {
+    const lines = [pc.dim('Service response:')];
+    lines.push(
+      `  ${pc.dim('Status:')} ${pc.red(`${error.status} ${error.statusText ?? ''}`.trim())}`,
+    );
+    if (error.code) {
+      lines.push(`  ${pc.dim('Code:')} ${pc.yellow(error.code)}`);
+    }
+    if (error.messages && error.messages.length === 1) {
+      lines.push(`  ${pc.dim('Message:')} ${pc.yellow(error.messages[0])}`);
+    } else if (error.messages && error.messages.length > 1) {
+      lines.push(`  ${pc.dim('Messages:')}`);
+      lines.push(...error.messages.map((message) => `    ${pc.yellow(`- ${message}`)}`));
+    }
+    if (error.responseFallback) {
+      lines.push(...error.responseFallback.map(colorizeGolemServiceErrorLine));
+    }
+    return lines;
+  }
+
+  return error.message.split('\n').map((line) => colorizeGolemServiceErrorLine(line));
+}
+
+function getAgentError(error: GolemServiceError): GolemAgentErrorDetails | undefined {
+  if (!error.body || !('agentError' in error.body)) return undefined;
+  return error.body.agentError;
+}
+
+function getServiceResponseFields(error: GolemServiceError): {
+  code?: string;
+  messages?: string[];
+  responseFallback?: string[];
+} {
+  if (error.body) {
+    return 'errors' in error.body
+      ? { code: error.body.code, messages: error.body.errors }
+      : { code: error.body.code, messages: [error.body.error] };
+  }
+
+  return { responseFallback: error.message.split('\n').slice(1) };
+}
+
+function formatCauseLines(cause: string): string[] {
+  return trimEmptyLines(cause.split('\n')).map(formatCauseLine);
+}
+
+function formatStderrLine(line: string): string {
+  if (
+    line.startsWith('JavaScript exception:') ||
+    line.startsWith('JavaScript error:') ||
+    line.startsWith('Error:')
+  ) {
+    return pc.red(pc.bold(line));
+  }
+  if (isWasmFrame(line) || line.includes('RUST_BACKTRACE=1')) {
+    return pc.dim(line);
+  }
+  return pc.yellow(line);
+}
+
+function formatCauseLine(line: string): string {
+  if (line.includes('called without being linked with an implementation')) {
+    return pc.red(pc.bold(line));
+  }
+  if (isWasmFrame(line)) {
+    return pc.dim(line);
+  }
+  return pc.yellow(line);
+}
+
+function isWasmFrame(line: string): boolean {
+  return line.includes('<unknown>!<wasm function') || line.includes('agent_guest.wasm!');
+}
+
+function colorizeGolemServiceErrorLine(line: string): string {
+  const trimmed = line.trimStart();
+  if (line.startsWith('Agent creation failed:') || line.startsWith('Agent invocation failed:')) {
+    return pc.red(pc.bold(line));
+  }
+  if (trimmed.startsWith('JavaScript exception:') || trimmed.startsWith('JavaScript error:')) {
+    return pc.red(pc.bold(line));
+  }
+  if (
+    line.startsWith('Code:') ||
+    line.startsWith('Messages:') ||
+    line.startsWith('Message:') ||
+    line.startsWith('Stderr:') ||
+    line.startsWith('Wasm trap:') ||
+    line.startsWith('Response body:') ||
+    line.startsWith('Response message:') ||
+    line.startsWith('Response messages:')
+  ) {
+    return pc.dim(line);
+  }
+  if (trimmed.startsWith('at ') && !line.includes('(user:')) {
+    return pc.dim(line);
+  }
+  if (
+    trimmed.startsWith("thread '") ||
+    trimmed.startsWith('note:') ||
+    trimmed.startsWith('Exception during awaiting call result')
+  ) {
+    return pc.dim(line);
+  }
+  return line;
+}
+
+function formatBridgeStack(stack: string | undefined, message: string): string[] {
+  if (!stack) return [];
+
+  const lines = stack.split('\n');
+  const firstFrameIndex = lines
+    .slice(message.split('\n').length)
+    .findIndex((line) => line.trimStart().startsWith('at '));
+  if (firstFrameIndex < 0) return [];
+
+  const actualFirstFrameIndex = firstFrameIndex + message.split('\n').length;
+  return lines
+    .slice(actualFirstFrameIndex)
+    .filter((line) => line.trim().length > 0 && line !== message)
+    .map((line) => pc.dim(line));
+}
+
+function trimEmptyLines(lines: string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start].trim() === '') start += 1;
+  while (end > start && lines[end - 1].trim() === '') end -= 1;
+  return lines.slice(start, end);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 export function writeFullLineSeparator() {

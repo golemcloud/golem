@@ -18,24 +18,24 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
+use crate::model::plan::PlanId;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PlanResourcePattern {
     Any,
     Plan(PlanIdPattern),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PlanIdPattern {
     Identifier(PlanIdentifier),
-    Uuid(Uuid),
+    PlanId(PlanId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct PlanIdentifier(pub String);
@@ -83,7 +83,7 @@ impl ResourcePattern for PlanResourcePattern {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PlanVerb {
     View,
@@ -101,7 +101,7 @@ impl VerbPattern for PlanVerb {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PlanClass;
 
@@ -123,8 +123,8 @@ impl PermissionClass for PlanClass {
 }
 
 fn parse_plan_id(value: &str) -> Result<PlanIdPattern, String> {
-    if let Ok(uuid) = Uuid::parse_str(value) {
-        Ok(PlanIdPattern::Uuid(uuid))
+    if let Ok(plan_id) = PlanId::try_from(value) {
+        Ok(PlanIdPattern::PlanId(plan_id))
     } else {
         PlanIdentifier::parse(value).map(PlanIdPattern::Identifier)
     }

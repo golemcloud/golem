@@ -90,7 +90,7 @@ impl ToJSON for TokenSecret {
 }
 
 mod protobuf {
-    use super::{AccountRole, EnvironmentRole};
+    use super::AccountRole;
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::AccountRole> for AccountRole {
         type Error = String;
@@ -113,32 +113,6 @@ mod protobuf {
                 AccountRole::Admin => Self::Admin,
                 AccountRole::MarketingAdmin => Self::MarketingAdmin,
                 AccountRole::BuiltinPluginOwner => Self::BuiltinPluginOwner,
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::auth::EnvironmentRole> for EnvironmentRole {
-        type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::auth::EnvironmentRole,
-        ) -> Result<Self, Self::Error> {
-            use golem_api_grpc::proto::golem::auth::EnvironmentRole as GrpcEnvironmentRole;
-
-            match value {
-                GrpcEnvironmentRole::Admin => Ok(Self::Admin),
-                GrpcEnvironmentRole::Viewer => Ok(Self::Viewer),
-                GrpcEnvironmentRole::Deployer => Ok(Self::Deployer),
-                GrpcEnvironmentRole::Unspecified => Err("unknown environment role".to_string()),
-            }
-        }
-    }
-
-    impl From<EnvironmentRole> for golem_api_grpc::proto::golem::auth::EnvironmentRole {
-        fn from(value: EnvironmentRole) -> Self {
-            match value {
-                EnvironmentRole::Admin => Self::Admin,
-                EnvironmentRole::Viewer => Self::Viewer,
-                EnvironmentRole::Deployer => Self::Deployer,
             }
         }
     }

@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::agent::common::ValueAndType;
 use crate::golem_agentic::golem::agent::common::AgentError;
-use crate::value_and_type::IntoValue;
+use crate::schema::IntoTypedSchemaValue;
 
 pub fn custom_error(msg: impl ToString) -> AgentError {
-    AgentError::CustomError(ValueAndType {
-        value: msg.to_string().into_value(),
-        typ: String::get_type(),
-    })
+    let typed = msg
+        .to_string()
+        .into_typed_schema_value()
+        .expect("failed to encode custom agent error");
+    let value =
+        crate::encode_typed_schema_value(&typed).expect("failed to encode custom agent error");
+    AgentError::CustomError(value)
 }
 
 pub fn internal_error(msg: impl ToString) -> AgentError {

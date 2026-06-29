@@ -26,6 +26,7 @@ fn my_test() {
 | Worker executor functionality | `cargo make worker-executor-tests` |
 | Service integration | `cargo make integration-tests` |
 | CLI changes | `cargo make cli-integration-tests` |
+| CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 
@@ -33,6 +34,17 @@ For running specific tests during development:
 ```shell
 cargo test -p <crate> -- <test_name> --report-time
 ```
+
+For `golem-cli` structured output schema or generator changes, load the
+`modifying-cli-output-schema` skill. If arbitrary output generators changed,
+rerun this prop test a few times to catch generator/schema drift:
+
+```shell
+cargo test -p golem-cli cli_output_schema_accepts_registered_generated_examples --lib
+```
+
+If CLI JSON output field names, `$type` names, or invoke JSON unwrapping changed,
+also keep `golem-skills/skills` and tests under `golem-skills/tests` up to date.
 
 ## Test Filtering Rules (test-r)
 

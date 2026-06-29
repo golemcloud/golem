@@ -17,7 +17,7 @@ use crate::rust::lib_gen::{Module, ModuleDef, ModuleName};
 use crate::rust::model_gen::RefCache;
 use crate::rust::printer::*;
 use crate::rust::types::{
-    DataType, RustPrinter, RustResult, ref_or_box_schema_type, ref_or_schema_type,
+    DataType, RustPrinter, RustResult, escape_keywords, ref_or_box_schema_type, ref_or_schema_type,
 };
 use crate::{Error, Result};
 use convert_case::{Case, Casing};
@@ -676,10 +676,24 @@ struct UnionVariant {
 }
 
 #[derive(Debug, Clone)]
+struct AdditionalField {
+    wire_name: String,
+    rust_name: String,
+}
+
+#[derive(Debug, Clone)]
 enum ErrorConvention {
-    Single { code: CodeConvention },
-    Multiple { code: CodeConvention },
-    Union { variants: Vec<UnionVariant> },
+    Single {
+        code: CodeConvention,
+        additional_fields: Vec<AdditionalField>,
+    },
+    Multiple {
+        code: CodeConvention,
+        additional_fields: Vec<AdditionalField>,
+    },
+    Union {
+        variants: Vec<UnionVariant>,
+    },
     Unknown,
 }
 
@@ -717,9 +731,15 @@ fn infer_error_convention_for_schema(open_api: &OpenAPI, schema: &Schema) -> Err
             let code = infer_code_convention(open_api, obj);
 
             if has_error {
-                ErrorConvention::Single { code }
+                ErrorConvention::Single {
+                    code,
+                    additional_fields: infer_additional_fields(obj, &["code", "error"]),
+                }
             } else if has_errors {
-                ErrorConvention::Multiple { code }
+                ErrorConvention::Multiple {
+                    code,
+                    additional_fields: infer_additional_fields(obj, &["code", "errors"]),
+                }
             } else {
                 ErrorConvention::Unknown
             }
@@ -750,6 +770,21 @@ fn infer_error_convention_for_schema(open_api: &OpenAPI, schema: &Schema) -> Err
         }
         _ => ErrorConvention::Unknown,
     }
+}
+
+fn infer_additional_fields(
+    object_type: &openapiv3::ObjectType,
+    normalized_fields: &[&str],
+) -> Vec<AdditionalField> {
+    object_type
+        .properties
+        .keys()
+        .filter(|name| !normalized_fields.contains(&name.as_str()))
+        .map(|name| AdditionalField {
+            wire_name: name.clone(),
+            rust_name: escape_keywords(&name.to_case(Case::Snake)),
+        })
+        .collect()
 }
 
 fn resolve_union_payload_model_name(open_api: &OpenAPI, case_reference: &str) -> Option<String> {
@@ -889,7 +924,8 @@ fn render_code_expr_for_model(
         .get(model_name)
         .unwrap_or(&ErrorConvention::Unknown)
     {
-        ErrorConvention::Single { code } | ErrorConvention::Multiple { code } => match code {
+        ErrorConvention::Single { code, .. } | ErrorConvention::Multiple { code, .. } => match code
+        {
             CodeConvention::Absent => unit() + "None",
             CodeConvention::Required => unit() + "Some(" + body_var + ".code.as_str())",
         },
@@ -1029,6 +1065,33 @@ fn render_errors(
         line(unit() + "match self {") + indented(code_cases) + line("}")
     };
 
+    let additional_fields_cases = errors
+        .codes
+        .iter()
+        .map(|(code, model)| {
+            let body_binding = render_additional_fields_case_binding(model, conventions);
+
+            line(
+                unit()
+                    + name.clone()
+                    + "::Error"
+                    + code.to_string()
+                    + "("
+                    + body_binding
+                    + ") => "
+                    + render_error_body_to_additional_fields(model, conventions)
+                    + ",",
+            )
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    let additional_fields_impl = if errors.codes.is_empty() {
+        line(unit() + "match *self {}")
+    } else {
+        line(unit() + "match self {") + indented(additional_fields_cases) + line("}")
+    };
+
     #[rustfmt::skip]
     let res = unit() +
         line(unit() + "#[derive(Debug)]") +
@@ -1071,12 +1134,32 @@ fn render_errors(
                 indented(
                     code_impl
                 ) +
+            line("}") +
+            line(unit() + "fn additional_fields(&self) -> Option<" + rust_name("serde_json", "Map") + "<String, " + rust_name("serde_json", "Value") + ">> {") +
+                indented(
+                    additional_fields_impl
+                ) +
             line("}")
         ) +
         line("}") +
         unit();
 
     Ok(res)
+}
+
+fn render_error_body_to_additional_fields(
+    typ: &DataType,
+    conventions: &HashMap<String, ErrorConvention>,
+) -> RustPrinter {
+    match typ {
+        DataType::Model(model) => render_additional_fields_expr_for_model(
+            &model.name,
+            "body",
+            conventions,
+            &mut HashSet::new(),
+        ),
+        _ => unit() + "None",
+    }
 }
 
 fn render_error_body_to_errors(
@@ -1110,6 +1193,24 @@ fn render_code_case_binding(
     match typ {
         DataType::Model(model)
             if code_needs_body_for_model(&model.name, conventions, &mut HashSet::new()) =>
+        {
+            "body"
+        }
+        _ => "_",
+    }
+}
+
+fn render_additional_fields_case_binding(
+    typ: &DataType,
+    conventions: &HashMap<String, ErrorConvention>,
+) -> &'static str {
+    match typ {
+        DataType::Model(model)
+            if additional_fields_needs_body_for_model(
+                &model.name,
+                conventions,
+                &mut HashSet::new(),
+            ) =>
         {
             "body"
         }
@@ -1170,19 +1271,147 @@ fn code_needs_body_for_model(
     {
         ErrorConvention::Single {
             code: CodeConvention::Required,
+            ..
         }
         | ErrorConvention::Multiple {
             code: CodeConvention::Required,
+            ..
         } => true,
         ErrorConvention::Single {
             code: CodeConvention::Absent,
+            ..
         }
         | ErrorConvention::Multiple {
             code: CodeConvention::Absent,
+            ..
         }
         | ErrorConvention::Unknown => false,
         ErrorConvention::Union { variants } => variants.iter().any(|variant| {
             code_needs_body_for_model(&variant.model_name, conventions, &mut visited.clone())
+        }),
+    };
+
+    visited.remove(model_name);
+    result
+}
+
+fn render_additional_fields_expr_for_model(
+    model_name: &str,
+    body_var: &str,
+    conventions: &HashMap<String, ErrorConvention>,
+    visited: &mut HashSet<String>,
+) -> RustPrinter {
+    if !visited.insert(model_name.to_string()) {
+        return unit() + "None";
+    }
+
+    let result = match conventions
+        .get(model_name)
+        .unwrap_or(&ErrorConvention::Unknown)
+    {
+        ErrorConvention::Single {
+            additional_fields, ..
+        }
+        | ErrorConvention::Multiple {
+            additional_fields, ..
+        } => render_additional_fields_expr(body_var, additional_fields),
+        ErrorConvention::Union { variants } => {
+            let cases = variants
+                .iter()
+                .map(|variant| {
+                    let mut branch_visited = visited.clone();
+                    let expr = render_additional_fields_expr_for_model(
+                        &variant.model_name,
+                        "inner",
+                        conventions,
+                        &mut branch_visited,
+                    );
+
+                    unit() + model_name + "::" + &variant.variant_name + "(inner) => " + expr + ","
+                })
+                .reduce(|acc, e| acc + " " + e)
+                .unwrap_or_else(|| unit() + "_ => None,");
+
+            unit() + "match " + body_var + " { " + cases + " }"
+        }
+        ErrorConvention::Unknown => unit() + "None",
+    };
+
+    visited.remove(model_name);
+    result
+}
+
+fn render_additional_fields_expr(
+    body_var: &str,
+    additional_fields: &[AdditionalField],
+) -> RustPrinter {
+    if additional_fields.is_empty() {
+        return unit() + "None";
+    }
+
+    let insertions = additional_fields
+        .iter()
+        .map(|field| {
+            line(
+                unit()
+                    + "if let Ok(value) = "
+                    + rust_name("serde_json", "to_value")
+                    + "(&"
+                    + body_var
+                    + "."
+                    + &field.rust_name
+                    + ") {",
+            ) + indented(
+                line(unit() + "if !value.is_null() {")
+                    + indented(line(
+                        unit() + "fields.insert(\"" + &field.wire_name + "\".to_string(), value);",
+                    ))
+                    + line("}"),
+            ) + line("}")
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    unit()
+        + line("{")
+        + indented(
+            line(unit() + "let mut fields = " + rust_name("serde_json", "Map") + "::new();")
+                + insertions
+                + line(unit() + "if fields.is_empty() {")
+                + indented(line(unit() + "None"))
+                + line(unit() + "} else {")
+                + indented(line(unit() + "Some(fields)"))
+                + line(unit() + "}"),
+        )
+        + line("}")
+}
+
+fn additional_fields_needs_body_for_model(
+    model_name: &str,
+    conventions: &HashMap<String, ErrorConvention>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    if !visited.insert(model_name.to_string()) {
+        return false;
+    }
+
+    let result = match conventions
+        .get(model_name)
+        .unwrap_or(&ErrorConvention::Unknown)
+    {
+        ErrorConvention::Single {
+            additional_fields, ..
+        }
+        | ErrorConvention::Multiple {
+            additional_fields, ..
+        } => !additional_fields.is_empty(),
+        ErrorConvention::Unknown => false,
+        ErrorConvention::Union { variants } => variants.iter().any(|variant| {
+            additional_fields_needs_body_for_model(
+                &variant.model_name,
+                conventions,
+                &mut visited.clone(),
+            )
         }),
     };
 

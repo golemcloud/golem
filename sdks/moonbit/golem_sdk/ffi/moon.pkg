@@ -1,5 +1,5 @@
 warnings = "-44-55"
 
 options(
-  "supported-targets": [ "wasm" ],
+  supported_targets: [ "wasm" ],
 )

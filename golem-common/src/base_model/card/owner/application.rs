@@ -13,17 +13,19 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::account::AccountEmail;
+use crate::model::application::ApplicationName;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ApplicationOwnerPattern {
     AnyApplications,
     AccountApplications {
-        account: String,
+        account: AccountEmail,
     },
     Application {
-        account: String,
-        application: String,
+        account: AccountEmail,
+        application: ApplicationName,
     },
 }
 
@@ -32,17 +34,17 @@ impl ApplicationOwnerPattern {
         match parse_segments(value)?.as_slice() {
             ["*", "*"] => Ok(Self::AnyApplications),
             [account, "*"] => Ok(Self::AccountApplications {
-                account: parse_concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
             }),
             [account, application] => Ok(Self::Application {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
             }),
             _ => Err(value.to_string()),
         }
     }
 
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
             Self::AnyApplications => None,
             Self::AccountApplications { account } | Self::Application { account, .. } => {
@@ -52,12 +54,13 @@ impl ApplicationOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicApplicationOwnerPattern {
     Concrete(ApplicationOwnerPattern),
-    Env,
-    Self_,
+    AccountApplications,
+    AccountApplication { application: ApplicationName },
+    App,
 }
 
 impl OwnerPattern for ApplicationOwnerPattern {
@@ -68,11 +71,19 @@ impl OwnerPattern for ApplicationOwnerPattern {
     }
 
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        parse_prefix_owner_slot(value, Self::parse).map(|slot| match slot {
-            PrefixOwnerSlot::Concrete(owner) => PolymorphicApplicationOwnerPattern::Concrete(owner),
-            PrefixOwnerSlot::Env => PolymorphicApplicationOwnerPattern::Env,
-            PrefixOwnerSlot::Self_ => PolymorphicApplicationOwnerPattern::Self_,
-        })
+        match split_leftmost_owner_slot(value)? {
+            Some(("?account", rest)) if rest.as_slice() == ["*"] => {
+                Ok(PolymorphicApplicationOwnerPattern::AccountApplications)
+            }
+            Some(("?account", rest)) if rest.len() == 1 => {
+                Ok(PolymorphicApplicationOwnerPattern::AccountApplication {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                })
+            }
+            Some(("?app", rest)) if rest.is_empty() => Ok(PolymorphicApplicationOwnerPattern::App),
+            Some(_) => Err(value.to_string()),
+            None => Self::parse(value).map(PolymorphicApplicationOwnerPattern::Concrete),
+        }
     }
 
     fn subsumes(&self, other: &Self) -> bool {

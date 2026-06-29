@@ -43,7 +43,8 @@ steps:
   - id: "configure-api-domain"
     prompt: >
       In the test-app project, configure the application HTTP API deployment in `golem.yaml` so
-      that `GreetingAgent` is exposed on the local domain `test-app.localhost:9006`.
+      that `GreetingAgent` is exposed on the local deployment subdomain `test-app`, which
+      resolves to `test-app.localhost:9006`.
 
       Add a `local` deployment under `httpApi.deployments` and include `GreetingAgent` in the
       deployed agents map. Do not change any source files or endpoint logic. After this change,
@@ -60,7 +61,7 @@ steps:
       command: "cat"
       args: ["test-app/golem.yaml"]
     expect:
-      stdout_matches: "[\\s\\S]*httpApi:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*domain: test-app\\.localhost:9006[\\s\\S]*GreetingAgent:(?:\\s*\\{\\})?[\\s\\S]*"
+      stdout_matches: "[\\s\\S]*httpApi:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*subdomain: test-app[\\s\\S]*GreetingAgent:(?:\\s*\\{\\})?[\\s\\S]*"
 
   - id: "http-hello"
     http:

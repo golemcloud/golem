@@ -33,6 +33,20 @@ Two parts of `docs/` are auto-generated from in-tree sources of truth and have C
 
 If you edit either source, commit the regenerated MDX files in the same PR.
 
+### Makefile.toml script conventions
+
+Inline scripts in `Makefile.toml` must be written in **duckscript** (`script_runner = "@duckscript"`), not POSIX shell/bash, so the build works on all operating systems including Windows. Do not introduce `bash`/`sh` inline scripts for build/asset tasks.
+
+When a task needs the cargo target directory (e.g. to invoke a freshly built binary), do **not** hardcode `target/...` or shell out to `cargo metadata`. Use the `CARGO_MAKE_CRATE_TARGET_DIRECTORY` environment variable, which cargo-make resolves cross-platform and which honors a redirected target dir (`CARGO_TARGET_DIR`, cargo config, or a cargo wrapper). Example:
+
+```toml
+script_runner = "@duckscript"
+script = '''
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+exec --fail-on-error ${golem} build -P release --yes
+'''
+```
+
 ## Testing
 
 Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.
@@ -75,6 +89,8 @@ Load these skills for guided workflows on complex tasks:
 | `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
+| `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
+| `modifying-cli-output-schema` | Adding or changing structured `golem-cli` output, `CliOutput` types, or the command output JSON schema |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
@@ -99,6 +115,9 @@ This runs `rustfmt` and `clippy` with automatic fixes. Load `pre-pr-checklist` s
 
 - Follow existing code conventions in the file you're editing
 - Do not add unnecessary comments
+- Comments must describe the code as it is, for a reader who has no other context. Never reference
+  implementation plans, migration "phases", ticket/issue/PR numbers, or other transient process
+  artifacts in code comments — describe the actual invariant, behavior, or rationale instead.
 - Use existing libraries and utilities from the codebase
 - Security: Never expose or log secrets/keys
 
@@ -115,7 +134,6 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-registry-service/` - Component registry
 - `golem-common/` - Shared types and utilities
 - `golem-wasm/` - WASM utilities
-- `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
 - `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala, MoonBit) - **not part of main build flow, see SDK-specific AGENTS.md**
 - `docs/` - User-facing documentation site at [learn.golem.cloud](https://learn.golem.cloud) (Next.js / Nextra / Bun) - **not part of main build flow, see `docs/AGENTS.md`**

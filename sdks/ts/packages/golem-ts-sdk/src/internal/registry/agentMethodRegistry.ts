@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TypeInfoInternal } from '../typeInfoInternal';
-import { CachePolicy, HttpEndpointDetails } from 'golem:agent/common@1.5.0';
+import { RuntimeOutput } from '../typeInfoInternal';
+import { CachePolicy, HttpEndpointDetails } from 'golem:agent/common@2.0.0';
 
 export interface AgentMethodMetadata {
   prompt?: string;
   description?: string;
-  returnType?: TypeInfoInternal;
+  returnType?: RuntimeOutput;
   httpEndpoint?: HttpEndpointDetails[];
   readOnly?: CachePolicy;
 }
@@ -47,7 +47,7 @@ class AgentMethodRegistryImpl {
     return this.registry.get(agentClassName);
   }
 
-  getReturnType(agentClassName: string, agentMethodName: string): TypeInfoInternal | undefined {
+  getReturnType(agentClassName: string, agentMethodName: string): RuntimeOutput | undefined {
     const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(agentMethodName)?.returnType;
   }
@@ -64,7 +64,7 @@ class AgentMethodRegistryImpl {
     classMeta.get(method)!.description = description;
   }
 
-  setReturnType(agentClassName: string, method: string, returnType: TypeInfoInternal): void {
+  setReturnType(agentClassName: string, method: string, returnType: RuntimeOutput): void {
     this.ensureMeta(agentClassName, method);
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.returnType = returnType;

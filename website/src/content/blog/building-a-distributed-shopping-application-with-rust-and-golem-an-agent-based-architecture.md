@@ -39,7 +39,7 @@ The entire application is written in Rust and compiled to WebAssembly, offering 
 
 The following diagram illustrates the high-level architecture of the Golem Shopping application:
 
-![](<https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/6970a44f2f664db46c3128a1_architecture%20(1).png>)
+![](/blog-images/6970a44f2f664db46c3128a1_architecture_1_.png)
 
 _Figure 1: Golem Shopping Application Architecture_
 
@@ -473,7 +473,7 @@ To ensure the Golem Shopping application meets production-grade performance requ
 
 ### Key Performance Metrics
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/696fafaedf95433ca758a5b0_Screenshot%202026-01-20%20at%2017.39.07.png)
+![](/blog-images/696fafaedf95433ca758a5b0_Screenshot_2026-01-20_at_17.39.07.png)
 
 ### Test Data
 

@@ -469,6 +469,42 @@ pub fn model_gen(
                     Err(Error::unimplemented(format!("Boolean schema {reference}")))
                 }
                 Type::Array(_) => Err(Error::unimplemented(format!("Array schema {reference}"))),
+                Type::Object(obj)
+                    if obj.properties.is_empty() && obj.additional_properties.is_none() =>
+                {
+                    // An object schema with no properties and no
+                    // additionalProperties is an opaque / free-form JSON object
+                    // (e.g. the schema-native value carriers, which
+                    // deliberately expose `type: object`). Represent it as a
+                    // transparent newtype over `serde_json::Value` so the full
+                    // JSON is preserved through the client instead of being
+                    // silently dropped by an empty struct.
+                    let code = unit()
+                        + derive_line()
+                        + line(r#"#[serde(transparent)]"#)
+                        + line(unit() + "pub struct " + &name + "(pub serde_json::value::Value);")
+                        + NewLine
+                        + line(
+                            unit()
+                                + "impl "
+                                + rust_name("crate::model", "MultipartField")
+                                + " for "
+                                + &name
+                                + "{",
+                        )
+                        + indented(
+                            line(unit() + "fn to_multipart_field(&self) -> String {")
+                                + indented(line("serde_json::to_string(self).unwrap()"))
+                                + line("}")
+                                + NewLine
+                                + line(unit() + "fn mime_type(&self) -> &'static str {")
+                                + indented(line(r#""application/json""#))
+                                + line("}"),
+                        )
+                        + line("}");
+
+                    Ok(code)
+                }
                 Type::Object(obj) => {
                     let required: HashSet<String> =
                         obj.required.iter().map(|s| s.to_owned()).collect();

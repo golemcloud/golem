@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::domain_registration::{DomainRegistrationRecord, DomainRegistrationRepoError};
+use super::model::domain_registration::{
+    DomainRegistrationAuthRecord, DomainRegistrationRecord, DomainRegistrationRepoError,
+};
 use crate::repo::model::BindFields;
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
@@ -52,7 +54,7 @@ pub trait DomainRegistrationRepo: Send + Sync {
     async fn get_by_id(
         &self,
         domain_registration_id: Uuid,
-    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError>;
+    ) -> Result<Option<DomainRegistrationAuthRecord>, DomainRegistrationRepoError>;
 
     async fn get_in_environment(
         &self,
@@ -115,7 +117,7 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
     async fn get_by_id(
         &self,
         domain_registration_id: Uuid,
-    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
+    ) -> Result<Option<DomainRegistrationAuthRecord>, DomainRegistrationRepoError> {
         let span = Self::span_id(domain_registration_id);
         self.repo
             .get_by_id(domain_registration_id)
@@ -297,18 +299,30 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         domain_registration_id: Uuid,
-    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
+    ) -> Result<Option<DomainRegistrationAuthRecord>, DomainRegistrationRepoError> {
         let result = self
             .with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
-                        domain_registration_id, environment_id, domain,
-                        created_at, created_by, deleted_at, deleted_by
-                    FROM domain_registrations
+                        dr.domain_registration_id, dr.environment_id, dr.domain,
+                        dr.created_at, dr.created_by, dr.deleted_at, dr.deleted_by,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
+                    FROM domain_registrations dr
+                    JOIN environments e ON e.environment_id = dr.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     WHERE
-                        domain_registration_id = $1
-                        AND deleted_at IS NULL
+                        dr.domain_registration_id = $1
+                        AND dr.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                 .bind(domain_registration_id),
             )

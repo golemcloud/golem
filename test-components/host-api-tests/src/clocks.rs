@@ -1,11 +1,11 @@
-use golem_rust::{Schema, agent_definition, agent_implementation};
+use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-#[derive(Clone, Schema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct StdTimeApisResult {
     pub elapsed1: f64,
     pub elapsed2: f64,
@@ -51,8 +51,8 @@ impl Clocks for ClocksImpl {
     fn sleep_for(&self, seconds: f64) -> f64 {
         let instant1 = Instant::now();
         sleep(Duration::from_millis((seconds * 1000.0) as u64));
-        let elapsed = instant1.elapsed().as_secs_f64();
-        elapsed
+
+        instant1.elapsed().as_secs_f64()
     }
 
     fn interruption(&self) -> String {
@@ -62,5 +62,46 @@ impl Clocks for ClocksImpl {
         }
 
         "done".to_string()
+    }
+}
+
+/// Stateful agent used to prove that `wasi:clocks/monotonic_clock.now` replays to an identical
+/// value. `record_now` captures a single monotonic reading into agent state; after a
+/// crash/restart the invocation is replayed, so the rebuilt state must equal the live reading,
+/// which `get_recorded` reads back.
+#[agent_definition]
+pub trait MonotonicClockState {
+    fn new(name: String) -> Self;
+
+    /// Captures the current monotonic clock reading once and returns it. Subsequent calls return
+    /// the same first reading.
+    fn record_now(&mut self) -> u64;
+
+    /// Returns the previously recorded monotonic clock reading.
+    fn get_recorded(&self) -> u64;
+}
+
+pub struct MonotonicClockStateImpl {
+    _name: String,
+    recorded: Option<u64>,
+}
+
+#[agent_implementation]
+impl MonotonicClockState for MonotonicClockStateImpl {
+    fn new(name: String) -> Self {
+        Self {
+            _name: name,
+            recorded: None,
+        }
+    }
+
+    fn record_now(&mut self) -> u64 {
+        let now = wasi::clocks::monotonic_clock::now();
+        *self.recorded.get_or_insert(now)
+    }
+
+    fn get_recorded(&self) -> u64 {
+        self.recorded
+            .expect("record_now must be called before get_recorded")
     }
 }

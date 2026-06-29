@@ -13,14 +13,12 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::base_model::agent::{ComponentModelElementValue, ElementValue};
-use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentStatus, PromiseId};
+use golem_common::schema::schema_value::ResultValuePayload;
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::analysis::analysed_type;
-use golem_wasm::{FromValue, UuidRecord, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -81,7 +79,7 @@ async fn rust_rpc_with_payload(
         .into_return_value()
         .expect("Expected a single return value");
 
-    let uuid = UuidRecord::from_value(uuid_as_value.clone()).expect("UUID expected");
+    let uuid = <uuid::Uuid as FromSchema>::from_value(&uuid_as_value).expect("UUID expected");
 
     let child_agent_id = agent_id!("RustChild", uuid);
 
@@ -97,11 +95,15 @@ async fn rust_rpc_with_payload(
 
     assert_eq!(
         option_payload_as_value,
-        Value::Option(Some(Box::new(Value::Record(vec![
-            Value::String("hello world".to_string()),
-            uuid_as_value.clone(),
-            Value::Enum(0)
-        ]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("hello world".to_string()),
+                    uuid_as_value.clone(),
+                    SchemaValue::Enum { case: 0 }
+                ],
+            }))
+        }
     );
     Ok(())
 }
@@ -182,20 +184,28 @@ async fn counter_resource_test_1(
 
     assert_eq!(
         result_value,
-        Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("counter_resource_test_1_test1_counter3".to_string()),
-                Value::U64(3)
-            ]),
-            Value::Tuple(vec![
-                Value::String("counter_resource_test_1_test1_counter2".to_string()),
-                Value::U64(3)
-            ]),
-            Value::Tuple(vec![
-                Value::String("counter_resource_test_1_test1_counter1".to_string()),
-                Value::U64(3)
-            ])
-        ])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::String("counter_resource_test_1_test1_counter3".to_string()),
+                        SchemaValue::U64(3)
+                    ]
+                },
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::String("counter_resource_test_1_test1_counter2".to_string()),
+                        SchemaValue::U64(3)
+                    ]
+                },
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::String("counter_resource_test_1_test1_counter1".to_string()),
+                        SchemaValue::U64(3)
+                    ]
+                }
+            ]
+        }
     );
 
     Ok(())
@@ -232,15 +242,11 @@ async fn counter_resource_test_2(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value1 = result1
-        .into_return_value()
-        .expect("Expected a single return value");
-    let result_value2 = result2
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value1 = result1.into_typed::<u64>()?;
+    let result_value2 = result2.into_typed::<u64>()?;
 
-    assert_eq!(result_value1, Value::U64(1));
-    assert_eq!(result_value2, Value::U64(2));
+    assert_eq!(result_value1, 1);
+    assert_eq!(result_value2, 2);
 
     Ok(())
 }
@@ -279,15 +285,11 @@ async fn counter_resource_test_2_with_restart(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value1 = result1
-        .into_return_value()
-        .expect("Expected a single return value");
-    let result_value2 = result2
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value1 = result1.into_typed::<u64>()?;
+    let result_value2 = result2.into_typed::<u64>()?;
 
-    assert_eq!(result_value1, Value::U64(1));
-    assert_eq!(result_value2, Value::U64(2));
+    assert_eq!(result_value1, 1);
+    assert_eq!(result_value2, 2);
 
     Ok(())
 }
@@ -323,15 +325,11 @@ async fn counter_resource_test_3(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value1 = result1
-        .into_return_value()
-        .expect("Expected a single return value");
-    let result_value2 = result2
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value1 = result1.into_typed::<u64>()?;
+    let result_value2 = result2.into_typed::<u64>()?;
 
-    assert_eq!(result_value1, Value::U64(1));
-    assert_eq!(result_value2, Value::U64(2));
+    assert_eq!(result_value1, 1);
+    assert_eq!(result_value2, 2);
 
     Ok(())
 }
@@ -370,15 +368,11 @@ async fn counter_resource_test_3_with_restart(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value1 = result1
-        .into_return_value()
-        .expect("Expected a single return value");
-    let result_value2 = result2
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value1 = result1.into_typed::<u64>()?;
+    let result_value2 = result2.into_typed::<u64>()?;
 
-    assert_eq!(result_value1, Value::U64(1));
-    assert_eq!(result_value2, Value::U64(2));
+    assert_eq!(result_value1, 1);
+    assert_eq!(result_value2, 2);
 
     Ok(())
 }
@@ -415,20 +409,22 @@ async fn context_inheritance(
         .expect("Expected a single return value");
 
     let result_tuple = match &result_value {
-        Value::Tuple(result) => result,
+        SchemaValue::Tuple { elements } => elements,
         _ => panic!("Unexpected result: {result_value:?}"),
     };
     let args = match &result_tuple[0] {
-        Value::List(args) => args.clone(),
+        SchemaValue::List { elements } => elements.clone(),
         _ => panic!("Unexpected result: {result_value:?}"),
     };
     let mut env = match &result_tuple[1] {
-        Value::List(env) => env
+        SchemaValue::List { elements } => elements
             .clone()
             .into_iter()
             .map(|value| match value {
-                Value::Tuple(tuple) => match (&tuple[0], &tuple[1]) {
-                    (Value::String(key), Value::String(value)) => (key.clone(), value.clone()),
+                SchemaValue::Tuple { elements } => match (&elements[0], &elements[1]) {
+                    (SchemaValue::String(key), SchemaValue::String(value)) => {
+                        (key.clone(), value.clone())
+                    }
                     _ => panic!("Unexpected result: {result_value:?}"),
                 },
                 _ => panic!("Unexpected result: {result_value:?}"),
@@ -438,7 +434,7 @@ async fn context_inheritance(
     };
     env.sort_by_key(|(k, _v)| k.clone());
 
-    assert_eq!(args, vec![] as Vec<Value>);
+    assert_eq!(args, vec![] as Vec<SchemaValue>);
 
     let env_keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
     assert!(
@@ -498,7 +494,13 @@ async fn counter_resource_test_5(
 
     assert_eq!(
         result_value,
-        Value::List(vec![Value::U64(3), Value::U64(3), Value::U64(3),])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U64(3),
+                SchemaValue::U64(3),
+                SchemaValue::U64(3),
+            ]
+        }
     );
 
     Ok(())
@@ -525,22 +527,10 @@ async fn wasm_rpc_bug_32_test(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let input_vat = ValueAndType {
-        value: Value::Enum(0),
-        typ: analysed_type::r#enum(&["leaf"]),
-    };
+    let input = crate::raw_params(vec![SchemaValue::Enum { case: 0 }]);
 
     let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "bug_wasm_rpc_i32",
-            DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: input_vat,
-                })],
-            }),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "bug_wasm_rpc_i32", input)
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -549,7 +539,7 @@ async fn wasm_rpc_bug_32_test(
         .into_return_value()
         .expect("Expected a single return value");
 
-    assert_eq!(result_value, Value::Enum(0));
+    assert_eq!(result_value, SchemaValue::Enum { case: 0 });
 
     Ok(())
 }
@@ -585,7 +575,10 @@ async fn golem_bug_1265_test(
         .into_return_value()
         .expect("Expected a single return value");
 
-    assert_eq!(result_value, Value::Result(Ok(None)));
+    assert_eq!(
+        result_value,
+        SchemaValue::Result(ResultValuePayload::Ok { value: None })
+    );
 
     Ok(())
 }
@@ -630,10 +623,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    let value = result
-        .into_return_value()
-        .expect("Expected a single return value");
-    assert_eq!(value, Value::U32(1));
+    let value = result.into_typed::<u32>()?;
+    assert_eq!(value, 1);
 
     Ok(())
 }
@@ -678,10 +669,8 @@ async fn ephemeral_worker_invocation_via_rpc2(
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    let value = result
-        .into_return_value()
-        .expect("Expected a single return value");
-    assert_eq!(value, Value::U32(1));
+    let value = result.into_typed::<u32>()?;
+    assert_eq!(value, 1);
 
     Ok(())
 }
@@ -758,12 +747,10 @@ async fn cancel_completed_async_rpc_is_noop(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value = result.into_typed::<u64>()?;
 
     // The counter was incremented by 5, so get_value should return 5
-    assert_eq!(result_value, Value::U64(5));
+    assert_eq!(result_value, 5);
 
     Ok(())
 }
@@ -800,11 +787,9 @@ async fn ts_abort_before_await_returns_aborted(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value = result.into_typed::<String>()?;
 
-    assert_eq!(result_value, Value::String("aborted".to_string()));
+    assert_eq!(result_value, "aborted".to_string());
 
     Ok(())
 }
@@ -841,21 +826,19 @@ async fn ts_abort_after_complete_is_noop(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value = result.into_typed::<f64>()?;
 
     // The counter was incremented by 5, so getValue should return 5.0
-    assert_eq!(result_value, Value::F64(5.0));
+    assert_eq!(result_value, 5.0);
 
     Ok(())
 }
 
-fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
-    let Value::Record(fields) = promise_id_value else {
+fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
+    let SchemaValue::Record { fields } = promise_id_value else {
         panic!("Expected a record for PromiseId");
     };
-    let Value::U64(oplog_idx) = fields[1] else {
+    let SchemaValue::U64(oplog_idx) = fields[1] else {
         panic!("Expected u64 oplog-idx field");
     };
     OplogIndex::from_u64(oplog_idx)
@@ -933,10 +916,8 @@ async fn ts_cancel_unblocks_caller_while_callee_blocked(
 
     // Now wait for A's result (abort fires at 3s, so A should complete relatively soon)
     let a_result = fiber.await??;
-    let a_value = a_result
-        .into_return_value()
-        .expect("Expected a single return value from callAndAbort");
-    assert_eq!(a_value, Value::String("aborted".to_string()));
+    let a_value = a_result.into_typed::<String>()?;
+    assert_eq!(a_value, "aborted".to_string());
 
     // B should still be suspended (cancel unblocked caller but NOT callee)
     let b_status = executor.get_worker_metadata(&b_worker_id).await?.status;
@@ -963,10 +944,8 @@ async fn ts_cancel_unblocks_caller_while_callee_blocked(
         .invoke_and_await_agent(&component, &b_agent_id, "getCompletedCount", data_value!())
         .await?;
 
-    let count_value = count_result
-        .into_return_value()
-        .expect("Expected a single return value from getCompletedCount");
-    assert_eq!(count_value, Value::F64(1.0));
+    let count_value = count_result.into_typed::<f64>()?;
+    assert_eq!(count_value, 1.0);
 
     Ok(())
 }
@@ -1043,10 +1022,8 @@ async fn ts_cancel_survives_executor_restart(
 
     // Wait for A's result
     let a_result = fiber.await??;
-    let a_value = a_result
-        .into_return_value()
-        .expect("Expected a single return value from callAndAbort");
-    assert_eq!(a_value, Value::String("aborted".to_string()));
+    let a_value = a_result.into_typed::<String>()?;
+    assert_eq!(a_value, "aborted".to_string());
 
     // Restart executor
     drop(executor);
@@ -1066,10 +1043,8 @@ async fn ts_cancel_survives_executor_restart(
         .invoke_and_await_agent(&component, &a_agent_id, "getLastOutcome", data_value!())
         .await?;
 
-    let outcome_value = outcome_result
-        .into_return_value()
-        .expect("Expected a single return value from getLastOutcome");
-    assert_eq!(outcome_value, Value::String("aborted".to_string()));
+    let outcome_value = outcome_result.into_typed::<String>()?;
+    assert_eq!(outcome_value, "aborted".to_string());
 
     // Complete the promise to unblock B
     executor
@@ -1092,10 +1067,8 @@ async fn ts_cancel_survives_executor_restart(
         .invoke_and_await_agent(&component, &b_agent_id, "getCompletedCount", data_value!())
         .await?;
 
-    let count_value = count_result
-        .into_return_value()
-        .expect("Expected a single return value from getCompletedCount");
-    assert_eq!(count_value, Value::F64(1.0));
+    let count_value = count_result.into_typed::<f64>()?;
+    assert_eq!(count_value, 1.0);
 
     Ok(())
 }

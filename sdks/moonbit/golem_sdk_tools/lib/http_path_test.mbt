@@ -9,7 +9,6 @@ test "simple literal path" {
       #|  { kind: Literal("v1") },
       #|  { kind: Literal("items") },
       #|]
-
     ),
   )
   debug_inspect(
@@ -31,7 +30,6 @@ test "path with variables" {
       #|  { kind: PathVariable("city") },
       #|  { kind: Literal("weather") },
       #|]
-
     ),
   )
   debug_inspect(
@@ -49,7 +47,6 @@ test "system variables - agent-type" {
     segments,
     content=(
       #|[{ kind: SystemVariable(AgentType) }, { kind: Literal("status") }]
-
     ),
   )
   debug_inspect(
@@ -67,7 +64,6 @@ test "system variables - agent-version" {
     segments,
     content=(
       #|[{ kind: SystemVariable(AgentVersion) }, { kind: Literal("info") }]
-
     ),
   )
   debug_inspect(
@@ -85,7 +81,6 @@ test "catch-all remaining path variable" {
     segments,
     content=(
       #|[{ kind: Literal("files") }, { kind: RemainingPathVariable("path") }]
-
     ),
   )
   debug_inspect(
@@ -105,7 +100,6 @@ test "path with query" {
     segments,
     content=(
       #|[{ kind: Literal("search") }]
-
     ),
   )
   debug_inspect(
@@ -115,7 +109,6 @@ test "path with query" {
       #|  { query_param_name: "q", variable_name: "query" },
       #|  { query_param_name: "limit", variable_name: "n" },
       #|]
-
     ),
   )
 }
@@ -184,7 +177,6 @@ test "query only" {
     query,
     content=(
       #|[{ query_param_name: "q", variable_name: "v" }]
-
     ),
   )
 }
@@ -233,7 +225,6 @@ test "parse_path_only success" {
       #|  { kind: PathVariable("city") },
       #|  { kind: Literal("weather") },
       #|]
-
     ),
   )
 }
@@ -256,94 +247,12 @@ test "catch-all at end with trailing slash" {
     segments,
     content=(
       #|[{ kind: Literal("files") }, { kind: RemainingPathVariable("path") }]
-
     ),
   )
   debug_inspect(
     query,
     content=(
       #|[]
-    ),
-  )
-}
-
-///|
-test "http_reorder_params: no endpoint returns original order" {
-  let vis : Array[(String, @lib.ParamType)] = [
-    ("temperature", Simple("Double")),
-    ("source", Simple("String")),
-  ]
-  let result = @lib.http_reorder_params(vis, None)
-  debug_inspect(
-    result.map(fn(p) { p.0 }),
-    content=(
-      #|["temperature", "source"]
-    ),
-  )
-}
-
-///|
-test "http_reorder_params: header-bound param moves before body param" {
-  let vis : Array[(String, @lib.ParamType)] = [
-    ("temperature", Simple("Double")),
-    ("source", Simple("String")),
-  ]
-  let endpoint : @lib.HttpEndpointInfo = {
-    method: "post",
-    path: "/set",
-    headers: [("X-Source", "source")],
-    auth: None,
-    cors: [],
-  }
-  let result = @lib.http_reorder_params(vis, Some(endpoint))
-  debug_inspect(
-    result.map(fn(p) { p.0 }),
-    content=(
-      #|["source", "temperature"]
-    ),
-  )
-}
-
-///|
-test "http_reorder_params: query-bound param stays first" {
-  let vis : Array[(String, @lib.ParamType)] = [("unit", Simple("String"))]
-  let endpoint : @lib.HttpEndpointInfo = {
-    method: "get",
-    path: "/current?unit={unit}",
-    headers: [],
-    auth: None,
-    cors: [],
-  }
-  let result = @lib.http_reorder_params(vis, Some(endpoint))
-  debug_inspect(
-    result.map(fn(p) { p.0 }),
-    content=(
-      #|["unit"]
-    ),
-  )
-}
-
-///|
-test "http_reorder_params: mixed path, header, and body params" {
-  let vis : Array[(String, @lib.ParamType)] = [
-    ("body_data", Simple("String")),
-    ("city", Simple("String")),
-    ("extra_body", Simple("Int")),
-    ("api_key", Simple("String")),
-  ]
-  let endpoint : @lib.HttpEndpointInfo = {
-    method: "post",
-    path: "/{city}/update",
-    headers: [("X-Api-Key", "api_key")],
-    auth: None,
-    cors: [],
-  }
-  let result = @lib.http_reorder_params(vis, Some(endpoint))
-  // HTTP-bound (city from path, api_key from header) first, then body params
-  debug_inspect(
-    result.map(fn(p) { p.0 }),
-    content=(
-      #|["city", "api_key", "body_data", "extra_body"]
     ),
   )
 }

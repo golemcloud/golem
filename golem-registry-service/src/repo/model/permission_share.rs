@@ -15,7 +15,7 @@
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::card::CardRepoError;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::card::CardId;
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareData, PermissionShareId, PermissionShareName,
@@ -143,6 +143,24 @@ pub struct PermissionShareExtRevisionRecord {
 
     #[sqlx(flatten)]
     pub revision: PermissionShareRevisionRecord,
+}
+
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct PermissionShareAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub share: PermissionShareExtRevisionRecord,
+    pub owner_account_email: String,
+    pub target_account_email: String,
+}
+
+impl PermissionShareAuthExtRevisionRecord {
+    pub fn owner_account_email(&self) -> AccountEmail {
+        AccountEmail::new(self.owner_account_email.clone())
+    }
+
+    pub fn target_account_email(&self) -> AccountEmail {
+        AccountEmail::new(self.target_account_email.clone())
+    }
 }
 
 impl TryFrom<PermissionShareExtRevisionRecord> for PermissionShare {

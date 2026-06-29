@@ -1,14 +1,23 @@
-package golem:agent@1.5.0;
+package golem:agent@2.0.0;
 
 interface guest {
-  use common.{agent-error, agent-type, data-value, principal};
+  use golem:core/types@2.0.0.{schema-value-tree};
+  use common.{agent-error, agent-type, principal};
 
   /// Initializes the agent of a given type with the given constructor parameters.
   /// If called a second time, it fails.
-  initialize: func(agent-type: string, input: data-value, principal: principal) -> result<_, agent-error>;
+  ///
+  /// `input` is a value tree whose root encodes the constructor's parameter
+  /// list (one record field per declared `named-field`, in declaration order).
+  /// The guest interprets it against its own constructor `input-schema`.
+  initialize: func(agent-type: string, input: schema-value-tree, principal: principal) -> result<_, agent-error>;
 
-  /// Invokes an agent. If create was not called before, it fails
-  invoke: func(method-name: string, input: data-value, principal: principal) -> result<data-value, agent-error>;
+  /// Invokes an agent. If create was not called before, it fails.
+  ///
+  /// `input` is a value tree whose root encodes the method's parameter list.
+  /// The result is `none` when the method's `output-schema` is `unit`, and
+  /// `some(value)` for a `single` output.
+  invoke: func(method-name: string, input: schema-value-tree, principal: principal) -> result<option<schema-value-tree>, agent-error>;
 
   /// Gets the agent type. If create was not called before, it fails
   get-definition: func() -> agent-type;

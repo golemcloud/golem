@@ -15,13 +15,13 @@
 import {
   AgentConstructor,
   AgentMethod,
-  DataSchema,
   HttpEndpointDetails,
   HttpMountDetails,
-} from 'golem:agent/common@1.5.0';
+  InputSchema,
+} from 'golem:agent/common@2.0.0';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
-import { TypeInfoInternal } from '../typeInfoInternal';
+import { RuntimeTypeInfo } from '../typeInfoInternal';
 
 export function validateHttpMount(
   agentClassName: string,
@@ -94,8 +94,8 @@ export function rejectQueryParamsInPath(path: string, entityName: string) {
   }
 }
 
-function collectMethodInputVars(schema: DataSchema): Set<string> {
-  return new Set(schema.val.map(([name]) => name));
+function collectMethodInputVars(schema: InputSchema): Set<string> {
+  return new Set(schema.val.map((field) => field.name));
 }
 
 function validateMountIsDefinedForHttpEndpoint(
@@ -126,7 +126,7 @@ function validateNoCatchAllInHttpMount(agentClassName: string, agentMount: HttpM
 function validateEndpointVariables(
   endpoint: HttpEndpointDetails,
   methodVars: Set<string>,
-  parameterTypes: Map<string, TypeInfoInternal>,
+  parameterTypes: Map<string, RuntimeTypeInfo>,
 ) {
   const principalParams = getPrincipalParams(parameterTypes);
   const unstructuredBinaryParams = getUnstructuredBinaryParams(parameterTypes);
@@ -191,7 +191,7 @@ function validateEndpointVariables(
   }
 }
 
-function getPrincipalParams(parameterTypes: Map<string, TypeInfoInternal>): Set<string> {
+function getPrincipalParams(parameterTypes: Map<string, RuntimeTypeInfo>): Set<string> {
   const methodVarsOfPrincipal = new Set<string>();
 
   for (const [varName, typeInfo] of parameterTypes.entries()) {
@@ -203,7 +203,7 @@ function getPrincipalParams(parameterTypes: Map<string, TypeInfoInternal>): Set<
   return methodVarsOfPrincipal;
 }
 
-function getUnstructuredBinaryParams(parameterTypes: Map<string, TypeInfoInternal>): Set<string> {
+function getUnstructuredBinaryParams(parameterTypes: Map<string, RuntimeTypeInfo>): Set<string> {
   const methodVarsOfPrincipal = new Set<string>();
 
   for (const [varName, typeInfo] of parameterTypes.entries()) {
@@ -215,7 +215,7 @@ function getUnstructuredBinaryParams(parameterTypes: Map<string, TypeInfoInterna
   return methodVarsOfPrincipal;
 }
 
-function getUnstructuredTextParams(parameterTypes: Map<string, TypeInfoInternal>): Set<string> {
+function getUnstructuredTextParams(parameterTypes: Map<string, RuntimeTypeInfo>): Set<string> {
   const methodVarsOfText = new Set<string>();
 
   for (const [varName, typeInfo] of parameterTypes.entries()) {
@@ -228,20 +228,22 @@ function getUnstructuredTextParams(parameterTypes: Map<string, TypeInfoInternal>
 }
 
 function collectConstructorInputParameterNames(agentConstructor: AgentConstructor): Set<string> {
-  return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
+  return new Set(agentConstructor.inputSchema.val.map((field) => field.name));
 }
 
 function validateConstructorParamsAreHttpSafe(
   agentClassName: string,
   agentConstructor: AgentConstructor,
 ) {
-  for (const [paramName, paramSchema] of agentConstructor.inputSchema.val) {
-    if (paramSchema.tag === 'unstructured-binary') {
+  for (const field of agentConstructor.inputSchema.val) {
+    const paramName = field.name;
+    const typeInfo = AgentConstructorParamRegistry.getParamType(agentClassName, paramName);
+    if (typeInfo?.tag === 'unstructured-binary') {
       throw new Error(
         `HTTP mount path variable '${paramName}' cannot be used for constructor parameters of type 'UnstructuredBinary'`,
       );
     }
-    if (paramSchema.tag === 'unstructured-text') {
+    if (typeInfo?.tag === 'unstructured-text') {
       throw new Error(
         `HTTP mount path variable '${paramName}' cannot be used for constructor parameters of type 'UnstructuredText'`,
       );

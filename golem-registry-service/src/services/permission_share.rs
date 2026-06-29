@@ -13,24 +13,29 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
-    PermissionShareRepoError, PermissionShareRevisionRecord,
+    PermissionShareAuthExtRevisionRecord, PermissionShareRepoError, PermissionShareRevisionRecord,
 };
 use crate::repo::permission_share::PermissionShareRepo;
-use golem_common::model::account::{Account, AccountId};
+use golem_common::model::account::{Account, AccountEmail, AccountId};
+use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{Card, CardId, CardManagedBy, CardParseError, PermissionPattern};
+use golem_common::model::card::{
+    AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardAlgebraError,
+    CardId, CardManagedBy, CardParseError, ClassPermissionTarget, EffectiveSurface,
+    PermissionPattern, PermissionTarget,
+};
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
     PermissionShareName, PermissionShareRevision, PermissionShareUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AccountAction, AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::str::FromStr;
 use std::sync::Arc;
-use uuid::Uuid;
 
 const MAX_CARD_TREE_DELETE_ATTEMPTS: usize = 5;
 
@@ -43,11 +48,13 @@ pub enum PermissionShareError {
     #[error("Permission share for name {0} not found")]
     PermissionShareByNameNotFound(PermissionShareName),
     #[error("Target account {0} not found")]
-    TargetAccountNotFound(AccountId),
+    TargetAccountNotFound(String),
     #[error("Invalid permission grant {grant}: {message}")]
     InvalidGrant { grant: String, message: String },
     #[error("Permission grant recipient must be '*' or target account '{target_account}'")]
     InvalidRecipient { target_account: String },
+    #[error("Permission grants are not delegable by the caller: {0}")]
+    GrantNotDelegable(String),
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
@@ -65,6 +72,7 @@ impl SafeDisplay for PermissionShareError {
             Self::TargetAccountNotFound(_) => self.to_string(),
             Self::InvalidGrant { .. } => self.to_string(),
             Self::InvalidRecipient { .. } => self.to_string(),
+            Self::GrantNotDelegable(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -77,16 +85,19 @@ error_forwarding!(PermissionShareError, PermissionShareRepoError, AccountError);
 pub struct PermissionShareService {
     permission_share_repo: Arc<dyn PermissionShareRepo>,
     account_service: Arc<AccountService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl PermissionShareService {
     pub fn new(
         permission_share_repo: Arc<dyn PermissionShareRepo>,
         account_service: Arc<AccountService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             permission_share_repo,
             account_service,
+            registry_change_notifier,
         }
     }
 
@@ -96,12 +107,21 @@ impl PermissionShareService {
         data: PermissionShareCreation,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        auth.authorize_account_action(owner_account_id, AccountAction::CreatePermissionShare)?;
+        let owner_account = self.get_account(owner_account_id, auth).await?;
+        authorize_permission_share_permission(
+            auth,
+            &owner_account.email,
+            AccountPermissionShareVerb::Create,
+            AccountPermissionShareResourcePattern::Any,
+        )?;
 
-        let target_account = self.get_account(data.target_account_id).await?;
+        let target_account = self
+            .get_account_by_email(&data.target_account_email)
+            .await?;
 
         let id = PermissionShareId::new();
-        let card = self.permission_share_card(id, &data.data, target_account.email.as_str())?;
+        let card =
+            self.permission_share_card(id, &data.data, target_account.email.as_str(), auth)?;
         let revision = PermissionShareRevisionRecord::creation(
             id,
             data.name,
@@ -114,7 +134,7 @@ impl PermissionShareService {
                 .permission_share_repo
                 .create(
                     owner_account_id.0,
-                    data.target_account_id.0,
+                    target_account.id.0,
                     revision.clone(),
                     card.clone(),
                 )
@@ -142,21 +162,35 @@ impl PermissionShareService {
         update: PermissionShareUpdate,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let mut share = self.get(permission_share_id, auth).await?;
-        auth.authorize_account_action(
-            share.owner_account_id,
-            AccountAction::UpdatePermissionShare,
+        let record = self.get_record_by_id(permission_share_id).await?;
+        let owner_account_email = record.owner_account_email();
+        let target_account_email = record.target_account_email();
+        let mut share: PermissionShare = record.share.try_into()?;
+
+        self.authorize_view(&share, &owner_account_email, &target_account_email, auth)
+            .map_err(|err| match err {
+                PermissionShareError::Unauthorized(_) => {
+                    PermissionShareError::PermissionShareNotFound(permission_share_id)
+                }
+                other => other,
+            })?;
+
+        authorize_permission_share_permission(
+            auth,
+            &owner_account_email,
+            AccountPermissionShareVerb::Update,
+            AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
 
         if share.revision != update.current_revision {
             return Err(PermissionShareError::ConcurrentModification);
         }
 
-        let target_account = self.get_account(share.target_account_id).await?;
         let replacement_card = self.permission_share_card(
             permission_share_id,
             &update.data,
-            target_account.email.as_str(),
+            target_account_email.as_str(),
+            auth,
         )?;
 
         share.revision = share.revision.next()?;
@@ -173,7 +207,13 @@ impl PermissionShareService {
                 .update(revision.clone(), replacement_card.clone())
                 .await
             {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    let permission_share: PermissionShare = record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?;
+
+                    return Ok(permission_share);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {
@@ -198,10 +238,24 @@ impl PermissionShareService {
         current_revision: PermissionShareRevision,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let mut share = self.get(permission_share_id, auth).await?;
-        auth.authorize_account_action(
-            share.owner_account_id,
-            AccountAction::DeletePermissionShare,
+        let record = self.get_record_by_id(permission_share_id).await?;
+        let owner_account_email = record.owner_account_email();
+        let target_account_email = record.target_account_email();
+        let mut share: PermissionShare = record.share.try_into()?;
+
+        self.authorize_view(&share, &owner_account_email, &target_account_email, auth)
+            .map_err(|err| match err {
+                PermissionShareError::Unauthorized(_) => {
+                    PermissionShareError::PermissionShareNotFound(permission_share_id)
+                }
+                other => other,
+            })?;
+
+        authorize_permission_share_permission(
+            auth,
+            &owner_account_email,
+            AccountPermissionShareVerb::Delete,
+            AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
 
         if share.revision != current_revision {
@@ -216,7 +270,13 @@ impl PermissionShareService {
 
         for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
             match self.permission_share_repo.delete(revision.clone()).await {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    let permission_share: PermissionShare = record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?;
+
+                    return Ok(permission_share);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {
@@ -237,18 +297,32 @@ impl PermissionShareService {
         permission_share_id: PermissionShareId,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let share: PermissionShare = self
-            .permission_share_repo
+        let record = self.get_record_by_id(permission_share_id).await?;
+        let owner_account_email = record.owner_account_email();
+        let target_account_email = record.target_account_email();
+        let share: PermissionShare = record.share.try_into()?;
+
+        self.authorize_view(&share, &owner_account_email, &target_account_email, auth)
+            .map_err(|err| match err {
+                PermissionShareError::Unauthorized(_) => {
+                    PermissionShareError::PermissionShareNotFound(permission_share_id)
+                }
+                other => other,
+            })?;
+
+        Ok(share)
+    }
+
+    async fn get_record_by_id(
+        &self,
+        permission_share_id: PermissionShareId,
+    ) -> Result<PermissionShareAuthExtRevisionRecord, PermissionShareError> {
+        self.permission_share_repo
             .get_by_id(permission_share_id.0)
             .await?
             .ok_or(PermissionShareError::PermissionShareNotFound(
                 permission_share_id,
-            ))?
-            .try_into()?;
-
-        self.authorize_view(&share, auth)?;
-
-        Ok(share)
+            ))
     }
 
     pub async fn get_by_owner_and_name(
@@ -257,7 +331,13 @@ impl PermissionShareService {
         name: &str,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        auth.authorize_account_action(owner_account_id, AccountAction::ViewPermissionShare)?;
+        let owner_account = self.get_account(owner_account_id, auth).await?;
+        authorize_permission_share_permission(
+            auth,
+            &owner_account.email,
+            AccountPermissionShareVerb::View,
+            AccountPermissionShareResourcePattern::Name(PermissionShareName(name.to_string())),
+        )?;
 
         self.permission_share_repo
             .get_by_owner_and_name(owner_account_id.0, name)
@@ -274,14 +354,28 @@ impl PermissionShareService {
         owner_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
-        auth.authorize_account_action(owner_account_id, AccountAction::ViewPermissionShare)?;
+        let owner_account = self.get_account(owner_account_id, auth).await?;
 
-        self.permission_share_repo
+        let shares = self
+            .permission_share_repo
             .get_for_owner(owner_account_id.0)
             .await?
             .into_iter()
             .map(|record| record.try_into().map_err(Into::into))
-            .collect()
+            .collect::<Result<Vec<_>, PermissionShareError>>()?;
+
+        Ok(shares
+            .into_iter()
+            .filter(|share: &PermissionShare| {
+                authorize_permission_share_permission(
+                    auth,
+                    &owner_account.email,
+                    AccountPermissionShareVerb::View,
+                    AccountPermissionShareResourcePattern::Name(share.name.clone()),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_for_target(
@@ -289,14 +383,28 @@ impl PermissionShareService {
         target_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
-        auth.authorize_account_action(target_account_id, AccountAction::ViewPermissionShare)?;
+        let target_account = self.get_account(target_account_id, auth).await?;
 
-        self.permission_share_repo
+        let shares = self
+            .permission_share_repo
             .get_for_target(target_account_id.0)
             .await?
             .into_iter()
             .map(|record| record.try_into().map_err(Into::into))
-            .collect()
+            .collect::<Result<Vec<_>, PermissionShareError>>()?;
+
+        Ok(shares
+            .into_iter()
+            .filter(|share: &PermissionShare| {
+                authorize_permission_share_permission(
+                    auth,
+                    &target_account.email,
+                    AccountPermissionShareVerb::View,
+                    AccountPermissionShareResourcePattern::Name(share.name.clone()),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn active_share_cards_for_target(
@@ -316,13 +424,32 @@ impl PermissionShareService {
             .collect()
     }
 
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, PermissionShareError> {
+    async fn get_account(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Account, PermissionShareError> {
         self.account_service
-            .get(account_id, &AuthCtx::System)
+            .get(account_id, auth)
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    PermissionShareError::TargetAccountNotFound(account_id)
+                    PermissionShareError::TargetAccountNotFound(account_id.to_string())
+                }
+                other => other.into(),
+            })
+    }
+
+    async fn get_account_by_email(
+        &self,
+        account_email: &AccountEmail,
+    ) -> Result<Account, PermissionShareError> {
+        self.account_service
+            .get_by_email(account_email.as_str(), &AuthCtx::System)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountByEmailNotFound(_) | AccountError::Unauthorized(_) => {
+                    PermissionShareError::TargetAccountNotFound(account_email.as_str().to_string())
                 }
                 other => other.into(),
             })
@@ -333,12 +460,13 @@ impl PermissionShareService {
         permission_share_id: PermissionShareId,
         data: &PermissionShareData,
         target_account: &str,
+        auth: &AuthCtx,
     ) -> Result<CardRecord, PermissionShareError> {
         let parsed = self.parse_and_validate_data_for_target(data, target_account)?;
-        let card_id = Uuid::now_v7();
+        validate_derivation(auth, &parsed)?;
 
         Ok(CardRecord::creation(
-            CardId(card_id),
+            CardId::new(),
             Vec::new(),
             parsed.lower_positive,
             parsed.lower_negative,
@@ -368,18 +496,44 @@ impl PermissionShareService {
     fn authorize_view(
         &self,
         share: &PermissionShare,
+        owner_account_email: &AccountEmail,
+        target_account_email: &AccountEmail,
         auth: &AuthCtx,
     ) -> Result<(), PermissionShareError> {
-        auth.authorize_account_action(share.owner_account_id, AccountAction::ViewPermissionShare)
-            .or_else(|_| {
-                auth.authorize_account_action(
-                    share.target_account_id,
-                    AccountAction::ViewPermissionShare,
-                )
-            })?;
+        authorize_permission_share_permission(
+            auth,
+            owner_account_email,
+            AccountPermissionShareVerb::View,
+            AccountPermissionShareResourcePattern::Name(share.name.clone()),
+        )
+        .or_else(|_| {
+            authorize_permission_share_permission(
+                auth,
+                target_account_email,
+                AccountPermissionShareVerb::View,
+                AccountPermissionShareResourcePattern::Name(share.name.clone()),
+            )
+        })?;
 
         Ok(())
     }
+}
+
+fn authorize_permission_share_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    verb: AccountPermissionShareVerb,
+    resource: AccountPermissionShareResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::AccountPermissionShare(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::Account {
+                account: account_email.clone(),
+            },
+            resource,
+        },
+    ))
 }
 
 struct ParsedPermissionShareData {
@@ -410,11 +564,42 @@ fn validate_recipient(
 ) -> Result<(), PermissionShareError> {
     match recipient {
         RecipientPattern::Any => Ok(()),
-        RecipientPattern::Account { account } if account == target_account => Ok(()),
+        RecipientPattern::Account { account } if account.as_str() == target_account => Ok(()),
         _ => Err(PermissionShareError::InvalidRecipient {
             target_account: target_account.to_string(),
         }),
     }
+}
+
+fn validate_derivation(
+    auth: &AuthCtx,
+    parsed: &ParsedPermissionShareData,
+) -> Result<(), PermissionShareError> {
+    match auth {
+        AuthCtx::System => Ok(()),
+        AuthCtx::User(user) => {
+            validate_effective_surface_derivation(&user.effective_surface, parsed)
+        }
+        AuthCtx::AdminImpersonation(ctx) => {
+            validate_effective_surface_derivation(&ctx.effective_surface, parsed)
+        }
+        AuthCtx::Agent(_) => Err(PermissionShareError::GrantNotDelegable(
+            "agent contexts cannot delegate permission grants".to_string(),
+        )),
+    }
+}
+
+fn validate_effective_surface_derivation(
+    effective_surface: &EffectiveSurface,
+    parsed: &ParsedPermissionShareData,
+) -> Result<(), PermissionShareError> {
+    effective_surface
+        .validates_derivation(&parsed.lower_positive, &parsed.upper_positive)
+        .map_err(derivation_error)
+}
+
+fn derivation_error(error: CardAlgebraError) -> PermissionShareError {
+    PermissionShareError::GrantNotDelegable(format!("{error:?}"))
 }
 
 fn invalid_grant(grant: &str, err: CardParseError) -> PermissionShareError {

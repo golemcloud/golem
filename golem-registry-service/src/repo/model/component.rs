@@ -17,19 +17,19 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationId;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hashable};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_service_base::model::component::Component;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -163,14 +163,21 @@ impl ComponentRevisionRecord {
                                 .map(|e| {
                                     Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
-                                            |reason| diff::DiffError::TypedConfigJsonConversion {
-                                                operation:
-                                                    "component revision to_diffable config entry conversion",
-                                                path: e.path.join("."),
-                                                reason,
-                                            },
-                                        )?),
+                                        NormalizedJsonValue::new(
+                                            golem_common::schema::render::to_json_value(
+                                                e.value.graph(),
+                                                e.value.root_type(),
+                                                e.value.value(),
+                                            )
+                                            .map_err(|reason| {
+                                                diff::DiffError::TypedConfigJsonConversion {
+                                                    operation:
+                                                        "component revision to_diffable config entry conversion",
+                                                    path: e.path.join("."),
+                                                    reason: reason.to_string(),
+                                                }
+                                            })?,
+                                        ),
                                     ))
                                 })
                                 .collect::<Result<_, _>>()?,
@@ -239,11 +246,52 @@ pub struct ComponentExtRevisionRecord {
     pub revision: ComponentRevisionRecord,
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub component: ComponentExtRevisionRecord,
+
+    pub application_id: Uuid,
+    pub application_name: String,
+    pub owner_account_id: Uuid,
+    pub owner_account_email: String,
+    pub environment_name: String,
+    pub environment_revision_id: i64,
+    pub environment_compatibility_check: bool,
+    pub environment_version_check: bool,
+    pub environment_security_overrides: bool,
+}
+
+impl ComponentAuthExtRevisionRecord {
+    pub fn try_into_model(self) -> Result<Component, RepoError> {
+        let Self {
+            component,
+            application_id,
+            application_name,
+            owner_account_id,
+            owner_account_email,
+            environment_name,
+            ..
+        } = self;
+
+        component.try_into_model(
+            ApplicationId(application_id),
+            AccountId(owner_account_id),
+            AccountEmail::new(owner_account_email),
+            ApplicationName(application_name),
+            EnvironmentName(environment_name),
+        )
+    }
+}
+
 impl ComponentExtRevisionRecord {
     pub fn try_into_model(
         self,
         application_id: ApplicationId,
         account_id: AccountId,
+        account_email: AccountEmail,
+        application_name: ApplicationName,
+        environment_name: EnvironmentName,
     ) -> Result<Component, RepoError> {
         Ok(Component {
             id: ComponentId(self.revision.component_id),
@@ -251,6 +299,9 @@ impl ComponentExtRevisionRecord {
             environment_id: EnvironmentId(self.environment_id),
             application_id,
             account_id,
+            account_email,
+            application_name,
+            environment_name,
             component_name: ComponentName(self.name),
             component_size: self.revision.size.into(),
             metadata: self.revision.metadata.into_value(),

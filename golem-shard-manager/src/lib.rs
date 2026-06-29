@@ -80,6 +80,7 @@ pub async fn run(
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), shard_manager_config.http_port),
         registry,
+        shard_manager_config.runtime_metrics_sampling_interval,
         "shard manager is running",
         join_set,
     )

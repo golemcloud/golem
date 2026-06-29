@@ -16,6 +16,8 @@
 
 package golem.host.js
 
+import golem.host.js.schema.JsTypedSchemaValue
+
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSName
 
@@ -72,7 +74,7 @@ object JsDurableExecutionState {
 sealed trait JsPersistedDurableFunctionInvocation extends js.Object {
   def timestamp: JsDatetime               = js.native
   def functionName: String                = js.native
-  def response: JsValueAndType            = js.native
+  def response: JsTypedSchemaValue        = js.native
   def functionType: JsDurableFunctionType = js.native
   def entryVersion: JsOplogEntryVersion   = js.native
 }
@@ -81,7 +83,7 @@ object JsPersistedDurableFunctionInvocation {
   def apply(
     timestamp: JsDatetime,
     functionName: String,
-    response: JsValueAndType,
+    response: JsTypedSchemaValue,
     functionType: JsDurableFunctionType,
     entryVersion: JsOplogEntryVersion
   ): JsPersistedDurableFunctionInvocation =

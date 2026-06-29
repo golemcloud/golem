@@ -16,8 +16,9 @@ use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
 use futures::future::ready;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
+use golem_common::model::card::EffectiveSurface;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -72,8 +73,10 @@ pub struct AgentConfig {
     pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
+    pub created_by_email: AccountEmail,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
+    pub agent_effective_surface: EffectiveSurface,
 }
 
 impl AgentConfig {
@@ -83,8 +86,10 @@ impl AgentConfig {
         current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
+        created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
+        agent_effective_surface: EffectiveSurface,
     ) -> AgentConfig {
         AgentConfig {
             deleted_regions,
@@ -92,8 +97,10 @@ impl AgentConfig {
             current_filesystem_storage_usage,
             component_revision_for_replay,
             created_by,
+            created_by_email,
             initial_agent_config,
             last_snapshot_index,
+            agent_effective_surface,
         }
     }
 
@@ -423,7 +430,7 @@ impl TrapType {
                             semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                         },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
-                            // The generic read-only check inside `Durability::new` reports
+                            // The generic read-only check inside `begin_durable_function` reports
                             // violations as `WorkerExecutorError::ReadOnlyViolation` so the
                             // trap survives `WorkerExecutorError -> wasmtime::Error -> ...`
                             // conversions (which would otherwise discard the original
@@ -935,8 +942,8 @@ mod tests {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
                 golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
-                    "OplogEntry::HostCall",
-                    "EndRemoteWrite { .. }",
+                    "OplogEntry::Start",
+                    "End { .. }",
                 ),
             ),
             OplogIndex::INITIAL,
@@ -952,8 +959,8 @@ mod tests {
                     msg.contains("Unexpected oplog entry during replay"),
                     "unexpected message: {msg}"
                 );
-                assert!(msg.contains("OplogEntry::HostCall"));
-                assert!(msg.contains("EndRemoteWrite"));
+                assert!(msg.contains("OplogEntry::Start"));
+                assert!(msg.contains("End"));
             }
             other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
         }
@@ -1007,8 +1014,8 @@ mod tests {
         // classification.
         let wasmtime_error = wasmtime::Error::from(
             golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
-                "OplogEntry::HostCall",
-                "BeginRemoteWrite { .. }",
+                "OplogEntry::Start",
+                "Cancelled { .. }",
             ),
         );
         let anyhow_error: anyhow::Error = wasmtime_error.into();

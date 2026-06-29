@@ -13,46 +13,82 @@
 // limitations under the License.
 
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
+use crate::model::card::{Card, CardId};
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::lucene::Query;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
-    NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
-    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
-    PublicOplogEntry, PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogPayload,
+    PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicLocalSpanData, PublicOplogEntry, PublicSnapshotData, PublicSpanData,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
     SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
-use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
-use golem_wasm::analysis::analysed_type::{
-    bool, r#enum, f64, field, handle, list, option, record, result_err, result_ok, s16, s32, str,
-    tuple, u64, variant,
-};
-use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use crate::schema::IntoTypedSchemaValue;
+use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
+use crate::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
+use crate::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
 use test_r::test;
 use uuid::Uuid;
+
+/// Build a single-root [`TypedSchemaValue`] fixture from an anonymous schema
+/// root and a value tree.
+fn typed(root: SchemaType, value: SchemaValue) -> TypedSchemaValue {
+    TypedSchemaValue::new(SchemaGraph::anonymous(root), value)
+}
+
+fn test_card(card_id: CardId) -> Card {
+    Card {
+        card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    }
+}
+
+fn nf(name: &str, body: SchemaType) -> NamedFieldType {
+    NamedFieldType {
+        name: name.to_string(),
+        body,
+        metadata: Default::default(),
+    }
+}
+
+fn vc(name: &str, payload: Option<SchemaType>) -> VariantCaseType {
+    VariantCaseType {
+        name: name.to_string(),
+        payload,
+        metadata: Default::default(),
+    }
+}
 
 #[test]
 fn create_serialization_poem_serde_equivalence() {
@@ -73,9 +109,9 @@ fn create_serialization_poem_serde_equivalence() {
             .into_iter()
             .collect(),
         created_by: AccountId::new(),
-        local_agent_config: vec![TypedAgentConfigEntry {
+        local_agent_config: vec![PublicTypedAgentConfigEntry {
             path: vec!["foo".to_string(), "bar".to_string()],
-            value: 1.into_value_and_type(),
+            value: 1i32.into_typed_schema_value().unwrap(),
         }],
         environment_id: EnvironmentId::new(),
         parent: Some(AgentId {
@@ -102,18 +138,15 @@ fn create_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn host_call_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::HostCall(HostCallParams {
+fn start_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Start(StartParams {
         timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
         function_name: "test".to_string(),
-        request: ValueAndType {
-            value: Value::String("test".to_string()),
-            typ: str(),
-        },
-        response: ValueAndType {
-            value: Value::List(vec![Value::U64(1)]),
-            typ: list(u64()),
-        },
+        request: Some(typed(
+            SchemaType::string(),
+            SchemaValue::String("test".to_string()),
+        )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -122,21 +155,41 @@ fn host_call_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn host_call_with_handle_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::HostCall(HostCallParams {
+fn end_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::End(EndParams {
         timestamp: Timestamp::now_utc().rounded(),
-        function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
-        request: ValueAndType {
-            value: Value::Handle {
-                uri: "urn:worker:component-id/worker-name".to_string(),
-                resource_id: 42,
+        start_index: crate::base_model::OplogIndex::from_u64(7),
+        response: Some(typed(
+            SchemaType::list(SchemaType::u64()),
+            SchemaValue::List {
+                elements: vec![SchemaValue::U64(1)],
             },
-            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-        },
-        response: ValueAndType {
-            value: Value::Tuple(vec![Value::U64(5)]),
-            typ: tuple(vec![u64()]),
-        },
+        )),
+        forced_commit: false,
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn start_with_handle_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(crate::base_model::OplogIndex::from_u64(3)),
+        function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
+        request: Some(typed(
+            SchemaType::record(vec![
+                nf("uri", SchemaType::string()),
+                nf("resource-id", SchemaType::u64()),
+            ]),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("urn:worker:component-id/worker-name".to_string()),
+                    SchemaValue::U64(42),
+                ],
+            },
+        )),
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -145,54 +198,129 @@ fn host_call_with_handle_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn host_call_with_complex_values_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::HostCall(HostCallParams {
+fn start_with_complex_values_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Start(StartParams {
         timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
         function_name: "wasi:keyvalue/store.{get}".to_string(),
-        request: ValueAndType {
-            value: Value::Record(vec![
-                Value::String("key".to_string()),
-                Value::Option(Some(Box::new(Value::List(vec![
-                    Value::U8(1),
-                    Value::U8(2),
-                ])))),
-                Value::Result(Ok(Some(Box::new(Value::Tuple(vec![
-                    Value::Bool(true),
-                    Value::F64(1.23),
-                ]))))),
-                Value::Variant {
-                    case_idx: 1,
-                    case_value: Some(Box::new(Value::S32(-42))),
-                },
-                Value::Flags(vec![true, false, true]),
-                Value::Enum(2),
-            ]),
-            typ: record(vec![
-                field("name", str()),
-                field(
+        request: Some(typed(
+            SchemaType::record(vec![
+                nf("name", SchemaType::string()),
+                nf(
                     "data",
-                    option(list(golem_wasm::analysis::analysed_type::u8())),
+                    SchemaType::option(SchemaType::list(SchemaType::u8())),
                 ),
-                field("status", result_ok(tuple(vec![bool(), f64()]))),
-                field(
+                nf(
+                    "status",
+                    SchemaType::result(ResultSpec {
+                        ok: Some(Box::new(SchemaType::tuple(vec![
+                            SchemaType::bool(),
+                            SchemaType::f64(),
+                        ]))),
+                        err: None,
+                    }),
+                ),
+                nf(
                     "kind",
-                    variant(vec![
-                        golem_wasm::analysis::analysed_type::case("none", str()),
-                        golem_wasm::analysis::analysed_type::case("some", s32()),
+                    SchemaType::variant(vec![
+                        vc("none", Some(SchemaType::string())),
+                        vc("some", Some(SchemaType::s32())),
                     ]),
                 ),
-                field(
+                nf(
                     "perms",
-                    golem_wasm::analysis::analysed_type::flags(&["read", "write", "exec"]),
+                    SchemaType::flags(vec![
+                        "read".to_string(),
+                        "write".to_string(),
+                        "exec".to_string(),
+                    ]),
                 ),
-                field("color", r#enum(&["red", "green", "blue"])),
+                nf(
+                    "color",
+                    SchemaType::r#enum(vec![
+                        "red".to_string(),
+                        "green".to_string(),
+                        "blue".to_string(),
+                    ]),
+                ),
             ]),
-        },
-        response: ValueAndType {
-            value: Value::Result(Err(Some(Box::new(Value::String("not found".to_string()))))),
-            typ: result_err(str()),
-        },
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("key".to_string()),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::List {
+                            elements: vec![SchemaValue::U8(1), SchemaValue::U8(2)],
+                        })),
+                    },
+                    SchemaValue::Result(ResultValuePayload::Ok {
+                        value: Some(Box::new(SchemaValue::Tuple {
+                            elements: vec![SchemaValue::Bool(true), SchemaValue::F64(1.23)],
+                        })),
+                    }),
+                    SchemaValue::Variant(VariantValuePayload {
+                        case: 1,
+                        payload: Some(Box::new(SchemaValue::S32(-42))),
+                    }),
+                    SchemaValue::Flags {
+                        bits: vec![true, false, true],
+                    },
+                    SchemaValue::Enum { case: 2 },
+                ],
+            },
+        )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn matcher_matches_payload_less_variant_case_name() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "test".to_string(),
+        request: Some(typed(
+            SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
+            SchemaValue::Variant(VariantValuePayload {
+                case: 0,
+                payload: None,
+            }),
+        )),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+
+    assert!(entry.matches(&Query::parse("none").unwrap()));
+    assert!(entry.matches(&Query::parse("request:none").unwrap()));
+}
+
+#[test]
+fn matcher_matches_variant_payload_under_case_path() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "test".to_string(),
+        request: Some(typed(
+            SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
+            SchemaValue::Variant(VariantValuePayload {
+                case: 1,
+                payload: Some(Box::new(SchemaValue::U32(42))),
+            }),
+        )),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+
+    assert!(entry.matches(&Query::parse("some").unwrap()));
+    assert!(entry.matches(&Query::parse("request.some:42").unwrap()));
+}
+
+#[test]
+fn cancelled_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Cancelled(CancelledParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        start_index: crate::base_model::OplogIndex::from_u64(7),
+        partial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -206,22 +334,23 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
-            function_input: DataValue::Tuple(ElementValues {
-                elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::String("test".to_string()),
-                            typ: str(),
+            function_input: typed(
+                SchemaType::tuple(vec![
+                    SchemaType::string(),
+                    SchemaType::record(vec![
+                        nf("x", SchemaType::s16()),
+                        nf("y", SchemaType::s16()),
+                    ]),
+                ]),
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::String("test".to_string()),
+                        SchemaValue::Record {
+                            fields: vec![SchemaValue::S16(1), SchemaValue::S16(-1)],
                         },
-                    }),
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                            typ: record(vec![field("x", s16()), field("y", s16())]),
-                        },
-                    }),
-                ],
-            }),
+                    ],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec!["a".to_string(), "b".to_string()],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -251,15 +380,16 @@ fn agent_invocation_finished_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
         result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
-            output: DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType {
-                        value: Value::Enum(1),
-                        typ: r#enum(&["red", "green", "blue"]),
-                    },
-                })],
-            }),
+            output: typed(
+                SchemaType::r#enum(vec![
+                    "red".to_string(),
+                    "green".to_string(),
+                    "blue".to_string(),
+                ]),
+                SchemaValue::Enum { case: 1 },
+            ),
         }),
+        method_name: Some("test".to_string()),
         consumed_fuel: 100,
         component_revision: ComponentRevision::INITIAL,
     });
@@ -358,40 +488,17 @@ fn end_atomic_region_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn begin_remote_write_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
-        timestamp: Timestamp::now_utc().rounded(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn end_remote_write_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        begin_index: OplogIndex::from_u64(1),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
 fn agent_invocation_started_with_initialization_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-            constructor_parameters: DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType {
-                        value: Value::String("test".to_string()),
-                        typ: str(),
-                    },
-                })],
-            }),
+            constructor_parameters: typed(
+                SchemaType::tuple(vec![SchemaType::string()]),
+                SchemaValue::Tuple {
+                    elements: vec![SchemaValue::String("test".to_string())],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec![],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -415,14 +522,12 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-            constructor_parameters: DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType {
-                        value: Value::Tuple(vec![]),
-                        typ: tuple(vec![]),
-                    },
-                })],
-            }),
+            constructor_parameters: typed(
+                SchemaType::tuple(vec![SchemaType::tuple(vec![])]),
+                SchemaValue::Tuple {
+                    elements: vec![SchemaValue::Tuple { elements: vec![] }],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec![],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -447,22 +552,23 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
-            function_input: DataValue::Tuple(ElementValues {
-                elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::String("test".to_string()),
-                            typ: str(),
+            function_input: typed(
+                SchemaType::tuple(vec![
+                    SchemaType::string(),
+                    SchemaType::record(vec![
+                        nf("x", SchemaType::s16()),
+                        nf("y", SchemaType::s16()),
+                    ]),
+                ]),
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::String("test".to_string()),
+                        SchemaValue::Record {
+                            fields: vec![SchemaValue::S16(1), SchemaValue::S16(-1)],
                         },
-                    }),
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                            typ: record(vec![field("x", s16()), field("y", s16())]),
-                        },
-                    }),
-                ],
-            }),
+                    ],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec!["a".to_string(), "b".to_string()],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -813,6 +919,29 @@ fn snapshot_raw_serialization_poem_serde_equivalence() {
 }
 
 #[test]
+fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
+    let card = test_card(CardId::new());
+    let active_cards = vec![card.clone().into()];
+    let entry = OplogEntry::Snapshot {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: OplogPayload::Inline(Box::new(vec![1, 2, 3, 4])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards,
+    };
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+
+    match decoded {
+        OplogEntry::Snapshot { active_cards, .. } => {
+            assert_eq!(active_cards, vec![card.into()]);
+        }
+        other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
 fn snapshot_json_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Snapshot(SnapshotParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -895,55 +1024,139 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
     assert_eq!(entry, deserialized);
 }
 
-#[test]
-fn oplog_entry_type_matches_wit() {
-    use crate::component_introspection::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
-    use crate::model::oplog::OplogEntry;
-    use golem_wasm::IntoValue;
-    use std::path::PathBuf;
+mod scope_scan {
+    use crate::model::oplog::host_functions::HostFunctionName;
+    use crate::model::oplog::{DurableFunctionType, OplogEntry, ScopeScanState};
+    use crate::model::{OplogIndex, Timestamp};
+    use test_r::test;
 
-    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
-    let mut resolver =
-        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
+    fn idx(i: u64) -> OplogIndex {
+        OplogIndex::from_u64(i)
+    }
 
-    let wit_type = resolver
-        .analysed_type(&TypeName {
-            package: Some("golem:api@1.5.0".to_string()),
-            owner: TypeOwner::Interface("oplog".to_string()),
-            name: Some("oplog-entry".to_string()),
-        })
-        .expect("Failed to find oplog-entry type in WIT");
+    fn start(parent: Option<u64>, durable_function_type: DurableFunctionType) -> OplogEntry {
+        OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: parent.map(idx),
+            function_name: HostFunctionName::Custom("test".to_string()),
+            request: None,
+            durable_function_type,
+        }
+    }
 
-    let rust_type = OplogEntry::get_type();
+    /// Replays the forward scan that `lookup_oplog_entry_with_condition_and_state` performs,
+    /// returning `true` if no entry between the scope `Start` (`root`) and its `End` is a foreign
+    /// concurrent side effect (i.e. `for_all_intermediate` holds for all of `entries`).
+    fn scan(
+        root: u64,
+        entries: &[(u64, OplogEntry)],
+        persistence_level: crate::model::oplog::PersistenceLevel,
+    ) -> bool {
+        let mut state = ScopeScanState::new(idx(root), persistence_level);
+        let mut ok = true;
+        for (i, entry) in entries {
+            entry.track_scope_membership(idx(*i), &mut state);
+            if !entry.no_concurrent_side_effect(idx(root), &state) {
+                ok = false;
+            }
+        }
+        ok
+    }
 
-    assert_eq!(
-        rust_type, wit_type,
-        "OplogEntry::get_type() does not match the WIT oplog-entry definition"
-    );
-}
+    fn persist_all() -> crate::model::oplog::PersistenceLevel {
+        crate::model::oplog::PersistenceLevel::Smart
+    }
 
-#[test]
-fn public_oplog_entry_type_matches_wit() {
-    use crate::component_introspection::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
-    use golem_wasm::IntoValue;
-    use std::path::PathBuf;
+    #[test]
+    fn direct_child_scope_is_allowed() {
+        // An HTTP call inside a batched-write scope writes a `Start` whose parent is the scope root.
+        let entries = vec![(
+            11,
+            start(
+                Some(10),
+                DurableFunctionType::WriteRemoteBatched(Some(idx(10))),
+            ),
+        )];
+        assert!(scan(10, &entries, persist_all()));
+    }
 
-    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
-    let mut resolver =
-        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
+    #[test]
+    fn transitive_grandchild_scope_is_allowed() {
+        // A grandchild's parent is the inner scope (11), not the root (10); transitive tracking
+        // must still recognise it as part of the scope.
+        let entries = vec![
+            (
+                11,
+                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (12, start(Some(11), DurableFunctionType::WriteRemote)),
+        ];
+        assert!(scan(10, &entries, persist_all()));
+    }
 
-    let wit_type = resolver
-        .analysed_type(&TypeName {
-            package: Some("golem:api@1.5.0".to_string()),
-            owner: TypeOwner::Interface("oplog".to_string()),
-            name: Some("public-oplog-entry".to_string()),
-        })
-        .expect("Failed to find public-oplog-entry type in WIT");
+    #[test]
+    fn foreign_read_remote_is_allowed() {
+        let entries = vec![(11, start(None, DurableFunctionType::ReadRemote))];
+        assert!(scan(10, &entries, persist_all()));
+    }
 
-    let rust_type = PublicOplogEntry::get_type();
+    #[test]
+    fn foreign_write_remote_is_rejected() {
+        let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
+        assert!(!scan(10, &entries, persist_all()));
+    }
 
-    assert_eq!(
-        rust_type, wit_type,
-        "PublicOplogEntry::get_type() does not match the WIT public-oplog-entry definition"
-    );
+    #[test]
+    fn foreign_batched_scope_is_rejected() {
+        let entries = vec![(
+            11,
+            start(None, DurableFunctionType::WriteRemoteBatched(None)),
+        )];
+        assert!(!scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn grandchild_of_foreign_scope_is_rejected() {
+        // The intermediate scope (11) is foreign (parent is unrelated 99), so its descendant (12)
+        // must not be absorbed into the root scope.
+        let entries = vec![
+            (
+                11,
+                start(Some(99), DurableFunctionType::WriteRemoteBatched(None)),
+            ),
+            (12, start(Some(11), DurableFunctionType::WriteRemote)),
+        ];
+        assert!(!scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn persist_nothing_ignores_foreign_side_effects() {
+        let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
+        assert!(scan(
+            10,
+            &entries,
+            crate::model::oplog::PersistenceLevel::PersistNothing
+        ));
+    }
+
+    #[test]
+    fn end_and_cancelled_markers_are_not_side_effects() {
+        let end = OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(11),
+            response: None,
+            forced_commit: false,
+        };
+        let cancelled = OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(12),
+            partial: None,
+        };
+        let entries = vec![
+            (11, start(Some(10), DurableFunctionType::WriteRemote)),
+            (12, end),
+            (13, cancelled),
+        ];
+        assert!(scan(10, &entries, persist_all()));
+    }
 }

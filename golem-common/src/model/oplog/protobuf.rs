@@ -20,34 +20,38 @@ use super::{
     ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicTypedAgentConfigEntry,
+    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotBasedUpdateParameters, StringAttributeValue, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
+use crate::base_model::oplog::{
+    CardInstallFailure, PublicQueuedCardEvent, PublicQueuedCardEventCard, QueuedCardEvent,
+};
 use crate::model::AgentInvocationResult;
 use crate::model::Empty;
-use crate::model::agent::DataValue;
-use crate::model::agent::UntypedDataValue;
+use crate::model::card::{CardId, StoredCard};
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::payload::host_functions::{
-    HostFunctionName, host_request_from_value_and_type, host_response_from_value_and_type,
+    HostFunctionName, host_request_from_typed_schema_value,
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams,
+    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
@@ -56,15 +60,207 @@ use crate::model::oplog::{
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
-use crate::model::worker::TypedAgentConfigEntry;
+use crate::resource_runtime::ResourceTypeId;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
     AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
     oplog_entry, wrapped_function_type,
 };
-use golem_wasm::wasmtime::ResourceTypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
+
+impl From<PublicTypedAgentConfigEntry>
+    for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
+{
+    fn from(value: PublicTypedAgentConfigEntry) -> Self {
+        Self {
+            path: value.path,
+            value: Some(value.value.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry>
+    for PublicTypedAgentConfigEntry
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path,
+            value: value
+                .value
+                .ok_or("Missing value field in PublicTypedAgentConfigEntry")?
+                .try_into()?,
+        })
+    }
+}
+
+fn public_queued_card_event_from_proto(
+    value: golem_api_grpc::proto::golem::worker::QueuedCardEvent,
+) -> Result<PublicQueuedCardEvent, String> {
+    use golem_api_grpc::proto::golem::worker::queued_card_event::Event;
+
+    match value.event.ok_or("Missing queued card event")? {
+        Event::Install(event) => Ok(PublicQueuedCardEvent::Install(PublicQueuedCardEventCard {
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
+        })),
+        Event::Revoke(event) => Ok(PublicQueuedCardEvent::Revoke(PublicQueuedCardEventCard {
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
+        })),
+    }
+}
+
+fn public_queued_card_event_to_proto(
+    value: PublicQueuedCardEvent,
+) -> golem_api_grpc::proto::golem::worker::QueuedCardEvent {
+    use golem_api_grpc::proto::golem::worker::queued_card_event::Event;
+
+    let event = match value {
+        PublicQueuedCardEvent::Install(event) => {
+            Event::Install(golem_api_grpc::proto::golem::worker::QueuedCardEventCard {
+                card_id: Some(event.card_id.0.into()),
+            })
+        }
+        PublicQueuedCardEvent::Revoke(event) => {
+            Event::Revoke(golem_api_grpc::proto::golem::worker::QueuedCardEventCard {
+                card_id: Some(event.card_id.0.into()),
+            })
+        }
+    };
+
+    golem_api_grpc::proto::golem::worker::QueuedCardEvent { event: Some(event) }
+}
+
+fn raw_queued_card_event_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawQueuedCardEvent,
+) -> Result<QueuedCardEvent, String> {
+    use golem_api_grpc::proto::golem::worker::raw_queued_card_event::Event;
+
+    match value.event.ok_or("Missing queued card event")? {
+        Event::Install(event) => {
+            let card: StoredCard = crate::serialization::deserialize(&event.card)
+                .map_err(|err| format!("Failed to deserialize queued install card: {err}"))?;
+            Ok(QueuedCardEvent::install(card))
+        }
+        Event::Revoke(event) => Ok(QueuedCardEvent::revoke(CardId(
+            event.card_id.ok_or("Missing card_id")?.into(),
+        ))),
+    }
+}
+
+fn raw_queued_card_event_to_proto(
+    value: QueuedCardEvent,
+) -> golem_api_grpc::proto::golem::worker::RawQueuedCardEvent {
+    use golem_api_grpc::proto::golem::worker::raw_queued_card_event::Event;
+
+    let event = match value {
+        QueuedCardEvent::Install(event) => Event::Install(
+            golem_api_grpc::proto::golem::worker::RawQueuedCardEventCard {
+                card_id: Some(event.card_id.0.into()),
+                card: event
+                    .card
+                    .as_ref()
+                    .map(crate::serialization::serialize)
+                    .transpose()
+                    .expect("Card must be serializable")
+                    .unwrap_or_default(),
+            },
+        ),
+        QueuedCardEvent::Revoke(event) => Event::Revoke(
+            golem_api_grpc::proto::golem::worker::RawQueuedCardEventCard {
+                card_id: Some(event.card_id.0.into()),
+                card: Vec::new(),
+            },
+        ),
+    };
+
+    golem_api_grpc::proto::golem::worker::RawQueuedCardEvent { event: Some(event) }
+}
+
+fn card_install_failure_from_proto(
+    value: golem_api_grpc::proto::golem::worker::CardInstallFailure,
+) -> Result<CardInstallFailure, String> {
+    match value {
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::Unspecified => {
+            Err("Unspecified card install failure".to_string())
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::CardRevoked => {
+            Ok(CardInstallFailure::CardRevoked)
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::NotFound => {
+            Ok(CardInstallFailure::NotFound)
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::RecipientMismatch => {
+            Ok(CardInstallFailure::RecipientMismatch)
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::NotPermitted => {
+            Ok(CardInstallFailure::NotPermitted)
+        }
+    }
+}
+
+fn card_install_failure_to_proto(
+    value: CardInstallFailure,
+) -> golem_api_grpc::proto::golem::worker::CardInstallFailure {
+    match value {
+        CardInstallFailure::CardRevoked => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::CardRevoked
+        }
+        CardInstallFailure::NotFound => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::NotFound
+        }
+        CardInstallFailure::RecipientMismatch => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::RecipientMismatch
+        }
+        CardInstallFailure::NotPermitted => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::NotPermitted
+        }
+    }
+}
+
+fn raw_card_install_failure_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawCardInstallFailure,
+) -> Result<CardInstallFailure, String> {
+    match value {
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::Unspecified => {
+            Err("Unspecified raw card install failure".to_string())
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::CardRevoked => {
+            Ok(CardInstallFailure::CardRevoked)
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotFound => {
+            Ok(CardInstallFailure::NotFound)
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::RecipientMismatch => {
+            Ok(CardInstallFailure::RecipientMismatch)
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotPermitted => {
+            Ok(CardInstallFailure::NotPermitted)
+        }
+    }
+}
+
+fn raw_card_install_failure_to_proto(
+    value: CardInstallFailure,
+) -> golem_api_grpc::proto::golem::worker::RawCardInstallFailure {
+    match value {
+        CardInstallFailure::CardRevoked => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::CardRevoked
+        }
+        CardInstallFailure::NotFound => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotFound
+        }
+        CardInstallFailure::RecipientMismatch => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::RecipientMismatch
+        }
+        CardInstallFailure::NotPermitted => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotPermitted
+        }
+    }
+}
 
 impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
     fn from(value: PersistenceLevel) -> Self {
@@ -343,7 +539,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 local_agent_config: create
                     .config
                     .into_iter()
-                    .map(TypedAgentConfigEntry::try_from)
+                    .map(PublicTypedAgentConfigEntry::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 environment_id: create
                     .environment_id
@@ -372,22 +568,29 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .map(|id| id.into())
                     .ok_or("Missing instance_id in Create entry")?,
             })),
-            oplog_entry::Entry::HostCall(host_call) => {
-                Ok(PublicOplogEntry::HostCall(HostCallParams {
-                    timestamp: host_call.timestamp.ok_or("Missing timestamp field")?.into(),
-                    function_name: host_call.function_name,
-                    request: host_call
-                        .request
-                        .ok_or("Missing request field")?
-                        .try_into()?,
-                    response: host_call
-                        .response
-                        .ok_or("Missing response field")?
-                        .try_into()?,
-                    durable_function_type: host_call
-                        .wrapped_function_type
-                        .ok_or("Missing wrapped_function_type field")?
-                        .try_into()?,
+            oplog_entry::Entry::Start(start) => Ok(PublicOplogEntry::Start(StartParams {
+                timestamp: start.timestamp.ok_or("Missing timestamp field")?.into(),
+                parent_start_index: start
+                    .parent_start_index
+                    .map(crate::base_model::OplogIndex::from_u64),
+                function_name: start.function_name,
+                request: start.request.map(TryInto::try_into).transpose()?,
+                durable_function_type: start
+                    .durable_function_type
+                    .ok_or("Missing durable_function_type field")?
+                    .try_into()?,
+            })),
+            oplog_entry::Entry::End(end) => Ok(PublicOplogEntry::End(EndParams {
+                timestamp: end.timestamp.ok_or("Missing timestamp field")?.into(),
+                start_index: crate::base_model::OplogIndex::from_u64(end.start_index),
+                response: end.response.map(TryInto::try_into).transpose()?,
+                forced_commit: end.forced_commit,
+            })),
+            oplog_entry::Entry::Cancelled(cancelled) => {
+                Ok(PublicOplogEntry::Cancelled(CancelledParams {
+                    timestamp: cancelled.timestamp.ok_or("Missing timestamp field")?.into(),
+                    start_index: crate::base_model::OplogIndex::from_u64(cancelled.start_index),
+                    partial: cancelled.partial.map(TryInto::try_into).transpose()?,
                 }))
             }
             oplog_entry::Entry::AgentInvocationStarted(agent_invocation_started) => Ok(
@@ -412,6 +615,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .result
                         .ok_or("Missing result field")?
                         .try_into()?,
+                    method_name: agent_invocation_finished.method_name,
                     consumed_fuel: agent_invocation_finished.consumed_fuel,
                     component_revision: agent_invocation_finished.component_revision.try_into()?,
                 }),
@@ -467,23 +671,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     begin_index: OplogIndex::from_u64(end_atomic_region.begin_index),
                 }))
             }
-            oplog_entry::Entry::BeginRemoteWrite(begin_remote_write) => {
-                Ok(PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
-                    timestamp: begin_remote_write
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                }))
-            }
-            oplog_entry::Entry::EndRemoteWrite(end_remote_write) => {
-                Ok(PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
-                    timestamp: end_remote_write
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    begin_index: OplogIndex::from_u64(end_remote_write.begin_index),
-                }))
-            }
+
             oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
                 PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                     timestamp: pending_worker_invocation
@@ -783,6 +971,41 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     name: params.policy_name,
                 }),
             ),
+            oplog_entry::Entry::CardRevoked(params) => {
+                Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    queued_event_index: OplogIndex::from_u64(params.queued_event_index),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
+                }))
+            }
+            oplog_entry::Entry::CardEventQueued(params) => {
+                Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    event: public_queued_card_event_from_proto(
+                        params.event.ok_or("Missing event field")?,
+                    )?,
+                }))
+            }
+            oplog_entry::Entry::CardInstalled(params) => {
+                Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    queued_event_index: params.queued_event_index.map(OplogIndex::from_u64),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
+                }))
+            }
+            oplog_entry::Entry::CardInstallFailed(params) => Ok(
+                PublicOplogEntry::CardInstallFailed(CardInstallFailedParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    queued_event_index: OplogIndex::from_u64(params.queued_event_index),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
+                    reason: card_install_failure_from_proto(
+                        golem_api_grpc::proto::golem::worker::CardInstallFailure::try_from(
+                            params.reason,
+                        )
+                        .map_err(|e| format!("Invalid card install failure: {e}"))?,
+                    )?,
+                }),
+            ),
         }
     }
 }
@@ -823,15 +1046,36 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::HostCall(host_call) => {
+            PublicOplogEntry::Start(start) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::HostCall(
-                        golem_api_grpc::proto::golem::worker::HostCallParameters {
-                            timestamp: Some(host_call.timestamp.into()),
-                            function_name: host_call.function_name.clone(),
-                            request: Some(host_call.request.into()),
-                            response: Some(host_call.response.into()),
-                            wrapped_function_type: Some(host_call.durable_function_type.into()),
+                    entry: Some(oplog_entry::Entry::Start(
+                        golem_api_grpc::proto::golem::worker::StartParameters {
+                            timestamp: Some(start.timestamp.into()),
+                            parent_start_index: start.parent_start_index.map(|id| id.as_u64()),
+                            function_name: start.function_name.clone(),
+                            request: start.request.map(Into::into),
+                            durable_function_type: Some(start.durable_function_type.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::End(end) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                entry: Some(oplog_entry::Entry::End(
+                    golem_api_grpc::proto::golem::worker::EndParameters {
+                        timestamp: Some(end.timestamp.into()),
+                        start_index: end.start_index.as_u64(),
+                        response: end.response.map(Into::into),
+                        forced_commit: end.forced_commit,
+                    },
+                )),
+            },
+            PublicOplogEntry::Cancelled(cancelled) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Cancelled(
+                        golem_api_grpc::proto::golem::worker::CancelledParameters {
+                            timestamp: Some(cancelled.timestamp.into()),
+                            start_index: cancelled.start_index.as_u64(),
+                            partial: cancelled.partial.map(Into::into),
                         },
                     )),
                 }
@@ -854,6 +1098,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             result: Some(agent_invocation_finished.result.try_into()?),
                             consumed_fuel: agent_invocation_finished.consumed_fuel,
                             component_revision: agent_invocation_finished.component_revision.get(),
+                            method_name: agent_invocation_finished.method_name,
                         },
                     )),
                 }
@@ -929,25 +1174,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::BeginRemoteWrite(begin_remote_write) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::BeginRemoteWrite(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(begin_remote_write.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::EndRemoteWrite(end_remote_write) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::EndRemoteWrite(
-                        golem_api_grpc::proto::golem::worker::EndRemoteWriteParameters {
-                            timestamp: Some(end_remote_write.timestamp.into()),
-                            begin_index: end_remote_write.begin_index.into(),
-                        },
-                    )),
-                }
-            }
+
             PublicOplogEntry::PendingAgentInvocation(pending_worker_invocation) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::PendingAgentInvocation(
@@ -1300,6 +1527,50 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
+            PublicOplogEntry::CardRevoked(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardRevoked(
+                        golem_api_grpc::proto::golem::worker::CardRevokedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            queued_event_index: params.queued_event_index.into(),
+                            card_id: Some(params.card_id.0.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardEventQueued(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardEventQueued(
+                        golem_api_grpc::proto::golem::worker::CardEventQueuedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            event: Some(public_queued_card_event_to_proto(params.event)),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardInstalled(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardInstalled(
+                        golem_api_grpc::proto::golem::worker::CardInstalledParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            queued_event_index: params.queued_event_index.map(Into::into),
+                            card_id: Some(params.card_id.0.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardInstallFailed(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardInstallFailed(
+                        golem_api_grpc::proto::golem::worker::CardInstallFailedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            queued_event_index: params.queued_event_index.into(),
+                            card_id: Some(params.card_id.0.into()),
+                            reason: card_install_failure_to_proto(params.reason) as i32,
+                        },
+                    )),
+                }
+            }
         })
     }
 }
@@ -1429,12 +1700,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation::Invocation;
         match value.invocation.ok_or("Missing invocation field")? {
             Invocation::AgentInitialization(init) => {
-                let typed = init
+                let constructor_parameters = init
                     .constructor_parameters
-                    .ok_or("Missing constructor_parameters field")?;
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let constructor_parameters = DataValue::try_from_untyped(untyped, schema)?;
+                    .ok_or("Missing constructor_parameters field")?
+                    .try_into()?;
                 let invocation_context = encode_public_span_data(init.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentInitialization(
                     AgentInitializationParameters {
@@ -1450,12 +1719,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                 ))
             }
             Invocation::AgentMethod(method) => {
-                let typed = method
+                let function_input = method
                     .function_input
-                    .ok_or("Missing function_input field")?;
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let function_input = DataValue::try_from_untyped(untyped, schema)?;
+                    .ok_or("Missing function_input field")?
+                    .try_into()?;
                 let invocation_context = encode_public_span_data(method.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentMethodInvocation(
                     AgentMethodInvocationParameters {
@@ -1546,17 +1813,11 @@ impl TryFrom<PublicAgentInvocation>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation::Invocation;
         let invocation = match value {
             PublicAgentInvocation::AgentInitialization(init) => {
-                let typed_data_value: super::TypedDataValue = init.constructor_parameters.into();
                 let invocation_context = decode_public_span_data(&init.invocation_context, 0);
                 Invocation::AgentInitialization(
                     golem_api_grpc::proto::golem::worker::PublicAgentInitializationInvocation {
                         idempotency_key: Some(init.idempotency_key.into()),
-                        constructor_parameters: Some(
-                            golem_api_grpc::proto::golem::component::TypedDataValue {
-                                value: Some(typed_data_value.value.into()),
-                                schema: Some(typed_data_value.schema.into()),
-                            },
-                        ),
+                        constructor_parameters: Some(init.constructor_parameters.into()),
                         trace_id: init.trace_id.to_string(),
                         trace_states: init.trace_states,
                         invocation_context,
@@ -1564,18 +1825,12 @@ impl TryFrom<PublicAgentInvocation>
                 )
             }
             PublicAgentInvocation::AgentMethodInvocation(method) => {
-                let typed_data_value: super::TypedDataValue = method.function_input.into();
                 let invocation_context = decode_public_span_data(&method.invocation_context, 0);
                 Invocation::AgentMethod(
                     golem_api_grpc::proto::golem::worker::PublicAgentMethodInvocation {
                         idempotency_key: Some(method.idempotency_key.into()),
                         method_name: method.method_name,
-                        function_input: Some(
-                            golem_api_grpc::proto::golem::component::TypedDataValue {
-                                value: Some(typed_data_value.value.into()),
-                                schema: Some(typed_data_value.schema.into()),
-                            },
-                        ),
+                        function_input: Some(method.function_input.into()),
                         trace_id: method.trace_id.to_string(),
                         trace_states: method.trace_states,
                         invocation_context,
@@ -1686,17 +1941,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation_result::Result as ProtoResult;
         match value.result.ok_or("Missing result field")? {
             ProtoResult::AgentInitializationOutput(typed) => {
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let output = DataValue::try_from_untyped(untyped, schema)?;
+                let output = typed.try_into()?;
                 Ok(PublicAgentInvocationResult::AgentInitialization(
                     AgentInvocationOutputParameters { output },
                 ))
             }
             ProtoResult::AgentMethodOutput(typed) => {
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let output = DataValue::try_from_untyped(untyped, schema)?;
+                let output = typed.try_into()?;
                 Ok(PublicAgentInvocationResult::AgentMethod(
                     AgentInvocationOutputParameters { output },
                 ))
@@ -1774,22 +2025,10 @@ impl TryFrom<PublicAgentInvocationResult>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation_result::Result as ProtoResult;
         let result = match value {
             PublicAgentInvocationResult::AgentInitialization(output) => {
-                let typed: super::TypedDataValue = output.output.into();
-                ProtoResult::AgentInitializationOutput(
-                    golem_api_grpc::proto::golem::component::TypedDataValue {
-                        value: Some(typed.value.into()),
-                        schema: Some(typed.schema.into()),
-                    },
-                )
+                ProtoResult::AgentInitializationOutput(output.output.into())
             }
             PublicAgentInvocationResult::AgentMethod(output) => {
-                let typed: super::TypedDataValue = output.output.into();
-                ProtoResult::AgentMethodOutput(
-                    golem_api_grpc::proto::golem::component::TypedDataValue {
-                        value: Some(typed.value.into()),
-                        schema: Some(typed.schema.into()),
-                    },
-                )
+                ProtoResult::AgentMethodOutput(output.output.into())
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
                 ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})
@@ -2177,7 +2416,11 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 env: create.env.into_iter().collect(),
                 environment_id: create.environment_id,
                 created_by: create.created_by,
-                local_agent_config: create.local_agent_config.into_iter().map(Into::into).collect(),
+                local_agent_config: create
+                    .local_agent_config
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()?,
                 parent: create.parent,
                 component_size: create.component_size,
                 initial_total_linear_memory_size: create.initial_total_linear_memory_size,
@@ -2189,8 +2432,8 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 original_phantom_id: create.original_phantom_id,
                 instance_id: create.instance_id
             }),
-            PublicOplogEntry::HostCall(host_call) => {
-                let durable_function_type = match host_call.durable_function_type {
+            PublicOplogEntry::Start(start) => {
+                let durable_function_type = match start.durable_function_type {
                     PublicDurableFunctionType::ReadLocal(_) => DurableFunctionType::ReadLocal,
                     PublicDurableFunctionType::WriteLocal(_) => DurableFunctionType::WriteLocal,
                     PublicDurableFunctionType::ReadRemote(_) => DurableFunctionType::ReadRemote,
@@ -2203,21 +2446,48 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     }
                 };
 
-                let request = OplogPayload::Inline(Box::new(host_request_from_value_and_type(
-                    &host_call.function_name,
-                    host_call.request,
-                )?));
-                let response = OplogPayload::Inline(Box::new(host_response_from_value_and_type(
-                    &host_call.function_name,
-                    host_call.response,
-                )?));
+                let request = start
+                    .request
+                    .map(|value| {
+                        host_request_from_typed_schema_value(&start.function_name, value)
+                            .map(|req| OplogPayload::Inline(Box::new(req)))
+                    })
+                    .transpose()?;
 
-                Ok(OplogEntry::HostCall {
-                    timestamp: host_call.timestamp,
-                    function_name: HostFunctionName::from(host_call.function_name.as_str()),
+                Ok(OplogEntry::Start {
+                    timestamp: start.timestamp,
+                    parent_start_index: start.parent_start_index,
+                    function_name: HostFunctionName::from(start.function_name.as_str()),
                     request,
-                    response,
                     durable_function_type,
+                })
+            }
+            PublicOplogEntry::End(end) => {
+                // The public type carries the response as a `ValueAndType`, but we cannot map it
+                // back to a typed `HostResponse` here without remembering the originating Start's
+                // function name. This converter is only used for snapshot import in tests.
+                // Reconstructing a typed inline response would require pairing this `End` with its
+                // `Start` in the same conversion pass, which is out of scope.
+                let response = end
+                    .response
+                    .map(|_| Err::<OplogPayload<_>, _>("Converting non-empty End response from public to raw oplog entry is not supported".to_string()))
+                    .transpose()?;
+                Ok(OplogEntry::End {
+                    timestamp: end.timestamp,
+                    start_index: end.start_index,
+                    response,
+                    forced_commit: end.forced_commit,
+                })
+            }
+            PublicOplogEntry::Cancelled(cancelled) => {
+                let partial = cancelled
+                    .partial
+                    .map(|_| Err::<OplogPayload<_>, _>("Converting non-empty Cancelled partial response from public to raw oplog entry is not supported".to_string()))
+                    .transpose()?;
+                Ok(OplogEntry::Cancelled {
+                    timestamp: cancelled.timestamp,
+                    start_index: cancelled.start_index,
+                    partial,
                 })
             }
             PublicOplogEntry::AgentInvocationStarted(_) => {
@@ -2228,6 +2498,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp: finished.timestamp,
                     result: OplogPayload::Inline(Box::new(raw_result)),
+                    method_name: finished.method_name,
                     consumed_fuel: finished.consumed_fuel,
                     component_revision: finished.component_revision,
                 })
@@ -2264,15 +2535,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     begin_index: p.begin_index,
                 })
             }
-            PublicOplogEntry::BeginRemoteWrite(p) => {
-                Ok(OplogEntry::BeginRemoteWrite { timestamp: p.timestamp })
-            }
-            PublicOplogEntry::EndRemoteWrite(p) => {
-                Ok(OplogEntry::EndRemoteWrite {
-                    timestamp: p.timestamp,
-                    begin_index: p.begin_index,
-                })
-            }
+
             PublicOplogEntry::PendingAgentInvocation(_) => {
                 Err("Cannot convert PendingAgentInvocation from public to raw oplog entry".to_string())
             }
@@ -2456,6 +2719,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     timestamp: p.timestamp,
                     data: OplogPayload::Inline(Box::new(data)),
                     mime_type,
+                    active_cards: Vec::new(),
                 })
             }
             PublicOplogEntry::OplogProcessorCheckpoint(p) => {
@@ -2476,6 +2740,23 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 timestamp: p.timestamp,
                 name: p.name,
             }),
+            PublicOplogEntry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
+                timestamp: p.timestamp,
+                queued_event_index: p.queued_event_index,
+                card_id: p.card_id,
+            }),
+            PublicOplogEntry::CardEventQueued(_) => {
+                Err("Converting CardEventQueued from public to raw oplog entry is not supported".to_string())
+            }
+            PublicOplogEntry::CardInstalled(_) => {
+                Err("Converting CardInstalled from public to raw oplog entry is not supported".to_string())
+            }
+            PublicOplogEntry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
+                timestamp: p.timestamp,
+                queued_event_index: p.queued_event_index,
+                card_id: p.card_id,
+                reason: p.reason,
+            }),
         }
     }
 }
@@ -2487,9 +2768,11 @@ fn public_agent_invocation_result_to_raw(
         PublicAgentInvocationResult::AgentInitialization(_) => {
             Ok(AgentInvocationResult::AgentInitialization)
         }
-        PublicAgentInvocationResult::AgentMethod(_) => Ok(AgentInvocationResult::AgentMethod {
-            output: UntypedDataValue::Tuple(vec![]),
-        }),
+        PublicAgentInvocationResult::AgentMethod(params) => {
+            Ok(AgentInvocationResult::AgentMethod {
+                output: params.output.into_parts().1,
+            })
+        }
         PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
         PublicAgentInvocationResult::LoadSnapshot(params) => {
             Ok(AgentInvocationResult::LoadSnapshot {
@@ -2834,18 +3117,20 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         use golem_api_grpc::proto::golem::worker::{
             RawActivatePluginParameters, RawAgentInvocationFinishedParameters,
             RawAgentInvocationStartedParameters, RawBeginRemoteTransactionParameters,
-            RawCancelPendingInvocationParameters, RawChangePersistenceLevelParameters,
-            RawCreateParameters, RawCreateResourceParameters, RawDeactivatePluginParameters,
-            RawDropResourceParameters, RawEndAtomicRegionParameters, RawEndRemoteWriteParameters,
-            RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
+            RawCancelPendingInvocationParameters, RawCancelledParameters,
+            RawCardEventQueuedParameters, RawCardInstallFailedParameters,
+            RawCardInstalledParameters, RawCardRevokedParameters,
+            RawChangePersistenceLevelParameters, RawCreateParameters, RawCreateResourceParameters,
+            RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
+            RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
             RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
-            RawGrowMemoryParameters, RawHostCallParameters, RawJumpParameters, RawLogParameters,
+            RawGrowMemoryParameters, RawJumpParameters, RawLogParameters,
             RawOplogProcessorCheckpointParameters, RawOplogRegion,
             RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSetSpanAttributeParameters,
-            RawSnapshotParameters, RawStartSpanParameters, RawSuccessfulUpdateParameters,
-            RawTimestampOnly,
+            RawSnapshotParameters, RawStartParameters, RawStartSpanParameters,
+            RawSuccessfulUpdateParameters, RawTimestampOnly,
         };
 
         let timestamp = value.timestamp();
@@ -2892,17 +3177,35 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 original_phantom_id: original_phantom_id.map(Into::into),
                 instance_id: Some(instance_id.into()),
             }),
-            OplogEntry::HostCall {
+            OplogEntry::Start {
+                parent_start_index,
                 function_name,
                 request,
-                response,
                 durable_function_type,
                 ..
-            } => Entry::HostCall(RawHostCallParameters {
+            } => Entry::Start(RawStartParameters {
+                parent_start_index: parent_start_index.map(|id| id.as_u64()),
                 function_name: function_name.to_string(),
-                request: Some(oplog_payload_to_proto(request)?),
-                response: Some(oplog_payload_to_proto(response)?),
+                request: request.map(oplog_payload_to_proto).transpose()?,
                 durable_function_type: Some(durable_function_type_to_proto(durable_function_type)),
+            }),
+            OplogEntry::End {
+                start_index,
+                response,
+                forced_commit,
+                ..
+            } => Entry::End(RawEndParameters {
+                start_index: start_index.as_u64(),
+                response: response.map(oplog_payload_to_proto).transpose()?,
+                forced_commit,
+            }),
+            OplogEntry::Cancelled {
+                start_index,
+                partial,
+                ..
+            } => Entry::Cancelled(RawCancelledParameters {
+                start_index: start_index.as_u64(),
+                partial: partial.map(oplog_payload_to_proto).transpose()?,
             }),
             OplogEntry::AgentInvocationStarted {
                 idempotency_key,
@@ -2923,11 +3226,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::AgentInvocationFinished {
                 result,
+                method_name,
                 consumed_fuel,
                 component_revision,
                 ..
             } => Entry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
                 result: Some(oplog_payload_to_proto(result)?),
+                method_name,
                 consumed_fuel,
                 component_revision: component_revision.into(),
             }),
@@ -2961,12 +3266,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     begin_index: begin_index.into(),
                 })
             }
-            OplogEntry::BeginRemoteWrite { .. } => Entry::BeginRemoteWrite(RawTimestampOnly {}),
-            OplogEntry::EndRemoteWrite { begin_index, .. } => {
-                Entry::EndRemoteWrite(RawEndRemoteWriteParameters {
-                    begin_index: begin_index.into(),
-                })
-            }
+
             OplogEntry::PendingAgentInvocation {
                 idempotency_key,
                 payload,
@@ -3145,10 +3445,17 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 })
             }
             OplogEntry::Snapshot {
-                data, mime_type, ..
+                data,
+                mime_type,
+                active_cards,
+                ..
             } => Entry::Snapshot(RawSnapshotParameters {
                 data: Some(oplog_payload_to_proto(data)?),
                 mime_type,
+                active_cards: active_cards
+                    .into_iter()
+                    .map(|card| crate::serialization::serialize(&card))
+                    .collect::<Result<Vec<_>, _>>()?,
             }),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
@@ -3172,6 +3479,41 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::RemoveRetryPolicy { name, .. } => {
                 Entry::RemoveRetryPolicy(RawRemoveRetryPolicyParameters { name })
             }
+            OplogEntry::CardRevoked {
+                timestamp,
+                queued_event_index,
+                card_id,
+            } => Entry::CardRevoked(RawCardRevokedParameters {
+                timestamp: Some(timestamp.into()),
+                queued_event_index: queued_event_index.into(),
+                card_id: Some(card_id.0.into()),
+            }),
+            OplogEntry::CardEventQueued { timestamp, event } => {
+                Entry::CardEventQueued(RawCardEventQueuedParameters {
+                    timestamp: Some(timestamp.into()),
+                    event: Some(raw_queued_card_event_to_proto(event)),
+                })
+            }
+            OplogEntry::CardInstalled {
+                timestamp,
+                queued_event_index,
+                card,
+            } => Entry::CardInstalled(RawCardInstalledParameters {
+                timestamp: Some(timestamp.into()),
+                queued_event_index: queued_event_index.map(Into::into),
+                card: crate::serialization::serialize(&card)?,
+            }),
+            OplogEntry::CardInstallFailed {
+                timestamp,
+                queued_event_index,
+                card_id,
+                reason,
+            } => Entry::CardInstallFailed(RawCardInstallFailedParameters {
+                timestamp: Some(timestamp.into()),
+                queued_event_index: queued_event_index.into(),
+                card_id: Some(card_id.0.into()),
+                reason: raw_card_install_failure_to_proto(reason) as i32,
+            }),
         };
 
         Ok(golem_api_grpc::proto::golem::worker::RawOplogEntry {
@@ -3244,25 +3586,41 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     instance_id,
                 })
             }
-            Entry::HostCall(p) => {
+            Entry::Start(p) => {
                 let function_name =
                     crate::model::oplog::payload::host_functions::HostFunctionName::from(
                         p.function_name.as_str(),
                     );
-                let request =
-                    oplog_payload_from_proto(p.request.ok_or("Missing request payload")?)?;
-                let response =
-                    oplog_payload_from_proto(p.response.ok_or("Missing response payload")?)?;
+                let request = p.request.map(oplog_payload_from_proto).transpose()?;
                 let durable_function_type = durable_function_type_from_proto(
                     p.durable_function_type
                         .ok_or("Missing durable_function_type")?,
                 )?;
-                Ok(OplogEntry::HostCall {
+                Ok(OplogEntry::Start {
                     timestamp,
+                    parent_start_index: p
+                        .parent_start_index
+                        .map(crate::base_model::OplogIndex::from_u64),
                     function_name,
                     request,
-                    response,
                     durable_function_type,
+                })
+            }
+            Entry::End(p) => {
+                let response = p.response.map(oplog_payload_from_proto).transpose()?;
+                Ok(OplogEntry::End {
+                    timestamp,
+                    start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
+                    response,
+                    forced_commit: p.forced_commit,
+                })
+            }
+            Entry::Cancelled(p) => {
+                let partial = p.partial.map(oplog_payload_from_proto).transpose()?;
+                Ok(OplogEntry::Cancelled {
+                    timestamp,
+                    start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
+                    partial,
                 })
             }
             Entry::AgentInvocationStarted(p) => {
@@ -3290,6 +3648,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp,
                     result,
+                    method_name: p.method_name,
                     consumed_fuel: p.consumed_fuel,
                     component_revision,
                 })
@@ -3326,11 +3685,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::Exited(_) => Ok(OplogEntry::Exited { timestamp }),
             Entry::BeginAtomicRegion(_) => Ok(OplogEntry::BeginAtomicRegion { timestamp }),
             Entry::EndAtomicRegion(p) => Ok(OplogEntry::EndAtomicRegion {
-                timestamp,
-                begin_index: OplogIndex::from_u64(p.begin_index),
-            }),
-            Entry::BeginRemoteWrite(_) => Ok(OplogEntry::BeginRemoteWrite { timestamp }),
-            Entry::EndRemoteWrite(p) => Ok(OplogEntry::EndRemoteWrite {
                 timestamp,
                 begin_index: OplogIndex::from_u64(p.begin_index),
             }),
@@ -3547,6 +3901,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     data,
                     mime_type: p.mime_type,
+                    active_cards: p
+                        .active_cards
+                        .into_iter()
+                        .map(|card| crate::serialization::deserialize(&card))
+                        .collect::<Result<Vec<_>, _>>()?,
                 })
             }
             Entry::OplogProcessorCheckpoint(p) => {
@@ -3575,6 +3934,30 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
                 timestamp,
                 name: p.name,
+            }),
+            Entry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                queued_event_index: OplogIndex::from_u64(p.queued_event_index),
+                card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
+            }),
+            Entry::CardEventQueued(p) => Ok(OplogEntry::CardEventQueued {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                event: raw_queued_card_event_from_proto(p.event.ok_or("Missing event")?)?,
+            }),
+            Entry::CardInstalled(p) => Ok(OplogEntry::CardInstalled {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                queued_event_index: p.queued_event_index.map(OplogIndex::from_u64),
+                card: crate::serialization::deserialize(&p.card)
+                    .map_err(|err| format!("Failed to deserialize installed card: {err}"))?,
+            }),
+            Entry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                queued_event_index: OplogIndex::from_u64(p.queued_event_index),
+                card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
+                reason: raw_card_install_failure_from_proto(
+                    golem_api_grpc::proto::golem::worker::RawCardInstallFailure::try_from(p.reason)
+                        .map_err(|e| format!("Invalid raw card install failure: {e}"))?,
+                )?,
             }),
         }
     }

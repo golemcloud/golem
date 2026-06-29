@@ -14,8 +14,9 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { AgentType, Principal, DataValue } from 'golem:agent/common@1.5.0';
-import { uuidToString, parseUuid } from 'golem:core/types@1.5.0';
+import { AgentType, Principal } from 'golem:agent/common@2.0.0';
+import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
+import { schemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -46,7 +47,7 @@ export * from './newTypes/multimodalAdvanced';
 export { Principal } from './principal';
 export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
-export { CancellationToken } from 'golem:agent/host@1.5.0';
+export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 export * from './webhook';
@@ -59,17 +60,18 @@ export * from './host/result';
 export * from './host/transaction';
 export * from './host/checkpoint';
 export { Config, Secret } from './agentConfig';
+export { Path, Duration, Quantity } from './richTypes';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
 
 async function initialize(
   agentTypeName: string,
-  input: DataValue,
+  input: SchemaValueTree,
   principal: Principal,
 ): Promise<void> {
   // There shouldn't be a need to re-initialize an agent in a container.
-  // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
+  // If the input differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
   if (resolvedAgent) {
     throw createCustomError(`Agent is already initialized in this container`);
@@ -85,7 +87,7 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = initiator.initiate(input, principal);
+  const initiateResult = initiator.initiate(schemaValueFromWit(input), principal);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = initiateResult.val;
@@ -95,11 +97,11 @@ async function initialize(
   }
 }
 
-async function invoke(
+async function invokeAgent(
   methodName: string,
-  input: DataValue,
+  input: SchemaValueTree,
   principal: Principal,
-): Promise<DataValue> {
+): Promise<SchemaValueTree | undefined> {
   if (!resolvedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
@@ -113,7 +115,29 @@ async function invoke(
   }
 }
 
-async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
+async function discoverTools(): Promise<bindings.golemTool010Guest.Tool[]> {
+  return [];
+}
+
+async function getTool(name: string): Promise<bindings.golemTool010Guest.Tool> {
+  throw { tag: 'invalid-tool-name', val: name } satisfies bindings.golemTool010Guest.ToolError;
+}
+
+async function invokeTool(
+  toolName: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _commandPath: string[],
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _input: bindings.golemTool010Guest.TypedSchemaValue,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _stdin: bindings.golemTool010Guest.InputStream | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _principal: Principal,
+): Promise<bindings.golemTool010Guest.InvocationResult> {
+  throw { tag: 'invalid-tool-name', val: toolName } satisfies bindings.golemTool010Guest.ToolError;
+}
+
+async function discoverAgentTypes(): Promise<bindings.golemAgent200Guest.AgentType[]> {
   try {
     // Check if there were any validation errors during agent registration
     const validationError = getAgentValidationError();
@@ -389,11 +413,17 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   }
 }
 
-export const guest: typeof bindings.guest = {
+export const golemAgent200Guest: typeof bindings.golemAgent200Guest = {
   initialize,
   discoverAgentTypes,
-  invoke,
+  invoke: invokeAgent,
   getDefinition,
+};
+
+export const golemTool010Guest: typeof bindings.golemTool010Guest = {
+  discoverTools,
+  getTool,
+  invoke: invokeTool,
 };
 
 export const saveSnapshot: typeof bindings.saveSnapshot = {

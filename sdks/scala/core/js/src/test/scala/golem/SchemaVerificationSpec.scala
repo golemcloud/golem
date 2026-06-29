@@ -16,16 +16,21 @@
 
 package golem
 
-import golem.data.{UByte, UShort, UInt, ULong}
-import golem.data.multimodal.Multimodal
-import golem.data.unstructured.{AllowedLanguages, AllowedMimeTypes, BinarySegment, TextSegment}
+import golem.{UByte, UShort, UInt, ULong}
 import golem.runtime.autowire.{AgentImplementation, MethodBinding}
+import golem.runtime.{OutputMetadata, ParameterMetadata}
+import golem.schema.{SchemaGraph, SchemaTypeBody}
 import zio.test._
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
-import scala.scalajs.js
 
+/**
+ * Verifies that the agent macros produce correct schema-native per-parameter
+ * metadata (the `golem:agent@2.0.0` `input-schema` / `output-schema`) for a
+ * broad range of Scala parameter / return types, asserting on the model
+ * [[SchemaGraph]] (not the JS facade).
+ */
 object SchemaVerificationSpec extends ZIOSpecDefault {
 
   // ---------------------------------------------------------------------------
@@ -35,27 +40,6 @@ object SchemaVerificationSpec extends ZIOSpecDefault {
   final case class PersonInfo(name: String, age: Int)
   object PersonInfo { implicit val schema: Schema[PersonInfo] = Schema.derived }
 
-  final case class Address(street: String, city: String, zip: Int)
-  object Address { implicit val schema: Schema[Address] = Schema.derived }
-
-  sealed trait SvLang
-  object SvLang {
-    implicit val allowed: AllowedLanguages[SvLang] = new AllowedLanguages[SvLang] {
-      override val codes: Option[List[String]] = Some(List("en", "de"))
-    }
-  }
-
-  sealed trait SvMime
-  object SvMime {
-    implicit val allowed: AllowedMimeTypes[SvMime] = new AllowedMimeTypes[SvMime] {
-      override val mimeTypes: Option[List[String]] = Some(List("application/json"))
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Agent with many parameter/return type combinations
-  // ---------------------------------------------------------------------------
-
   sealed trait Color
   object Color {
     case object Red   extends Color
@@ -64,7 +48,9 @@ object SchemaVerificationSpec extends ZIOSpecDefault {
     implicit val schema: Schema[Color] = Schema.derived
   }
 
-  implicit val eitherStringIntSchema: Schema[Either[String, Int]] = Schema.derived
+  // ---------------------------------------------------------------------------
+  // Agent with many parameter/return type combinations
+  // ---------------------------------------------------------------------------
 
   @agentDefinition("schema-verify-agent")
   trait SchemaVerifyAgent extends BaseAgent {
@@ -86,11 +72,7 @@ object SchemaVerificationSpec extends ZIOSpecDefault {
     def caseClassMethod(p: PersonInfo): Future[PersonInfo]
     def multiParamMethod(name: String, age: Int, active: Boolean): Future[String]
     def unitReturnMethod(s: String): Future[Unit]
-    def textSegmentMethod(t: TextSegment[SvLang]): Future[TextSegment[SvLang]]
-    def binarySegmentMethod(b: BinarySegment[SvMime]): Future[BinarySegment[SvMime]]
-    def multimodalMethod(m: Multimodal[PersonInfo]): Future[Multimodal[PersonInfo]]
     def pureEnumMethod(c: Color): Future[Color]
-    def eitherMethod(e: Either[String, Int]): Future[Either[String, Int]]
   }
 
   @agentImplementation()
@@ -112,12 +94,8 @@ object SchemaVerificationSpec extends ZIOSpecDefault {
     override def caseClassMethod(p: PersonInfo): Future[PersonInfo]                        = Future.successful(p)
     override def multiParamMethod(name: String, age: Int, active: Boolean): Future[String] =
       Future.successful(s"$name-$age-$active")
-    override def unitReturnMethod(s: String): Future[Unit]                                    = Future.successful(())
-    override def textSegmentMethod(t: TextSegment[SvLang]): Future[TextSegment[SvLang]]       = Future.successful(t)
-    override def binarySegmentMethod(b: BinarySegment[SvMime]): Future[BinarySegment[SvMime]] = Future.successful(b)
-    override def multimodalMethod(m: Multimodal[PersonInfo]): Future[Multimodal[PersonInfo]]  = Future.successful(m)
-    override def pureEnumMethod(c: Color): Future[Color]                                      = Future.successful(c)
-    override def eitherMethod(e: Either[String, Int]): Future[Either[String, Int]]            = Future.successful(e)
+    override def unitReturnMethod(s: String): Future[Unit] = Future.successful(())
+    override def pureEnumMethod(c: Color): Future[Color]   = Future.successful(c)
   }
 
   private lazy val defn = AgentImplementation.registerClass[SchemaVerifyAgent, SchemaVerifyAgentImpl]
@@ -125,69 +103,34 @@ object SchemaVerificationSpec extends ZIOSpecDefault {
   private def findMethod(name: String): MethodBinding[SchemaVerifyAgent] =
     defn.methodMetadata.find(_.metadata.name == name).getOrElse(sys.error(s"method not found: $name"))
 
-  private def schemaTag(schema: golem.host.js.JsDataSchema): String =
-    schema.tag
+  private def params(methodName: String): List[ParameterMetadata] =
+    findMethod(methodName).metadata.input.userSupplied
 
-  private val multimodalMethods = Set("multimodalMethod")
+  private def inputElementCount(methodName: String): Int =
+    params(methodName).size
 
-  private def inputElementCount(methodName: String): Int = {
-    val m   = findMethod(methodName)
-    val arr = m.inputSchema.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[js.Array[js.Any]]
-    arr.length
-  }
+  private def outputElementCount(methodName: String): Int =
+    findMethod(methodName).metadata.output match {
+      case OutputMetadata.Unit      => 0
+      case OutputMetadata.Single(_) => 1
+    }
 
-  private def outputElementCount(methodName: String): Int = {
-    val m   = findMethod(methodName)
-    val arr = m.outputSchema.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[js.Array[js.Any]]
-    arr.length
-  }
-
-  private def inputElementNames(methodName: String): List[String] = {
-    val m   = findMethod(methodName)
-    val arr = m.inputSchema.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[js.Array[js.Array[js.Any]]]
-    (0 until arr.length).map(i => arr(i)(0).asInstanceOf[String]).toList
-  }
-
-  private def firstInputElementTag(methodName: String): String = {
-    val m    = findMethod(methodName)
-    val arr  = m.inputSchema.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[js.Array[js.Array[js.Any]]]
-    val elem = arr(0)(1).asInstanceOf[js.Dynamic]
-    elem.selectDynamic("tag").asInstanceOf[String]
-  }
+  private def inputElementNames(methodName: String): List[String] =
+    params(methodName).map(_.name)
 
   /**
-   * For a single-param component-model method, returns the WIT type node tag of
-   * its root type node.
+   * The effective root body of a graph, dereferencing a top-level named ref.
    */
-  private def firstInputWitTypeTag(methodName: String): String = {
-    val m    = findMethod(methodName)
-    val arr  = m.inputSchema.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[js.Array[js.Array[js.Any]]]
-    val elem = arr(0)(1).asInstanceOf[js.Dynamic]
-    // elem is { tag: "component-model", val: { nodes: [...] } }
-    val witType = elem.selectDynamic("val").asInstanceOf[js.Dynamic]
-    val nodes   = witType.selectDynamic("nodes").asInstanceOf[js.Array[js.Dynamic]]
-    // Root node is first element; get its "type" field's tag
-    val rootNode = nodes(0)
-    rootNode.selectDynamic("type").selectDynamic("tag").asInstanceOf[String]
+  private def rootBody(g: SchemaGraph): SchemaTypeBody = g.root.body match {
+    case SchemaTypeBody.RefType(id) => g.defs(id).body.body
+    case other                      => other
   }
 
+  /** The schema body of the first (single) parameter of a method. */
+  private def firstParamBody(methodName: String): SchemaTypeBody =
+    rootBody(params(methodName).head.graph)
+
   def spec = suite("SchemaVerificationSpec")(
-    test("non-multimodal methods have tuple inputSchema tag") {
-      defn.methodMetadata
-        .filterNot(m => multimodalMethods(m.metadata.name))
-        .foreach { m =>
-          assert(schemaTag(m.inputSchema) == "tuple")(Assertion.isTrue)
-        }
-      assertCompletes
-    },
-    test("non-multimodal methods have tuple outputSchema tag") {
-      defn.methodMetadata
-        .filterNot(m => multimodalMethods(m.metadata.name))
-        .foreach { m =>
-          assert(schemaTag(m.outputSchema) == "tuple")(Assertion.isTrue)
-        }
-      assertCompletes
-    },
     test("single-param method has 1 input element") {
       assertTrue(
         inputElementCount("stringMethod") == 1,
@@ -201,67 +144,66 @@ object SchemaVerificationSpec extends ZIOSpecDefault {
     test("multi-param method has 3 input elements") {
       assertTrue(inputElementCount("multiParamMethod") == 3)
     },
-    test("string-returning method has 1 output element") {
+    test("single-output method has 1 output element") {
       assertTrue(outputElementCount("stringMethod") == 1)
     },
     test("unit-returning method has 0 output elements") {
       assertTrue(outputElementCount("unitReturnMethod") == 0)
     },
-    test("single-param method element name is 'value' (from GolemSchema.single)") {
+    test("single-param method element name is the parameter name") {
       assertTrue(
-        inputElementNames("stringMethod") == List("value"),
-        inputElementNames("intMethod") == List("value"),
-        inputElementNames("caseClassMethod") == List("value")
+        inputElementNames("stringMethod") == List("s"),
+        inputElementNames("intMethod") == List("i"),
+        inputElementNames("caseClassMethod") == List("p")
       )
     },
     test("multi-param method element names match parameter names") {
       assertTrue(inputElementNames("multiParamMethod") == List("name", "age", "active"))
     },
-    test("TextSegment parameter produces unstructured-text schema tag") {
-      assertTrue(firstInputElementTag("textSegmentMethod") == "unstructured-text")
+    test("byte method produces s8 schema body") {
+      assertTrue(firstParamBody("byteMethod") == SchemaTypeBody.S8Type)
     },
-    test("BinarySegment parameter produces unstructured-binary schema tag") {
-      assertTrue(firstInputElementTag("binarySegmentMethod") == "unstructured-binary")
+    test("short method produces s16 schema body") {
+      assertTrue(firstParamBody("shortMethod") == SchemaTypeBody.S16Type)
     },
-    test("Multimodal parameter produces multimodal input schema tag") {
-      val m = findMethod("multimodalMethod")
-      assertTrue(schemaTag(m.inputSchema) == "multimodal")
+    test("int method produces s32 schema body") {
+      assertTrue(firstParamBody("intMethod") == SchemaTypeBody.S32Type)
     },
-    test("byte method produces prim-s8-type WIT node") {
-      assertTrue(firstInputWitTypeTag("byteMethod") == "prim-s8-type")
+    test("long method produces s64 schema body") {
+      assertTrue(firstParamBody("longMethod") == SchemaTypeBody.S64Type)
     },
-    test("short method produces prim-s16-type WIT node") {
-      assertTrue(firstInputWitTypeTag("shortMethod") == "prim-s16-type")
+    test("float method produces f32 schema body") {
+      assertTrue(firstParamBody("floatMethod") == SchemaTypeBody.F32Type)
     },
-    test("int method produces prim-s32-type WIT node") {
-      assertTrue(firstInputWitTypeTag("intMethod") == "prim-s32-type")
+    test("double method produces f64 schema body") {
+      assertTrue(firstParamBody("doubleMethod") == SchemaTypeBody.F64Type)
     },
-    test("float method produces prim-f32-type WIT node") {
-      assertTrue(firstInputWitTypeTag("floatMethod") == "prim-f32-type")
+    test("ubyte method produces u8 schema body") {
+      assertTrue(firstParamBody("ubyteMethod") == SchemaTypeBody.U8Type)
     },
-    test("double method produces prim-f64-type WIT node") {
-      assertTrue(firstInputWitTypeTag("doubleMethod") == "prim-f64-type")
+    test("ushort method produces u16 schema body") {
+      assertTrue(firstParamBody("ushortMethod") == SchemaTypeBody.U16Type)
     },
-    test("ubyte method produces prim-u8-type WIT node") {
-      assertTrue(firstInputWitTypeTag("ubyteMethod") == "prim-u8-type")
+    test("uint method produces u32 schema body") {
+      assertTrue(firstParamBody("uintMethod") == SchemaTypeBody.U32Type)
     },
-    test("ushort method produces prim-u16-type WIT node") {
-      assertTrue(firstInputWitTypeTag("ushortMethod") == "prim-u16-type")
+    test("ulong method produces u64 schema body") {
+      assertTrue(firstParamBody("ulongMethod") == SchemaTypeBody.U64Type)
     },
-    test("uint method produces prim-u32-type WIT node") {
-      assertTrue(firstInputWitTypeTag("uintMethod") == "prim-u32-type")
+    test("string method produces string schema body") {
+      assertTrue(firstParamBody("stringMethod") == SchemaTypeBody.StringType)
     },
-    test("ulong method produces prim-u64-type WIT node") {
-      assertTrue(firstInputWitTypeTag("ulongMethod") == "prim-u64-type")
+    test("bool method produces bool schema body") {
+      assertTrue(firstParamBody("boolMethod") == SchemaTypeBody.BoolType)
     },
-    test("schema-verify agent has 22 registered methods") {
-      assertTrue(defn.methodMetadata.size == 22)
+    test("pure enum method produces enum schema body") {
+      assertTrue(firstParamBody("pureEnumMethod") match {
+        case _: SchemaTypeBody.EnumType => true
+        case _                          => false
+      })
     },
-    test("pure enum method produces enum-type WIT node") {
-      assertTrue(firstInputWitTypeTag("pureEnumMethod") == "enum-type")
-    },
-    test("either method produces result-type WIT node") {
-      assertTrue(firstInputWitTypeTag("eitherMethod") == "result-type")
+    test("schema-verify agent has 18 registered methods") {
+      assertTrue(defn.methodMetadata.size == 18)
     }
   )
 }

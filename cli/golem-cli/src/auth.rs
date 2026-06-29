@@ -19,7 +19,7 @@ use crate::config::{
 };
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::LogColorize;
-use crate::log::log_warn_action;
+use crate::log::{log_warn_action, logln};
 use anyhow::{Context, anyhow, bail};
 use colored::Colorize;
 use golem_client::Security;
@@ -33,7 +33,7 @@ use golem_client::model::{
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::login::OAuth2WebflowStateId;
-use indoc::printdoc;
+use indoc::formatdoc;
 use std::path::Path;
 use tracing::info;
 
@@ -229,7 +229,7 @@ impl Auth {
 fn inform_user(data: &OAuth2WebflowData) {
     let url = &data.url.underline();
 
-    printdoc! {
+    logln(formatdoc! {
         "
         ┌────────────────────────────────────────┐
         │       Authenticate with GitHub         │
@@ -240,7 +240,7 @@ fn inform_user(data: &OAuth2WebflowData) {
         {url}
         ──────────────────────────────────────────
         "
-    }
+    });
 
-    println!("Waiting for authentication...");
+    logln("Waiting for authentication...");
 }

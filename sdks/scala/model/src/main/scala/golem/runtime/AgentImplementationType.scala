@@ -18,7 +18,6 @@ package golem.runtime
 
 import golem.Principal
 import golem.config.ConfigBuilder
-import golem.data.GolemSchema
 
 import scala.concurrent.Future
 
@@ -30,7 +29,7 @@ import scala.concurrent.Future
  */
 final case class AgentImplementationType[Instance, Ctor](
   metadata: AgentMetadata,
-  idSchema: GolemSchema[Ctor],
+  ctorCodec: InputRecordCodec[Ctor],
   buildInstance: (Ctor, Principal) => Instance,
   methods: List[ImplementationMethod[Instance]],
   configBuilder: Option[ConfigBuilder[_]] = None,
@@ -45,14 +44,14 @@ sealed trait ImplementationMethod[Instance] {
 
 final case class SyncImplementationMethod[Instance, In, Out](
   metadata: MethodMetadata,
-  inputSchema: GolemSchema[In],
-  outputSchema: GolemSchema[Out],
+  inputCodec: InputRecordCodec[In],
+  outputCodec: OutputCodec[Out],
   handler: (Instance, In, Principal) => Out
 ) extends ImplementationMethod[Instance]
 
 final case class AsyncImplementationMethod[Instance, In, Out](
   metadata: MethodMetadata,
-  inputSchema: GolemSchema[In],
-  outputSchema: GolemSchema[Out],
+  inputCodec: InputRecordCodec[In],
+  outputCodec: OutputCodec[Out],
   handler: (Instance, In, Principal) => Future[Out]
 ) extends ImplementationMethod[Instance]

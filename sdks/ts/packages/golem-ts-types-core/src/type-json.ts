@@ -109,6 +109,20 @@ export type LiteTypeJSON =
     }
   | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | { kind: 'principal'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'path'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'url'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'datetime'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'duration'; name?: string; owner?: string; optional: boolean }
+  | {
+      kind: 'quantity';
+      name?: string;
+      owner?: string;
+      optional: boolean;
+      spec?: {
+        baseUnit: string;
+        allowedSuffixes: string[];
+      };
+    }
   | {
       kind: 'unresolved-type';
       name?: string;

@@ -13,9 +13,10 @@
 // limitations under the License.
 
 import { describe, it } from 'vitest';
-import { AgentClassName, AgentDecoratorOptions } from '../src';
+import { AgentClassName } from '../src';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
+import { paramNames, paramShape, schemaTypeAt, normalizeSchema } from './agentTypeHelpers';
 
 describe('agent config handling', () => {
   it('correctly describes a complex config type', () => {
@@ -82,164 +83,38 @@ describe('agent config handling', () => {
   it('correctly describes expected config entries to the host', () => {
     const configAgent = AgentTypeRegistry.get(new AgentClassName('ConfigAgent'))!;
     expect(configAgent.config).toHaveLength(7);
-    expect(configAgent.config).toEqual([
-      {
-        source: 'local',
-        path: ['foo'],
-        valueType: {
-          nodes: [
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'prim-f64-type',
-              },
-            },
-          ],
-        },
-      },
-      {
-        source: 'local',
-        path: ['bar'],
-        valueType: {
-          nodes: [
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'prim-string-type',
-              },
-            },
-          ],
-        },
-      },
-      {
-        source: 'secret',
-        path: ['secret'],
-        valueType: {
-          nodes: [
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'prim-bool-type',
-              },
-            },
-          ],
-        },
-      },
-      {
-        source: 'secret',
-        path: ['nested', 'nestedSecret'],
-        valueType: {
-          nodes: [
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'prim-f64-type',
-              },
-            },
-          ],
-        },
-      },
-      {
-        source: 'local',
-        path: ['nested', 'a'],
-        valueType: {
-          nodes: [
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'prim-bool-type',
-              },
-            },
-          ],
-        },
-      },
-      {
-        source: 'local',
-        path: ['nested', 'b'],
-        valueType: {
-          nodes: [
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'list-type',
-                val: 1,
-              },
-            },
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'prim-f64-type',
-              },
-            },
-          ],
-        },
-      },
-      {
-        source: 'local',
-        path: ['aliasedNested', 'c'],
-        valueType: {
-          nodes: [
-            {
-              name: undefined,
-              owner: undefined,
-              type: {
-                tag: 'prim-f64-type',
-              },
-            },
-          ],
-        },
-      },
+
+    // Each config declaration carries a `valueType` index into the agent's
+    // shared schema graph; resolve it to assert source, path and value type.
+    const resolved = configAgent.config.map((entry) => {
+      const { root, defs } = schemaTypeAt(configAgent, entry.valueType);
+      return {
+        source: entry.source,
+        path: entry.path,
+        type: normalizeSchema(root, defs),
+      };
+    });
+
+    expect(resolved).toEqual([
+      { source: 'local', path: ['foo'], type: 'f64' },
+      { source: 'local', path: ['bar'], type: 'string' },
+      { source: 'secret', path: ['secret'], type: 'bool' },
+      { source: 'secret', path: ['nested', 'nestedSecret'], type: 'f64' },
+      { source: 'local', path: ['nested', 'a'], type: 'bool' },
+      { source: 'local', path: ['nested', 'b'], type: { list: 'f64' } },
+      { source: 'local', path: ['aliasedNested', 'c'], type: 'f64' },
     ]);
   });
 
   it('config parameters should not show up in declared constructor', () => {
     const configAgent = AgentTypeRegistry.get(new AgentClassName('ConfigAgent'))!;
-    const expectedSchema = {
-      tag: 'tuple',
-      val: [
-        [
-          'before',
-          {
-            tag: 'component-model',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-f64-type',
-                  },
-                },
-              ],
-            },
-          },
-        ],
-        [
-          'after',
-          {
-            tag: 'component-model',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-bool-type',
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      ],
-    };
-    expect(configAgent.constructor.inputSchema).toEqual(expectedSchema);
+
+    // `config` parameters are lifted into agent-level config declarations and
+    // never consume a constructor input field; only `before` / `after` remain.
+    expect(configAgent.constructor.inputSchema.tag).toBe('parameters');
+    expect(paramNames(configAgent.constructor.inputSchema)).toEqual(['before', 'after']);
+
+    expect(paramShape(configAgent, configAgent.constructor.inputSchema, 'before')).toEqual('f64');
+    expect(paramShape(configAgent, configAgent.constructor.inputSchema, 'after')).toEqual('bool');
   });
 });

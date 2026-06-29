@@ -17,7 +17,7 @@
 package golem.runtime.autowire
 
 import golem.Principal
-import golem.host.js._
+import golem.host.js.schema.{JsAgentError, JsAgentType, JsSchemaValueTree}
 import golem.runtime.AgentMetadata
 import golem.runtime.SnapshotHandlers
 
@@ -35,15 +35,9 @@ import scala.scalajs.js
  * `golem.runtime.autowire.AgentImplementation` to generate definitions at
  * compile time.
  *
- * ==Structure==
- * {{{
- * AgentDefinition[MyAgent]
- *   ├── typeName: "my-agent"
- *   ├── metadata: AgentMetadata (name, description, methods)
- *   ├── constructor: AgentConstructor[MyAgent]
- *   ├── bindings: List[MethodBinding[MyAgent]]
- *   └── mode: AgentMode
- * }}}
+ * The constructor / method values exchanged at the boundary are
+ * `golem:agent@2.0.0` `schema-value-tree`s; method results are an
+ * `option<schema-value-tree>` (modelled as a Scala [[Option]]).
  *
  * @tparam Instance
  *   The agent trait type
@@ -68,13 +62,12 @@ final class AgentDefinition[Instance](
 ) {
 
   /**
-   * The WIT type representation of this agent, for host registration.
-   *
-   * This is lazily computed and cached. It encodes the agent's schema in a
-   * format suitable for the Golem runtime's type system.
+   * The `golem:agent@2.0.0` type representation of this agent, for host
+   * registration. Lazily computed and cached.
    */
   lazy val agentType: JsAgentType =
-    AgentTypeEncoder.from(this)
+    AgentTypeEncoderV2.encode(AgentRequestBuilder.fromMetadata(metadata, mode.value))
+
   private val methodsByName: Map[String, MethodBinding[Instance]] =
     bindings.map(binding => binding.metadata.name -> binding).toMap
 
@@ -82,21 +75,14 @@ final class AgentDefinition[Instance](
    * Initializes a new agent instance, returning as Any for type-erased
    * contexts.
    */
-  def initializeAny(payload: JsDataValue, principal: Principal): js.Promise[Any] =
-    initialize(payload, principal).asInstanceOf[js.Promise[Any]]
+  def initializeAny(input: JsSchemaValueTree, principal: Principal): js.Promise[Any] =
+    initialize(input, principal).asInstanceOf[js.Promise[Any]]
 
   /**
    * Initializes a new agent instance from a constructor payload.
-   *
-   * @param payload
-   *   The constructor arguments as a JsDataValue
-   * @param principal
-   *   The principal performing the initialization
-   * @return
-   *   A Promise resolving to the initialized instance
    */
-  def initialize(payload: JsDataValue, principal: Principal): js.Promise[Instance] =
-    constructor.initialize(payload, principal)
+  def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
+    constructor.initialize(input, principal)
 
   /**
    * Invokes a method with type-erased instance for dynamic dispatch.
@@ -104,41 +90,24 @@ final class AgentDefinition[Instance](
   def invokeAny(
     instance: Any,
     methodName: String,
-    payload: JsDataValue,
+    input: JsSchemaValueTree,
     principal: Principal
-  ): js.Promise[JsDataValue] =
-    invoke(instance.asInstanceOf[Instance], methodName, payload, principal)
+  ): js.Promise[Option[JsSchemaValueTree]] =
+    invoke(instance.asInstanceOf[Instance], methodName, input, principal)
 
   /**
    * Invokes a method on an agent instance.
-   *
-   * @param instance
-   *   The agent instance to invoke on
-   * @param methodName
-   *   The method to invoke
-   * @param payload
-   *   The method arguments as a JsDataValue
-   * @param principal
-   *   The principal performing the invocation
-   * @return
-   *   A Promise resolving to the method result
    */
   def invoke(
     instance: Instance,
     methodName: String,
-    payload: JsDataValue,
+    input: JsSchemaValueTree,
     principal: Principal
-  ): js.Promise[JsDataValue] = {
-    if (!methodsByName.contains(methodName)) {
-      scala.scalajs.js.Dynamic.global.console.log(
-        s"[AgentDefinition] Unknown method: $methodName, available: ${methodsByName.keySet.mkString(",")}"
-      )
-    }
+  ): js.Promise[Option[JsSchemaValueTree]] =
     methodsByName
       .get(methodName)
-      .map(_.invoke(instance, payload, principal))
+      .map(_.invoke(instance, input, principal))
       .getOrElse(js.Promise.reject(JsAgentError.invalidMethod(s"Unknown method: $methodName")))
-  }
 
   /**
    * Returns the list of method bindings for inspection or testing.

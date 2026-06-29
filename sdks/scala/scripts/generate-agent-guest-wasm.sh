@@ -84,6 +84,49 @@ wasm-rquickjs generate-wrapper-crate \
   --js-modules "user=@slot" \
   --output "$wrapper_dir"
 
+# The wrapper crate builds its WIT bindings with Golem's forked wit-bindgen,
+# which adds an "outline-lift" optimization that shrinks the giant generated
+# lift/lower wrappers. wasm-rquickjs hardcodes the upstream wit-bindgen version
+# in its skeleton Cargo.toml and exposes no flag to override it, so rewrite the
+# generated manifest before building.
+echo "[agent-guest] Rewriting wit-bindgen dependency to Golem's outline-lift fork..." >&2
+cargo_toml="$wrapper_dir/Cargo.toml"
+wit_bindgen_line='wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }'
+wit_bindgen_rt_line='wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }'
+forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0", default-features = false, features = ["macros"] }'
+
+if [[ "$(grep -cF -- "$wit_bindgen_line" "$cargo_toml")" != "1" ]]; then
+  echo "[agent-guest] ERROR: expected exactly one wit-bindgen dependency line in $cargo_toml" >&2
+  echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
+  exit 1
+fi
+if [[ "$(grep -cF -- "$wit_bindgen_rt_line" "$cargo_toml")" != "1" ]]; then
+  echo "[agent-guest] ERROR: expected exactly one wit-bindgen-rt dependency line in $cargo_toml" >&2
+  echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
+  exit 1
+fi
+
+# Drop the separate wit-bindgen-rt crate (the fork embeds its runtime) and point
+# wit-bindgen at Golem's outline-lift fork.
+WB_LINE="$wit_bindgen_line" WB_RT_LINE="$wit_bindgen_rt_line" FORK_LINE="$forked_line" \
+  perl -ni -e '
+    chomp(my $chomped = $_);
+    next if $chomped eq $ENV{WB_RT_LINE};
+    if ($chomped eq $ENV{WB_LINE}) { print "$ENV{FORK_LINE}\n"; next; }
+    print;
+  ' "$cargo_toml"
+
+if ! grep -qF -- "golemcloud/wit-bindgen" "$cargo_toml" || grep -qF -- "$wit_bindgen_rt_line" "$cargo_toml"; then
+  echo "[agent-guest] ERROR: failed to rewrite wit-bindgen dependency in $cargo_toml" >&2
+  exit 1
+fi
+
+# wasm-rquickjs emits a Cargo.lock pinned to the upstream wit-bindgen deps it
+# hardcodes. After swapping in the fork, that lock conflicts (e.g. it pins
+# indexmap below what the fork's wit-parser requires), so drop it and let cargo
+# resolve a fresh lock during the build.
+rm -f "$wrapper_dir/Cargo.lock"
+
 echo "[agent-guest] Building guest runtime (cargo build --target wasm32-wasip2 --release)..." >&2
 if [[ -f "$HOME/.cargo/env" ]]; then
   # shellcheck disable=SC1090

@@ -16,13 +16,12 @@
 
 package golem.runtime.rpc
 
-import golem.data.GolemSchema
-import golem.host.js._
+import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.annotations.{DurabilityMode, agentDefinition}
 import golem.BaseAgent
 import golem.runtime.{AgentMethod, AgentType}
 import golem.runtime.rpc.AgentClientRuntimeSpecFixtures._
-import golem.runtime.rpc.host.AgentHostApi
+import golem.schema.IntoSchema
 import zio._
 import zio.test._
 import zio.blocks.schema.Schema
@@ -41,7 +40,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
 
       val method   = findMethod[RpcParityAgent, SampleInput, SampleOutput](agentType, "rpcCall")
       val expected = SampleOutput("ack")
-      invoker.enqueueInvokeResult(encodeValue(expected)(using method.outputSchema))
+      invoker.enqueueInvokeResult(Right(encodeResult(expected)))
 
       ZIO.fromFuture(_ => resolved.await(method, SampleInput("hello", 2))).map { result =>
         assertTrue(
@@ -119,20 +118,13 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
   private def stubRemote(
     agentType: AgentType[RpcParityAgent, Any],
     invoker: RpcInvoker
-  ): RemoteAgentClient = {
-    val metadata = js.Dynamic
-      .literal(
-        "agent-type"     -> js.Dynamic.literal("type-name" -> agentType.typeName),
-        "implemented-by" -> js.Dynamic.literal(
-          "uuid" -> js.Dynamic.literal("high-bits" -> 0.0, "low-bits" -> 0.0)
-        )
-      )
-      .asInstanceOf[AgentHostApi.RegisteredAgentType]
-    RemoteAgentClient(agentType.typeName, "agent-1", metadata, invoker)
-  }
+  ): RemoteAgentClient =
+    // The `metadata` field is not read on the awaitable / fire-and-forget path.
+    RemoteAgentClient(agentType.typeName, "agent-1", null, invoker)
 
-  private def encodeValue[A](value: A)(implicit codec: GolemSchema[A]): Either[String, JsDataValue] =
-    RpcValueCodec.encodeValue(value).map(wv => JsDataValue.tuple(js.Array(JsElementValue.componentModel(wv))))
+  /** Encode a single-output method result as the host `some(tree)`. */
+  private def encodeResult[A](value: A)(implicit into: IntoSchema[A]): Option[JsSchemaValueTree] =
+    SchemaRpcCodec.encodeSingleResult(value)
 
   private def findMethod[Trait, In, Out](
     agentType: AgentType[Trait, Any],
@@ -144,35 +136,44 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     }.getOrElse(throw new IllegalArgumentException(s"Method definition for $name not found"))
 
   private final class RecordingRpcInvoker extends RpcInvoker {
-    val invokeCalls   = mutable.ListBuffer.empty[(String, JsDataValue)]
-    val triggerCalls  = mutable.ListBuffer.empty[(String, JsDataValue)]
-    val scheduleCalls = mutable.ListBuffer.empty[(golem.Datetime, String, JsDataValue)]
+    val invokeCalls   = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
+    val triggerCalls  = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
+    val scheduleCalls = mutable.ListBuffer.empty[(golem.Datetime, String, JsSchemaValueTree)]
 
-    private val invokeResults = mutable.Queue.empty[Either[String, JsDataValue]]
+    private val invokeResults = mutable.Queue.empty[Either[String, Option[JsSchemaValueTree]]]
 
-    def enqueueInvokeResult(result: Either[String, JsDataValue]): Unit =
+    def enqueueInvokeResult(result: Either[String, Option[JsSchemaValueTree]]): Unit =
       invokeResults.enqueue(result)
 
-    override def invokeAndAwait(functionName: String, input: JsDataValue): Either[String, JsDataValue] = {
+    override def invokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[String, Option[JsSchemaValueTree]] = {
       invokeCalls += ((functionName, input))
       if (invokeResults.nonEmpty) invokeResults.dequeue()
-      else Right(js.Dynamic.literal().asInstanceOf[JsDataValue])
+      else Right(None)
     }
 
-    override def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Future[JsDataValue] = {
+    override def asyncInvokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Future[Option[JsSchemaValueTree]] = {
       invokeCalls += ((functionName, input))
       if (invokeResults.nonEmpty) {
         invokeResults.dequeue() match {
           case Right(v)  => Future.successful(v)
           case Left(err) => Future.failed(js.JavaScriptException(err))
         }
-      } else Future.successful(js.Dynamic.literal().asInstanceOf[JsDataValue])
+      } else Future.successful(None)
     }
 
-    override def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (Future[JsDataValue], CancellationToken) =
+    override def cancelableAsyncInvokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
       (asyncInvokeAndAwait(functionName, input), CancellationToken.fromFunction(() => ()))
 
-    override def invoke(functionName: String, input: JsDataValue): Either[String, Unit] = {
+    override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] = {
       triggerCalls += ((functionName, input))
       Right(())
     }
@@ -180,7 +181,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     override def scheduleInvocation(
       datetime: golem.Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[String, Unit] = {
       scheduleCalls += ((datetime, functionName, input))
       Right(())
@@ -189,7 +190,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     override def scheduleCancelableInvocation(
       datetime: golem.Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[String, CancellationToken] =
       Left("not used")
   }

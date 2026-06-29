@@ -16,16 +16,18 @@ pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
 
-use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
-use crate::model::worker::TypedAgentConfigEntry;
+use crate::model::account::AccountId;
+use crate::model::card::CardId;
+#[cfg(feature = "full")]
+use crate::model::card::StoredCard;
 use crate::oplog_entry;
-use golem_wasm::ValueAndType;
+use crate::schema::TypedSchemaValue;
 pub use public_types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,7 +45,7 @@ mod raw_imports {
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
     pub use crate::model::worker::UntypedAgentConfigEntry;
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
-    pub use golem_wasm::wasmtime::ResourceTypeId;
+    pub use crate::resource_runtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
 }
@@ -60,7 +62,7 @@ use raw_imports::*;
 // - PublicOplogEntry
 //
 // the oplog representation presented to users through queries, with enriched information
-// with JSON and poem codecs, convertible to/from golem_wasm::Value and (hand-written) lucene query matching
+// with JSON and poem codecs and (hand-written) lucene query matching
 //
 // The macro's DSL requires the following items for each oplog entry to be specified:
 // - hint: false|true
@@ -99,27 +101,75 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            local_agent_config: Vec<TypedAgentConfigEntry>,
+            local_agent_config: Vec<PublicTypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,
             instance_id: Uuid
         }
     },
-    /// The agent invoked a host function
-    HostCall {
+    /// Marks the start of a durable host call (or scope such as a batched-write).
+    ///
+    /// A `Start` is identified by its own `OplogIndex`. It is paired either with a
+    /// matching `End` (successful completion) or a matching `Cancelled` (the call was
+    /// dropped before completion); both reference this `Start` via `start_index`.
+    ///
+    /// `parent_start_index` is the `OplogIndex` of the enclosing scope's `Start`, if any.
+    /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
+    /// host-level request payload (batched-write, future transaction scopes).
+    Start {
         hint: false
-        wit_raw_type: "raw-host-call-parameters"
-        wit_public_type: "host-call-parameters"
+        wit_raw_type: "raw-start-parameters"
+        wit_public_type: "start-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             function_name: payload::host_functions::HostFunctionName,
-            request: payload::OplogPayload<payload::HostRequest>,
-            response: payload::OplogPayload<payload::HostResponse>,
+            request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
         }
         public {
+            parent_start_index: Option<OplogIndex>,
             function_name: String,
-            request: ValueAndType,
-            response: ValueAndType,
+            request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
+        }
+    },
+    /// Marks the successful completion of a durable host call (or scope) started by the
+    /// `Start` at `start_index`.
+    ///
+    /// `response` is `Some(...)` for real host calls and `None` for scopes (batched-write,
+    /// future transaction scopes). `forced_commit` requests the oplog to commit immediately
+    /// after this entry is appended (currently only used for scope ends that today drive
+    /// `CommitLevel::Always`).
+    End {
+        hint: false
+        wit_raw_type: "raw-end-parameters"
+        wit_public_type: "end-parameters"
+        raw {
+            start_index: OplogIndex,
+            response: Option<payload::OplogPayload<payload::HostResponse>>,
+            forced_commit: bool,
+        }
+        public {
+            start_index: OplogIndex,
+            response: Option<TypedSchemaValue>,
+            forced_commit: bool,
+        }
+    },
+    /// Marks that a durable host call started by the `Start` at `start_index` was
+    /// cancelled (e.g. dropped from a `select!`) before producing a final response.
+    ///
+    /// `partial` optionally carries any partial response captured before cancellation
+    /// (e.g. partially read bytes from a stream).
+    Cancelled {
+        hint: false
+        wit_raw_type: "raw-cancelled-parameters"
+        wit_public_type: "cancelled-parameters"
+        raw {
+            start_index: OplogIndex,
+            partial: Option<payload::OplogPayload<payload::HostResponse>>,
+        }
+        public {
+            start_index: OplogIndex,
+            partial: Option<TypedSchemaValue>,
         }
     },
     /// The agent has been invoked
@@ -145,11 +195,13 @@ oplog_entry! {
         wit_public_type: "agent-invocation-finished-parameters"
         raw {
             result: payload::OplogPayload<AgentInvocationResult>,
+            method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
         public {
             result: PublicAgentInvocationResult,
+            method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
@@ -245,28 +297,6 @@ oplog_entry! {
         hint: false
         wit_raw_type: "end-atomic-region-parameters"
         wit_public_type: "end-atomic-region-parameters"
-        raw {
-            begin_index: OplogIndex,
-        }
-        public {
-            begin_index: OplogIndex,
-        }
-    },
-    /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-    /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-    /// unfinished remote writes cannot be recovered.
-    BeginRemoteWrite {
-        hint: false
-        wit_raw_type: "timestamp"
-        wit_public_type: "timestamp"
-        raw {}
-        public {}
-    },
-    /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-    EndRemoteWrite {
-        hint: false
-        wit_raw_type: "end-remote-write-parameters"
-        wit_public_type: "end-remote-write-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -475,9 +505,7 @@ oplog_entry! {
         }
         public {
             span_id: SpanId,
-            #[cfg_attr(feature = "full", wit_field(rename = "parent"))]
             parent_id: Option<SpanId>,
-            #[cfg_attr(feature = "full", wit_field(rename = "linked-context-id"))]
             linked_context: Option<SpanId>,
             attributes: Vec<PublicAttribute>,
         }
@@ -594,6 +622,7 @@ oplog_entry! {
         raw {
             data: payload::OplogPayload<Vec<u8>>,
             mime_type: String,
+            active_cards: Vec<StoredCard>,
         }
         public {
             data: PublicSnapshotData
@@ -641,6 +670,62 @@ oplog_entry! {
         }
         public {
             name: String,
+        }
+    },
+    /// Durable queue entry for pending permission-card work.
+    CardEventQueued {
+        hint: true
+        wit_raw_type: "raw-card-event-queued-parameters"
+        wit_public_type: "card-event-queued-parameters"
+        raw {
+            event: QueuedCardEvent,
+        }
+        public {
+            event: PublicQueuedCardEvent,
+        }
+    },
+    /// Records successful installation of a permission card into the agent wallet.
+    CardInstalled {
+        hint: true
+        wit_raw_type: "raw-card-installed-parameters"
+        wit_public_type: "card-installed-parameters"
+        raw {
+            queued_event_index: Option<OplogIndex>,
+            card: StoredCard,
+        }
+        public {
+            queued_event_index: Option<OplogIndex>,
+            card_id: CardId,
+        }
+    },
+    /// Records failed installation of a permission card into the agent wallet.
+    CardInstallFailed {
+        hint: true
+        wit_raw_type: "card-install-failed-parameters"
+        wit_public_type: "card-install-failed-parameters"
+        raw {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+            reason: CardInstallFailure,
+        }
+        public {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+            reason: CardInstallFailure,
+        }
+    },
+    /// Records that a permission card used by the agent has been revoked.
+    CardRevoked {
+        hint: true
+        wit_raw_type: "card-revoked-parameters"
+        wit_public_type: "card-revoked-parameters"
+        raw {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+        }
+        public {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
         }
     }
 }

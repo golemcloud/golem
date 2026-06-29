@@ -39,6 +39,17 @@ import { createWellKnownTypes, WellKnown, WellKnownTypes } from './wellknownType
 import * as fs from 'node:fs';
 import path from 'path';
 
+// Tracks the types currently being expanded along a single traversal path, so a
+// self-reference can be emitted as a finite recursive back-edge instead of being
+// expanded forever. The value is the `owner` the type was first registered with
+// on this path: a recursive back-edge must inherit it verbatim so the downstream
+// mapper resolves the back-edge to the *same* type id as the root definition.
+// (The owner is reference-site dependent — e.g. an imported type carries the
+// import path at the root reference but resolves to `undefined` when re-derived
+// from a same-module self-reference deep inside its own body — so recomputing it
+// at the back-edge would break cross-module recursive types.)
+type VisitedTypes = Map<TsMorphType, string | undefined>;
+
 export function getTypeFromTsMorph(
   tsMorphType: TsMorphType,
   isOptional: boolean,
@@ -50,7 +61,7 @@ export function getTypeFromTsMorph(
       tsMorphType,
       isOptional,
       wellKnownTypes,
-      new Set(),
+      new Map(),
       sourceTypeNode,
     );
   } catch (e) {
@@ -78,7 +89,7 @@ function getTypeFromTsMorphInternal(
   tsMorphType: TsMorphType,
   isOptional: boolean,
   wellKnownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
   sourceTypeNode?: TsMorphNode,
 ): Type.Type {
   const type = unwrapAlias(tsMorphType);
@@ -90,12 +101,15 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'others',
       name: rawName ?? aliasName ?? type.getText(),
-      owner,
+      // Inherit the owner the root definition was registered with on this path,
+      // not the (reference-site dependent) owner re-derived here, so the mapper
+      // resolves this back-edge to the same type id as the root. See VisitedTypes.
+      owner: visitedTypes.get(type),
       optional: isOptional,
       recursive: true,
     };
   }
-  visitedTypes.add(type);
+  visitedTypes.set(type, owner);
 
   if (isExactly(type, wellKnownTypes.object)) {
     const name = rawName ?? aliasName ?? type.getText();
@@ -135,8 +149,8 @@ function getTypeFromTsMorphInternal(
 
   if (isExactly(type, wellKnownTypes.containers.map)) {
     const [keyT, valT] = type.getTypeArguments();
-    const key = getTypeFromTsMorphInternal(keyT, false, wellKnownTypes, new Set(visitedTypes));
-    const value = getTypeFromTsMorphInternal(valT, false, wellKnownTypes, new Set(visitedTypes));
+    const key = getTypeFromTsMorphInternal(keyT, false, wellKnownTypes, new Map(visitedTypes));
+    const value = getTypeFromTsMorphInternal(valT, false, wellKnownTypes, new Map(visitedTypes));
     return {
       kind: 'map',
       name: aliasName,
@@ -173,6 +187,26 @@ function getTypeFromTsMorphInternal(
     return { kind: 'quota-token', name: aliasName, optional: isOptional };
   }
 
+  if (isExactly(type, wellKnownTypes.sdk.path)) {
+    return { kind: 'path', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactlyBuiltIn(type, wellKnownTypes.sdk.url)) {
+    return { kind: 'url', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactlyBuiltIn(type, wellKnownTypes.sdk.date)) {
+    return { kind: 'datetime', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.duration)) {
+    return { kind: 'duration', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.quantity)) {
+    return { kind: 'quantity', name: aliasName, optional: isOptional, spec: getQuantitySpec(type) };
+  }
+
   if (!containsInvalidTypes(type) && type.isAssignableTo(wellKnownTypes.sdk.principal)) {
     return {
       kind: 'principal',
@@ -204,7 +238,7 @@ function getTypeFromTsMorphInternal(
   if (type.isTuple()) {
     const tupleElems = type
       .getTupleElements()
-      .map((el) => getTypeFromTsMorphInternal(el, false, wellKnownTypes, new Set(visitedTypes)));
+      .map((el) => getTypeFromTsMorphInternal(el, false, wellKnownTypes, new Map(visitedTypes)));
 
     return {
       kind: 'tuple',
@@ -376,10 +410,10 @@ function getTypeFromTsMorphInternal(
 function getCanonicalFallbackUnionTypes(
   unionTypes: TsMorphType[],
   wellKnownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
 ): Type.Type[] {
   const withKeys = unionTypes.map((member, index) => {
-    const mapped = getTypeFromTsMorphInternal(member, false, wellKnownTypes, new Set(visitedTypes));
+    const mapped = getTypeFromTsMorphInternal(member, false, wellKnownTypes, new Map(visitedTypes));
     return {
       index,
       mapped,
@@ -400,7 +434,7 @@ function getSourceOrderedUnionTypes(
   unionType: TsMorphType,
   sourceTypeNode: TsMorphNode | undefined,
   wellKnownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
 ): Type.Type[] | undefined {
   const sourceUnionTypeNode =
     resolveUnionTypeNode(sourceTypeNode) ?? resolveUnionTypeNodeFromType(unionType);
@@ -414,7 +448,7 @@ function getSourceOrderedUnionTypes(
         member.getType(),
         false,
         wellKnownTypes,
-        new Set(visitedTypes),
+        new Map(visitedTypes),
         member,
       ),
     );
@@ -493,13 +527,64 @@ function getUnionTypeKindRank(kind: Type.Type['kind']): number {
       return 17;
     case 'principal':
       return 18;
-    case 'alias':
+    case 'path':
       return 19;
-    case 'others':
+    case 'url':
       return 20;
-    case 'unresolved-type':
+    case 'datetime':
       return 21;
+    case 'duration':
+      return 22;
+    case 'quantity':
+      return 23;
+    case 'alias':
+      return 24;
+    case 'others':
+      return 25;
+    case 'unresolved-type':
+      return 26;
   }
+}
+
+function getQuantitySpec(type: TsMorphType): Type.QuantitySpec | undefined {
+  const specType = type.getTypeArguments()[0];
+  if (!specType) return undefined;
+
+  const declaration =
+    specType.getSymbol()?.getDeclarations()[0] ?? specType.getAliasSymbol()?.getDeclarations()[0];
+  if (!declaration) return undefined;
+  const baseUnit = literalProperty(specType, 'baseUnit');
+  const allowedSuffixesType = specType
+    .getProperty('allowedSuffixes')
+    ?.getTypeAtLocation(declaration);
+  const tupleElements = allowedSuffixesType?.getTupleElements();
+  const allowedSuffixes = tupleElements?.map((element) => element.getLiteralValue());
+
+  if (
+    baseUnit === undefined ||
+    tupleElements === undefined ||
+    !allowedSuffixesType?.isTuple() ||
+    allowedSuffixes === undefined ||
+    allowedSuffixes.length !== tupleElements.length ||
+    !allowedSuffixes.every((value): value is string => typeof value === 'string')
+  ) {
+    throw new Error(
+      'Quantity<T> type parameter must have a literal baseUnit and a tuple of string-literal allowedSuffixes',
+    );
+  }
+
+  return {
+    baseUnit,
+    allowedSuffixes,
+  };
+}
+
+function literalProperty(type: TsMorphType, name: string): string | undefined {
+  const declaration =
+    type.getSymbol()?.getDeclarations()[0] ?? type.getAliasSymbol()?.getDeclarations()[0];
+  if (!declaration) return undefined;
+  const value = type.getProperty(name)?.getTypeAtLocation(declaration).getLiteralValue();
+  return typeof value === 'string' ? value : undefined;
 }
 
 // TypeLiteral in TS AST is `type A = {}`. Union types, etc. get other node types
@@ -959,7 +1044,7 @@ export function loadTypeMetadataFromJsonFile() {
 function propertiesAsSymbols(
   type: TsMorphType,
   wellknownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
 ): Symbol[] {
   return type.getProperties().map((prop) => {
     const firstDeclaration = prop.getDeclarations()[0];
@@ -975,7 +1060,7 @@ function propertiesAsSymbols(
       type,
       false,
       wellknownTypes,
-      new Set(visitedTypes),
+      new Map(visitedTypes),
       sourceTypeNode,
     );
     const propName = prop.getName();
@@ -1031,7 +1116,36 @@ function isExactly(type: TsMorphType, wellKnown: WellKnown): boolean {
     return false;
   }
 
-  return nominalSymbol === wellKnown.symbol;
+  return (
+    nominalSymbol === wellKnown.symbol || sameSymbolDeclaration(nominalSymbol, wellKnown.symbol)
+  );
+}
+
+function isExactlyBuiltIn(type: TsMorphType, wellKnown: WellKnown): boolean {
+  const nominalSymbol = getNominalSymbol(type);
+  if (nominalSymbol == null || !isExactly(type, wellKnown)) return false;
+  const declarationPaths = nominalSymbol
+    .getDeclarations()
+    .map((declaration) => declaration.getSourceFile().getFilePath());
+  return (
+    declarationPaths.some((filePath) => filePath.includes('/typescript/lib/')) &&
+    declarationPaths.every((filePath) => filePath.includes('/node_modules/'))
+  );
+}
+
+function sameSymbolDeclaration(left: TsMorphSymbol, right: TsMorphSymbol): boolean {
+  return left
+    .getDeclarations()
+    .some((leftDeclaration) =>
+      right
+        .getDeclarations()
+        .some(
+          (rightDeclaration) =>
+            leftDeclaration.getSourceFile().getFilePath() ===
+              rightDeclaration.getSourceFile().getFilePath() &&
+            leftDeclaration.getStart() === rightDeclaration.getStart(),
+        ),
+    );
 }
 
 function isConcreteType(type: TsMorphType): boolean {

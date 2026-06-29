@@ -1,0 +1,59 @@
+package golem:tool@0.1.0;
+
+/// Interface exported by a component that provides tools. The component
+/// declares which tools it exposes, supplies their metadata, and accepts
+/// invocations against a chosen leaf command of any tool.
+///
+/// Tools are stateless from the host's perspective: each invocation is
+/// independent. State accumulated by the underlying agent (file-system
+/// writes, config-store updates, etc.) persists per the agent's normal
+/// rules and is independent of the tool calling convention.
+interface guest {
+  use common.{tool, tool-error, invocation-result};
+  use golem:core/types@2.0.0.{typed-schema-value};
+  use golem:agent/common@2.0.0.{principal};
+  use wasi:io/streams@0.2.3.{input-stream};
+
+  /// Enumerate the tools this component exposes. The returned metadata
+  /// is complete (full command tree and schema graph).
+  discover-tools: func() -> result<list<tool>, tool-error>;
+
+  /// Look up a single tool by name.
+  get-tool: func(name: string) -> result<tool, tool-error>;
+
+  /// Invoke a command of a tool.
+  ///
+  /// `command-path` selects the command body to execute. An empty list
+  /// targets the root command's body; non-empty lists walk the
+  /// `subcommands` field, each segment matching a `command-node.name`
+  /// or alias.
+  ///
+  /// `input` is a self-contained `typed-schema-value` whose root must
+  /// structurally match the selected body's input schema — a record with
+  /// one field per positional, option, flag, and inherited global declared
+  /// on or above the body, each field typed by the matching type node in
+  /// the body's schema.
+  ///
+  /// `stdin` is supplied when the selected body declared a stdin
+  /// `stream-spec`. Stream ownership: the `stdin` resource handle is moved
+  /// into the callee for the duration of the call.
+  ///
+  /// `principal` carries the caller's authenticated identity for
+  /// authorization and audit, identical in semantics to the parameter
+  /// of the same name in `golem:agent/guest.invoke`.
+  invoke: func(
+    tool-name:    string,
+    command-path: list<string>,
+    input:        typed-schema-value,
+    stdin:        option<input-stream>,
+    principal:    principal,
+  ) -> result<invocation-result, tool-error>;
+}
+
+world tool-guest {
+  import golem:api/host@1.5.0;
+  import golem:agent/host@2.0.0;
+  import host;
+  import common;
+  export guest;
+}

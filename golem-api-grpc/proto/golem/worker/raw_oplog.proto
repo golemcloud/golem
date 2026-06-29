@@ -19,7 +19,6 @@ message RawOplogEntry {
   google.protobuf.Timestamp timestamp = 1;
   oneof entry {
     RawCreateParameters create = 2;
-    RawHostCallParameters host_call = 3;
     RawAgentInvocationStartedParameters agent_invocation_started = 4;
     RawAgentInvocationFinishedParameters agent_invocation_finished = 5;
     RawTimestampOnly suspend = 6;
@@ -30,8 +29,6 @@ message RawOplogEntry {
     RawTimestampOnly exited = 11;
     RawTimestampOnly begin_atomic_region = 12;
     RawEndAtomicRegionParameters end_atomic_region = 13;
-    RawTimestampOnly begin_remote_write = 14;
-    RawEndRemoteWriteParameters end_remote_write = 15;
     RawPendingAgentInvocationParameters pending_agent_invocation = 16;
     RawPendingUpdateParameters pending_update = 17;
     RawSuccessfulUpdateParameters successful_update = 18;
@@ -59,6 +56,13 @@ message RawOplogEntry {
     RawOplogProcessorCheckpointParameters oplog_processor_checkpoint = 40;
     RawSetRetryPolicyParameters set_retry_policy = 41;
     RawRemoveRetryPolicyParameters remove_retry_policy = 42;
+    RawStartParameters start = 43;
+    RawEndParameters end = 44;
+    RawCancelledParameters cancelled = 45;
+    RawCardRevokedParameters card_revoked = 46;
+    RawCardEventQueuedParameters card_event_queued = 47;
+    RawCardInstalledParameters card_installed = 48;
+    RawCardInstallFailedParameters card_install_failed = 49;
   }
 }
 
@@ -144,11 +148,22 @@ message RawCreateParameters {
   golem.component.AgentMode agent_mode = 13;
 }
 
-message RawHostCallParameters {
-  string function_name = 1;
-  RawOplogPayload request = 2;
-  RawOplogPayload response = 3;
-  WrappedFunctionType durable_function_type = 4;
+message RawStartParameters {
+  optional uint64 parent_start_index = 2;
+  string function_name = 3;
+  optional RawOplogPayload request = 4;
+  WrappedFunctionType durable_function_type = 5;
+}
+
+message RawEndParameters {
+  uint64 start_index = 1;
+  optional RawOplogPayload response = 2;
+  bool forced_commit = 3;
+}
+
+message RawCancelledParameters {
+  uint64 start_index = 1;
+  optional RawOplogPayload partial = 2;
 }
 
 message RawAgentInvocationStartedParameters {
@@ -163,6 +178,7 @@ message RawAgentInvocationFinishedParameters {
   RawOplogPayload result = 1;
   int64 consumed_fuel = 2;
   uint64 component_revision = 3;
+  optional string method_name = 4;
 }
 
 message RawErrorParameters {
@@ -177,10 +193,6 @@ message RawJumpParameters {
 }
 
 message RawEndAtomicRegionParameters {
-  uint64 begin_index = 1;
-}
-
-message RawEndRemoteWriteParameters {
   uint64 begin_index = 1;
 }
 
@@ -285,6 +297,7 @@ message RawRemoteTransactionParameters {
 message RawSnapshotParameters {
   RawOplogPayload data = 1;
   string mime_type = 2;
+  repeated bytes active_cards = 3;
 }
 
 message RawOplogProcessorCheckpointParameters {
@@ -301,6 +314,50 @@ message RawSetRetryPolicyParameters {
 
 message RawRemoveRetryPolicyParameters {
   string name = 1;
+}
+
+message RawCardRevokedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message RawQueuedCardEvent {
+  oneof event {
+    RawQueuedCardEventCard install = 1;
+    RawQueuedCardEventCard revoke = 2;
+  }
+}
+
+message RawQueuedCardEventCard {
+  golem.common.UUID card_id = 1;
+  bytes card = 2;
+}
+
+enum RawCardInstallFailure {
+  RAW_CARD_INSTALL_FAILURE_UNSPECIFIED = 0;
+  RAW_CARD_INSTALL_FAILURE_CARD_REVOKED = 1;
+  RAW_CARD_INSTALL_FAILURE_NOT_FOUND = 2;
+  RAW_CARD_INSTALL_FAILURE_RECIPIENT_MISMATCH = 3;
+  RAW_CARD_INSTALL_FAILURE_NOT_PERMITTED = 4;
+}
+
+message RawCardEventQueuedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  RawQueuedCardEvent event = 2;
+}
+
+message RawCardInstalledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  optional uint64 queued_event_index = 2;
+  bytes card = 3;
+}
+
+message RawCardInstallFailedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+  RawCardInstallFailure reason = 4;
 }
 
 message RawOplogEntryWithIndex {

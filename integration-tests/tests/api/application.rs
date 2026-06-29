@@ -113,7 +113,7 @@ async fn other_users_cannot_get_applications(
         assert!(matches!(
             result,
             Err(golem_client::Error::Item(
-                RegistryServiceListAccountApplicationsError::Error403(_)
+                RegistryServiceListAccountApplicationsError::Error404(_)
             ))
         ));
     }
@@ -146,7 +146,7 @@ async fn deleting_account_hides_applications(
         assert!(matches!(
             result,
             Err(golem_client::Error::Item(
-                RegistryServiceListAccountApplicationsError::Error403(_)
+                RegistryServiceListAccountApplicationsError::Error404(_)
             ))
         ));
     }

@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use crate::model::agent::view::AgentTypeView;
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_message_highlight, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_message_highlight, log_table,
     new_table_full_condensed,
 };
 use golem_common::model::agent::DeployedRegisteredAgentType;
+use serde::{Deserialize, Serialize};
 
 impl MessageWithFields for AgentTypeView {
     fn message(&self) -> String {
@@ -38,20 +41,36 @@ impl MessageWithFields for AgentTypeView {
     }
 }
 
+impl Masked for AgentTypeView {}
+
+impl StructuredOutput for AgentTypeView {
+    const KIND: &'static str = "agent-type.get";
+}
+
 impl From<&DeployedRegisteredAgentType> for AgentTypeView {
     fn from(value: &DeployedRegisteredAgentType) -> Self {
         AgentTypeView::new(value, true)
     }
 }
 
-impl TextView for Vec<DeployedRegisteredAgentType> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTypeListView {
+    pub agent_types: Vec<DeployedRegisteredAgentType>,
+}
+
+impl StructuredOutput for AgentTypeListView {
+    const KIND: &'static str = "agent-type.list";
+}
+
+impl TextOutput for AgentTypeListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Agent Type").fixed(),
             Column::new("Constructor"),
             Column::new("Description"),
         ]);
-        for agent_type in self {
+        for agent_type in &self.agent_types {
             let view = AgentTypeView::new(agent_type, true);
             table.add_row(vec![view.agent_type, view.constructor, view.description]);
         }

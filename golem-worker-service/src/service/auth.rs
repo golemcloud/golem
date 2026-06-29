@@ -21,8 +21,8 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
-use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -50,13 +50,6 @@ error_forwarding!(AuthServiceError, RegistryServiceError);
 #[async_trait]
 pub trait AuthService: Send + Sync {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
-    async fn authorize_environment_actions(
-        &self,
-        environment_id: EnvironmentId,
-        action: EnvironmentAction,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, AuthServiceError>;
-
     async fn invalidate_tokens_for_account(&self, _account_id: AccountId) {}
     async fn invalidate_environment_auth(
         &self,
@@ -84,21 +77,9 @@ impl From<AuthCtxCacheError> for AuthServiceError {
     }
 }
 
-#[derive(Clone)]
-enum EnvironmentAuthDetailsCacheError {
-    NotFound,
-    Error,
-}
-
 pub struct RemoteAuthService {
     client: Arc<dyn RegistryService>,
     auth_ctx_cache: Cache<TokenSecret, (), AuthCtx, AuthCtxCacheError>,
-    environment_auth_details_cache: Cache<
-        (EnvironmentId, AuthCtx),
-        (),
-        AuthDetailsForEnvironment,
-        EnvironmentAuthDetailsCacheError,
-    >,
 }
 
 impl RemoteAuthService {
@@ -114,55 +95,7 @@ impl RemoteAuthService {
                 },
                 "token_secret_to_auth_ctx",
             ),
-            environment_auth_details_cache: Cache::new(
-                Some(config.environment_auth_details_cache_max_capacity),
-                FullCacheEvictionMode::LeastRecentlyUsed(1),
-                BackgroundEvictionMode::OlderThan {
-                    ttl: config.environment_auth_details_cache_ttl,
-                    period: config.environment_auth_details_cache_eviction_period,
-                },
-                "environment_id_to_auth_details",
-            ),
         }
-    }
-
-    async fn auth_details_for_environment_id(
-        &self,
-        environment_id: EnvironmentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Option<AuthDetailsForEnvironment>, AuthServiceError> {
-        // worker-service level auth does not care about account roles or plans, so downgrade here to avoid cache
-        // misses during rpc
-        let downgraded_auth = auth_ctx.downgrade_to_agent();
-        let result = self
-            .environment_auth_details_cache
-            .get_or_insert_simple(
-                &(environment_id, downgraded_auth.clone()),
-                async move || {
-                    self.client
-                        .get_auth_details_for_environment(environment_id, false, &downgraded_auth)
-                        .await
-                        .map_err(|e| match e {
-                            RegistryServiceError::NotFound(_) => {
-                                EnvironmentAuthDetailsCacheError::NotFound
-                            }
-                            e => {
-                                tracing::warn!("Authenticating user token failed: {e}");
-                                EnvironmentAuthDetailsCacheError::Error
-                            }
-                        })
-                },
-            )
-            .await
-            .map(Some)
-            .or_else(|e| match e {
-                EnvironmentAuthDetailsCacheError::NotFound => Ok(None),
-                EnvironmentAuthDetailsCacheError::Error => Err(anyhow!(
-                    "Cached get_auth_details_for_environment request failed"
-                )),
-            })?;
-
-        Ok(result)
     }
 }
 
@@ -180,18 +113,6 @@ impl AuthService for RemoteAuthService {
         for key in entries {
             self.auth_ctx_cache.remove(&key).await;
         }
-
-        let env_entries: Vec<(EnvironmentId, AuthCtx)> = self
-            .environment_auth_details_cache
-            .iter()
-            .await
-            .into_iter()
-            .filter(|((_, auth_ctx), _)| auth_ctx.account_id() == account_id)
-            .map(|(key, _)| key)
-            .collect();
-        for key in env_entries {
-            self.environment_auth_details_cache.remove(&key).await;
-        }
     }
 
     async fn invalidate_environment_auth(
@@ -199,29 +120,13 @@ impl AuthService for RemoteAuthService {
         environment_id: EnvironmentId,
         grantee_account_id: AccountId,
     ) {
-        let entries: Vec<(EnvironmentId, AuthCtx)> = self
-            .environment_auth_details_cache
-            .iter()
-            .await
-            .into_iter()
-            .filter(|((env_id, auth_ctx), _)| {
-                *env_id == environment_id && auth_ctx.account_id() == grantee_account_id
-            })
-            .map(|(key, _)| key)
-            .collect();
-        for key in entries {
-            self.environment_auth_details_cache.remove(&key).await;
-        }
+        let _ = (environment_id, grantee_account_id);
     }
 
     async fn clear_all_caches(&self) {
         let auth_keys = self.auth_ctx_cache.keys().await;
         for key in auth_keys {
             self.auth_ctx_cache.remove(&key).await;
-        }
-        let env_keys = self.environment_auth_details_cache.keys().await;
-        for key in env_keys {
-            self.environment_auth_details_cache.remove(&key).await;
         }
     }
 
@@ -245,27 +150,5 @@ impl AuthService for RemoteAuthService {
             .await?;
 
         Ok(result)
-    }
-
-    async fn authorize_environment_actions(
-        &self,
-        environment_id: EnvironmentId,
-        action: EnvironmentAction,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, AuthServiceError> {
-        let environment_auth_details = self
-            .auth_details_for_environment_id(environment_id, auth_ctx)
-            .await?
-            .ok_or(AuthServiceError::Unauthorized(
-                AuthorizationError::EnvironmentActionNotAllowed(action),
-            ))?;
-
-        auth_ctx.authorize_environment_action(
-            environment_auth_details.account_id_owning_environment,
-            &environment_auth_details.environment_roles_from_shares,
-            action,
-        )?;
-
-        Ok(environment_auth_details)
     }
 }

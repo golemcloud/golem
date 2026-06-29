@@ -20,14 +20,14 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentMcpDeploymentResourcePattern {
     Any,
     Name(EnvironmentMcpDeploymentName),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct EnvironmentMcpDeploymentName(pub String);
@@ -67,7 +67,7 @@ impl ResourcePattern for EnvironmentMcpDeploymentResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentMcpDeploymentVerb {
     View,
@@ -89,7 +89,7 @@ impl VerbPattern for EnvironmentMcpDeploymentVerb {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EnvironmentMcpDeploymentClass;
 
@@ -115,7 +115,7 @@ fn parse_environment_mcp_deployment_identifier(value: &str) -> Result<String, St
     if chars
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
         Ok(value.to_string())
     } else {

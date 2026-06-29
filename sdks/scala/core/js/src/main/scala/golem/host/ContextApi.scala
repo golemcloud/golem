@@ -68,8 +68,8 @@ object ContextApi {
   final class Span private[golem] (private[golem] val underlying: JsSpan) {
 
     def startedAt(): DateTime = {
-      val raw   = underlying.startedAt()
-      val secs  = BigInt(raw.seconds.toString)
+      val raw  = underlying.startedAt()
+      val secs = BigInt(raw.seconds.toString)
       DateTime(secs, raw.nanoseconds)
     }
 

@@ -11,7 +11,7 @@ With Golem 1.0's Launch on August 23rd, we wanted to make sure we celebrated the
 
 This time around, we're looking forward to celebrating the winner with exciting cash prizes.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055aa_67559f0f16c5f7501359f57f_66c3235f266306ad16302997_66c31ebabe4b2f0a05c501ba_Golem%252525201.0%25252520Hackathon%25252520-%25252520Graphic.png)
+![](/blog-images/68d76ba7edec7ec0b5c055aa_67559f0f16c5f7501359f57f_66c3235f266306ad16302997_66c31ebabe4b2f0a05c501ba_Golem_2525201.0_252520Hackathon_252520-_252520Graphic.png)
 
 **Looking forward to participating?**
 

@@ -3,7 +3,7 @@
  * the durability and transactional guarantees the executor provides.
  */
 declare module 'golem:api/host@1.5.0' {
-  import * as golemCore150Types from 'golem:core/types@1.5.0';
+  import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   /**
    * Create a new promise
@@ -79,6 +79,20 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function generateIdempotencyKey(): Uuid;
   /**
+   * Returns one permission card currently installed in this agent's wallet, if any.
+   */
+  export function selfCard(): Card | undefined;
+  /**
+   * Derives a card handle from an installed card. This minimal test-facing form keeps the card as plain data.
+   * @throws string
+   */
+  export function deriveCard(card: Card): Card;
+  /**
+   * Installs a card into this agent's own wallet.
+   * @throws CardInstallError
+   */
+  export function installCard(card: Card): void;
+  /**
    * Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
    * not waiting for the agent to get updated.
    */
@@ -150,12 +164,12 @@ declare module 'golem:api/host@1.5.0' {
      */
     get(): Uint8Array | undefined;
   }
-  export type ComponentId = golemCore150Types.ComponentId;
-  export type Uuid = golemCore150Types.Uuid;
-  export type ValueAndType = golemCore150Types.ValueAndType;
-  export type AgentId = golemCore150Types.AgentId;
-  export type PromiseId = golemCore150Types.PromiseId;
-  export type OplogIndex = golemCore150Types.OplogIndex;
+  export type ComponentId = golemCore200Types.ComponentId;
+  export type CardId = golemCore200Types.CardId;
+  export type Uuid = golemCore200Types.Uuid;
+  export type AgentId = golemCore200Types.AgentId;
+  export type PromiseId = golemCore200Types.PromiseId;
+  export type OplogIndex = golemCore200Types.OplogIndex;
   export type Pollable = wasiIo023Poll.Pollable;
   /**
    * Represents a Golem component's version
@@ -338,10 +352,18 @@ declare module 'golem:api/host@1.5.0' {
     val: ForkDetails
   };
   /**
+   * Plain-data handle to a permission card visible to the guest.
+   */
+  export type Card = {
+    cardId: CardId;
+  };
+  export type CardInstallError = "revoked" | "not-found" | "not-permitted";
+  /**
    * Snapshot payload
    */
   export type Snapshot = {
     payload: Uint8Array;
     mimeType: string;
   };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

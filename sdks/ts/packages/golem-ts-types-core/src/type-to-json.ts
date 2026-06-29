@@ -217,6 +217,20 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
         optional: type.optional,
       };
 
+    case 'path':
+    case 'url':
+    case 'datetime':
+    case 'duration':
+      return { kind: type.kind, name: type.name, owner: type.owner, optional: type.optional };
+    case 'quantity':
+      return {
+        kind: 'quantity',
+        name: type.name,
+        owner: type.owner,
+        optional: type.optional,
+        spec: type.spec,
+      };
+
     case 'unresolved-type':
       return {
         kind: 'unresolved-type',

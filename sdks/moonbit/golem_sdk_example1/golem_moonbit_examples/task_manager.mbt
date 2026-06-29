@@ -17,15 +17,6 @@ pub(all) struct TaskInfo {
 } derive(ToJson, @json.FromJson)
 
 ///|
-fn priority_to_string(p : Priority) -> String {
-  match p {
-    Low => "low"
-    Medium => "medium"
-    High => "high"
-  }
-}
-
-///|
 /// A task management agent
 #derive.agent
 struct TaskManager {
@@ -33,30 +24,16 @@ struct TaskManager {
 } derive(ToJson, @json.FromJson)
 
 ///|
-let task_logger : @logging.Logger = @logging.with_name("task-manager")
-
-///|
 /// Creates a new empty task manager
 fn TaskManager::new() -> TaskManager {
-  task_logger.info("Creating new task manager")
   { tasks: [] }
 }
 
 ///|
 /// Adds a new task, returns the total task count
 pub fn TaskManager::add_task(self : Self, task : TaskInfo) -> UInt64 {
-  @context.with_span(
-    "task_manager.add_task",
-    attributes=[
-      ("task.title", task.title),
-      ("task.priority", priority_to_string(task.priority)),
-    ],
-    fn(_span) {
-      task_logger.info("Adding task: " + task.title)
-      self.tasks.push(task)
-      self.tasks.length().reinterpret_as_uint().to_uint64()
-    },
-  )
+  self.tasks.push(task)
+  self.tasks.length().reinterpret_as_uint().to_uint64()
 }
 
 ///|

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::auth::TokenId;
 use crate::model::card::owner::{AgentOwnerPattern, EmptyOwnerPattern, OwnerPattern};
 use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
@@ -29,6 +30,14 @@ fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> Perm
         verb: Some(FilesystemVerb::Read),
         owner: AgentOwnerPattern::parse(owner).unwrap(),
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
+        resource,
+    })
+}
+
+fn fs_target(owner: &str, resource: FilesystemResourcePattern) -> PermissionTarget {
+    PermissionTarget::Filesystem(ClassPermissionTarget::<FilesystemClass> {
+        verb: Some(FilesystemVerb::Read),
+        owner: AgentOwnerPattern::parse(owner).unwrap(),
         resource,
     })
 }
@@ -65,6 +74,10 @@ fn oplog_read(resource: OplogResourcePattern) -> PermissionPattern {
 
 fn fixed_uuid() -> Uuid {
     Uuid::from_u128(0x550e8400e29b41d4a716446655440000)
+}
+
+fn fixed_token_id() -> TokenId {
+    TokenId(fixed_uuid())
 }
 
 fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPattern>) -> Card {
@@ -174,20 +187,21 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
     let account_agents = AgentRecipientPattern::parse("acme/*/*/*/*").unwrap();
     let application_agents = AgentRecipientPattern::parse("acme/shop/*/*/*").unwrap();
     let agent_type = AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap();
-    let agent =
-        AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
+    let agent = AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart").unwrap();
+    let other_agent =
+        AgentRecipientPattern::parse("other/shop/prod/cart-svc/ShoppingCart").unwrap();
 
-    assert!(account.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
-    assert!(account.matches_holder("acme/shop/prod"));
+    assert!(account.subsumes(&agent));
+    assert!(account.subsumes(&environment));
     assert!(account_environments.subsumes(&environment));
-    assert!(account_environments.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
-    assert!(environment.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
+    assert!(account_environments.subsumes(&agent));
+    assert!(environment.subsumes(&agent));
     assert!(account_agents.subsumes(&agent));
     assert!(application_agents.subsumes(&agent));
-    assert!(!account_agents.matches_holder("acme/shop/prod"));
+    assert!(!account_agents.subsumes(&environment));
     assert!(agent_type.subsumes(&agent));
     assert!(!agent.subsumes(&agent_type));
-    assert!(!account.matches_holder("other/shop/prod/cart-svc/ShoppingCart(\"42\")"));
+    assert!(!account.subsumes(&other_agent));
 }
 
 #[test_gen]
@@ -302,32 +316,29 @@ fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
                 "recipient_matching_{}_{}",
                 test_name(recipient),
                 if expected {
-                    "matches_holder"
+                    "subsumes_holder"
                 } else {
-                    "does_not_match_holder"
+                    "does_not_subsume_holder"
                 }
             ),
             TestProperties::unit_test(),
             || {
                 let holder = "acme/shop/prod/cart-svc/ShoppingCart(\"42\")";
 
-                assert_eq!(recipient_matches_holder(recipient, holder), expected);
+                assert_eq!(recipient_subsumes_holder(recipient, holder), expected);
             }
         );
     }
 }
 
-fn recipient_matches_holder(recipient: &str, holder: &str) -> bool {
-    AgentRecipientPattern::parse(recipient)
-        .map(|recipient| recipient.matches_holder(holder))
-        .or_else(|_| {
-            EnvironmentRecipientPattern::parse(recipient)
-                .map(|recipient| recipient.matches_holder(holder))
-        })
-        .or_else(|_| {
-            AccountRecipientPattern::parse(recipient)
-                .map(|recipient| recipient.matches_holder(holder))
-        })
+fn recipient_subsumes_holder(recipient: &str, holder: &str) -> bool {
+    parse_recipient(recipient).subsumes(&parse_recipient(holder))
+}
+
+fn parse_recipient(value: &str) -> RecipientPattern {
+    AgentRecipientPattern::parse(value)
+        .or_else(|_| EnvironmentRecipientPattern::parse(value))
+        .or_else(|_| AccountRecipientPattern::parse(value))
         .unwrap()
 }
 
@@ -448,26 +459,12 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test_gen]
 fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
-    let application_cases = [
-        (
-            "application_any_subsumes_named",
-            ApplicationResourcePattern::Any,
-            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
-            true,
-        ),
-        (
-            "application_named_does_not_subsume_any",
-            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
-            ApplicationResourcePattern::Any,
-            false,
-        ),
-        (
-            "application_named_requires_same_name",
-            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
-            ApplicationResourcePattern::Application(ApplicationName("admin".to_string())),
-            false,
-        ),
-    ];
+    let application_cases = [(
+        "application_unit_subsumes_unit",
+        ApplicationResourcePattern,
+        ApplicationResourcePattern,
+        true,
+    )];
 
     for (name, left, right, expected) in application_cases {
         let left = std::sync::Arc::new(left);
@@ -481,40 +478,19 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "environment_any_subsumes_revision",
             EnvironmentResourcePattern::Any,
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
+            EnvironmentResourcePattern::Revision { revision: 42 },
             true,
         ),
         (
-            "environment_name_subsumes_own_revision",
-            EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
-            true,
-        ),
-        (
-            "environment_revision_does_not_subsume_name",
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
-            EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
+            "environment_revision_does_not_subsume_any",
+            EnvironmentResourcePattern::Revision { revision: 42 },
+            EnvironmentResourcePattern::Any,
             false,
         ),
         (
             "environment_revision_requires_same_revision",
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 43,
-            },
+            EnvironmentResourcePattern::Revision { revision: 42 },
+            EnvironmentResourcePattern::Revision { revision: 43 },
             false,
         ),
     ];
@@ -531,37 +507,19 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "component_any_subsumes_revision",
             ComponentResourcePattern::Any,
-            ComponentResourcePattern::Revision {
-                component: ComponentName("cart-svc".to_string()),
-                revision: 42,
-            },
+            ComponentResourcePattern::Revision { revision: 42 },
             true,
         ),
         (
-            "component_name_subsumes_own_revision",
-            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
-            ComponentResourcePattern::Revision {
-                component: ComponentName("cart-svc".to_string()),
-                revision: 42,
-            },
-            true,
-        ),
-        (
-            "component_revision_does_not_subsume_name",
-            ComponentResourcePattern::Revision {
-                component: ComponentName("cart-svc".to_string()),
-                revision: 42,
-            },
-            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
+            "component_revision_does_not_subsume_any",
+            ComponentResourcePattern::Revision { revision: 42 },
+            ComponentResourcePattern::Any,
             false,
         ),
         (
-            "component_name_requires_same_name",
-            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
-            ComponentResourcePattern::Revision {
-                component: ComponentName("checkout-svc".to_string()),
-                revision: 42,
-            },
+            "component_revision_requires_same_revision",
+            ComponentResourcePattern::Revision { revision: 42 },
+            ComponentResourcePattern::Revision { revision: 43 },
             false,
         ),
     ];
@@ -689,12 +647,12 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "account_token_any_subsumes_token",
             AccountTokenResourcePattern::Any,
-            AccountTokenResourcePattern::Token(fixed_uuid()),
+            AccountTokenResourcePattern::Token(fixed_token_id()),
             true,
         ),
         (
             "account_token_token_does_not_subsume_any",
-            AccountTokenResourcePattern::Token(fixed_uuid()),
+            AccountTokenResourcePattern::Token(fixed_token_id()),
             AccountTokenResourcePattern::Any,
             false,
         ),
@@ -713,7 +671,7 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
             "card_any_subsumes_install_target",
             CardResourcePattern::Any,
             CardResourcePattern::InstallTarget(
-                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(*)").unwrap(),
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart").unwrap(),
             ),
             true,
         ),
@@ -723,7 +681,7 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
                 AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap(),
             ),
             CardResourcePattern::InstallTarget(
-                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(*)").unwrap(),
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart").unwrap(),
             ),
             true,
         ),
@@ -848,6 +806,7 @@ fn subsumption_requires_same_permission_class() {
 #[test]
 fn derivation_must_be_subsumed_by_parent_union() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -866,7 +825,7 @@ fn derivation_must_be_subsumed_by_parent_union() {
 
     let parent = card(vec![parent_grant], Vec::new());
     let parent_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&parent), holder).unwrap();
+        EffectiveSurface::from_cards(std::slice::from_ref(&parent), &recipient).unwrap();
 
     assert!(
         parent_surface
@@ -882,6 +841,7 @@ fn derivation_must_be_subsumed_by_parent_union() {
 #[test]
 fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -899,7 +859,7 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     );
     let parent = card(Vec::new(), vec![parent_upper]);
     let parent_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&parent), holder).unwrap();
+        EffectiveSurface::from_cards(std::slice::from_ref(&parent), &recipient).unwrap();
 
     assert!(
         parent_surface
@@ -914,29 +874,23 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
 
 #[test]
 fn negative_grants_override_positive_grants() {
-    let allowed = fs(
+    let public = fs_target(
         "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
-        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
-    );
-    let denied = fs(
-        "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
-        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
-    );
-    let public = fs(
-        "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
-    let secret = fs(
+    let secret = fs_target(
         "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let surface = GrantSurface {
-        positive: vec![allowed],
-        negative: vec![denied],
+        positive: vec![fs_target(
+            "acme/shop/prod/cart/agent",
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+        )],
+        negative: vec![fs_target(
+            "acme/shop/prod/cart/agent",
+            fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+        )],
     };
 
     assert!(surface.allows(&public).unwrap());

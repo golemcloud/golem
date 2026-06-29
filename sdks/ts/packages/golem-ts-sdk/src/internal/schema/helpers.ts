@@ -14,10 +14,9 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common@1.5.0';
-import * as WitType from '../mapping/types/WitType';
-import { TypeInfoInternal } from '../typeInfoInternal';
-import { ParameterDetail } from '../mapping/values/dataValue';
+import { MultimodalCase, RuntimeTypeInfo } from '../typeInfoInternal';
+import { mapTsTypeToResolvedGraph } from '../mapping/types/resolvedMapper';
+import { TypeScope } from '../mapping/types/scope';
 import { tryTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
 
 const MULTIMODAL_TYPE_NAMES = ['Multimodal', 'MultimodalAdvanced', 'MultimodalCustom'];
@@ -29,9 +28,80 @@ export function isMultimodalType(type: Type.Type): boolean {
   return false;
 }
 
-export function getMultimodalParamDetails(
+function isPrincipalType(type: Type.Type): boolean {
+  return type.kind === 'principal' || type.name === 'Principal';
+}
+
+/**
+ * Resolve a constructor/method parameter's TypeScript type into its schema-native
+ * {@link RuntimeTypeInfo}. Auto-injected (`principal`) and `config` parameters are
+ * recognised here too; the caller decides how they participate in the input schema.
+ */
+export function resolveParamType(
+  scope: TypeScope | undefined,
   type: Type.Type,
-): Either.Either<ParameterDetail[], string> {
+): Either.Either<RuntimeTypeInfo, string> {
+  if (isPrincipalType(type)) {
+    return Either.right({ tag: 'principal', tsType: type });
+  }
+  if (type.kind === 'config') {
+    return Either.right({ tag: 'config', tsType: type as Type.Type & { kind: 'config' } });
+  }
+  return resolveModalityOrSchemaType(scope, type, true);
+}
+
+/**
+ * Resolve a type that may be a rich modality (unstructured text/binary), a
+ * multimodal list, or a plain schema type. Used for top-level params (when
+ * `allowMultimodal` is `true`) and for the individual cases of a multimodal
+ * parameter (when `false`).
+ */
+function resolveModalityOrSchemaType(
+  scope: TypeScope | undefined,
+  type: Type.Type,
+  allowMultimodal: boolean,
+): Either.Either<RuntimeTypeInfo, string> {
+  if (type.name === 'UnstructuredText') {
+    return Either.map(getLanguageCodes(type), (languages) => ({
+      tag: 'unstructured-text',
+      languages,
+      tsType: type,
+    }));
+  }
+  if (type.name === 'UnstructuredBinary') {
+    return Either.map(getMimeTypes(type), (mimeTypes) => ({
+      tag: 'unstructured-binary',
+      mimeTypes,
+      tsType: type,
+    }));
+  }
+  if (allowMultimodal && isMultimodalType(type)) {
+    return resolveMultimodalType(type);
+  }
+  return Either.map(mapTsTypeToResolvedGraph(type, scope), (graph) => ({
+    tag: 'schema',
+    graph,
+    tsType: type,
+  }));
+}
+
+function resolveMultimodalType(type: Type.Type): Either.Either<RuntimeTypeInfo, string> {
+  if (type.kind !== 'array') {
+    return Either.left('Multimodal type is not an array');
+  }
+  return Either.map(getMultimodalCases(type.element), (cases) => ({
+    tag: 'multimodal',
+    cases,
+    tsType: type,
+  }));
+}
+
+/**
+ * Resolve the cases of a multimodal element type (a tagged union where each
+ * `{ tag, val }` case's `val` is a modality: unstructured text/binary or a
+ * plain schema value). Never itself multimodal/principal/config.
+ */
+export function getMultimodalCases(type: Type.Type): Either.Either<MultimodalCase[], string> {
   const multimodalTypes =
     type.kind === 'union' ? tryTaggedUnion(type.unionTypes) : tryTaggedUnion([type]);
 
@@ -52,14 +122,13 @@ export function getMultimodalParamDetails(
   return Either.all(
     taggedTypes.map((taggedTypeMetadata) => {
       const paramTypeOpt = taggedTypeMetadata.valueType;
+      const tagName = taggedTypeMetadata.tagLiteralName;
 
       if (!paramTypeOpt) {
         return Either.left(
-          `Multimodal types should have a value associated with the tag ${taggedTypeMetadata.tagLiteralName}`,
+          `Multimodal types should have a value associated with the tag ${tagName}`,
         );
       }
-
-      const tagName = taggedTypeMetadata.tagLiteralName;
 
       const [valName, paramType] = paramTypeOpt;
 
@@ -69,109 +138,12 @@ export function getMultimodalParamDetails(
         );
       }
 
-      const typeName = paramType.name;
-
-      if (typeName && typeName === 'UnstructuredText') {
-        const textDescriptor = getTextDescriptor(paramType);
-
-        if (Either.isLeft(textDescriptor)) {
-          return Either.left(
-            `Failed to get text descriptor for unstructured-text parameter ${tagName}: ${textDescriptor.val}`,
-          );
-        }
-
-        let typeInfoInternal: TypeInfoInternal = {
-          tag: 'unstructured-text',
-          val: textDescriptor.val,
-          tsType: paramType,
-        };
-
-        return Either.right({
-          name: tagName,
-          type: typeInfoInternal,
-        });
-      }
-
-      if (typeName && typeName === 'UnstructuredBinary') {
-        const binaryDescriptor = getBinaryDescriptor(paramType);
-
-        if (Either.isLeft(binaryDescriptor)) {
-          return Either.left(
-            `Failed to get binary descriptor for unstructured-binary parameter ${tagName}: ${binaryDescriptor.val}`,
-          );
-        }
-
-        const typeInfoInternal: TypeInfoInternal = {
-          tag: 'unstructured-binary',
-          val: binaryDescriptor.val,
-          tsType: paramType,
-        };
-
-        return Either.right({
-          name: tagName,
-          type: typeInfoInternal,
-        });
-      }
-
-      const witType = WitType.fromTsType(paramType, undefined);
-
-      return Either.map(witType, (typeInfo) => {
-        const witType = typeInfo[0];
-
-        const analysedType = typeInfo[1];
-
-        const typeInfoInternal: TypeInfoInternal = {
-          tag: 'analysed',
-          val: analysedType,
-          tsType: paramType,
-          witType: witType,
-        };
-
-        return {
-          name: tagName,
-          type: typeInfoInternal,
-        };
-      });
+      return Either.map(resolveModalityOrSchemaType(undefined, paramType, false), (modality) => ({
+        name: tagName,
+        type: modality,
+      }));
     }),
   );
-}
-
-export function getTextDescriptor(paramType: Type.Type): Either.Either<TextDescriptor, string> {
-  const languageCodes = getLanguageCodes(paramType);
-
-  if (Either.isLeft(languageCodes)) {
-    return Either.left(`Failed to get language code: ${languageCodes.val}`);
-  }
-
-  const textDescriptor: TextDescriptor =
-    languageCodes.val.length > 0
-      ? {
-          restrictions: languageCodes.val.map((code) => ({
-            languageCode: code,
-          })),
-        }
-      : {};
-
-  return Either.right(textDescriptor);
-}
-
-export function getBinaryDescriptor(paramType: Type.Type): Either.Either<BinaryDescriptor, string> {
-  const mimeTypes = getMimeTypes(paramType);
-
-  if (Either.isLeft(mimeTypes)) {
-    return Either.left(`Failed to get mime types: ${mimeTypes.val}`);
-  }
-
-  const binaryDescriptor =
-    mimeTypes.val.length > 0
-      ? {
-          restrictions: mimeTypes.val.map((type) => ({
-            mimeType: type,
-          })),
-        }
-      : {};
-
-  return Either.right(binaryDescriptor);
 }
 
 export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {

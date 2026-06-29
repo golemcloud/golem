@@ -13,8 +13,11 @@
 // limitations under the License.
 
 import { Uuid } from './uuid';
-import { ComponentId as RawComponentId, AccountId as RawAccountId } from 'golem:core/types@1.5.0';
-import { EnvironmentId as RawEnvironmentId } from 'golem:api/host@1.5.0';
+import {
+  ComponentId as RawComponentId,
+  AccountId as RawAccountId,
+  EnvironmentId as RawEnvironmentId,
+} from 'golem:core/types@2.0.0';
 
 export class ComponentId {
   readonly uuid: Uuid;

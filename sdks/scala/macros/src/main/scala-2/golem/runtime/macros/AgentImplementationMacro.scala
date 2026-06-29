@@ -17,9 +17,9 @@
 package golem.runtime.macros
 
 import golem.config.ConfigBuilder
-import golem.data.GolemSchema
 import golem.runtime.Snapshotting
 import golem.runtime.AgentImplementationType
+import golem.schema.IntoSchema
 
 import scala.reflect.macros.blackbox
 
@@ -39,7 +39,7 @@ object AgentImplementationMacro {
 
 object AgentImplementationMacroImpl {
   private val schemaHint: String =
-    "\nHint: GolemSchema is derived from zio.blocks.schema.Schema.\n" +
+    "\nHint: IntoSchema/FromSchema are derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
       "Scala 3: `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n" +
       "Scala 2: `implicit val schema: zio.blocks.schema.Schema[T] = zio.blocks.schema.Schema.derived`.\n"
@@ -55,19 +55,18 @@ object AgentImplementationMacroImpl {
       c.abort(c.enclosingPosition, s"@agentImplementation target must be a trait, found: ${traitSymbol.fullName}")
     }
 
-    val metadataExpr = q"_root_.golem.runtime.macros.AgentDefinitionMacro.generate[$traitType]"
-    val methodsExpr  = buildImplementationMethodsExpr(c)(traitType, metadataExpr)
-
-    val ctorSchemaExpr =
-      c.inferImplicitValue(appliedType(typeOf[GolemSchema[_]].typeConstructor, typeOf[Unit]))
+    val metadataExpr      = q"_root_.golem.runtime.macros.AgentDefinitionMacro.generate[$traitType]"
+    val methodsExpr       = buildImplementationMethodsExpr(c)(traitType, metadataExpr)
+    val configBuilderExpr = detectConfigBuilder(c)(traitType)
 
     c.Expr[AgentImplementationType[Trait, Unit]](q"""
       val metadata = $metadataExpr
       _root_.golem.runtime.AgentImplementationType[$traitType, _root_.scala.Unit](
         metadata = metadata,
-        idSchema = $ctorSchemaExpr,
+        ctorCodec = _root_.golem.runtime.InputRecordCodec.unit,
         buildInstance = (_: _root_.scala.Unit, _: _root_.golem.Principal) => $build,
-        methods = $methodsExpr
+        methods = $methodsExpr,
+        configBuilder = $configBuilderExpr
       )
     """)
   }
@@ -84,62 +83,51 @@ object AgentImplementationMacroImpl {
       c.abort(c.enclosingPosition, s"@agentImplementation target must be a trait, found: ${traitSymbol.fullName}")
     }
 
-    val ctorType: Type = {
-      val idAnnotationType = typeOf[golem.runtime.annotations.id]
+    val idParams = agentInputParams(c)(traitType)
+    val ctorType = weakTypeOf[Ctor]
+    val gotCtor  = ctorType.dealias
 
-      val annotatedClass = traitType.members.collectFirst {
-        case sym if sym.isClass && !sym.isMethod &&
-          sym.annotations.exists(ann => ann.tree.tpe != null && ann.tree.tpe =:= idAnnotationType) =>
-          sym
-      }
-
-      val constructorClass = annotatedClass.orElse {
-        val byName = traitType.member(TypeName("Id"))
-        if (byName == NoSymbol) None else Some(byName)
-      }.getOrElse {
-        c.abort(c.enclosingPosition,
-          s"Agent trait ${traitSymbol.fullName} must define a `class Id(...)` to declare its constructor parameters. Use `class Id()` for agents with no constructor parameters.")
-      }
-      val primaryCtor = constructorClass.asClass.primaryConstructor.asMethod
-      val params = primaryCtor.paramLists.flatten.filter(_.isTerm).map(_.typeSignature)
-      params match {
-        case Nil      => typeOf[Unit]
-        case p :: Nil => p
-        case ps       =>
-          val tupleClass = rootMirror.staticClass(s"scala.Tuple${ps.length}")
-          appliedType(tupleClass.toType, ps)
-      }
+    val ctorCodecExpr: Tree = idParams match {
+      case Nil =>
+        if (!(gotCtor =:= typeOf[Unit])) {
+          c.abort(
+            c.enclosingPosition,
+            s"Constructor function input must be Unit for the empty Id class on ${traitSymbol.fullName} (found: $gotCtor)"
+          )
+        }
+        q"_root_.golem.runtime.InputRecordCodec.unit"
+      case (name, expected) :: Nil =>
+        if (!(gotCtor =:= expected)) {
+          c.abort(
+            c.enclosingPosition,
+            s"Constructor function input must match the Id class parameter ($expected) on ${traitSymbol.fullName} (found: $gotCtor)"
+          )
+        }
+        val into = summonInto(c)(ctorType, s"constructor of ${traitSymbol.fullName}")
+        val from = summonFrom(c)(ctorType, s"constructor of ${traitSymbol.fullName}")
+        q"_root_.golem.runtime.InputRecordCodec.single[$ctorType]($name)($into, $from)"
+      case _ =>
+        c.abort(
+          c.enclosingPosition,
+          s"implementationType[Trait, Ctor] does not support multi-parameter constructors on " +
+            s"${traitSymbol.fullName}. Use `implementationTypeFromClass` (or a single-field Id class) instead."
+        )
     }
 
-    val gotCtor = weakTypeOf[Ctor].dealias
-    if (!(gotCtor =:= ctorType)) {
-      c.abort(
-        c.enclosingPosition,
-        s"Constructor function must have input type matching Id class parameters ($ctorType) on ${traitSymbol.fullName} (found: $gotCtor)"
-      )
-    }
-
-    val metadataExpr = q"_root_.golem.runtime.macros.AgentDefinitionMacro.generate[$traitType]"
-    val methodsExpr  = buildImplementationMethodsExpr(c)(traitType, metadataExpr)
-
-    val ctorSchemaTpe  = appliedType(typeOf[GolemSchema[_]].typeConstructor, ctorType)
-    val ctorSchemaExpr = c.inferImplicitValue(ctorSchemaTpe)
-    if (ctorSchemaExpr.isEmpty) {
-      c.abort(
-        c.enclosingPosition,
-        s"Unable to summon GolemSchema for constructor type $ctorType on ${traitSymbol.fullName}.$schemaHint"
-      )
-    }
+    val metadataExpr      = q"_root_.golem.runtime.macros.AgentDefinitionMacro.generate[$traitType]"
+    val methodsExpr       = buildImplementationMethodsExpr(c)(traitType, metadataExpr)
+    val configBuilderExpr = detectConfigBuilder(c)(traitType)
 
     c.Expr[AgentImplementationType[Trait, Ctor]](
       q"""
       val metadata = $metadataExpr
       _root_.golem.runtime.AgentImplementationType[$traitType, $ctorType](
         metadata = metadata,
-        idSchema = $ctorSchemaExpr,
+        ctorCodec = $ctorCodecExpr,
         buildInstance = { val f = ($build).asInstanceOf[$ctorType => $traitType]; (input: $ctorType, _: _root_.golem.Principal) => f(input) },
-        methods = $methodsExpr
-      ).asInstanceOf[_root_.golem.runtime.AgentImplementationType[$traitType, ${weakTypeOf[Ctor]}]]
+        methods = $methodsExpr,
+        configBuilder = $configBuilderExpr
+      )
       """
     )
   }
@@ -198,29 +186,8 @@ object AgentImplementationMacroImpl {
 
     val methodName = method.name.toString
 
-    val inputSchemaExpr = accessMode match {
-      case ParamAccessMode.MultiArgs =>
-        multiParamSchemaExpr(c)(methodName, nonPrincipalParams)
-      case _ =>
-        val golemSchemaType = appliedType(typeOf[GolemSchema[_]].typeConstructor, inputType)
-        val schemaInstance  = c.inferImplicitValue(golemSchemaType)
-        if (schemaInstance.isEmpty) {
-          c.abort(
-            c.enclosingPosition,
-            s"Unable to summon GolemSchema for input of method $methodName with type $inputType.$schemaHint"
-          )
-        }
-        schemaInstance
-    }
-
-    val golemOutputSchemaType = appliedType(typeOf[GolemSchema[_]].typeConstructor, outputType)
-    val outputSchemaInstance  = c.inferImplicitValue(golemOutputSchemaType)
-    if (outputSchemaInstance.isEmpty) {
-      c.abort(
-        c.enclosingPosition,
-        s"Unable to summon GolemSchema for output of method $methodName with type $outputType.$schemaHint"
-      )
-    }
+    val inputCodecExprV  = inputCodecExpr(c)(accessMode, s"method $methodName", nonPrincipalParams.map { case (n, t) => (n.toString, t) })
+    val outputCodecExprV = outputCodecExpr(c)(outputType, s"method $methodName")
 
     val handlerExpr = buildHandler(c)(traitType, method, allParams, nonPrincipalParams, accessMode, inputType, isAsync)
 
@@ -228,8 +195,8 @@ object AgentImplementationMacroImpl {
       q"""
         _root_.golem.runtime.AsyncImplementationMethod[$traitType, $inputType, $outputType](
           metadata = $methodMetadataExpr,
-          inputSchema = $inputSchemaExpr,
-          outputSchema = $outputSchemaInstance,
+          inputCodec = $inputCodecExprV,
+          outputCodec = $outputCodecExprV,
           handler = $handlerExpr
         )
       """
@@ -237,8 +204,8 @@ object AgentImplementationMacroImpl {
       q"""
         _root_.golem.runtime.SyncImplementationMethod[$traitType, $inputType, $outputType](
           metadata = $methodMetadataExpr,
-          inputSchema = $inputSchemaExpr,
-          outputSchema = $outputSchemaInstance,
+          inputCodec = $inputCodecExprV,
+          outputCodec = $outputCodecExprV,
           handler = $handlerExpr
         )
       """
@@ -312,108 +279,6 @@ object AgentImplementationMacroImpl {
     }
   }
 
-  private def multiParamSchemaExpr(c: blackbox.Context)(
-    methodName: String,
-    params: List[(c.universe.TermName, c.universe.Type)]
-  ): c.Tree = {
-    import c.universe._
-
-    val expectedCount = params.length
-
-    val paramEntries = params.map { case (name, tpe) =>
-      val nameStr         = name.toString
-      val golemSchemaType = appliedType(typeOf[GolemSchema[_]].typeConstructor, tpe)
-      val schemaInstance  = c.inferImplicitValue(golemSchemaType)
-      if (schemaInstance.isEmpty) {
-        c.abort(
-          c.enclosingPosition,
-          s"Unable to summon GolemSchema for parameter '$nameStr' of method $methodName with type $tpe.$schemaHint"
-        )
-      }
-      q"($nameStr, $schemaInstance.asInstanceOf[_root_.golem.data.GolemSchema[Any]])"
-    }
-
-    q"""
-      new _root_.golem.data.GolemSchema[List[Any]] {
-        private val params = Array[(String, _root_.golem.data.GolemSchema[Any])](..$paramEntries)
-
-        override val schema: _root_.golem.data.StructuredSchema = {
-          val builder = List.newBuilder[_root_.golem.data.NamedElementSchema]
-          var idx = 0
-          while (idx < params.length) {
-            val (paramName, codec) = params(idx)
-            builder += _root_.golem.data.NamedElementSchema(paramName, codec.elementSchema)
-            idx += 1
-          }
-          _root_.golem.data.StructuredSchema.Tuple(builder.result())
-        }
-
-        override def encode(value: List[Any]): Either[String, _root_.golem.data.StructuredValue] = {
-          val values = value.toVector
-          if (values.length != params.length)
-            Left("Parameter count mismatch for method '" + $methodName + "'. Expected " + $expectedCount + ", found " + values.length)
-          else {
-            val builder = List.newBuilder[_root_.golem.data.NamedElementValue]
-            var idx = 0
-            var error: Option[String] = None
-            while (idx < params.length && error.isEmpty) {
-              val (paramName, codec) = params(idx)
-              codec.encodeElement(values(idx)) match {
-                case Left(err) =>
-                  error = Some("Failed to encode parameter '" + paramName + "' in method '" + $methodName + "': " + err)
-                case Right(elementValue) =>
-                  builder += _root_.golem.data.NamedElementValue(paramName, elementValue)
-              }
-              idx += 1
-            }
-            error.fold[Either[String, _root_.golem.data.StructuredValue]](
-              Right(_root_.golem.data.StructuredValue.Tuple(builder.result()))
-            )(Left(_))
-          }
-        }
-
-        override def decode(value: _root_.golem.data.StructuredValue): Either[String, List[Any]] =
-          value match {
-            case _root_.golem.data.StructuredValue.Tuple(elements) =>
-              if (elements.length != params.length)
-                Left("Structured element count mismatch for method '" + $methodName + "'. Expected " + $expectedCount + ", found " + elements.length)
-              else {
-                val builder = List.newBuilder[Any]
-                var idx = 0
-                var error: Option[String] = None
-                while (idx < params.length && error.isEmpty) {
-                  val (paramName, codec) = params(idx)
-                  val element = elements(idx)
-                  if (element.name != paramName)
-                    error = Some("Structured element name mismatch for method '" + $methodName + "'. Expected '" + paramName + "', found '" + element.name + "'")
-                  else {
-                    codec.decodeElement(element.value) match {
-                      case Left(err) =>
-                        error = Some("Failed to decode parameter '" + paramName + "' in method '" + $methodName + "': " + err)
-                      case Right(decoded) =>
-                        builder += decoded
-                    }
-                  }
-                  idx += 1
-                }
-                error.fold[Either[String, List[Any]]](Right(builder.result()))(Left(_))
-              }
-            case other =>
-              Left("Structured value mismatch for method '" + $methodName + "'. Expected tuple payload, found: " + other)
-          }
-
-        override def elementSchema: _root_.golem.data.ElementSchema =
-          throw new UnsupportedOperationException("Multi-param schema cannot be used as a single element")
-
-        override def encodeElement(value: List[Any]): Either[String, _root_.golem.data.ElementValue] =
-          Left("Multi-param schema cannot be encoded as a single element")
-
-        override def decodeElement(value: _root_.golem.data.ElementValue): Either[String, List[Any]] =
-          Left("Multi-param schema cannot be decoded from a single element")
-      }
-    """
-  }
-
   private def methodReturnInfo(c: blackbox.Context)(
     method: c.universe.MethodSymbol
   ): (Boolean, c.universe.Type) = {
@@ -438,13 +303,156 @@ object AgentImplementationMacroImpl {
 
   private def inputTypeFor(c: blackbox.Context)(
     accessMode: ParamAccessMode,
-    params: List[(c.universe.TermName, c.universe.Type)]
+    params: List[(_, c.universe.Type)]
   ): c.universe.Type = {
     import c.universe._
     accessMode match {
       case ParamAccessMode.NoArgs    => typeOf[Unit]
       case ParamAccessMode.SingleArg => params.head._2
-      case ParamAccessMode.MultiArgs => typeOf[List[Any]]
+      case ParamAccessMode.MultiArgs => typeOf[Vector[Any]]
+    }
+  }
+
+  /**
+   * The user-supplied `class Id(...)` parameters (name + type), Principal
+   * params filtered out. These define the constructor input record's shape.
+   */
+  private def agentInputParams(c: blackbox.Context)(
+    traitType: c.universe.Type
+  ): List[(String, c.universe.Type)] = {
+    import c.universe._
+    val idAnnotationType  = typeOf[golem.runtime.annotations.id]
+    val principalFullName = "golem.Principal"
+
+    val annotatedClass = traitType.members.collectFirst {
+      case sym
+          if sym.isClass && !sym.isMethod &&
+            sym.annotations.exists(ann => ann.tree.tpe != null && ann.tree.tpe =:= idAnnotationType) =>
+        sym
+    }
+
+    val constructorClass = annotatedClass.orElse {
+      val byName = traitType.member(TypeName("Id"))
+      if (byName == NoSymbol) None else Some(byName)
+    }.getOrElse {
+      c.abort(
+        c.enclosingPosition,
+        s"Agent trait ${traitType.typeSymbol.fullName} must define a `class Id(...)` to declare its constructor parameters. Use `class Id()` for agents with no constructor parameters."
+      )
+    }
+    val primaryCtor = constructorClass.asClass.primaryConstructor.asMethod
+    primaryCtor.paramLists.flatten
+      .filter(_.isTerm)
+      .map(p => (p.name.toString, p.typeSignature))
+      .filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != principalFullName }
+  }
+
+  private def summonInto(c: blackbox.Context)(tpe: c.universe.Type, position: String): c.Tree = {
+    import c.universe._
+    val intoType     = appliedType(typeOf[IntoSchema[_]].typeConstructor, tpe)
+    val intoInstance = c.inferImplicitValue(intoType)
+    if (intoInstance.isEmpty) {
+      c.abort(c.enclosingPosition, s"Unable to summon IntoSchema for $position with type $tpe.$schemaHint")
+    }
+    intoInstance
+  }
+
+  private def summonFrom(c: blackbox.Context)(tpe: c.universe.Type, position: String): c.Tree = {
+    import c.universe._
+    val fromType     = appliedType(typeOf[golem.schema.FromSchema[_]].typeConstructor, tpe)
+    val fromInstance = c.inferImplicitValue(fromType)
+    if (fromInstance.isEmpty) {
+      c.abort(c.enclosingPosition, s"Unable to summon FromSchema for $position with type $tpe.$schemaHint")
+    }
+    fromInstance
+  }
+
+  /**
+   * Build the `InputRecordCodec[In]` for a constructor/method input from its
+   * user-supplied parameters: `unit` (no args), `single` (one arg), or
+   * `fromParams` (multiple args, encoded positionally as `Vector[Any]`).
+   */
+  private def inputCodecExpr(c: blackbox.Context)(
+    accessMode: ParamAccessMode,
+    context: String,
+    params: List[(String, c.universe.Type)]
+  ): c.Tree = {
+    import c.universe._
+    accessMode match {
+      case ParamAccessMode.NoArgs =>
+        q"_root_.golem.runtime.InputRecordCodec.unit"
+      case ParamAccessMode.SingleArg =>
+        val (name, tpe) = params.head
+        val into        = summonInto(c)(tpe, s"input of $context")
+        val from        = summonFrom(c)(tpe, s"input of $context")
+        q"_root_.golem.runtime.InputRecordCodec.single[$tpe]($name)($into, $from)"
+      case ParamAccessMode.MultiArgs =>
+        val paramCodecs = paramCodecsExpr(c)(context, params)
+        q"_root_.golem.runtime.InputRecordCodec.fromParams($paramCodecs)"
+    }
+  }
+
+  private def paramCodecsExpr(c: blackbox.Context)(
+    context: String,
+    params: List[(String, c.universe.Type)]
+  ): c.Tree = {
+    import c.universe._
+    val entries = params.map { case (name, tpe) =>
+      val into = summonInto(c)(tpe, s"parameter '$name' of $context")
+      val from = summonFrom(c)(tpe, s"parameter '$name' of $context")
+      q"""
+        _root_.golem.runtime.ParamCodec(
+          $name,
+          $into.asInstanceOf[_root_.golem.schema.IntoSchema[Any]],
+          $from.asInstanceOf[_root_.golem.schema.FromSchema[Any]]
+        )
+      """
+    }
+    q"_root_.scala.List(..$entries)"
+  }
+
+  /**
+   * Build the `OutputCodec[Out]` for a method's return type: `unit` for `Unit`
+   * (the host returns `none`), otherwise `single` carrying the value codec.
+   */
+  private def outputCodecExpr(c: blackbox.Context)(tpe: c.universe.Type, context: String): c.Tree = {
+    import c.universe._
+    if (tpe =:= typeOf[Unit]) q"_root_.golem.runtime.OutputCodec.unit[$tpe]"
+    else {
+      val into = summonInto(c)(tpe, s"output of $context")
+      val from = summonFrom(c)(tpe, s"output of $context")
+      q"_root_.golem.runtime.OutputCodec.single[$tpe]($into, $from)"
+    }
+  }
+
+  private def detectConfigBuilder(c: blackbox.Context)(traitType: c.universe.Type): c.Tree = {
+    import c.universe._
+
+    val agentConfigBases = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig")
+
+    if (agentConfigBases.isEmpty) q"_root_.scala.None"
+    else {
+      val configTypes = agentConfigBases.flatMap { sym =>
+        traitType.baseType(sym) match {
+          case TypeRef(_, _, List(arg)) => Some(arg)
+          case _                        => None
+        }
+      }
+      configTypes.headOption match {
+        case Some(configType) =>
+          val cbTpe           = appliedType(typeOf[ConfigBuilder[_]].typeConstructor, configType)
+          val builderImplicit = c.inferImplicitValue(cbTpe)
+          if (builderImplicit.isEmpty) {
+            c.abort(
+              c.enclosingPosition,
+              s"No implicit ConfigBuilder available for config type $configType.\n" +
+                "Hint: Add an implicit Schema[T] for your config type, which provides ConfigBuilder automatically."
+            )
+          }
+          q"_root_.scala.Some($builderImplicit: _root_.golem.config.ConfigBuilder[_])"
+        case None =>
+          q"_root_.scala.None"
+      }
     }
   }
 
@@ -530,64 +538,48 @@ object AgentImplementationMacroImpl {
 
     val principalParam = principalParams.headOption
 
-    // Extract constructor type from Id class on the trait
-    val expectedCtor: Type = {
-      val idAnnotationType = typeOf[golem.runtime.annotations.id]
+    // The user-supplied Id-class params (Principal filtered out) are the source
+    // of truth for the constructor input record; validate the impl's identity
+    // params against them.
+    val idParams = agentInputParams(c)(traitType)
 
-      val annotatedClass = traitType.members.collectFirst {
-        case sym if sym.isClass && !sym.isMethod &&
-          sym.annotations.exists(ann => ann.tree.tpe != null && ann.tree.tpe =:= idAnnotationType) =>
-          sym
-      }
-
-      val constructorClass = annotatedClass.orElse {
-        val byName = traitType.member(TypeName("Id"))
-        if (byName == NoSymbol) None else Some(byName)
-      }.getOrElse {
-        c.abort(c.enclosingPosition,
-          s"Agent trait ${traitSymbol.fullName} must define a `class Id(...)` to declare its constructor parameters. Use `class Id()` for agents with no constructor parameters.")
-      }
-      val primaryCtor = constructorClass.asClass.primaryConstructor.asMethod
-      val params = primaryCtor.paramLists.flatten.filter(_.isTerm).map(_.typeSignature)
-      params match {
-        case Nil      => typeOf[Unit]
-        case p :: Nil => p
-        case ps       =>
-          val tupleClass = rootMirror.staticClass(s"scala.Tuple${ps.length}")
-          appliedType(tupleClass.toType, ps)
-      }
-    }
-
-    if (expectedCtor =:= typeOf[Unit]) {
-      if (identityParams.nonEmpty) {
-        c.abort(
-          c.enclosingPosition,
-          s"Trait ${traitSymbol.fullName} has an empty Id class (Unit constructor), " +
-            s"but Impl ${implSymbol.fullName} has ${identityParams.length} non-Config constructor parameter(s): " +
-            s"${identityParams.map(_.name.toString).mkString(", ")}"
-        )
-      }
-    } else {
-      if (identityParams.length == 1) {
-        if (!(identityParams.head.tpe =:= expectedCtor)) {
+    idParams match {
+      case Nil =>
+        if (identityParams.nonEmpty) {
           c.abort(
             c.enclosingPosition,
-            s"Constructor parameter '${identityParams.head.name}' has type ${identityParams.head.tpe}, " +
-              s"but Id class expects $expectedCtor"
+            s"Trait ${traitSymbol.fullName} has an empty Id class (Unit constructor), " +
+              s"but Impl ${implSymbol.fullName} has ${identityParams.length} non-Config constructor parameter(s): " +
+              s"${identityParams.map(_.name.toString).mkString(", ")}"
           )
         }
-      } else if (identityParams.length > 1) {
-        val tuplePrefix = "scala.Tuple"
-        if (expectedCtor.typeSymbol.fullName.startsWith(tuplePrefix)) {
-          val tupleArgs = expectedCtor.typeArgs
-          if (tupleArgs.length != identityParams.length) {
+      case (_, expected) :: Nil =>
+        if (identityParams.length == 1) {
+          if (!(identityParams.head.tpe =:= expected)) {
+            c.abort(
+              c.enclosingPosition,
+              s"Constructor parameter '${identityParams.head.name}' has type ${identityParams.head.tpe}, " +
+                s"but Id class expects $expected"
+            )
+          }
+        } else if (identityParams.length > 1) {
+          c.abort(
+            c.enclosingPosition,
+            s"Impl ${implSymbol.fullName} has ${identityParams.length} identity params but " +
+              s"Id class declares a single constructor parameter"
+          )
+        }
+      // identityParams.isEmpty is valid (config-only constructor on a non-Unit Id class)
+      case multi =>
+        if (identityParams.nonEmpty) {
+          if (multi.length != identityParams.length) {
             c.abort(
               c.enclosingPosition,
               s"Impl ${implSymbol.fullName} has ${identityParams.length} identity params but " +
-                s"Id class expects a ${tupleArgs.length}-element tuple"
+                s"Id class declares ${multi.length} constructor parameter(s)"
             )
           }
-          identityParams.zip(tupleArgs).foreach { case (param, expected) =>
+          identityParams.zip(multi).foreach { case (param, (_, expected)) =>
             if (!(param.tpe =:= expected)) {
               c.abort(
                 c.enclosingPosition,
@@ -596,37 +588,28 @@ object AgentImplementationMacroImpl {
               )
             }
           }
-        } else {
-          c.abort(
-            c.enclosingPosition,
-            s"Impl ${implSymbol.fullName} has ${identityParams.length} identity params but " +
-              s"Id class type $expectedCtor is not a tuple type"
-          )
         }
-      }
+      // identityParams.isEmpty is valid (config-only constructor on a non-Unit Id class)
     }
 
-    // Determine the Ctor type based on identity params
-    val ctorType: Type = identityParams match {
-      case Nil      => expectedCtor
-      case p :: Nil => p.tpe
-      case ps       =>
-        val types = ps.map(_.tpe)
-        val tupleClass = rootMirror.staticClass(s"scala.Tuple${types.length}")
-        appliedType(tupleClass.toType, types)
+    // Determine the Ctor type + wire access mode from the Id-class params (the
+    // source of truth for the constructor input record). Multi-param ctors are
+    // represented positionally as `Vector[Any]`, matching method inputs.
+    val ctorAccess: ParamAccessMode = idParams match {
+      case Nil      => ParamAccessMode.NoArgs
+      case _ :: Nil => ParamAccessMode.SingleArg
+      case _        => ParamAccessMode.MultiArgs
     }
+    val ctorType: Type = ctorAccess match {
+      case ParamAccessMode.NoArgs    => typeOf[Unit]
+      case ParamAccessMode.SingleArg => idParams.head._2
+      case ParamAccessMode.MultiArgs => typeOf[Vector[Any]]
+    }
+
+    val ctorCodecExpr = inputCodecExpr(c)(ctorAccess, s"constructor of ${traitSymbol.fullName}", idParams)
 
     val metadataExpr = q"_root_.golem.runtime.macros.AgentDefinitionMacro.generate[$traitType]"
     val methodsExpr  = buildImplementationMethodsExpr(c)(traitType, metadataExpr)
-
-    val ctorSchemaTpe  = appliedType(typeOf[GolemSchema[_]].typeConstructor, ctorType)
-    val ctorSchemaExpr = c.inferImplicitValue(ctorSchemaTpe)
-    if (ctorSchemaExpr.isEmpty) {
-      c.abort(
-        c.enclosingPosition,
-        s"Unable to summon GolemSchema for constructor type $ctorType on ${traitSymbol.fullName}.$schemaHint"
-      )
-    }
 
     // Resolve configBuilder
     val configParam = configParams.headOption
@@ -677,53 +660,27 @@ object AgentImplementationMacroImpl {
         }
 
       case None =>
-        // Detect if trait extends AgentConfig[X] and summon ConfigBuilder
-        val agentConfigBases = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig")
-        if (agentConfigBases.isEmpty) {
-          q"_root_.scala.None"
-        } else {
-          val configTypes = agentConfigBases.flatMap { sym =>
-            traitType.baseType(sym) match {
-              case TypeRef(_, _, List(arg)) => Some(arg)
-              case _                       => None
-            }
-          }
-          configTypes.headOption match {
-            case Some(configType) =>
-              val cbTpe = appliedType(typeOf[ConfigBuilder[_]].typeConstructor, configType)
-              val builderImplicit = c.inferImplicitValue(cbTpe)
-              if (builderImplicit.isEmpty) {
-                c.abort(
-                  c.enclosingPosition,
-                  s"No implicit ConfigBuilder available for config type $configType.\n" +
-                    "Hint: Add an implicit Schema[T] for your config type, which provides ConfigBuilder automatically."
-                )
-              }
-              q"_root_.scala.Some($builderImplicit: _root_.golem.config.ConfigBuilder[_])"
-            case None =>
-              q"_root_.scala.None"
-          }
-        }
+        detectConfigBuilder(c)(traitType)
     }
 
     // Build the instance construction lambda: (Ctor, Principal) => Trait
     val inputTermName    = TermName("input")
     val principalArgName = TermName("principalArg")
 
+    def identityArgTree(pi: ParamInfo): Tree =
+      identityParams match {
+        case Nil      => c.abort(c.enclosingPosition, "Unexpected: no identity params but trying to construct args")
+        case _ :: Nil => q"$inputTermName"
+        case ps       =>
+          val idx = ps.indexWhere(_.index == pi.index)
+          q"$inputTermName($idx).asInstanceOf[${pi.tpe}]"
+      }
+
     val buildInstanceExpr: Tree = configParam match {
       case None =>
         val argTerms: List[Tree] = paramInfos.map { pi =>
-          if (pi.isPrincipal) {
-            q"$principalArgName"
-          } else {
-            identityParams match {
-              case Nil      => c.abort(c.enclosingPosition, "Unexpected: no identity params but trying to construct args")
-              case _ :: Nil => q"$inputTermName"
-              case ps       =>
-                val idx = ps.indexWhere(_.index == pi.index)
-                q"$inputTermName.${TermName(s"_${idx + 1}")}"
-            }
-          }
+          if (pi.isPrincipal) q"$principalArgName"
+          else identityArgTree(pi)
         }
         q"($inputTermName: $ctorType, $principalArgName: _root_.golem.Principal) => new $implType(..$argTerms)"
 
@@ -736,15 +693,7 @@ object AgentImplementationMacroImpl {
             q"_root_.golem.config.ConfigLoader.createLazyConfig[$configInner]($builderImplicit)"
           } else if (pi.isPrincipal) {
             q"$principalArgName"
-          } else {
-            identityParams match {
-              case Nil      => c.abort(c.enclosingPosition, "Unexpected: identity param not found")
-              case _ :: Nil => q"$inputTermName"
-              case ps       =>
-                val idx = ps.indexWhere(_.index == pi.index)
-                q"$inputTermName.${TermName(s"_${idx + 1}")}"
-            }
-          }
+          } else identityArgTree(pi)
         }
         q"($inputTermName: $ctorType, $principalArgName: _root_.golem.Principal) => new $implType(..$argTerms)"
     }
@@ -755,7 +704,7 @@ object AgentImplementationMacroImpl {
         val metadata = $metadataExpr
         _root_.golem.runtime.AgentImplementationType[$traitType, $ctorType](
           metadata = metadata,
-          idSchema = $ctorSchemaExpr,
+          ctorCodec = $ctorCodecExpr,
           buildInstance = $buildInstanceExpr,
           methods = $methodsExpr,
           configBuilder = $configBuilderExpr,

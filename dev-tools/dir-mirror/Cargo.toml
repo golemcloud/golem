@@ -1,0 +1,14 @@
+[package]
+name = "dir-mirror"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+description = "Idempotent directory mirror used to keep per-crate wit/deps copies in sync"
+
+# No dependencies — std only, on purpose (see dev-tools/README.md). Tests use plain
+# `cargo test` (libtest), so there are no dev-dependencies either.
+
+[[bin]]
+name = "dir-mirror"
+test = false

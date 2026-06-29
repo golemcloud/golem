@@ -13,7 +13,7 @@ To check agent metadata and status, load the `golem-get-agent-metadata` skill. T
 
 ## `agent oplog` — Query the Operation Log
 
-Dump or search an agent's operation log (oplog). The oplog records every operation the agent has performed — invocations, side effects, persistence boundaries, etc.
+Stream or search an agent's operation log (oplog). The oplog records every operation the agent has performed — invocations, side effects, persistence boundaries, etc.
 
 ```shell
 golem agent oplog <AGENT_ID> [OPTIONS]
@@ -26,11 +26,11 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 | `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query`. |
 | `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
 
-If neither `--from` nor `--query` is provided, the entire oplog is returned.
+If neither `--from` nor `--query` is provided, the entire oplog is streamed.
 
 ### Output
 
-Each entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. The entry types rendered are:
+Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. In structured formats (`json`, `yaml`, `toon`), `agent oplog` emits one output document per entry with `$type: "agent.oplog"`, `index`, and `entry`; parse stdout as a sequence of documents, not as one array or object. The entry types rendered are:
 
 | Entry | Description |
 |-------|-------------|
@@ -67,7 +67,7 @@ Each entry is printed with its index (e.g. `#00042:`) followed by a labeled head
 
 ### Examples
 
-Dump the full oplog:
+Stream the full oplog:
 ```shell
 golem agent oplog <AGENT_ID>
 ```
@@ -81,4 +81,3 @@ Search for specific entries:
 ```shell
 golem agent oplog <AGENT_ID> --query "error"
 ```
-

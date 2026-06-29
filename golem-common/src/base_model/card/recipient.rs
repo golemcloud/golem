@@ -14,28 +14,59 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+use crate::model::account::AccountEmail;
+use crate::model::agent::AgentTypeName;
+use crate::model::application::ApplicationName;
+use crate::model::component::ComponentName;
+use crate::model::environment::EnvironmentName;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RecipientPattern {
     Any,
     Account {
-        account: String,
+        account: AccountEmail,
+    },
+    AccountEnvironments {
+        account: AccountEmail,
+    },
+    ApplicationEnvironments {
+        account: AccountEmail,
+        application: ApplicationName,
     },
     Environment {
-        account: String,
-        application: String,
-        environment: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    AccountAgents {
+        account: AccountEmail,
+    },
+    ApplicationAgents {
+        account: AccountEmail,
+        application: ApplicationName,
+    },
+    EnvironmentAgents {
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    ComponentAgents {
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
     },
     Agent {
-        account: String,
-        application: String,
-        environment: String,
-        component: String,
-        agent: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+        agent_type: AgentTypeName,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicRecipientPattern {
     Concrete(RecipientPattern),
@@ -44,7 +75,7 @@ pub enum PolymorphicRecipientPattern {
     Agent(PolymorphicAgentRecipientPattern),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentRecipientPattern {
     AccountEnvironments,
@@ -52,16 +83,21 @@ pub enum PolymorphicEnvironmentRecipientPattern {
     Environment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAgentRecipientPattern {
     AccountAgents,
     ApplicationAgents,
     EnvironmentAgents,
-    EnvironmentAgent { component: String, agent: String },
+    EnvironmentAgent {
+        component: ComponentName,
+        agent_type: AgentTypeName,
+    },
     ComponentAgents,
-    ComponentAgent { agent: String },
-    Self_,
+    ComponentAgent {
+        agent_type: AgentTypeName,
+    },
+    Agent,
 }
 
 impl RecipientPattern {
@@ -72,29 +108,47 @@ impl RecipientPattern {
 
         match parse_anchored_segments(value)?.as_slice() {
             [account] => Ok(Self::Account {
-                account: concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(concrete_segment(account)?),
+            }),
+            [account, "*", "*"] => Ok(Self::AccountEnvironments {
+                account: AccountEmail::new(concrete_segment(account)?),
+            }),
+            [account, application, "*"] => Ok(Self::ApplicationEnvironments {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
             }),
             [account, application, environment] => Ok(Self::Environment {
-                account: concrete_segment(account)?.to_string(),
-                application: application_segment(application)?.to_string(),
-                environment: application_segment(environment)?.to_string(),
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
             }),
-            [account, application, environment, component, agent] => Ok(Self::Agent {
-                account: concrete_segment(account)?.to_string(),
-                application: application_segment(application)?.to_string(),
-                environment: application_segment(environment)?.to_string(),
-                component: application_segment(component)?.to_string(),
-                agent: agent_segment(agent)?.to_string(),
+            [account, "*", "*", "*", "*"] => Ok(Self::AccountAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+            }),
+            [account, application, "*", "*", "*"] => Ok(Self::ApplicationAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+            }),
+            [account, application, environment, "*", "*"] => Ok(Self::EnvironmentAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
+            }),
+            [account, application, environment, component, "*"] => Ok(Self::ComponentAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
+                component: ComponentName(concrete_segment(component)?.to_string()),
+            }),
+            [account, application, environment, component, agent_type] => Ok(Self::Agent {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
+                component: ComponentName(concrete_segment(component)?.to_string()),
+                agent_type: AgentTypeName(concrete_segment(agent_type)?.to_string()),
             }),
             _ => Err(value.to_string()),
         }
-    }
-
-    pub fn matches_holder(&self, holder: &str) -> bool {
-        let Ok(holder) = Self::parse_holder(holder) else {
-            return false;
-        };
-        self.subsumes(&holder)
     }
 
     pub fn subsumes(&self, other: &Self) -> bool {
@@ -103,6 +157,18 @@ impl RecipientPattern {
             (Self::Account { account: a }, other) => {
                 other.account_part().is_some_and(|account| a == account)
             }
+            (Self::AccountEnvironments { account: a }, other) => other
+                .environment_scope_part()
+                .is_some_and(|(account, _, _)| a == account),
+            (
+                Self::ApplicationEnvironments {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .environment_scope_part()
+                .is_some_and(|(ba, bp, _)| aa == ba && bp == Some(ap)),
             (
                 Self::Environment {
                     account: aa,
@@ -110,8 +176,41 @@ impl RecipientPattern {
                     environment: ae,
                 },
                 other,
-            ) => other.environment_part().is_some_and(|(ba, bp, be)| {
-                aa == ba && segment_subsumes(ap, bp) && segment_subsumes(ae, be)
+            ) => other
+                .environment_scope_part()
+                .is_some_and(|(ba, bp, be)| aa == ba && bp == Some(ap) && be == Some(ae)),
+            (Self::AccountAgents { account: a }, other) => other
+                .agent_scope_part()
+                .is_some_and(|(account, _, _, _, _)| a == account),
+            (
+                Self::ApplicationAgents {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .agent_scope_part()
+                .is_some_and(|(ba, bp, _, _, _)| aa == ba && bp == Some(ap)),
+            (
+                Self::EnvironmentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                other,
+            ) => other
+                .agent_scope_part()
+                .is_some_and(|(ba, bp, be, _, _)| aa == ba && bp == Some(ap) && be == Some(ae)),
+            (
+                Self::ComponentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                },
+                other,
+            ) => other.agent_scope_part().is_some_and(|(ba, bp, be, bc, _)| {
+                aa == ba && bp == Some(ap) && be == Some(ae) && bc == Some(ac)
             }),
             (
                 Self::Agent {
@@ -119,57 +218,131 @@ impl RecipientPattern {
                     application: ap,
                     environment: ae,
                     component: ac,
-                    agent: ag,
+                    agent_type: at,
                 },
                 Self::Agent {
                     account: ba,
                     application: bp,
                     environment: be,
                     component: bc,
-                    agent: bg,
+                    agent_type: bt,
                 },
-            ) => {
-                aa == ba
-                    && segment_subsumes(ap, bp)
-                    && segment_subsumes(ae, be)
-                    && segment_subsumes(ac, bc)
-                    && agent_segment_subsumes(ag, bg)
-            }
+            ) => aa == ba && ap == bp && ae == be && ac == bc && at == bt,
             (Self::Agent { .. }, _) => false,
         }
     }
 
-    fn parse_holder(value: &str) -> Result<Self, String> {
-        let segments = parse_holder_segments(value)?;
-        if segments.contains(&"*") {
-            return Err(value.to_string());
-        }
-        Self::parse(value)
-    }
-
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
             Self::Any => None,
             Self::Account { account }
+            | Self::AccountEnvironments { account }
+            | Self::ApplicationEnvironments { account, .. }
             | Self::Environment { account, .. }
+            | Self::AccountAgents { account }
+            | Self::ApplicationAgents { account, .. }
+            | Self::EnvironmentAgents { account, .. }
+            | Self::ComponentAgents { account, .. }
             | Self::Agent { account, .. } => Some(account),
         }
     }
 
-    fn environment_part(&self) -> Option<(&str, &str, &str)> {
+    fn environment_scope_part(
+        &self,
+    ) -> Option<(
+        &AccountEmail,
+        Option<&ApplicationName>,
+        Option<&EnvironmentName>,
+    )> {
         match self {
+            Self::AccountEnvironments { account } | Self::AccountAgents { account } => {
+                Some((account, None, None))
+            }
+            Self::ApplicationEnvironments {
+                account,
+                application,
+            }
+            | Self::ApplicationAgents {
+                account,
+                application,
+            } => Some((account, Some(application), None)),
             Self::Environment {
                 account,
                 application,
                 environment,
+            }
+            | Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            }
+            | Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                ..
             }
             | Self::Agent {
                 account,
                 application,
                 environment,
                 ..
-            } => Some((account, application, environment)),
+            } => Some((account, Some(application), Some(environment))),
             Self::Any | Self::Account { .. } => None,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn agent_scope_part(
+        &self,
+    ) -> Option<(
+        &AccountEmail,
+        Option<&ApplicationName>,
+        Option<&EnvironmentName>,
+        Option<&ComponentName>,
+        Option<&AgentTypeName>,
+    )> {
+        match self {
+            Self::AccountAgents { account } => Some((account, None, None, None, None)),
+            Self::ApplicationAgents {
+                account,
+                application,
+            } => Some((account, Some(application), None, None, None)),
+            Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            } => Some((account, Some(application), Some(environment), None, None)),
+            Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            } => Some((
+                account,
+                Some(application),
+                Some(environment),
+                Some(component),
+                None,
+            )),
+            Self::Agent {
+                account,
+                application,
+                environment,
+                component,
+                agent_type,
+            } => Some((
+                account,
+                Some(application),
+                Some(environment),
+                Some(component),
+                Some(agent_type),
+            )),
+            Self::Any
+            | Self::Account { .. }
+            | Self::AccountEnvironments { .. }
+            | Self::ApplicationEnvironments { .. }
+            | Self::Environment { .. } => None,
         }
     }
 }
@@ -203,8 +376,8 @@ impl PolymorphicRecipientPattern {
             {
                 Ok(Self::Agent(
                     PolymorphicAgentRecipientPattern::EnvironmentAgent {
-                        component: rest[0].to_string(),
-                        agent: rest[1].to_string(),
+                        component: ComponentName(rest[0].to_string()),
+                        agent_type: AgentTypeName(rest[1].to_string()),
                     },
                 ))
             }
@@ -213,11 +386,11 @@ impl PolymorphicRecipientPattern {
             )),
             Some(("?component", rest)) if rest.len() == 1 && valid_suffix_segment(rest[0]) => Ok(
                 Self::Agent(PolymorphicAgentRecipientPattern::ComponentAgent {
-                    agent: rest[0].to_string(),
+                    agent_type: AgentTypeName(rest[0].to_string()),
                 }),
             ),
-            Some(("?self", rest)) if rest.is_empty() => {
-                Ok(Self::Agent(PolymorphicAgentRecipientPattern::Self_))
+            Some(("?agent", rest)) if rest.is_empty() => {
+                Ok(Self::Agent(PolymorphicAgentRecipientPattern::Agent))
             }
             Some(_) => Err(value.to_string()),
             None => RecipientPattern::parse(value).map(Self::Concrete),
@@ -238,14 +411,6 @@ fn parse_anchored_segments(value: &str) -> Result<Vec<&str>, String> {
         Err(value.to_string())
     } else {
         Ok(segments)
-    }
-}
-
-fn parse_holder_segments(value: &str) -> Result<Vec<&str>, String> {
-    let segments = parse_anchored_segments(value)?;
-    match segments.len() {
-        1 | 3 | 5 => Ok(segments),
-        _ => Err(value.to_string()),
     }
 }
 
@@ -298,40 +463,8 @@ fn concrete_segment(segment: &str) -> Result<&str, String> {
     }
 }
 
-fn application_segment(segment: &str) -> Result<&str, String> {
-    if segment.is_empty() || segment.contains('?') {
-        Err(segment.to_string())
-    } else {
-        Ok(segment)
-    }
-}
-
-fn agent_segment(segment: &str) -> Result<&str, String> {
-    if segment.is_empty() || segment.contains('?') {
-        Err(segment.to_string())
-    } else {
-        Ok(segment)
-    }
-}
-
 fn contains_slot_reference(value: &str) -> bool {
     value
         .split('/')
         .any(|segment| segment.starts_with('?') || segment.contains("/?"))
-}
-
-fn segment_subsumes(left: &str, right: &str) -> bool {
-    left == "*" || left == right
-}
-
-fn agent_segment_subsumes(left: &str, right: &str) -> bool {
-    if left == right || left == "*" {
-        return true;
-    }
-    let Some(agent_type) = left.strip_suffix("(*)") else {
-        return false;
-    };
-    right
-        .strip_prefix(agent_type)
-        .is_some_and(|suffix| suffix.starts_with('(') && suffix.ends_with(')'))
 }

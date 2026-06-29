@@ -29,11 +29,11 @@ moon run cmd -- agents <package-dir>
 
 | File | Contents |
 |---|---|
-| `golem_agents.mbt` | `fn init {}` block registering all agents, `AgentType` definitions, constructor deserialization, `impl RawAgent` with method dispatch |
-| `golem_derive.mbt` | `HasElementSchema`, `FromExtractor`, `FromElementValue`, `ToElementValue` impls for `#derive.golem_schema` types; `MultimodalModality` impls for `#derive.multimodal` enums |
+| `golem_agents.mbt` | `fn init {}` block registering all agents, `AgentTypeDef` definitions, constructor decoding, `impl RawAgent` with method dispatch |
+| `golem_derive.mbt` | `@schema.IntoSchema` / `@schema.FromSchema` impls for `#derive.golem_schema` types; `@multimodal.MultimodalModality` impls for `#derive.multimodal` enums |
 | `golem_clients.mbt` | RPC client structs (`<AgentName>Client`) with awaited, fire-and-forget (`trigger_*`), and scheduled (`schedule_*`) method variants |
 
-It also auto-adds required imports (`rpc`, `rpcTypes`, `wallClock`, `types`) to the target `moon.pkg`.
+It also auto-adds the required imports to the target `moon.pkg` (e.g. `agents`, `schema`, `schema_model`, `interface/golem/agent/common`, `interface/golem/core/types`, `rpc`, `multimodal`, `config`). The `reexports` subcommand additionally adds the `gen` import.
 
 ## Supported Annotations
 
@@ -42,10 +42,8 @@ It also auto-adds required imports (`rpc`, `rpcTypes`, `wallClock`, `types`) to 
 | `#derive.agent` | struct | Marks a struct as a Golem agent |
 | `#derive.agent("ephemeral")` | struct | Marks an agent as ephemeral (stateless) |
 | `#derive.golem_schema` | struct, enum | Generates serialization impls |
-| `#derive.multimodal` | enum | Generates `MultimodalModality` trait impl |
+| `#derive.multimodal` | enum | Generates `@multimodal.MultimodalModality` trait impl |
 | `#derive.prompt_hint("...")` | method | Adds a prompt hint to the method definition |
-| `#derive.text_languages("param", "en", ...)` | method | Restricts an `UnstructuredText` param to specific languages |
-| `#derive.mime_types("param", "image/png", ...)` | method | Restricts an `UnstructuredBinary` param to specific MIME types |
 
 Doc comments (`///`) on structs, constructors, and methods are extracted as descriptions in the generated `AgentType` metadata.
 

@@ -1,0 +1,5 @@
+error: PoemSchema does not support `#[serde(flatten)]` on a field
+  --> tests/compile_fail/poem_flatten_field.rs:25:13
+   |
+25 |     #[serde(flatten)]
+   |             ^^^^^^^

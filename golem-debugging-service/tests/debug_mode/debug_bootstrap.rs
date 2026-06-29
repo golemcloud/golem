@@ -15,6 +15,7 @@ use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::card::{CardService, NoopCardService};
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
@@ -105,6 +106,13 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         ))
     }
 
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(NoopCardService)
+    }
+
     fn create_resource_limits(
         &self,
         _golem_config: &GolemConfig,
@@ -146,6 +154,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
         runtime: Handle,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
@@ -181,6 +190,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             engine,
             linker,
             runtime,
+            card_service,
             component_service,
             shard_manager_service,
             worker_service,

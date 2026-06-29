@@ -12,17 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Bridge SDK generators for the Rust and TypeScript client targets.
+//!
+//! The internal walkers in [`rust`] and [`typescript`] operate directly on
+//! the schema layer ([`golem_common::schema::SchemaType`] /
+//! [`golem_common::schema::graph::SchemaGraph`]). The public entry point
+//! ([`BridgeGenerator::new`]) takes a schema-native
+//! [`AgentTypeSchema`](golem_common::schema::AgentTypeSchema); the agent's own
+//! [`SchemaGraph`](golem_common::schema::graph::SchemaGraph) is adopted as the
+//! ref-resolution graph and [`type_naming::TypeNaming`] keys generated names by
+//! [`SchemaType`](golem_common::schema::schema_type::SchemaType) structural
+//! identity. The generators emit schema-native `SchemaValue` (`{kind,value}`)
+//! encode/decode code; there is no longer any dependency on the legacy
+//! `AnalysedType` / `IntoValue` / `FromValue` surface.
+
+pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;
+pub mod scala;
 pub mod type_naming;
 pub mod typescript;
 
 use camino::Utf8Path;
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::schema::AgentTypeSchema;
 use heck::ToKebabCase;
 
 pub trait BridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self>
+    fn new(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self>
     where
         Self: Sized;
     fn generate(&mut self) -> anyhow::Result<()>;

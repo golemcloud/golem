@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::model::retry_policy::{
-    RetryPolicyCreationRecord, RetryPolicyExtRevisionRecord, RetryPolicyRepoError,
-    RetryPolicyRevisionRecord,
+    RetryPolicyAuthExtRevisionRecord, RetryPolicyCreationRecord, RetryPolicyExtRevisionRecord,
+    RetryPolicyRepoError, RetryPolicyRevisionRecord,
 };
 use super::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
@@ -52,7 +52,7 @@ pub trait RetryPolicyRepo: Send + Sync {
     async fn get_by_id(
         &self,
         retry_policy_id: Uuid,
-    ) -> Result<Option<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>;
+    ) -> Result<Option<RetryPolicyAuthExtRevisionRecord>, RetryPolicyRepoError>;
 
     async fn get_for_environment(
         &self,
@@ -112,7 +112,7 @@ impl<Repo: RetryPolicyRepo> RetryPolicyRepo for LoggedRetryPolicyRepo<Repo> {
     async fn get_by_id(
         &self,
         retry_policy_id: Uuid,
-    ) -> Result<Option<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError> {
+    ) -> Result<Option<RetryPolicyAuthExtRevisionRecord>, RetryPolicyRepoError> {
         self.repo
             .get_by_id(retry_policy_id)
             .instrument(Self::span_retry_policy_id(retry_policy_id))
@@ -326,14 +326,27 @@ impl RetryPolicyRepo for DbRetryPolicyRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         retry_policy_id: Uuid,
-    ) -> Result<Option<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError> {
-        let result: Option<RetryPolicyExtRevisionRecord> = self.with_ro("get_by_id")
+    ) -> Result<Option<RetryPolicyAuthExtRevisionRecord>, RetryPolicyRepoError> {
+        let result: Option<RetryPolicyAuthExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT rp.environment_id, rp.name, rp.created_at AS entity_created_at, rev.retry_policy_id, rev.revision_id, rev.priority, rev.predicate_json, rev.policy_json, rev.created_at, rev.created_by, rev.deleted
+                    SELECT rp.environment_id, rp.name, rp.created_at AS entity_created_at, rev.retry_policy_id, rev.revision_id, rev.priority, rev.predicate_json, rev.policy_json, rev.created_at, rev.created_by, rev.deleted,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM retry_policies rp
+                    JOIN environments e ON e.environment_id = rp.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     JOIN retry_policy_revisions rev ON rev.retry_policy_id = rp.retry_policy_id AND rev.revision_id = rp.current_revision_id
-                    WHERE rp.retry_policy_id = $1 AND rp.deleted_at IS NULL
+                    WHERE rp.retry_policy_id = $1
+                        AND rp.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                     .bind(retry_policy_id),
             )

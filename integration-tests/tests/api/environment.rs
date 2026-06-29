@@ -17,11 +17,13 @@ use golem_client::api::{
     RegistryServiceGetApplicationEnvironmentError, RegistryServiceListApplicationEnvironmentsError,
     RegistryServiceUpdateEnvironmentError,
 };
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
-use pretty_assertions::assert_eq;
+use pretty_assertions::{assert_eq, assert_matches};
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
@@ -63,12 +65,12 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
         let result = client
             .get_application_environment(&app.id.0, &env_2.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
@@ -101,22 +103,22 @@ async fn other_users_cannot_get_applications(
         let result = client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
             ))
-        ));
+        );
     }
 
     Ok(())
@@ -142,24 +144,24 @@ async fn deleting_account_hides_environments(
 
     {
         let result = admin_client.list_application_environments(&app.id.0).await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
         let result = admin_client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
     Ok(())
 }
@@ -181,24 +183,24 @@ async fn deleting_application_hides_environments(
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
         let result = client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
     Ok(())
 }
@@ -227,12 +229,12 @@ async fn cannot_create_two_environments_with_same_name(
                 },
             )
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceCreateEnvironmentError::Error409(_)
             ))
-        ));
+        );
     }
 
     // try to rename environment to conflicting name
@@ -250,12 +252,12 @@ async fn cannot_create_two_environments_with_same_name(
             )
             .await;
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceUpdateEnvironmentError::Error409(_)
             ))
-        ));
+        );
     }
 
     // delete the environment, now creating a new one will succeed
@@ -314,9 +316,35 @@ async fn list_visible_environments_shows_owned_and_shared(
     let env_1b = owner.env(&app_1.id).await?;
     let (_, env_2a) = owner.app_and_env().await?;
 
-    // Share one environment with grantee
-    owner
-        .share_environment(&env_1b.id, &grantee.account_id, &[EnvironmentRole::Admin])
+    // Share one environment with grantee through the card-based permission-share path.
+    client_owner
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: grantee.account_email.clone(),
+                name: PermissionShareName("visible-environment-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!(
+                            "application({}/{}) @ {} : view :",
+                            owner.account_email.as_str(),
+                            app_1.name.0,
+                            grantee.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment({}/{}/{}) @ {} : view :",
+                            owner.account_email.as_str(),
+                            app_1.name.0,
+                            env_1b.name.0,
+                            grantee.account_email.as_str(),
+                        ),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     // Owner sees all environments
@@ -344,6 +372,16 @@ async fn list_visible_environments_shows_owned_and_shared(
     assert!(!grantee_env_ids.contains(&env_1a.id));
     assert!(grantee_env_ids.contains(&env_1b.id));
     assert!(!grantee_env_ids.contains(&env_2a.id));
+
+    // The application-scoped listing endpoint returns only environments visible to the caller.
+    let listed_env_ids = client_grantee
+        .list_application_environments(&app_1.id.0)
+        .await?
+        .values
+        .into_iter()
+        .map(|env| env.id)
+        .collect::<HashSet<_>>();
+    assert_eq!(listed_env_ids, HashSet::from_iter([env_1b.id]));
 
     Ok(())
 }
@@ -429,9 +467,27 @@ async fn deleted_account_hides_shared_environments_from_grantee(
     // Owner creates an application and an environment
     let (_, env) = owner.app_and_env().await?;
 
-    // Owner shares the environment with the grantee
-    owner
-        .share_environment(&env.id, &grantee.account_id, &[EnvironmentRole::Admin])
+    // Owner shares the environment with the grantee through a permission share.
+    owner_client
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: grantee.account_email.clone(),
+                name: PermissionShareName("deleted-account-shared-environment".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![format!(
+                        "environment({}/{}/{}) @ {} : view :",
+                        owner.account_email.as_str(),
+                        env.application_name.0,
+                        env.name.0,
+                        grantee.account_email.as_str(),
+                    )],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     // Grantee can see the shared environment

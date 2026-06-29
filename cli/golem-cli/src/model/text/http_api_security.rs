@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
 use golem_client::model::SecuritySchemeDto;
@@ -19,6 +21,8 @@ use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeCreateView(pub SecuritySchemeDto);
+
+impl Masked for HttpSecuritySchemeCreateView {}
 
 impl MessageWithFields for HttpSecuritySchemeCreateView {
     fn message(&self) -> String {
@@ -33,8 +37,14 @@ impl MessageWithFields for HttpSecuritySchemeCreateView {
     }
 }
 
+impl StructuredOutput for HttpSecuritySchemeCreateView {
+    const KIND: &'static str = "api.security-scheme.create";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeGetView(pub SecuritySchemeDto);
+
+impl Masked for HttpSecuritySchemeGetView {}
 
 impl MessageWithFields for HttpSecuritySchemeGetView {
     fn message(&self) -> String {
@@ -49,8 +59,14 @@ impl MessageWithFields for HttpSecuritySchemeGetView {
     }
 }
 
+impl StructuredOutput for HttpSecuritySchemeGetView {
+    const KIND: &'static str = "api.security-scheme.get";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeUpdateView(pub SecuritySchemeDto);
+
+impl Masked for HttpSecuritySchemeUpdateView {}
 
 impl MessageWithFields for HttpSecuritySchemeUpdateView {
     fn message(&self) -> String {
@@ -65,8 +81,14 @@ impl MessageWithFields for HttpSecuritySchemeUpdateView {
     }
 }
 
+impl StructuredOutput for HttpSecuritySchemeUpdateView {
+    const KIND: &'static str = "api.security-scheme.update";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeDeleteView(pub SecuritySchemeDto);
+
+impl Masked for HttpSecuritySchemeDeleteView {}
 
 impl MessageWithFields for HttpSecuritySchemeDeleteView {
     fn message(&self) -> String {
@@ -79,6 +101,20 @@ impl MessageWithFields for HttpSecuritySchemeDeleteView {
     fn fields(&self) -> Vec<(String, String)> {
         security_scheme_view_fields(&self.0)
     }
+}
+
+impl StructuredOutput for HttpSecuritySchemeDeleteView {
+    const KIND: &'static str = "api.security-scheme.delete";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpSecuritySchemeListView {
+    pub security_schemes: Vec<SecuritySchemeDto>,
+}
+
+impl StructuredOutput for HttpSecuritySchemeListView {
+    const KIND: &'static str = "api.security-scheme.list";
 }
 
 fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)> {
@@ -96,7 +132,7 @@ fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)
     fields.build()
 }
 
-impl TextView for Vec<SecuritySchemeDto> {
+impl TextOutput for HttpSecuritySchemeListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name").fixed(),
@@ -107,7 +143,7 @@ impl TextView for Vec<SecuritySchemeDto> {
             Column::new("Redirect URL"),
             Column::new("Scopes"),
         ]);
-        for scheme in self {
+        for scheme in &self.security_schemes {
             table.add_row(vec![
                 scheme.name.0.clone(),
                 scheme.id.to_string(),

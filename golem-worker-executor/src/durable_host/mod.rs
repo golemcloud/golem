@@ -18,6 +18,7 @@
 pub mod blobstore;
 mod cli;
 mod clocks;
+mod concurrent;
 mod config;
 pub mod durability;
 mod filesystem;
@@ -31,6 +32,7 @@ mod random;
 pub mod rdbms;
 mod replay_state;
 mod sockets;
+pub mod tool;
 pub mod wasm_rpc;
 pub mod websocket;
 
@@ -50,6 +52,7 @@ use crate::model::{
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -72,7 +75,7 @@ use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::worker::{RetryDecision, Worker};
@@ -89,9 +92,11 @@ pub use durability::*;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
 use futures::future::try_join_all;
+use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -99,9 +104,11 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
+    AgentError, AgentResourceId, DurableFunctionType, HostRequest, HostRequestHttpRequest,
+    HostResponse, LogLevel, OplogEntry, OplogIndex, PersistenceLevel, RawSnapshotData,
+    ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -112,6 +119,8 @@ use golem_common::model::{
     RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
+use golem_common::resource_runtime::Uri;
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -119,10 +128,8 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
-use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -165,6 +172,7 @@ impl Drop for WorkerDir {
 }
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_service_base::model::auth::AuthCtx;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
@@ -253,6 +261,53 @@ pub enum InvocationStrictness {
     ReadOnly,
 }
 
+pub(crate) fn agent_effective_surface_from_component_metadata(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    agent_id: &ParsedAgentId,
+) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
+    let context = agent_monomorphization_context(component, owned_agent_id, agent_id);
+    let card = agent_initial_card_from_component_metadata(component, agent_id)?;
+    Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
+}
+
+fn agent_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    agent_id: &ParsedAgentId,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    golem_common::model::card::AgentPermissionMonomorphizationContext {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        agent_type: agent_id.agent_type.clone(),
+    }
+}
+
+fn agent_initial_card_from_component_metadata(
+    component: &Component,
+    agent_id: &ParsedAgentId,
+) -> Result<StoredCard, WorkerExecutorError> {
+    let card = component
+        .metadata
+        .agent_type_initial_permission_card(&agent_id.agent_type)
+        .cloned()
+        .ok_or_else(|| missing_agent_initial_card_error(component, agent_id))?;
+    Ok(StoredCard::Polymorphic(card))
+}
+
+fn missing_agent_initial_card_error(
+    component: &Component,
+    agent_id: &ParsedAgentId,
+) -> WorkerExecutorError {
+    WorkerExecutorError::invalid_request(format!(
+        "Missing initial permission card for agent type {} in component {} revision {}",
+        agent_id.agent_type, component.id, component.revision
+    ))
+}
+
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -267,6 +322,30 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    /// Per-instance cache of resolved typed guest export handles, populated
+    /// lazily on first use during invocation dispatch.
+    agent_export_funcs: AgentExportFuncs,
+    _store_alive_guard: StoreAliveGuard,
+}
+
+/// Increments the live-`Store` gauge on construction and decrements it on drop.
+/// Held as a field of [`DurableWorkerCtx`], which is the data of the wasmtime
+/// `Store`, so the gauge follows the `Store`'s true lifetime regardless of which
+/// reference keeps it alive. A persistent gap above the resident-worker count
+/// indicates `Store`s retained after their worker was deleted.
+struct StoreAliveGuard;
+
+impl StoreAliveGuard {
+    fn new() -> Self {
+        crate::metrics::workers::inc_worker_store_alive();
+        StoreAliveGuard
+    }
+}
+
+impl Drop for StoreAliveGuard {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_worker_store_alive();
+    }
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -280,10 +359,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         IdempotencyKey::derived(&current_idempotency_key, idempotency_key_oplog_index)
     }
 
+    /// Returns the per-instance cache of resolved typed guest export handles.
+    pub(crate) fn agent_export_funcs(&self) -> &AgentExportFuncs {
+        &self.agent_export_funcs
+    }
+
+    /// Returns a mutable reference to the per-instance cache of resolved typed
+    /// guest export handles.
+    pub(crate) fn agent_export_funcs_mut(&mut self) -> &mut AgentExportFuncs {
+        &mut self.agent_export_funcs
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -298,6 +388,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
@@ -409,7 +500,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            )
+            )?
         } else {
             HashMap::new()
         };
@@ -463,6 +554,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 blob_store_service,
                 rdbms_service,
                 quota_service,
+                card_service,
                 component_service,
                 agent_types_service,
                 environment_state_service,
@@ -475,11 +567,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 component_metadata,
                 worker_config.total_linear_memory_size,
                 worker_config.current_filesystem_storage_usage,
+                worker_config.agent_effective_surface,
                 worker_fork,
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
+                worker_config.created_by_email,
                 worker_config.initial_agent_config,
                 agent_config,
                 shard_service,
@@ -494,6 +588,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            agent_export_funcs: AgentExportFuncs::default(),
+            _store_alive_guard: StoreAliveGuard::new(),
         })
     }
 
@@ -587,7 +683,161 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.created_by
     }
 
-    pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
+    pub fn created_by_email(&self) -> &AccountEmail {
+        &self.state.created_by_email
+    }
+
+    pub fn agent_effective_surface(&self) -> golem_common::model::card::EffectiveSurface {
+        self.state.agent_effective_surface.clone()
+    }
+
+    pub fn agent_auth_ctx(&self) -> AuthCtx {
+        AuthCtx::agent_with_effective_surface(
+            self.created_by(),
+            self.created_by_email().clone(),
+            self.agent_effective_surface(),
+        )
+    }
+
+    pub(crate) fn agent_wallet_cards_snapshot(&self) -> Vec<StoredCard> {
+        self.state.agent_wallet_cards.values().cloned().collect()
+    }
+
+    fn rederive_agent_effective_surface_from_wallet(&mut self) {
+        self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
+            let context = agent_monomorphization_context(
+                &self.state.component_metadata,
+                &self.owned_agent_id,
+                agent_id,
+            );
+            golem_common::model::card::agent_effective_surface_from_wallet(
+                &context,
+                self.state.agent_wallet_cards.values(),
+            )
+        } else {
+            golem_common::model::card::EffectiveSurface::default()
+        };
+    }
+
+    async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
+        if !self.state.is_live() {
+            return Ok(());
+        }
+
+        let events = self
+            .public_state
+            .worker()
+            .get_last_known_status()
+            .await
+            .pending_card_events;
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        for pending_event in events {
+            match pending_event.event {
+                QueuedCardEvent::Revoke(event) => {
+                    let card_id = event.card_id;
+                    self.apply_card_revoked(card_id, pending_event.oplog_index, true)
+                        .await?;
+                }
+                QueuedCardEvent::Install(event) => {
+                    let Some(card) = event.card else {
+                        return Err(WorkerExecutorError::runtime(
+                            "queued card install is missing card payload",
+                        ));
+                    };
+                    let _ = self
+                        .apply_card_install(Some(pending_event.oplog_index), card)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn apply_card_install(
+        &mut self,
+        queued_event_index: Option<OplogIndex>,
+        card: StoredCard,
+    ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
+        let card_id = card.card_id();
+        let revoked_or_missing = self
+            .state
+            .card_service
+            .check_cards(vec![card_id])
+            .await?
+            .contains(&card_id);
+        let status = self.public_state.worker().get_last_known_status().await;
+
+        if revoked_or_missing {
+            let reason = if status.revoked_cards.contains(&card_id) {
+                CardInstallFailure::CardRevoked
+            } else {
+                CardInstallFailure::NotFound
+            };
+
+            if let Some(queued_event_index) = queued_event_index {
+                self.public_state
+                    .worker()
+                    .add_and_commit_oplog(OplogEntry::card_install_failed(
+                        queued_event_index,
+                        card_id,
+                        reason,
+                    ))
+                    .await;
+            }
+            Ok(Err(reason))
+        } else {
+            self.state.agent_wallet_cards.insert(card_id, card.clone());
+            self.rederive_agent_effective_surface_from_wallet();
+            let wallet_card_ids = self
+                .state
+                .agent_wallet_cards
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            self.state
+                .card_service
+                .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
+                .await;
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
+                .await;
+            Ok(Ok(()))
+        }
+    }
+
+    async fn apply_card_revoked(
+        &mut self,
+        card_id: CardId,
+        queued_event_index: OplogIndex,
+        is_live: bool,
+    ) -> Result<(), WorkerExecutorError> {
+        let was_in_wallet = self.state.agent_wallet_cards.remove(&card_id).is_some();
+
+        if was_in_wallet {
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+
+        if is_live {
+            self.state
+                .card_service
+                .remove_revoked_agent_cards(&self.owned_agent_id, &[card_id])
+                .await;
+
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
+                .await;
+        }
+
+        Ok(())
+    }
+
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.state.agent_id.clone()
     }
 
@@ -648,6 +898,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_service(&self) -> Arc<dyn ComponentService> {
         self.state.component_service.clone()
+    }
+
+    pub fn card_service(&self) -> Arc<dyn CardService> {
+        self.state.card_service.clone()
     }
 
     pub fn agent_types_service(&self) -> Arc<dyn AgentTypesService> {
@@ -1184,22 +1438,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
-            || matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            )
-        {
+        if self.state.opens_durable_scope(function_type) {
             let result = if self.is_live() {
-                let begin_index = self
-                    .public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::begin_remote_write())
-                    .await;
+                // A scope `Start` is top-level with respect to other durable scopes: long-lived
+                // HTTP / RPC scopes overlap as siblings, so there is no meaningful enclosing scope
+                // to point at. Nesting is expressed by the *child* host calls pointing back at this
+                // scope's `Start` (see `child_parent_start_index`), not by chaining scope `Start`s.
+                let entry = OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+                    request: None,
+                    durable_function_type: function_type.clone(),
+                };
+                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
                 Ok(begin_index)
             } else {
                 let (begin_index, _) =
-                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::BeginRemoteWrite)?;
+                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
                 if !self.state.assume_idempotence
                     && !matches!(
                         *function_type,
@@ -1229,10 +1485,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .replay_state
                         .lookup_oplog_entry_with_condition_and_state(
                             begin_index,
-                            OplogEntry::is_end_remote_write_s::<PersistenceLevel>,
+                            OplogEntry::is_end_remote_write_s::<ScopeScanState>,
                             OplogEntry::no_concurrent_side_effect,
-                            self.state.persistence_level,
-                            OplogEntry::track_persistence_level,
+                            ScopeScanState::new(begin_index, self.state.persistence_level),
+                            OplogEntry::track_scope_membership,
                         )
                         .await;
                     match lookup_result {
@@ -1261,7 +1517,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // and later we replay it, we need to skip the first attempt and only replay the second.
                             // Se we add a Jump entry to the oplog that registers a deleted region.
                             let deleted_region = OplogRegion {
-                                start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                                start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
                                 end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                             };
 
@@ -1288,15 +1544,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }?;
 
-            // A `BeginRemoteWrite` region (remote write / HTTP request) is now open until the
-            // matching `end_function`; the tip is inside it, so block mid-invocation checkpoints.
-            self.state.open_rollback_regions.insert(result);
+            // A durable scope (remote write / HTTP request) is now open until the matching
+            // `end_function`; the tip is inside it, so block mid-invocation checkpoints, and any
+            // `Start` written while it is open links back to it via `parent_start_index`.
+            let kind = if matches!(
+                *function_type,
+                DurableFunctionType::WriteRemoteBatched(None)
+            ) {
+                DurableScopeKind::BatchedWrite
+            } else {
+                DurableScopeKind::NonIdempotentWrite
+            };
+            self.state.push_durable_scope(result, kind);
 
-            // The current retry point will point to the BeginRemoteWrite entry
+            // The effective retry point now derives from the open scope; keep the global fallback
+            // pointing at the scope `Start` so it survives the scope being closed.
             self.state.current_retry_point = result;
             Ok(result)
         } else {
-            // When there is no BeginRemoteWrite entry, the current retry point can only
+            // When there is no scope `Start` entry, the current retry point can only
             // point to the last written non-hint entry. Hint entries must be ignored
             // because they are nondeterministic.
             // If the entry belongs to an open batched write or transaction, we need to
@@ -1330,27 +1596,82 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
-            || matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            )
-        {
+        if self.state.opens_durable_scope(function_type) {
             if self.is_live() {
-                self.state
-                    .oplog
-                    .add(OplogEntry::end_remote_write(begin_index))
-                    .await;
+                let entry = OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: begin_index,
+                    response: None,
+                    forced_commit: true,
+                };
+                self.state.oplog.add(entry).await;
             } else {
-                let (_, _) =
-                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::EndRemoteWrite)?;
+                let (_, end_entry) =
+                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+                if let OplogEntry::End { start_index, .. } = end_entry
+                    && start_index != begin_index
+                {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!("End {{ start_index: {begin_index} }}"),
+                        format!("End {{ start_index: {start_index} }}"),
+                    ));
+                }
             }
-            // The `BeginRemoteWrite` region opened in `begin_function` is now closed.
-            self.state.open_rollback_regions.remove(&begin_index);
+            // The durable scope opened in `begin_function` is now closed.
+            self.state.remove_durable_scope(begin_index)?;
             Ok(())
         } else {
             Ok(())
         }
+    }
+
+    /// Appends a completed child host call inside a durable scope, as an eager `Start` immediately
+    /// followed by its matching `End`. Unlike [`crate::durable_host::concurrent::CallHandle::start`]
+    /// this never opens a new durable scope — it records the result of a poll on an async future
+    /// (HTTP / RPC) within a request/invoke scope that the caller opens and closes itself.
+    ///
+    /// `parent_start_index` is the `Start` index of the enclosing scope this poll belongs to,
+    /// threaded explicitly by the caller (the owning request/invoke resource). It must **not** be
+    /// inferred from the set of temporally-open scopes: long-lived sibling scopes overlap, so the
+    /// "innermost open scope" would frequently be a different concurrent request.
+    ///
+    /// Both payloads are uploaded before the `Start` is appended, so a serialization failure never
+    /// leaves a dangling `Start`. The two entries are written with plain `add`s (eager model: a
+    /// forced commit may flush the `Start` before its `End`; an incomplete `Start` is rejected on
+    /// replay, like the surrounding scope-recovery rules). The caller remains responsible for the
+    /// snapshotting guard, closing the surrounding scope, finishing spans, and the durable commit.
+    pub(crate) async fn append_completed_child_call(
+        &mut self,
+        function_name: HostFunctionName,
+        request: &HostRequest,
+        response: &HostResponse,
+        function_type: DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
+    ) -> Result<(), String> {
+        let request_payload = self.state.oplog.upload_payload(request).await?;
+        let response_payload = self.state.oplog.upload_payload(response).await?;
+        let now = Timestamp::now_utc();
+        let start_idx = self
+            .state
+            .oplog
+            .add(OplogEntry::Start {
+                timestamp: now,
+                parent_start_index,
+                function_name,
+                request: Some(request_payload),
+                durable_function_type: function_type,
+            })
+            .await;
+        self.state
+            .oplog
+            .add(OplogEntry::End {
+                timestamp: now,
+                start_index: start_idx,
+                response: Some(response_payload),
+                forced_commit: false,
+            })
+            .await;
+        Ok(())
     }
 
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
@@ -1377,31 +1698,91 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     {
         if self.is_live() {
             let (tx_id, tx) = handler.create_new().await?;
-            let begin_index = self
+            // A transaction is a durable scope: append the scope `Start` and the
+            // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
+            // boundary. The scope `Start` index is the stable begin index for the whole transaction.
+            // Like other scope `Start`s it is top-level (`parent_start_index: None`); its child host
+            // calls point back at it via `WriteRemoteTransaction(Some(begin_index))`.
+            let scope_start = OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
+                request: None,
+                durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+            };
+            let (begin_index, _) = self
                 .public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id, None))
+                .oplog()
+                .add_pair(
+                    scope_start,
+                    Box::new(move |_start_index| OplogEntry::begin_remote_transaction(tx_id, None)),
+                )
+                .await;
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
 
-            // A remote transaction region is now open until commit/rollback; block checkpoints.
-            self.state.open_rollback_regions.insert(begin_index);
+            // The transaction scope is now open until commit/rollback; block checkpoints.
+            self.state
+                .push_durable_scope(begin_index, DurableScopeKind::Transaction);
             self.state.current_retry_point = begin_index;
 
             Ok((begin_index, tx))
         } else {
+            // The transaction scope `Start` is preserved across restarts, so its index is the
+            // stable original begin index that keys every transaction marker.
+            let (scope_start_index, scope_start_entry) =
+                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
+            // Reject anything that is not the exact `Start` shape `begin_transaction_function`
+            // writes, so a corrupt or interleaved oplog fails here instead of silently driving the
+            // recovery logic with the wrong scope.
+            if let OplogEntry::Start {
+                function_name,
+                request,
+                durable_function_type,
+                ..
+            } = &scope_start_entry
+            {
+                let is_transaction_scope = matches!(
+                    function_name,
+                    HostFunctionName::Custom(name) if name == "<scope:transaction>"
+                ) && request.is_none()
+                    && matches!(
+                        durable_function_type,
+                        DurableFunctionType::WriteRemoteTransaction(None)
+                    );
+                if !is_transaction_scope {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "Start { <scope:transaction>, WriteRemoteTransaction(None) }".to_string(),
+                        format!("Start {{ {function_name}, {durable_function_type:?} }}"),
+                    )
+                    .into());
+                }
+            }
             let (begin_index, begin_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::BeginRemoteTransaction
             )?;
-            let original_begin_index = if let OplogEntry::BeginRemoteTransaction {
+            // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
+            // transaction (`original_begin_index: None`) or, after a restart, points back at this
+            // scope `Start`.
+            if let OplogEntry::BeginRemoteTransaction {
                 original_begin_index: Some(idx),
                 ..
             } = &begin_entry
+                && *idx != scope_start_index
             {
-                *idx
-            } else {
-                begin_index
-            };
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!(
+                        "BeginRemoteTransaction {{ original_begin_index: None | Some({scope_start_index}) }}"
+                    ),
+                    format!("BeginRemoteTransaction {{ original_begin_index: Some({idx}) }}"),
+                )
+                .into());
+            }
+            let original_begin_index = scope_start_index;
 
             let assume_idempotence = self.state.assume_idempotence;
 
@@ -1412,18 +1793,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     original_begin_index,
                     OplogEntry::is_pre_remote_transaction_s,
                     OplogEntry::no_concurrent_side_effect,
-                    self.state.persistence_level,
-                    OplogEntry::track_persistence_level,
+                    ScopeScanState::new(original_begin_index, self.state.persistence_level),
+                    OplogEntry::track_scope_membership,
                 )
                 .await;
 
             let tx_id = try_match!(
                 begin_entry,
-                OplogEntry::BeginRemoteTransaction {
-                    timestamp: _,
-                    transaction_id,
-                    original_begin_index: _,
-                }
+                OplogEntry::BeginRemoteTransaction { transaction_id, .. }
             )
             .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
 
@@ -1442,8 +1819,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             original_begin_index,
                             OplogEntry::is_end_remote_transaction_s,
                             OplogEntry::no_concurrent_side_effect,
-                            self.state.persistence_level,
-                            OplogEntry::track_persistence_level,
+                            ScopeScanState::new(original_begin_index, self.state.persistence_level),
+                            OplogEntry::track_scope_membership,
                         )
                         .await;
 
@@ -1456,7 +1833,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 // if we can not confirm the transaction was committed, we need to restart
                                 should_restart = !handler.is_committed(&tx_id).await?;
                             } else if pre_entry
-                                .is_pre_commit_remote_transaction(original_begin_index)
+                                .is_pre_rollback_remote_transaction(original_begin_index)
                             {
                                 // if we can not confirm the transaction was rolled back, we need to restart
                                 should_restart = !handler.is_rolled_back(&tx_id).await?;
@@ -1502,7 +1879,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
-                        start: begin_index, // need to delete the previous BeginRemoteTransaction entry, because we'll get a new TX id
+                        // Delete the previous `BeginRemoteTransaction` entry (and everything after),
+                        // because we'll get a new tx id. The transaction scope `Start` lives at
+                        // `scope_start_index < begin_index`, so it is preserved.
+                        start: begin_index,
                         end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                     };
 
@@ -1530,8 +1910,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Ok((original_begin_index, tx))
             }?;
 
-            // The (possibly re-begun) remote transaction region is open until commit/rollback.
-            self.state.open_rollback_regions.insert(result);
+            // The (possibly re-begun) transaction scope is open until commit/rollback.
+            self.state
+                .push_durable_scope(result, DurableScopeKind::Transaction);
             self.state.current_retry_point = original_begin_index;
 
             Ok((result, tx))
@@ -1599,9 +1980,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            // The final marker and the scope `End` are appended as an atomic pair so they can never
+            // be split across a crash boundary (which would leave a marker without its `End`).
             self.state
                 .oplog
-                .fallible_add(OplogEntry::committed_remote_transaction(begin_index))
+                .fallible_add_pair(
+                    OplogEntry::committed_remote_transaction(begin_index),
+                    OplogEntry::End {
+                        timestamp: Timestamp::now_utc(),
+                        start_index: begin_index,
+                        response: None,
+                        forced_commit: true,
+                    },
+                )
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -1614,11 +2005,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::CommittedRemoteTransaction
             )?;
+            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+            if let OplogEntry::End { start_index, .. } = end_entry
+                && start_index != begin_index
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("End {{ start_index: {begin_index} }}"),
+                    format!("End {{ start_index: {start_index} }}"),
+                ));
+            }
         }
-        // The remote transaction region opened in `begin_transaction_function` is now closed: the
-        // `CommittedRemoteTransaction` entry has been durably committed (live) or replayed, so the
-        // tip is no longer inside a jumpable region on its account.
-        self.state.open_rollback_regions.remove(&begin_index);
+        // The transaction scope opened in `begin_transaction_function` is now closed: the
+        // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed (live)
+        // or replayed, so the tip is no longer inside a jumpable scope on its account.
+        self.state.remove_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -1634,9 +2034,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            // The final marker and the scope `End` are appended as an atomic pair so they can never
+            // be split across a crash boundary (which would leave a marker without its `End`).
             self.state
                 .oplog
-                .fallible_add(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .fallible_add_pair(
+                    OplogEntry::rolled_back_remote_transaction(begin_index),
+                    OplogEntry::End {
+                        timestamp: Timestamp::now_utc(),
+                        start_index: begin_index,
+                        response: None,
+                        forced_commit: true,
+                    },
+                )
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -1649,11 +2059,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::RolledBackRemoteTransaction
             )?;
+            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+            if let OplogEntry::End { start_index, .. } = end_entry
+                && start_index != begin_index
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("End {{ start_index: {begin_index} }}"),
+                    format!("End {{ start_index: {start_index} }}"),
+                ));
+            }
         }
-        // The remote transaction region opened in `begin_transaction_function` is now closed: the
-        // `RolledBackRemoteTransaction` entry has been durably committed (live) or replayed, so the
-        // tip is no longer inside a jumpable region on its account.
-        self.state.open_rollback_regions.remove(&begin_index);
+        // The transaction scope opened in `begin_transaction_function` is now closed: the
+        // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed (live)
+        // or replayed, so the tip is no longer inside a jumpable scope on its account.
+        self.state.remove_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -2148,63 +2567,99 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     debug!("Updating the replay's current phantom id to {new_phantom_id}");
                     self.update_state_to_new_phantom_id(new_phantom_id).await?;
                 }
+                ReplayEvent::CardInstalled { card } => {
+                    let card_id = card.card_id();
+                    debug!(card_id = %card_id, "Applying replayed card installation");
+                    self.state.agent_wallet_cards.insert(card_id, card);
+                    self.rederive_agent_effective_surface_from_wallet();
+                }
+                ReplayEvent::CardRevoked { card_id } => {
+                    debug!(card_id = %card_id, "Applying replayed card revocation");
+                    self.apply_card_revoked(card_id, OplogIndex::NONE, false)
+                        .await?;
+                }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
                     let pending_update = self.state.pending_update.lock().await.take();
+                    if let Some(pending_update) = pending_update {
+                        match pending_update.description {
+                            UpdateDescription::Automatic { target_revision } => {
+                                debug!("Finalizing pending automatic update");
 
-                    let pending_update = if let Some(pending_update) = pending_update {
-                        pending_update
-                    } else {
-                        continue;
-                    };
+                                if let Err(error) = self
+                                    .update_state_to_new_component_revision(target_revision)
+                                    .await
+                                {
+                                    let stringified_error =
+                                        format!("Applying worker update failed: {error}");
 
-                    match pending_update.description {
-                        UpdateDescription::Automatic { target_revision } => {
-                            debug!("Finalizing pending automatic update");
+                                    self.on_worker_update_failed(
+                                        target_revision,
+                                        Some(stringified_error),
+                                    )
+                                    .await;
 
-                            if let Err(error) = self
-                                .update_state_to_new_component_revision(target_revision)
-                                .await
-                            {
-                                let stringified_error =
-                                    format!("Applying worker update failed: {error}");
+                                    Err(error)?
+                                };
 
-                                self.on_worker_update_failed(
+                                let component_metadata = self.component_metadata().clone();
+
+                                self.on_worker_update_succeeded(
                                     target_revision,
-                                    Some(stringified_error),
+                                    component_metadata.component_size,
+                                    HashSet::from_iter({
+                                        self.agent_type_provision_config()
+                                            .map(|c| c.plugins.as_slice())
+                                            .unwrap_or_default()
+                                            .iter()
+                                            .map(|installation| {
+                                                installation.environment_plugin_grant_id
+                                            })
+                                    }),
                                 )
                                 .await;
 
-                                Err(error)?
-                            };
-
-                            let component_metadata = self.component_metadata().clone();
-
-                            self.on_worker_update_succeeded(
-                                target_revision,
-                                component_metadata.component_size,
-                                HashSet::from_iter({
-                                    self.agent_type_provision_config()
-                                        .map(|c| c.plugins.as_slice())
-                                        .unwrap_or_default()
-                                        .iter()
-                                        .map(|installation| {
-                                            installation.environment_plugin_grant_id
-                                        })
-                                }),
-                            )
-                            .await;
-
-                            debug!("Finalizing automatic update to revision {target_revision}");
-                        }
-                        _ => {
-                            return Err(WorkerExecutorError::runtime(
-                                "pending replay event finalization expected an automatic update description",
-                            ));
+                                debug!("Finalizing automatic update to revision {target_revision}");
+                            }
+                            _ => {
+                                return Err(WorkerExecutorError::runtime(
+                                    "pending replay event finalization expected an automatic update description",
+                                ));
+                            }
                         }
                     }
+
+                    self.check_post_replay_wallet_liveness().await?;
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    async fn check_post_replay_wallet_liveness(&mut self) -> Result<(), WorkerExecutorError> {
+        let wallet_card_ids = self
+            .state
+            .agent_wallet_cards
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        self.state
+            .card_service
+            .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
+            .await;
+
+        if wallet_card_ids.is_empty() {
+            return Ok(());
+        }
+
+        let revoked_card_ids = self.state.card_service.check_cards(wallet_card_ids).await?;
+
+        for card_id in revoked_card_ids {
+            self.public_state
+                .worker()
+                .queue_card_revocation(card_id)
+                .await;
         }
 
         Ok(())
@@ -2242,26 +2697,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .cloned()
         });
 
-        let mut current_files = self.state.files.write().await;
-        update_filesystem(
-            &mut current_files,
-            &self.state.file_loader,
-            self.owned_agent_id.environment_id,
-            self.worker_dir.path(),
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.as_slice())
-                .unwrap_or_default(),
-        )
-        .await?;
-
-        let mut read_only_paths = self.state.read_only_paths.write().unwrap();
-        *read_only_paths = compute_read_only_paths(&current_files);
-
-        if let Some(agent_id) = self.parsed_agent_id() {
+        let updated_agent_state = if let Some(agent_id) = self.parsed_agent_id() {
             let agent_type = new_metadata
                 .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(&agent_id.agent_type)
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
                         "Agent type {} not found in updated agent metadata",
@@ -2275,12 +2714,55 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            );
+            )?;
 
-            validate_agent_config(&updated_agent_config, &agent_type)?;
+            validate_agent_config(&updated_agent_config, agent_type)?;
 
+            let initial_card =
+                agent_initial_card_from_component_metadata(&new_metadata, &agent_id)?;
+            let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
+            let context =
+                agent_monomorphization_context(&new_metadata, &self.owned_agent_id, &agent_id);
+            let agent_effective_surface =
+                golem_common::model::card::agent_effective_surface_from_wallet(
+                    &context,
+                    initial_wallet_cards.values(),
+                );
+
+            Some((
+                updated_agent_config,
+                agent_effective_surface,
+                initial_wallet_cards,
+            ))
+        } else {
+            None
+        };
+
+        {
+            let mut current_files = self.state.files.write().await;
+            update_filesystem(
+                &mut current_files,
+                &self.state.file_loader,
+                self.owned_agent_id.environment_id,
+                self.worker_dir.path(),
+                new_agent_type_provision_configs
+                    .as_ref()
+                    .map(|c| c.files.as_slice())
+                    .unwrap_or_default(),
+            )
+            .await?;
+
+            let mut read_only_paths = self.state.read_only_paths.write().unwrap();
+            *read_only_paths = compute_read_only_paths(&current_files);
+        }
+
+        if let Some((updated_agent_config, agent_effective_surface, initial_wallet_cards)) =
+            updated_agent_state
+        {
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
+            self.state.agent_effective_surface = agent_effective_surface;
+            self.state.agent_wallet_cards = initial_wallet_cards;
         };
 
         self.state.component_metadata = new_metadata;
@@ -2616,11 +3098,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     | AgentInvocationResult::ProcessOplogEntries { .. } => true,
                 };
 
+                // Only `AgentMethod` results need the method name persisted so the
+                // public oplog renderer can resolve the correct output schema.
+                let method_name = match &output.result {
+                    AgentInvocationResult::AgentMethod { .. } => {
+                        Some(full_function_name.to_string())
+                    }
+                    _ => None,
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
                     .add_agent_invocation_finished(
                         &output.result,
+                        method_name,
                         consumed_fuel,
                         component_revision,
                     )
@@ -2687,8 +3179,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 && !recorded_result.replay_equivalent(&output.result)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("{full_function_name} => {recorded_result:?}"),
-                    format!("{full_function_name} => {:?}", output.result),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        recorded_result.redacted_debug()
+                    ),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        output.result.redacted_debug()
+                    ),
                 ));
             }
         }
@@ -2698,11 +3196,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_retry_point(&self) -> OplogIndex {
-        if let Some(region) = self.state.active_atomic_regions.last() {
-            region.begin_index
-        } else {
-            self.state.current_retry_point
-        }
+        self.state.effective_retry_point()
     }
 }
 
@@ -3696,106 +4190,130 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
     }
 }
 
-// TODO: optimize this and keep the relevant indices for recovering logs in the AgentStatusRecord
+/// Number of oplog entries read per backward-scan window. Sized to match the compressed oplog
+/// archive's chunk and cache sizes so that each window generally costs a single chunk decompression.
+const BACKWARD_OPLOG_SCAN_WINDOW: u64 = 4096;
+
+/// Returns the start index of the inclusive backward-scan window ending at `end`, clamped to
+/// [`OplogIndex::INITIAL`].
+fn backward_scan_window_start(end: OplogIndex) -> OplogIndex {
+    let initial = OplogIndex::INITIAL.as_u64();
+    let start = end
+        .as_u64()
+        .saturating_sub(BACKWARD_OPLOG_SCAN_WINDOW - 1)
+        .max(initial);
+    OplogIndex::from_u64(start)
+}
+
+/// Finds the most recent error of the current invocation (if any) together with its retry point and
+/// the surrounding stderr logs.
+///
+/// A possible future optimization is to maintain the relevant indices (last error, last invocation
+/// start) directly in the [`AgentStatusRecord`] so that no backward oplog scan is needed at all.
 async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     latest_worker_status: &AgentStatusRecord,
 ) -> Option<LastError> {
-    let mut idx = this
+    // Short-circuit: there is nothing to report unless the worker is currently in an error-bearing
+    // state. `last_error` otherwise scans backward to the start of the current invocation, which is
+    // unbounded for long-running invocations. A failed/retrying worker always has its error near the
+    // tail, and a non-empty `current_retry_state` means an `Error` with a tracked retry policy was
+    // recorded since the last invocation boundary; in every other case there is no error to find.
+    if !matches!(
+        latest_worker_status.status,
+        AgentStatus::Failed | AgentStatus::Retrying
+    ) && latest_worker_status.current_retry_state.is_empty()
+    {
+        return None;
+    }
+
+    let last_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
         .await;
-    if idx == OplogIndex::NONE {
-        None
-    } else {
-        let mut first_error = None;
-        let mut first_retry_from = OplogIndex::NONE;
-        let mut last_error_index = idx;
+    if last_index == OplogIndex::NONE {
+        return None;
+    }
+
+    let mut first_error = None;
+    let mut first_retry_from = OplogIndex::NONE;
+    let mut last_error_index = last_index;
+
+    // Walk the oplog backward in windows, reading each window in a single bulk range read instead of
+    // one entry at a time (the latter thrashes the compressed-archive chunk cache).
+    let mut window_end = last_index;
+    'scan: loop {
+        let window_start = backward_scan_window_start(window_end);
+        let entries = this
+            .oplog_service()
+            .read_range(owned_agent_id, agent_mode, window_start, window_end)
+            .await;
+
+        let mut idx = window_end;
         loop {
             if latest_worker_status
                 .deleted_regions
                 .is_in_deleted_region(idx)
             {
-                if idx > OplogIndex::INITIAL {
-                    idx = idx.previous();
-                    continue;
-                } else {
-                    break;
-                }
+                // Skip entries in deleted regions without consulting the read range.
             } else {
-                let oplog_entry = this
-                    .oplog_service()
-                    .read(owned_agent_id, agent_mode, idx, 1)
-                    .await;
-                match oplog_entry.first_key_value() {
-                    Some((
-                        _,
-                        OplogEntry::Error {
-                            error, retry_from, ..
-                        },
-                    )) => {
+                match entries.get(&idx) {
+                    Some(OplogEntry::Error {
+                        error, retry_from, ..
+                    }) => {
                         if first_retry_from == OplogIndex::NONE || first_retry_from == *retry_from {
                             last_error_index = idx;
                             if first_error.is_none() {
                                 first_error = Some(error.clone());
                                 first_retry_from = *retry_from;
                             }
-                            if idx > OplogIndex::INITIAL {
-                                idx = idx.previous();
-                                continue;
-                            } else {
-                                break;
-                            }
                         } else {
                             // Found an error entry belonging to another retry point
-                            break;
+                            break 'scan;
                         }
                     }
-                    Some((_, entry)) if entry.is_hint() => {
+                    Some(entry) if entry.is_hint() => {
                         // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
-                        if idx > OplogIndex::INITIAL {
-                            idx = idx.previous();
-                            continue;
-                        } else {
-                            break;
-                        }
                     }
-                    Some((
-                        _,
+                    Some(
                         OplogEntry::AgentInvocationStarted { .. }
                         | OplogEntry::AgentInvocationFinished { .. },
-                    )) => {
+                    ) => {
                         // Retry counting never gets across invocation boundaries
-                        break;
+                        break 'scan;
                     }
-                    Some((_, _)) => {
+                    Some(_) => {
                         // Skipping non-hint entries as well, but only up to the first error entry that's different, or the beginning
                         // of the last invocation
-                        if idx > OplogIndex::INITIAL {
-                            idx = idx.previous();
-                            continue;
-                        } else {
-                            break;
-                        }
                     }
                     None => {
                         // This is possible if the oplog has been deleted between the get_last_index and the read call
-                        break;
+                        break 'scan;
                     }
                 }
             }
+
+            if idx == OplogIndex::INITIAL {
+                break 'scan;
+            }
+            if idx == window_start {
+                break;
+            }
+            idx = idx.previous();
         }
-        match first_error {
-            Some(error) => Some(LastError {
-                error,
-                stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index)
-                    .await,
-                retry_from: first_retry_from,
-            }),
-            None => None,
-        }
+
+        window_end = window_start.previous();
+    }
+
+    match first_error {
+        Some(error) => Some(LastError {
+            error,
+            stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await,
+            retry_from: first_retry_from,
+        }),
+        None => None,
     }
 }
 
@@ -3820,76 +4338,82 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
     // have at most one pending batch we discard.
     let mut collected_count = 0;
-    let mut idx = last_oplog_idx;
     let mut stderr_entries = Vec::new();
     let mut current_stderr_entries_batch = Vec::new();
     let mut first_seen_invocation = None;
 
-    loop {
-        // TODO: this could be read in batches to speed up the process
-        let oplog_entry = this
+    // Walk the oplog backward in windows, reading each window in a single bulk range read instead of
+    // one entry at a time.
+    let mut window_end = last_oplog_idx;
+    'scan: loop {
+        let window_start = backward_scan_window_start(window_end);
+        let entries = this
             .oplog_service()
-            .read(owned_agent_id, agent_mode, idx, 1)
+            .read_range(owned_agent_id, agent_mode, window_start, window_end)
             .await;
 
-        // Because of retries we might have multiple invocation start entries.
-        // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
-        match oplog_entry.first_key_value() {
-            Some((
-                _,
-                OplogEntry::Log {
+        let mut idx = window_end;
+        loop {
+            // Because of retries we might have multiple invocation start entries.
+            // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
+            match entries.get(&idx) {
+                Some(OplogEntry::Log {
                     level,
                     message,
                     context,
                     ..
-                },
-            )) if (level == &LogLevel::Warn
-                || level == &LogLevel::Error
-                || level == &LogLevel::Critical
-                || level == &LogLevel::Stderr)
-                && collected_count < max_count =>
-            {
-                if level == &LogLevel::Stderr {
-                    current_stderr_entries_batch.push(message.clone());
-                } else {
-                    let line = format!(
-                        "[{}] [{}] {}\n",
-                        format!("{level:?}").to_uppercase(),
-                        context,
-                        message
-                    );
-                    current_stderr_entries_batch.push(line);
+                }) if (level == &LogLevel::Warn
+                    || level == &LogLevel::Error
+                    || level == &LogLevel::Critical
+                    || level == &LogLevel::Stderr)
+                    && collected_count < max_count =>
+                {
+                    if level == &LogLevel::Stderr {
+                        current_stderr_entries_batch.push(message.clone());
+                    } else {
+                        let line = format!(
+                            "[{}] [{}] {}\n",
+                            format!("{level:?}").to_uppercase(),
+                            context,
+                            message
+                        );
+                        current_stderr_entries_batch.push(line);
+                    }
+                    collected_count += 1;
                 }
-                collected_count += 1;
-            }
-            Some((
-                _,
-                OplogEntry::AgentInvocationStarted {
+                Some(OplogEntry::AgentInvocationStarted {
                     idempotency_key, ..
+                }) => match &first_seen_invocation {
+                    None => {
+                        first_seen_invocation = Some(idempotency_key.clone());
+                        stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                        if stderr_entries.len() >= max_count {
+                            break 'scan;
+                        };
+                    }
+                    Some(expected_idempotency_key)
+                        if idempotency_key == expected_idempotency_key =>
+                    {
+                        stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                        if stderr_entries.len() >= max_count {
+                            break 'scan;
+                        };
+                    }
+                    Some(_) => break 'scan,
                 },
-            )) => match &first_seen_invocation {
-                None => {
-                    first_seen_invocation = Some(idempotency_key.clone());
-                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
-                    if stderr_entries.len() >= max_count {
-                        break;
-                    };
-                }
-                Some(expected_idempotency_key) if idempotency_key == expected_idempotency_key => {
-                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
-                    if stderr_entries.len() >= max_count {
-                        break;
-                    };
-                }
-                Some(_) => break,
-            },
-            _ => {}
-        }
-        if idx > OplogIndex::INITIAL {
+                _ => {}
+            }
+
+            if idx == OplogIndex::INITIAL {
+                break 'scan;
+            }
+            if idx == window_start {
+                break;
+            }
             idx = idx.previous();
-        } else {
-            break;
         }
+
+        window_end = window_start.previous();
     }
     stderr_entries.reverse();
     stderr_entries.join("")
@@ -3977,7 +4501,7 @@ pub(crate) enum PendingStatusRetryDecision {
 pub(crate) struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
-    /// The BeginRemoteWrite entry's index
+    /// The scope `Start` entry's index (batched-write scope marker)
     pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
     pub request: HostRequestHttpRequest,
@@ -4048,6 +4572,28 @@ struct ActiveAtomicRegion {
     has_side_effects: bool,
 }
 
+/// The kind of a durable scope, identified by the `OplogIndex` of its `Start` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableScopeKind {
+    /// A batched remote write scope (`WriteRemoteBatched(None)`).
+    BatchedWrite,
+    /// A non-idempotent remote write scope (`WriteRemote` with `assume_idempotence == false`).
+    NonIdempotentWrite,
+    /// A remote transaction scope.
+    Transaction,
+}
+
+/// A currently open durable scope. Durable scopes are first-class `Start`/`End` pairs
+/// (batched writes, non-idempotent writes, transactions) identified by their `Start` index.
+/// The innermost open scope provides the `parent_start_index` for any `Start` written while
+/// it is open, and contributes to the effective retry point (see `effective_retry_point`).
+#[derive(Debug, Clone, Copy)]
+struct ActiveDurableScope {
+    start_index: OplogIndex,
+    #[allow(dead_code)]
+    kind: DurableScopeKind,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FilesystemOutputStreamState {
     pub descriptor_rep: u32,
@@ -4085,6 +4631,7 @@ struct PrivateDurableWorkerState {
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
     quota_service: Arc<dyn QuotaService>,
+    card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -4092,7 +4639,8 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<LegacyParsedAgentId>,
+    agent_id: Option<ParsedAgentId>,
+    created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -4137,6 +4685,8 @@ struct PrivateDurableWorkerState {
     read_only_method_name: Option<String>,
 
     component_metadata: Component,
+    agent_effective_surface: golem_common::model::card::EffectiveSurface,
+    agent_wallet_cards: BTreeMap<CardId, StoredCard>,
 
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -4160,7 +4710,7 @@ struct PrivateDurableWorkerState {
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
-    agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
 
     /// Cached named retry policies derived from `agent_config` only. Lazily populated and
     /// invalidated whenever `agent_config` is reassigned.
@@ -4180,9 +4730,17 @@ struct PrivateDurableWorkerState {
     // Map from resource_id to the dyn_pollables that wrap it
     promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
 
-    /// Marks a retry point in the oplog to be attached to an Error entry in case a failure happens.
-    /// As the error can happen both in the host or in the user code, we attach the last known value every time,
-    /// which normally points to the last persisted side effect or the beginning of a region.
+    /// The **global fallback** retry point: the index attached to an `Error` entry when no atomic
+    /// region and no durable scope is active. It is overwritten every time a side effect is
+    /// persisted (and pointed at a call's `Start` while that call is in flight), so it normally
+    /// tracks the last persisted side effect.
+    ///
+    /// This is *not* what is read directly at error time. Errors use
+    /// [`PrivateDurableWorkerState::effective_retry_point`], which layers priority on top of this
+    /// field: an active atomic region (whole region retried from its begin index) wins, then an open
+    /// durable scope (error grouped at the scope `Start`), and only otherwise does it fall back to
+    /// `current_retry_point`. Keep them distinct: write `current_retry_point`, read
+    /// `effective_retry_point()`.
     current_retry_point: OplogIndex,
 
     /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
@@ -4192,16 +4750,22 @@ struct PrivateDurableWorkerState {
     /// from scratch.
     active_atomic_regions: Vec<ActiveAtomicRegion>,
 
-    /// Begin indices of currently open rollback-capable regions other than atomic regions: remote
-    /// writes / HTTP requests (`BeginRemoteWrite`..`EndRemoteWrite`) and remote transactions
-    /// (`BeginRemoteTransaction`..`Committed`/`RolledBackRemoteTransaction`). Maintained by
-    /// `begin_function`/`end_function` and the transaction lifecycle functions. While any such
-    /// region is open, the current oplog tip sits inside it, so a later trap/replay can append a
-    /// jump that deletes the tip — making a mid-invocation status checkpoint at the tip unsafe (see
-    /// `at_clean_checkpoint_boundary`). Keyed by begin index so begin/end are self-balancing across
-    /// the messy replay/restart paths; a fresh state is built per worker incarnation, so a region
-    /// left open by a trap is cleared on restart.
-    open_rollback_regions: HashSet<OplogIndex>,
+    /// Currently open durable scopes other than atomic regions: batched / remote writes
+    /// (`Start`..`End`) and remote transactions (`Start`..`End` wrapping the transaction markers).
+    /// Maintained by `begin_function`/`end_function` and the transaction lifecycle functions.
+    ///
+    /// While any such scope is open, the current oplog tip sits inside it, so a later trap/replay
+    /// can append a jump that deletes the tip — making a mid-invocation status checkpoint at the tip
+    /// unsafe (see `at_clean_checkpoint_boundary`). Only the *set* of open scopes matters for this.
+    ///
+    /// Durable scopes are **not** strictly nested: HTTP / RPC scopes are long-lived and overlap as
+    /// siblings (one opens while another is still pending), closing in arbitrary order. So this is
+    /// an order-independent collection, not a stack: `remove_durable_scope` removes the closed scope
+    /// wherever it is and hard-errors only if it was never open. `parent_start_index` is therefore
+    /// **not** derived from this collection (which scope is "innermost" is meaningless for siblings)
+    /// — it is threaded explicitly from the owning call/resource. A fresh state is built per worker
+    /// incarnation, so a scope left open by a trap is cleared on restart.
+    active_durable_scopes: Vec<ActiveDurableScope>,
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
     /// invocation (the `NoOp` marker it plants). It is the only realistic `set_oplog_index` target,
@@ -4239,7 +4803,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -4250,6 +4814,7 @@ impl PrivateDurableWorkerState {
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -4262,13 +4827,15 @@ impl PrivateDurableWorkerState {
         component_metadata: Component,
         total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
+        _agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
+        created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
-        agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+        agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -4293,6 +4860,40 @@ impl PrivateDurableWorkerState {
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
+        let initial_agent_wallet_cards =
+            || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
+                match agent_id.as_ref() {
+                    Some(agent_id) => {
+                        let card = agent_initial_card_from_component_metadata(
+                            &component_metadata,
+                            agent_id,
+                        )?;
+                        Ok(BTreeMap::from([(card.card_id(), card)]))
+                    }
+                    None => Ok(BTreeMap::new()),
+                }
+            };
+        let agent_wallet_cards = if let Some(snapshot_idx) = last_snapshot_index {
+            match oplog.read(snapshot_idx).await {
+                OplogEntry::Snapshot { active_cards, .. } => active_cards
+                    .into_iter()
+                    .map(|card| (card.card_id(), card))
+                    .collect(),
+                _ => initial_agent_wallet_cards()?,
+            }
+        } else {
+            initial_agent_wallet_cards()?
+        };
+        let agent_effective_surface = if let Some(agent_id) = agent_id.as_ref() {
+            let context =
+                agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
+            golem_common::model::card::agent_effective_surface_from_wallet(
+                &context,
+                agent_wallet_cards.values(),
+            )
+        } else {
+            golem_common::model::card::EffectiveSurface::default()
+        };
         Ok(Self {
             oplog_service,
             oplog,
@@ -4309,6 +4910,7 @@ impl PrivateDurableWorkerState {
             blob_store_service,
             rdbms_service,
             quota_service,
+            card_service,
             component_service,
             agent_types_service,
             environment_state_service,
@@ -4332,6 +4934,8 @@ impl PrivateDurableWorkerState {
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
             component_metadata,
+            agent_effective_surface,
+            agent_wallet_cards,
             total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,
@@ -4344,6 +4948,7 @@ impl PrivateDurableWorkerState {
             files,
             file_loader,
             created_by,
+            created_by_email,
             initial_agent_config,
             config,
             cached_agent_config_retry_policies: None,
@@ -4355,7 +4960,7 @@ impl PrivateDurableWorkerState {
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
-            open_rollback_regions: HashSet::new(),
+            active_durable_scopes: Vec::new(),
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
@@ -4446,6 +5051,97 @@ impl PrivateDurableWorkerState {
         self.active_atomic_regions
             .first()
             .is_some_and(|region| region.has_side_effects)
+    }
+
+    /// The `parent_start_index` to attach to the host-call `Start` of a durable call, given the
+    /// function type and the `begin_index` returned by `begin_function`. This is derived
+    /// *explicitly* from the call itself, never from the set of temporally-open scopes (which scope
+    /// is "innermost" is meaningless when long-lived sibling scopes overlap):
+    ///
+    /// - if the call opened its own durable scope (non-idempotent `WriteRemote` /
+    ///   `WriteRemoteBatched(None)`), its host-call `Start` nests inside that scope (`begin_index`);
+    /// - otherwise it nests inside the enclosing scope encoded in the function type
+    ///   (`WriteRemoteBatched(Some)` / `WriteRemoteTransaction(Some)`), if any;
+    /// - otherwise it is a top-level call with no parent.
+    fn child_parent_start_index(
+        &self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Option<OplogIndex> {
+        if self.opens_durable_scope(function_type) {
+            Some(begin_index)
+        } else {
+            match function_type {
+                DurableFunctionType::WriteRemoteBatched(Some(idx))
+                | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
+                _ => None,
+            }
+        }
+    }
+
+    /// Whether a durable function of this `function_type` opens a durable scope — a first-class
+    /// `Start`/`End` pair, opened by [`DurableWorkerCtx::begin_function`] and closed by
+    /// [`DurableWorkerCtx::end_function`] — namely a non-idempotent remote write or the first
+    /// (`None`) call of a batched remote write.
+    ///
+    /// Snapshotting turns off persistence entirely, and `persist`/`replay` skip `end_function`
+    /// while snapshotting, so no scope must be opened either: otherwise the scope `Start` (written
+    /// through `add_and_commit_oplog`, which commits with `CommitLevel::Always` and therefore
+    /// ignores `PersistNothing`) would be committed with no matching `End`, corrupting later replay.
+    /// A snapshotting region never straddles a single scope's begin/end, so guarding both ends with
+    /// the same predicate keeps the durable-scope stack balanced.
+    fn opens_durable_scope(&self, function_type: &DurableFunctionType) -> bool {
+        self.snapshotting_mode.is_none()
+            && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
+                || matches!(
+                    *function_type,
+                    DurableFunctionType::WriteRemoteBatched(None)
+                ))
+    }
+
+    /// Opens a durable scope identified by its `Start` index. Must be balanced by
+    /// `remove_durable_scope` on the matching `End`/`Cancelled`.
+    fn push_durable_scope(&mut self, start_index: OplogIndex, kind: DurableScopeKind) {
+        self.active_durable_scopes
+            .push(ActiveDurableScope { start_index, kind });
+    }
+
+    /// Closes the durable scope opened at `start_index`. Durable scopes are not strictly nested
+    /// (long-lived HTTP / RPC scopes overlap as siblings and close in arbitrary order), so the
+    /// closed scope is removed wherever it is in the collection. It is a hard error only if the
+    /// scope was never open, which would mean the begin/end bookkeeping got out of sync.
+    fn remove_durable_scope(&mut self, start_index: OplogIndex) -> Result<(), WorkerExecutorError> {
+        match self
+            .active_durable_scopes
+            .iter()
+            .position(|scope| scope.start_index == start_index)
+        {
+            Some(pos) => {
+                self.active_durable_scopes.remove(pos);
+                Ok(())
+            }
+            None => Err(WorkerExecutorError::runtime(format!(
+                "Tried to close durable scope {start_index} but it is not open; open scopes: {:?}",
+                self.active_durable_scopes
+                    .iter()
+                    .map(|s| s.start_index)
+                    .collect::<Vec<_>>()
+            ))),
+        }
+    }
+
+    /// The retry point to associate with an error, with priority `atomic region > global`. While an
+    /// atomic region is active the whole region is retried from its begin index; otherwise the error
+    /// is grouped at `current_retry_point`, which the durable-call machinery keeps pointing at the
+    /// enclosing scope `Start` (or the call's own `Start` when unscoped). Durable scopes do **not**
+    /// add a tier here: with overlapping sibling scopes there is no meaningful "innermost" scope, so
+    /// grouping is driven by the explicitly-maintained `current_retry_point` instead.
+    fn effective_retry_point(&self) -> OplogIndex {
+        if let Some(region) = self.active_atomic_regions.last() {
+            region.begin_index
+        } else {
+            self.current_retry_point
+        }
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
@@ -4590,7 +5286,7 @@ impl PrivateDurableWorkerState {
     pub fn at_clean_checkpoint_boundary(&self) -> bool {
         self.is_live()
             && self.active_atomic_regions.is_empty()
-            && self.open_rollback_regions.is_empty()
+            && self.active_durable_scopes.is_empty()
             && self.persistence_level != PersistenceLevel::PersistNothing
             && self.snapshotting_mode.is_none()
     }

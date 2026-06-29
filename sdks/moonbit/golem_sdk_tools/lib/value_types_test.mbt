@@ -9,9 +9,12 @@ test "parse struct with primitive fields" {
     #|}
   let types = parse_value_types([("point.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Point"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Point"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content="Record([(\"x\", Simple(\"Double\")), (\"y\", Simple(\"Double\"))])",
@@ -30,9 +33,12 @@ test "parse struct with compound fields" {
     #|}
   let types = parse_value_types([("config.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Config"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Config"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content=(
@@ -59,10 +65,16 @@ test "parse simple enum (all unit cases)" {
     #|}
   let types = parse_value_types([("priority.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Priority"
-  ))
-  debug_inspect(types[0].kind, content="SimpleEnum([\"Low\", \"Medium\", \"High\"])")
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Priority"
+    ),
+  )
+  debug_inspect(
+    types[0].kind,
+    content="SimpleEnum([\"Low\", \"Medium\", \"High\"])",
+  )
 }
 
 ///|
@@ -77,9 +89,12 @@ test "parse enum with mixed unit and payload cases" {
     #|}
   let types = parse_value_types([("shape.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Shape"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Shape"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content=(
@@ -105,9 +120,12 @@ test "parse enum with multi-field positional case" {
     #|}
   let types = parse_value_types([("shape.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Shape"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Shape"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content=(
@@ -123,7 +141,6 @@ test "parse enum with multi-field positional case" {
       #|    ),
       #|  ],
       #|)
-
     ),
   )
 }
@@ -139,9 +156,12 @@ test "parse enum with labelled fields" {
     #|}
   let types = parse_value_types([("shape.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Shape"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Shape"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content=(
@@ -157,7 +177,6 @@ test "parse enum with labelled fields" {
       #|    ),
       #|  ],
       #|)
-
     ),
   )
 }
@@ -181,17 +200,26 @@ test "multiple types in one file" {
     #|}
   let types = parse_value_types([("types.mbt", content)])
   debug_inspect(types.length(), content="2")
-  debug_inspect(types[0].name, content=(
-    #|"Point"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Point"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content="Record([(\"x\", Simple(\"Double\")), (\"y\", Simple(\"Double\"))])",
   )
-  debug_inspect(types[1].name, content=(
-    #|"Color"
-  ))
-  debug_inspect(types[1].kind, content="SimpleEnum([\"Red\", \"Green\", \"Blue\"])")
+  debug_inspect(
+    types[1].name,
+    content=(
+      #|"Color"
+    ),
+  )
+  debug_inspect(
+    types[1].kind,
+    content="SimpleEnum([\"Red\", \"Green\", \"Blue\"])",
+  )
 }
 
 ///|
@@ -214,16 +242,22 @@ test "types across multiple files" {
     #|}
   let types = parse_value_types([("point.mbt", file1), ("direction.mbt", file2)])
   debug_inspect(types.length(), content="2")
-  debug_inspect(types[0].name, content=(
-    #|"Point"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Point"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content="Record([(\"x\", Simple(\"Double\")), (\"y\", Simple(\"Double\"))])",
   )
-  debug_inspect(types[1].name, content=(
-    #|"Direction"
-  ))
+  debug_inspect(
+    types[1].name,
+    content=(
+      #|"Direction"
+    ),
+  )
   debug_inspect(
     types[1].kind,
     content="SimpleEnum([\"North\", \"South\", \"East\", \"West\"])",
@@ -241,9 +275,12 @@ test "parse struct with tuple field" {
     #|}
   let types = parse_value_types([("pair.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"PairHolder"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"PairHolder"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content=(
@@ -253,7 +290,6 @@ test "parse struct with tuple field" {
       #|    ("triple", ([Simple("String"), Simple("Int"), Simple("Bool")])),
       #|  ],
       #|)
-
     ),
   )
 }
@@ -271,9 +307,12 @@ test "parse struct with cross-package type field" {
     #|}
   let types = parse_value_types([("order.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Order"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Order"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content=(
@@ -301,9 +340,12 @@ test "parse variant enum with cross-package payload" {
     #|}
   let types = parse_value_types([("event.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Event"
-  ))
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Event"
+    ),
+  )
   debug_inspect(
     types[0].kind,
     content=(
@@ -323,7 +365,6 @@ test "parse variant enum with cross-package payload" {
       #|    ("Deleted", None),
       #|  ],
       #|)
-
     ),
   )
 }
@@ -347,7 +388,6 @@ test "parse_multimodal_enum" {
       #|    variants: [("Text", Simple("String")), ("Image", Simple("Bytes"))],
       #|  },
       #|]
-
     ),
   )
 }
@@ -373,8 +413,48 @@ test "non-annotated types are skipped" {
     #|}
   let types = parse_value_types([("mixed.mbt", content)])
   debug_inspect(types.length(), content="1")
-  debug_inspect(types[0].name, content=(
-    #|"Public"
-  ))
-  debug_inspect(types[0].kind, content="Record([(\"name\", Simple(\"String\"))])")
+  debug_inspect(
+    types[0].name,
+    content=(
+      #|"Public"
+    ),
+  )
+  debug_inspect(
+    types[0].kind,
+    content="Record([(\"name\", Simple(\"String\"))])",
+  )
+}
+
+///|
+test "parse_value_types rejects multimodal in golem_schema payload" {
+  let content =
+    #|///|
+    #|#derive.golem_schema
+    #|pub(all) struct Wrapper {
+    #|  data : @multimodal.Multimodal[Foo]
+    #|}
+  let result : Result[_, _] = try? parse_value_types([("w.mbt", content)])
+  debug_inspect(
+    result,
+    content=(
+      #|Err(AgentParseError("Multimodal type is not allowed in field 'data' of #derive.golem_schema type 'Wrapper'; multimodal is only supported as a direct agent method parameter or return type"))
+    ),
+  )
+}
+
+///|
+test "parse_value_types rejects multimodal nested in golem_schema variant" {
+  let content =
+    #|///|
+    #|#derive.golem_schema
+    #|pub(all) enum Shape {
+    #|  Tagged(Array[@multimodal.Multimodal[Foo]])
+    #|}
+  let result : Result[_, _] = try? parse_value_types([("s.mbt", content)])
+  debug_inspect(
+    result,
+    content=(
+      #|Err(AgentParseError("Multimodal type is not allowed in field 'Tagged' of #derive.golem_schema type 'Shape'; multimodal is only supported as a direct agent method parameter or return type"))
+    ),
+  )
 }

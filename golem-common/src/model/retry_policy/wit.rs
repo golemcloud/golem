@@ -21,7 +21,7 @@
 //! representation, so their conversions live here.
 
 use super::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy, duration_to_nanos};
-use crate::model::agent::bindings::golem::api::retry::{
+use crate::schema::agent::bindings::golem::api::retry::{
     AddDelayConfig, ClampConfig, CountBoxConfig, ExponentialConfig, FibonacciConfig,
     FilteredConfig, JitterConfig, NamedRetryPolicy as WitNamedRetryPolicy, PolicyNode,
     PredicateNode, PredicateValue as WitPredicateValue, PropertyComparison, PropertyPattern,

@@ -21,8 +21,8 @@ use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
@@ -32,9 +32,9 @@ use golem_common::model::{
 };
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
+use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
 use nonempty_collections::nev;
 use std::collections::HashSet;
 use std::sync::RwLock;
@@ -69,6 +69,7 @@ fn make_agent_metadata(
         env: vec![],
         environment_id,
         created_by,
+        created_by_email: AccountEmail::new("test@golem"),
         config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,
@@ -800,23 +801,25 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .await;
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    let entry1 = oplog
-        .add_host_call(
+    let (start_idx, end_idx) = oplog
+        .add_completed_host_call(
             HostFunctionName::Custom("f1".to_string()),
-            &HostRequest::Custom("request".into_value_and_type()),
-            &HostResponse::Custom("response".into_value_and_type()),
+            &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
+            &HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
+            None,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry_start = oplog.read(start_idx).await.rounded();
+    let entry_end = oplog.read(end_idx).await.rounded();
     let entry2 = oplog
         .add_agent_invocation_started(AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
             method_name: "f2".to_string(),
-            input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                "request".into_value(),
-            )]),
+            input: SchemaValue::Record {
+                fields: vec![SchemaValue::String("request".to_string())],
+            },
             invocation_context: InvocationContextStack::fresh_rounded(),
             principal: Principal::anonymous(),
         })
@@ -826,10 +829,11 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let entry3 = oplog
         .add_agent_invocation_finished(
             &AgentInvocationResult::AgentMethod {
-                output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    "response".into_value(),
-                )]),
+                output: SchemaValue::Record {
+                    fields: vec![SchemaValue::String("response".to_string())],
+                },
             },
+            Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
         )
@@ -854,18 +858,23 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await;
 
-    let r1 = oplog.read(last_oplog_idx.next()).await.rounded();
-    let r2 = oplog.read(last_oplog_idx.next().next()).await.rounded();
-    let r3 = oplog
+    let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
+    let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r2 = oplog
         .read(last_oplog_idx.next().next().next())
         .await
         .rounded();
-    let r4 = oplog
+    let r3 = oplog
         .read(last_oplog_idx.next().next().next().next())
         .await
         .rounded();
+    let r4 = oplog
+        .read(last_oplog_idx.next().next().next().next().next())
+        .await
+        .rounded();
 
-    assert_eq!(r1, entry1);
+    assert_eq!(r_start, entry_start);
+    assert_eq!(r_end, entry_end);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
@@ -875,7 +884,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             &owned_agent_id,
             AgentMode::Durable,
             last_oplog_idx.next(),
-            4,
+            5,
         )
         .await;
     assert_eq!(
@@ -884,22 +893,26 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             .map(|entry| entry.rounded())
             .collect::<Vec<_>>(),
         vec![
-            entry1.clone(),
+            entry_start.clone(),
+            entry_end.clone(),
             entry2.clone(),
             entry3.clone(),
             entry4.clone(),
         ]
     );
 
-    let p1 = match entry1 {
-        OplogEntry::HostCall { response, .. } => {
+    let p1 = match entry_end {
+        OplogEntry::End {
+            response: Some(payload),
+            ..
+        } => {
             let response = oplog_service
-                .download_payload(&owned_agent_id, AgentMode::Durable, response)
+                .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
                 .unwrap();
             match response {
-                HostResponse::Custom(vnt) => String::from_value_and_type(vnt).unwrap(),
-                _ => panic!("unexpected entry"),
+                HostResponse::Custom(vnt) => String::from_value(vnt.value()).unwrap(),
+                _ => panic!("unexpected response"),
             }
         }
         _ => panic!("unexpected entry"),
@@ -912,10 +925,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 .unwrap();
             match payload {
                 AgentInvocationPayload::AgentMethod { input, .. } => match input {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            String::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::String(value)) => value,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -933,10 +944,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 .unwrap();
             match result {
                 AgentInvocationResult::AgentMethod { output } => match output {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            String::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::String(value)) => value,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -996,23 +1005,28 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let large_payload4 = vec![3u8; 1024 * 1024];
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    let entry1 = oplog
-        .add_host_call(
+    let (start_idx, end_idx) = oplog
+        .add_completed_host_call(
             HostFunctionName::Custom("f1".to_string()),
-            &HostRequest::Custom("request".into_value_and_type()),
-            &HostResponse::Custom(large_payload1.clone().into_value_and_type()),
+            &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
+            &HostResponse::Custom(large_payload1.clone().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
+            None,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry_start = oplog.read(start_idx).await.rounded();
+    let entry_end = oplog.read(end_idx).await.rounded();
     let entry2 = oplog
         .add_agent_invocation_started(AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
             method_name: "f2".to_string(),
-            input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                large_payload2.clone().into_value(),
-            )]),
+            input: SchemaValue::Record {
+                fields: vec![SchemaValue::Binary(BinaryValuePayload {
+                    bytes: large_payload2.clone(),
+                    mime_type: None,
+                })],
+            },
             invocation_context: InvocationContextStack::fresh_rounded(),
             principal: Principal::anonymous(),
         })
@@ -1022,10 +1036,14 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let entry3 = oplog
         .add_agent_invocation_finished(
             &AgentInvocationResult::AgentMethod {
-                output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    large_payload3.clone().into_value(),
-                )]),
+                output: SchemaValue::Record {
+                    fields: vec![SchemaValue::Binary(BinaryValuePayload {
+                        bytes: large_payload3.clone(),
+                        mime_type: None,
+                    })],
+                },
             },
+            Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
         )
@@ -1050,18 +1068,23 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await;
 
-    let r1 = oplog.read(last_oplog_idx.next()).await.rounded();
-    let r2 = oplog.read(last_oplog_idx.next().next()).await.rounded();
-    let r3 = oplog
+    let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
+    let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r2 = oplog
         .read(last_oplog_idx.next().next().next())
         .await
         .rounded();
-    let r4 = oplog
+    let r3 = oplog
         .read(last_oplog_idx.next().next().next().next())
         .await
         .rounded();
+    let r4 = oplog
+        .read(last_oplog_idx.next().next().next().next().next())
+        .await
+        .rounded();
 
-    assert_eq!(r1, entry1);
+    assert_eq!(r_start, entry_start);
+    assert_eq!(r_end, entry_end);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
@@ -1071,7 +1094,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             &owned_agent_id,
             AgentMode::Durable,
             last_oplog_idx.next(),
-            4,
+            5,
         )
         .await;
     assert_eq!(
@@ -1080,22 +1103,26 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             .map(|entry| entry.rounded())
             .collect::<Vec<_>>(),
         vec![
-            entry1.clone(),
+            entry_start.clone(),
+            entry_end.clone(),
             entry2.clone(),
             entry3.clone(),
             entry4.clone(),
         ]
     );
 
-    let p1 = match entry1 {
-        OplogEntry::HostCall { response, .. } => {
+    let p1 = match entry_end {
+        OplogEntry::End {
+            response: Some(payload),
+            ..
+        } => {
             let response = oplog_service
-                .download_payload(&owned_agent_id, AgentMode::Durable, response)
+                .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
                 .unwrap();
             match response {
-                HostResponse::Custom(vnt) => Vec::<u8>::from_value_and_type(vnt).unwrap(),
-                _ => panic!("unexpected entry"),
+                HostResponse::Custom(vnt) => Vec::<u8>::from_value(vnt.value()).unwrap(),
+                _ => panic!("unexpected response"),
             }
         }
         _ => panic!("unexpected entry"),
@@ -1108,10 +1135,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 .unwrap();
             match payload {
                 AgentInvocationPayload::AgentMethod { input, .. } => match input {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            Vec::<u8>::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::Binary(BinaryValuePayload { bytes, .. })) => bytes,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -1129,10 +1154,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 .unwrap();
             match result {
                 AgentInvocationResult::AgentMethod { output } => match output {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            Vec::<u8>::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::Binary(BinaryValuePayload { bytes, .. })) => bytes,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -1260,16 +1283,21 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let mut entries = Vec::new();
 
     for i in 0..n {
-        let entry = oplog
-            .add_host_call(
-                HostFunctionName::Custom("test-function".to_string()),
-                &HostRequest::Custom(i.into_value_and_type()),
-                &HostResponse::Custom("response".into_value_and_type()),
-                DurableFunctionType::ReadLocal,
-            )
+        // One simple Start entry per iteration; the test only cares about
+        // per-entry layer transfer behaviour, not the Start/End pairing.
+        let request = oplog
+            .upload_payload(&HostRequest::Custom(i.into_typed_schema_value().unwrap()))
             .await
-            .unwrap()
-            .rounded();
+            .unwrap();
+        let entry = OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::Custom("test-function".to_string()),
+            request: Some(request),
+            durable_function_type: DurableFunctionType::ReadLocal,
+        }
+        .rounded();
+        oplog.add(entry.clone()).await;
         oplog.commit(CommitLevel::Always).await;
         entries.push(entry);
     }
@@ -1506,6 +1534,16 @@ async fn blob_read_initial_from_archive(_tracing: &Tracing) {
     crate::services::oplog::tests::read_initial_from_archive_impl(true).await;
 }
 
+#[test]
+async fn ephemeral_read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::ephemeral_read_initial_from_archive_impl(false).await;
+}
+
+#[test]
+async fn blob_ephemeral_read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::ephemeral_read_initial_from_archive_impl(true).await;
+}
+
 async fn read_initial_from_archive_impl(use_blob: bool) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -1629,6 +1667,122 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     assert_eq!(last_index_1, OplogIndex::INITIAL);
     assert_eq!(last_index_2, OplogIndex::INITIAL);
     assert_eq!(last_index_3, OplogIndex::INITIAL);
+}
+
+async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+            RetryConfig::default(),
+        ))
+    };
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            2,
+            RetryConfig::default(),
+        ))
+    };
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    let timestamp = Timestamp::now_utc();
+    let create_entry = OplogEntry::Create {
+        timestamp,
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "test".to_string(),
+        },
+        agent_mode: AgentMode::Ephemeral,
+        component_revision: ComponentRevision::new(1).unwrap(),
+        env: vec![],
+        local_agent_config: Vec::new(),
+        environment_id,
+        created_by: account_id,
+        parent: None,
+        component_size: 0,
+        initial_total_linear_memory_size: 0,
+        initial_active_plugins: HashSet::new(),
+        original_phantom_id: None,
+        instance_id: Uuid::new_v4(),
+    }
+    .rounded();
+
+    let oplog = oplog_service
+        .create(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            AgentMetadata {
+                agent_mode: AgentMode::Ephemeral,
+                ..make_agent_metadata(agent_id.clone(), account_id, environment_id)
+            },
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+    oplog.commit(CommitLevel::Always).await;
+
+    let read_before_archive = oplog_service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await
+        .into_iter()
+        .next();
+    let more = EphemeralOplog::try_archive_blocking(&oplog).await;
+    let read_after_archive = oplog_service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await
+        .into_iter()
+        .next();
+
+    assert_eq!(more, Some(false));
+    assert_eq!(
+        read_before_archive,
+        Some((OplogIndex::INITIAL, create_entry.clone()))
+    );
+    assert_eq!(
+        read_after_archive,
+        Some((OplogIndex::INITIAL, create_entry))
+    );
 }
 
 #[test]

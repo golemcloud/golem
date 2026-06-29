@@ -20,6 +20,12 @@ export type ConfigProperty = {
   type: Type;
 };
 
+export type QuantityValue = { mantissa: bigint; scale: number; unit: string };
+export type QuantitySpec = {
+  baseUnit: string;
+  allowedSuffixes: string[];
+};
+
 export type Type =
   | { kind: 'boolean'; name?: string; owner?: string; optional: boolean }
   | { kind: 'number'; name?: string; owner?: string; optional: boolean }
@@ -72,6 +78,11 @@ export type Type =
     }
   | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | { kind: 'principal'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'path'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'url'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'datetime'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'duration'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'quantity'; name?: string; owner?: string; optional: boolean; spec?: QuantitySpec }
   | {
       kind: 'unresolved-type';
       name?: string;

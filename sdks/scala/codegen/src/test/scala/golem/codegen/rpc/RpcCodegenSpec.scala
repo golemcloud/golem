@@ -579,6 +579,38 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
   }
 
+  test("multi-param constructor packs args as Vector matching the runtime InputRecordCodec") {
+    val result = RpcCodegen.generate(
+      agents = List(
+        agent(
+          "example.EphAgent",
+          "example",
+          "EphAgent",
+          params = List(ParamSurface("name", "String"), ParamSurface("id", "Int")),
+          mode = "durable",
+          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil))
+        )
+      ),
+      existingObjects = Seq.empty
+    )
+
+    val content = result.files.head.content
+    // The runtime constructor codec is `InputRecordCodec.fromParams` (Vector[Any]),
+    // so the generated `Id` type and packed value must be Vector[Any], NOT a tuple.
+    assert(
+      content.contains("private type Id = _root_.scala.collection.immutable.Vector[_root_.scala.Any]"),
+      s"multi-param Id type should be Vector[Any], not a tuple:\n$content"
+    )
+    assert(
+      content.contains("agentType, _root_.scala.Vector[_root_.scala.Any](name, id)"),
+      s"multi-param constructor should pack args as Vector[Any]:\n$content"
+    )
+    assert(
+      !content.contains("agentType, (name, id)"),
+      s"multi-param constructor must not pass a tuple:\n$content"
+    )
+  }
+
   test("durable agent with constructor params and config fields generates WithConfig with both") {
     val cfgFields = List(
       ConfigFieldSurface(List("host"), "String")

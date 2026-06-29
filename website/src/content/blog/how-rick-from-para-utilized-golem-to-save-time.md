@@ -7,7 +7,7 @@ slug: "how-rick-from-para-utilized-golem-to-save-time"
 originalUrl: "https://golem.cloud/post/how-rick-from-para-utilized-golem-to-save-time"
 ---
 
-![How Rick Rothenberg from Para Utilized Golem To Save Time](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055d5_67559f0f16c5f7501359f578_Blogpost%2520Rick%2520Rothenberg%2520(1).png)
+![How Rick Rothenberg from Para Utilized Golem To Save Time](/blog-images/68d76ba7edec7ec0b5c055d5_67559f0f16c5f7501359f578_Blogpost_20Rick_20Rothenberg_20_1_.png)
 
 A quick interview with Para's Senior Software Engineer on how Golem came in handy.
 

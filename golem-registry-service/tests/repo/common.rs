@@ -17,17 +17,15 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
+use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::agent::{
-    AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
-    Snapshotting,
-};
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::environment_share::EnvironmentShareId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
-use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_registry_service::repo::environment::{
+    EnvironmentRevisionRecord, EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
+};
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
@@ -44,7 +42,6 @@ use golem_registry_service::repo::model::deployment::{
     DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
 };
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
-use golem_registry_service::repo::model::environment_share::EnvironmentShareRevisionRecord;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
@@ -196,7 +193,9 @@ pub async fn test_application_create(deps: &Deps) {
         .unwrap();
     let_assert!(Some(app_2) = app_2);
 
-    check!(app == app_2);
+    check!(app.account_id == app_2.account_id);
+    check!(app.entity_created_at == app_2.entity_created_at);
+    check!(app.revision == app_2.revision);
 }
 
 pub async fn test_application_create_concurrent(deps: &Deps) {
@@ -299,12 +298,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     assert!(
         deps.environment_repo
-            .get_by_name(
-                app.revision.application_id,
-                env_name,
-                user.revision.account_id,
-                false,
-            )
+            .get_by_name(app.revision.application_id, env_name)
             .await
             .unwrap()
             .is_none()
@@ -334,29 +328,131 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env_by_name = deps
         .environment_repo
-        .get_by_name(
-            app.revision.application_id,
-            env_name,
-            user.revision.account_id,
-            false,
-        )
+        .get_by_name(app.revision.application_id, env_name)
         .await
         .unwrap();
     let_assert!(Some(env_by_name) = env_by_name);
-    check!(env == env_by_name);
+    check!(env.application_id == env_by_name.application_id);
+    check!(env.revision == env_by_name.revision);
 
     let env_by_id = deps
         .environment_repo
-        .get_by_id(
-            env.revision.environment_id,
-            user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(env.revision.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
-    check!(env == env_by_id);
+    check!(env.application_id == env_by_id.application_id);
+    check!(env.revision == env_by_id.revision);
+}
+
+pub async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {
+    let owner_1 = deps
+        .create_account_with_email("visibility-owner-1@golem")
+        .await;
+    let owner_2 = deps
+        .create_account_with_email("visibility-owner-2@golem")
+        .await;
+
+    let app_1 = deps.create_application(owner_1.revision.account_id).await;
+    let app_2 = deps.create_application(owner_1.revision.account_id).await;
+    let app_3 = deps.create_application(owner_2.revision.account_id).await;
+
+    let env_1 = deps.create_env(app_1.revision.application_id).await;
+    let env_2 = deps.create_env(app_2.revision.application_id).await;
+    let env_3 = deps.create_env(app_3.revision.application_id).await;
+
+    let account_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::account(
+            owner_1.revision.email.clone(),
+        )]);
+    let account_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &account_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(
+        account_filtered
+            == BTreeSet::from([env_1.revision.environment_id, env_2.revision.environment_id])
+    );
+
+    let account_filter_with_request_filters = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(
+                new_repo_uuid(),
+                &account_filter,
+                Some(&owner_1.revision.email),
+                Some(&app_2.revision.name),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    check!(account_filter_with_request_filters == BTreeSet::from([env_2.revision.environment_id]));
+
+    let application_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::application(
+            owner_1.revision.email.clone(),
+            app_1.revision.name.clone(),
+            None,
+        )]);
+    let application_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &application_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(application_filtered == BTreeSet::from([env_1.revision.environment_id]));
+
+    let environment_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::application(
+            owner_2.revision.email.clone(),
+            app_3.revision.name.clone(),
+            Some(env_3.revision.name.clone()),
+        )]);
+    let environment_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &environment_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(environment_filtered == BTreeSet::from([env_3.revision.environment_id]));
+
+    let none_filtered = deps
+        .environment_repo
+        .list_visible_to_account(
+            new_repo_uuid(),
+            &EnvironmentVisibilityFilter::None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    check!(none_filtered.is_empty());
+
+    let all_with_request_account_filter = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(
+                new_repo_uuid(),
+                &EnvironmentVisibilityFilter::All,
+                Some(&owner_2.revision.email),
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    check!(all_with_request_account_filter == BTreeSet::from([env_3.revision.environment_id]));
+}
+
+fn environment_ids(
+    records: Vec<golem_registry_service::repo::model::environment::EnvironmentWithDetailsRecord>,
+) -> BTreeSet<Uuid> {
+    records
+        .into_iter()
+        .map(|record| record.environment_id)
+        .collect()
 }
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {
@@ -436,12 +532,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_name = deps
         .environment_repo
-        .get_by_name(
-            env_rev_0.application_id,
-            &env_rev_0.revision.name,
-            user.revision.account_id,
-            false,
-        )
+        .get_by_name(env_rev_0.application_id, &env_rev_0.revision.name)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_name) = rev_1_by_name);
@@ -451,12 +542,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(
-            env_rev_1.environment_id,
-            user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(env_rev_1.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
@@ -495,12 +581,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_name = deps
         .environment_repo
-        .get_by_name(
-            env_rev_0.application_id,
-            &env_rev_0.revision.name,
-            user.revision.account_id,
-            false,
-        )
+        .get_by_name(env_rev_0.application_id, &env_rev_0.revision.name)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_name) = rev_2_by_name);
@@ -510,12 +591,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(
-            env_rev_2.environment_id,
-            user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(env_rev_2.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
@@ -670,9 +746,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.name == component_name);
+    assert!(revision_0 == get_revision_0.component.revision);
+    assert!(get_revision_0.component.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.component.name == component_name);
 
     let get_revision_0 = deps
         .component_repo
@@ -845,9 +921,9 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.domain == domain);
+    assert!(revision_0 == get_revision_0.deployment.revision);
+    assert!(get_revision_0.deployment.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.deployment.domain == domain);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
@@ -1157,16 +1233,17 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
 
 // resolve_agent_type_by_names tests ---------------------------------------------------------------
 
-fn make_test_agent_type(name: &str) -> AgentType {
-    AgentType {
+fn make_test_agent_type(name: &str) -> AgentTypeSchema {
+    AgentTypeSchema {
         type_name: AgentTypeName(name.to_string()),
         description: format!("Test agent {name}"),
         source_language: String::new(),
-        constructor: AgentConstructor {
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
             name: None,
             description: "constructor".to_string(),
             prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            input_schema: InputSchema::Parameters(vec![]),
         },
         methods: vec![],
         dependencies: vec![],
@@ -1179,7 +1256,6 @@ fn make_test_agent_type(name: &str) -> AgentType {
 
 struct ResolveTestEnv {
     owner_account_id: Uuid,
-    owner_email: String,
     app_name: String,
     env_name: String,
     environment_id: Uuid,
@@ -1271,6 +1347,9 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         agent_type_name: agent_type_name.clone(),
         component_id,
         component_revision_id,
+        component_name,
+        owner_account_id,
+        owner_account_email: email.clone(),
         webhook_prefix_authority_and_path: None,
         agent_type: Blob::new(agent_type),
         canonical_agent_type_name: agent_type_name.to_kebab_case(),
@@ -1303,7 +1382,6 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
 
     ResolveTestEnv {
         owner_account_id,
-        owner_email: email,
         app_name,
         env_name,
         environment_id,
@@ -1334,84 +1412,6 @@ pub async fn test_resolve_agent_type_owner_no_email(deps: &Deps) {
     check!(record.environment_id == env.environment_id);
     check!(record.deployment_revision_id == env.deployment_revision_id);
     check!(record.owner_account_id == env.owner_account_id);
-}
-
-/// Caller has share (Viewer role) + email → works
-pub async fn test_resolve_agent_type_shared_with_email(deps: &Deps) {
-    let env = setup_resolve_env(deps).await;
-
-    // Create a grantee account
-    let grantee = deps.create_account().await;
-    let grantee_account_id = grantee.revision.account_id;
-
-    // Grant Viewer role to the grantee
-    let share_id = EnvironmentShareId(new_repo_uuid());
-    let mut roles = BTreeSet::new();
-    roles.insert(EnvironmentRole::Viewer);
-
-    deps.environment_share_repo
-        .create(
-            env.environment_id,
-            EnvironmentShareRevisionRecord::creation(
-                share_id,
-                roles,
-                golem_common::model::account::AccountId(env.owner_account_id),
-            ),
-            grantee_account_id,
-        )
-        .await
-        .unwrap()
-        .signal_new_events_available(&deps.test_registry_change_notifier());
-
-    // Grantee resolves using owner's email
-    let result = deps
-        .full_deployment_repo
-        .resolve_agent_type_by_names(
-            grantee_account_id,
-            &env.app_name,
-            &env.env_name,
-            &env.agent_type_name,
-            None,
-            Some(&env.owner_email),
-        )
-        .await
-        .unwrap();
-
-    let_assert!(Some(record) = result);
-    check!(record.agent_type_name == env.agent_type_name);
-    check!(record.owner_account_id == env.owner_account_id);
-    // roles_bitmask should include Viewer (bit 2 = 4)
-    check!(record.environment_roles_from_shares & 4 != 0);
-}
-
-/// Caller has no share + email → row returned with roles_bitmask=0
-/// (service layer maps auth failure to NotFound to prevent enumeration)
-pub async fn test_resolve_agent_type_no_share_returns_zero_roles(deps: &Deps) {
-    let env = setup_resolve_env(deps).await;
-
-    // Create a stranger account with no share
-    let stranger = deps.create_account().await;
-
-    let result = deps
-        .full_deployment_repo
-        .resolve_agent_type_by_names(
-            stranger.revision.account_id,
-            &env.app_name,
-            &env.env_name,
-            &env.agent_type_name,
-            None,
-            Some(&env.owner_email),
-        )
-        .await
-        .unwrap();
-
-    // Record returned but roles_bitmask = 0 (no share)
-    // The service layer maps this to NotFound via auth check;
-    // at repo level we still get the row back with roles_bitmask = 0
-    let_assert!(Some(record) = result);
-    check!(record.environment_roles_from_shares == 0);
-    check!(record.owner_account_id == env.owner_account_id);
-    check!(record.agent_type_name == env.agent_type_name);
 }
 
 /// Env exists but no current deployment (latest) → None
@@ -1541,8 +1541,8 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(fetched_deployment) = fetched_deployment);
-    assert!(fetched_deployment.revision.revision_id == revision_0.revision_id);
-    assert!(fetched_deployment.domain == domain);
+    assert!(fetched_deployment.deployment.revision.revision_id == revision_0.revision_id);
+    assert!(fetched_deployment.deployment.domain == domain);
 
     let fetched_by_domain = deps
         .mcp_deployment_repo

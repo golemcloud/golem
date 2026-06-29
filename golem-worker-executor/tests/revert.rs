@@ -19,7 +19,6 @@ use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, Rev
 use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -114,19 +113,13 @@ async fn revert_successful_invocations(
     executor.check_oplog_is_queryable(&worker_id1).await?;
     executor.check_oplog_is_queryable(&worker_id2).await?;
 
-    let result1_value = result1
-        .into_return_value()
-        .expect("Expected a return value");
-    let result2_value = result2
-        .into_return_value()
-        .expect("Expected a return value");
-    let result2_after_value = result2_after
-        .into_return_value()
-        .expect("Expected a return value");
+    let result1_value = result1.into_typed::<u64>()?;
+    let result2_value = result2.into_typed::<u64>()?;
+    let result2_after_value = result2_after.into_typed::<u64>()?;
 
-    assert_eq!(result1_value, Value::U64(5));
-    assert_eq!(result2_value, Value::U64(3));
-    assert_eq!(result2_after_value, Value::U64(1));
+    assert_eq!(result1_value, 5);
+    assert_eq!(result2_value, 3);
+    assert_eq!(result2_after_value, 1);
 
     Ok(())
 }
@@ -343,8 +336,8 @@ async fn revert_auto_update(
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0. After the revert to just after init, calling f2 again
     // returns a random number. The traces of the update should be gone.
-    assert_eq!(result1, data_value!(0u64));
-    assert_ne!(result2, data_value!(0u64));
+    assert_eq!(result1.into_typed::<u64>()?, 0);
+    assert_ne!(result2.into_typed::<u64>()?, 0);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 0));
 

@@ -17,7 +17,6 @@
 package golem.runtime
 
 import golem.config.AgentConfigDeclaration
-import golem.data.StructuredSchema
 import golem.runtime.http.{HttpEndpointDetails, HttpMountDetails}
 
 /**
@@ -35,17 +34,17 @@ import golem.runtime.http.{HttpEndpointDetails, HttpMountDetails}
  * @param mode
  *   Optional method mode override
  * @param input
- *   Schema describing the method's input parameters
+ *   Schema-native description of the method's input parameters
  * @param output
- *   Schema describing the method's return type
+ *   Schema-native description of the method's return type (unit/single)
  */
 final case class MethodMetadata(
   name: String,
   description: Option[String],
   prompt: Option[String],
   mode: Option[String],
-  input: StructuredSchema,
-  output: StructuredSchema,
+  input: InputMetadata,
+  output: OutputMetadata,
   httpEndpoints: List[HttpEndpointDetails] = Nil,
   readOnly: Option[ReadOnlyConfig] = None
 )
@@ -68,14 +67,14 @@ final case class MethodMetadata(
  * @param methods
  *   Metadata for each method in the agent trait
  * @param constructor
- *   Schema for the agent's constructor parameters
+ *   Metadata (and schema-native input) for the agent's constructor parameters
  */
 final case class AgentMetadata(
   name: String,
   description: Option[String],
   mode: Option[String],
   methods: List[MethodMetadata],
-  constructor: StructuredSchema,
+  constructor: ConstructorMetadata,
   httpMount: Option[HttpMountDetails] = None,
   config: List[AgentConfigDeclaration] = Nil,
   snapshotting: Snapshotting = Snapshotting.Disabled

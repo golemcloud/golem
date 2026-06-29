@@ -88,6 +88,7 @@ impl GolemCliCommand {
                     vec!["completion"],
                     vec!["generate-bridge"],
                     vec!["new"],
+                    vec!["output-schema"],
                     vec!["plugin"],
                     vec!["profile"],
                     vec!["repl"],
@@ -104,7 +105,7 @@ impl GolemCliCommand {
                     "local",
                     "preset",
                     "profile",
-                    "show_sensitive",
+                    "show_secrets",
                 ],
                 exclude_hidden: true,
             },
@@ -200,9 +201,9 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, short = 'Y', global = true, display_order = 110)]
     pub yes: bool,
 
-    /// Disables filtering of potentially sensitive user values in text mode (e.g. component environment variable values)
+    /// Show secret and sensitive values that are masked by default
     #[arg(long, global = true, display_order = 111)]
-    pub show_sensitive: bool,
+    pub show_secrets: bool,
 
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 112)]
@@ -692,7 +693,7 @@ pub enum GolemCliSubcommand {
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
     Repl {
-        /// Select the language for the REPL, defaults to the component's language
+        /// Select the REPL language. Currently only TypeScript is supported.
         #[arg(long)]
         language: Option<ReplLanguage>,
         #[command(flatten)]
@@ -745,9 +746,12 @@ pub enum GolemCliSubcommand {
         /// definitions, API objects). The text format is intended for human
         /// review and is not stable.
         ///
-        /// In `--format json/yaml` the result document only carries
-        /// `{"deployed": true}` indicating that planning succeeded; the
-        /// detailed diff is not yet emitted as structured data.
+        /// In `--format json/yaml/toon`, `deploy` may emit multiple structured
+        /// documents. Depending on the plan, stdout can contain
+        /// `deploy.diff` and/or `deploy.plan`, followed by a final
+        /// `deploy` success document. Parse stdout as a sequence of
+        /// documents and branch on `$type`; do not assume every possible
+        /// document appears.
         #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
         plan: bool,
         /// Only plan and stage changes, but do not apply them to the environment; used for testing
@@ -891,6 +895,16 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ResourceDefinitionSubcommand,
     },
+    /// Print the structured CLI output JSON schema to stdout
+    #[command(after_help = crate::command_examples::OUTPUT_SCHEMA)]
+    OutputSchema {
+        /// List known structured output type names as a compact JSON array
+        #[arg(long, conflicts_with = "output_type")]
+        types: bool,
+        /// Print a pruned schema for this output type. Can be repeated.
+        #[arg(long = "type", value_name = "TYPE")]
+        output_type: Vec<String>,
+    },
     /// Generate shell completion. The completion script is written to stdout
     /// as plain text; the global `--format` flag is ignored. Redirect the
     /// output into your shell's completions location (or `source` it from
@@ -988,15 +1002,15 @@ pub mod shared_args {
 
     #[derive(Debug, Args)]
     pub struct StreamArgs {
-        /// Hide log levels in stream output
+        /// Hide log levels in text stream output. Structured formats still include the `level` field.
         #[clap(long)]
         pub stream_no_log_level: bool,
-        /// Hide timestamp in stream output
+        /// Hide timestamps in text stream output. Structured formats still include the `timestamp` field.
         #[clap(long)]
         pub stream_no_timestamp: bool,
-        /// Only show entries coming from the agent, no output about invocation markers
-        /// and stream status. Does NOT change the process exit code: the exit code
-        /// reflects whether the invocation could be placed and (for non-`--trigger`
+        /// Only show entries coming from the agent, suppressing invocation markers
+        /// and stream status events. Does NOT change the process exit code: the exit
+        /// code reflects whether the invocation could be placed and (for non-`--trigger`
         /// calls) completed at the protocol level. A function-level error returned by
         /// the agent itself is reported in the result payload, not in the exit code.
         #[clap(long)]
@@ -1299,7 +1313,7 @@ pub mod worker {
             /// Set idempotency key for the call. Use `-` for an auto-generated key.
             /// The effective key (whether explicit or auto-generated) is always echoed
             /// back: in `--format text` mode as a `Using ... idempotency key:` log
-            /// line on stderr, and in `--format json/yaml` mode as the
+            /// line on stderr, and in `--format json/yaml/toon` mode as the
             /// `idempotency_key` field of the result document on stdout.
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
@@ -1359,7 +1373,7 @@ pub mod worker {
             /// in the previous response.
             /// The cursor has the format 'layer/position' where both layer and position are numbers.
             ///
-            /// Returned cursors: in `--format json/yaml` the response includes a
+            /// Returned cursors: in `--format json/yaml/toon` the response includes a
             /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
@@ -1382,16 +1396,14 @@ pub mod worker {
             /// Press Ctrl+C to exit watch mode.
             ///
             /// Watch mode redraws into the alternate terminal screen, so it is
-            /// intended for interactive use. It is not meaningful with
-            /// `--format json/yaml`: structured output is overwritten on every
-            /// frame and the alternate-screen restore on exit will leave you with
-            /// no captured payload.
+            /// intended for interactive text output only.
             ///
             /// Mutually exclusive with `--scan-cursor`.
             #[arg(long, default_missing_value = "400", value_name = "MILLIS", num_args = 0..=1, conflicts_with = "scan_cursor")]
             refresh: Option<u64>,
         },
-        /// Connect to an agent and live stream its standard output, error and log channels
+        /// Connect to an agent and live stream its standard output, error and log channels.
+        /// Structured formats emit one output document per stream event.
         #[command(after_help = crate::command_examples::AGENT_STREAM)]
         Stream {
             #[command(flatten)]
@@ -1449,7 +1461,8 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
         },
-        /// Queries and dumps an agent's full oplog
+        /// Queries and streams an agent's full oplog.
+        /// Structured formats emit one output document per oplog entry.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
@@ -1526,7 +1539,8 @@ pub mod worker {
             /// `/data/state.json`). Always starts with `/`.
             path: String,
             /// Local (host) path (including filename) to save the file contents
-            /// to. If omitted, the file contents are streamed to stdout.
+            /// to. If omitted, the file is saved in the current directory using
+            /// the guest file basename, or output.bin if no basename is available.
             #[arg(long)]
             output: Option<String>,
         },
@@ -2150,7 +2164,7 @@ pub mod api_token {
         /// List tokens
         #[command(after_help = crate::command_examples::API_TOKEN_LIST)]
         List,
-        /// Create new token
+        /// Create a new token. The token secret is intentionally printed once, including in structured output; store it securely.
         #[command(after_help = crate::command_examples::API_TOKEN_NEW)]
         New {
             /// Expiration timestamp of the generated token, in RFC 3339 format
@@ -2172,7 +2186,82 @@ pub mod api_token {
 
 pub mod account {
     use crate::command::shared_args::AccountIdOptionalArg;
-    use clap::Subcommand;
+    use clap::{Args, Subcommand};
+    use golem_common::model::permission_share::PermissionShareId;
+
+    #[derive(Debug, Args)]
+    pub struct PermissionShareGrantArgs {
+        /// Lower positive permission grant. Can be specified multiple times.
+        #[arg(long = "lower-positive", action = clap::ArgAction::Append)]
+        pub lower_positive: Option<Vec<String>>,
+
+        /// Lower negative permission grant. Can be specified multiple times.
+        #[arg(long = "lower-negative", action = clap::ArgAction::Append)]
+        pub lower_negative: Option<Vec<String>>,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum PermissionShareSubcommand {
+        /// List permission shares owned by this account, or received by this account with --received.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_LIST)]
+        List {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// List permission shares targeting the account instead of owned by the account.
+            #[arg(long)]
+            received: bool,
+        },
+        /// Get a permission share by ID.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET)]
+        Get {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+        },
+        /// Get a permission share by owner account and name.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET_BY_NAME)]
+        GetByName {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Permission share name.
+            name: String,
+        },
+        /// Create a new permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_NEW)]
+        New {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Target account email receiving the permissions.
+            target_account_email: String,
+
+            /// Permission share name.
+            name: String,
+
+            #[command(flatten)]
+            grants: PermissionShareGrantArgs,
+        },
+        /// Update an existing permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_UPDATE)]
+        Update {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+
+            /// New permission share name. Defaults to the existing name.
+            #[arg(long)]
+            name: Option<String>,
+
+            #[command(flatten)]
+            grants: PermissionShareGrantArgs,
+        },
+        /// Delete an existing permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_DELETE)]
+        Delete {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+        },
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum AccountSubcommand {
@@ -2206,10 +2295,18 @@ pub mod account {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
         },
+        /// Manage permission shares owned by an account.
+        PermissionShare {
+            #[command(subcommand)]
+            subcommand: PermissionShareSubcommand,
+        },
     }
 }
 
 pub mod server {
+    use crate::config::{
+        DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
+    };
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
@@ -2266,14 +2363,15 @@ pub mod server {
         }
 
         pub fn router_port(&self) -> u16 {
-            self.router_port.unwrap_or(9881)
+            self.router_port.unwrap_or(DEFAULT_LOCAL_ROUTER_PORT)
         }
 
         pub fn custom_request_port(&self) -> u16 {
-            self.custom_request_port.unwrap_or(9006)
+            self.custom_request_port
+                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT)
         }
         pub fn mcp_port(&self) -> u16 {
-            self.mcp_port.unwrap_or(9007)
+            self.mcp_port.unwrap_or(DEFAULT_LOCAL_MCP_PORT)
         }
     }
 

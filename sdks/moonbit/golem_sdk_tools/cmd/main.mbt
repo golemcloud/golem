@@ -125,6 +125,7 @@ fn run_agents(project_root : String) -> Unit raise {
           multimodal_enums,
           config_types,
           all_config_types~,
+          type_id_prefix=dotted_pkg(scan.pkg.rel_path),
         )
       } else {
         cleanup_stale_file("\{pkg_dir}/golem_derive.mbt")
@@ -143,42 +144,74 @@ fn run_agents(project_root : String) -> Unit raise {
       let client_path = "\{pkg_dir}/golem_clients.mbt"
       @fs.write_string_to_file(client_path, client_output)
       println("Generated golem_clients.mbt with \{agents.length()} client(s)")
-      // Auto-add RPC-related imports to moon.pkg
+      // Auto-add imports needed by the generated golem_agents.mbt /
+      // golem_clients.mbt to moon.pkg (idempotent; new schema model).
       let pkg_path = "\{pkg_dir}/moon.pkg"
       let mut pkg_content = @fs.read_file_to_string(pkg_path)
+      pkg_content = @lib.ensure_pkg_import(
+        pkg_content, "golemcloud/golem_sdk/agents", "@agents",
+      )
+      pkg_content = @lib.ensure_pkg_import(
+        pkg_content, "golemcloud/golem_sdk/schema", "@schema",
+      )
+      pkg_content = @lib.ensure_pkg_import(
+        pkg_content, "golemcloud/golem_sdk/interface/golem/agent/common", "@common",
+      )
+      pkg_content = @lib.ensure_pkg_import(
+        pkg_content, "golemcloud/golem_sdk/interface/golem/core/types", "@types",
+      )
       pkg_content = @lib.ensure_pkg_import(
         pkg_content, "golemcloud/golem_sdk/rpc", "@rpc",
       )
       pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/interface/golem/core/types", "@rpcTypes",
+        pkg_content, "golemcloud/golem_sdk/interface/golem/agent/host", "@agentHost",
       )
       pkg_content = @lib.ensure_pkg_import(
         pkg_content, "golemcloud/golem_sdk/interface/wasi/clocks/wallClock", "@wallClock",
       )
-      pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/interface/golem/agent/host", "@agentHost",
-      )
-      let uses_multimodal = has_multimodal_agent(agents)
-      if uses_multimodal || multimodal_enums.length() > 0 {
+      // JSON snapshot helpers are emitted for agents deriving ToJson/FromJson.
+      let needs_json = agents
+        .iter()
+        .any(fn(a) { a.has_json_derives && not(a.has_snapshottable) })
+      if needs_json {
         pkg_content = @lib.ensure_pkg_import(
-          pkg_content, "golemcloud/golem_sdk/agents/types", "@types",
+          pkg_content, "moonbitlang/core/json", "@json",
         )
-        println("Ensured agents/types import in moon.pkg")
+        pkg_content = @lib.ensure_pkg_import(
+          pkg_content, "moonbitlang/core/encoding/utf8", "@utf8",
+        )
+      }
+      // Custom #derive.golem_schema types emit a golem_derive.mbt in this same
+      // package that references @model (schema_model).
+      if has_derive {
+        pkg_content = @lib.ensure_pkg_import(
+          pkg_content, "golemcloud/golem_sdk/schema_model", "@model",
+        )
+      }
+      // Multimodal agents reference @multimodal.Multimodal[...] in the agent
+      // type/dispatch, and #derive.multimodal enums emit MultimodalModality
+      // impls into golem_derive.mbt.
+      if has_multimodal_agent(agents) || multimodal_enums.length() > 0 {
+        pkg_content = @lib.ensure_pkg_import(
+          pkg_content, "golemcloud/golem_sdk/multimodal", "@multimodal",
+        )
       }
       let uses_config = agents.iter().any(fn(a) { a.config_type is Some(_) })
       if uses_config || config_types.length() > 0 {
         pkg_content = @lib.ensure_pkg_import(
           pkg_content, "golemcloud/golem_sdk/config", "@config",
         )
-        pkg_content = @lib.ensure_pkg_import(
-          pkg_content, "golemcloud/golem_sdk/schema", "@schema",
-        )
-        println("Ensured config and schema imports in moon.pkg")
       }
       @fs.write_string_to_file(pkg_path, pkg_content)
     } else if has_derive {
       // --- Non-agent package with derive types: generate golem_derive.mbt only ---
-      generate_derive_file(pkg_dir, value_types, multimodal_enums, config_types)
+      generate_derive_file(
+        pkg_dir,
+        value_types,
+        multimodal_enums,
+        config_types,
+        type_id_prefix=dotted_pkg(scan.pkg.rel_path),
+      )
       // Ensure needed imports in moon.pkg
       let pkg_path = "\{pkg_dir}/moon.pkg"
       let mut pkg_content = @fs.read_file_to_string(pkg_path)
@@ -186,19 +219,22 @@ fn run_agents(project_root : String) -> Unit raise {
         pkg_content, "golemcloud/golem_sdk/schema", "@schema",
       )
       pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/extractor", "@extractor",
-      )
-      pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/interface/golem/agent/common", "@common",
+        pkg_content, "golemcloud/golem_sdk/schema_model", "@model",
       )
       if multimodal_enums.length() > 0 {
         pkg_content = @lib.ensure_pkg_import(
-          pkg_content, "golemcloud/golem_sdk/agents/types", "@types",
+          pkg_content, "golemcloud/golem_sdk/multimodal", "@multimodal",
         )
       }
       if config_types.length() > 0 {
         pkg_content = @lib.ensure_pkg_import(
           pkg_content, "golemcloud/golem_sdk/config", "@config",
+        )
+        pkg_content = @lib.ensure_pkg_import(
+          pkg_content, "golemcloud/golem_sdk/agents", "@agents",
+        )
+        pkg_content = @lib.ensure_pkg_import(
+          pkg_content, "golemcloud/golem_sdk/interface/golem/agent/common", "@common",
         )
       }
       @fs.write_string_to_file(pkg_path, pkg_content)
@@ -215,6 +251,17 @@ fn run_agents(project_root : String) -> Unit raise {
 }
 
 ///|
+/// Converts a package's project-relative path (slash-separated) into the dotted
+/// prefix used for default `type_id()`s (e.g. `src/foo` -> `src.foo`).
+fn dotted_pkg(rel_path : String) -> String {
+  let parts : Array[String] = []
+  for p in rel_path.split("/") {
+    parts.push(p.to_string())
+  }
+  parts.join(".")
+}
+
+///|
 /// Generates `golem_derive.mbt` from value types, multimodal enums, and config types.
 /// When `all_config_types` is provided, also generates override types and walker
 /// functions for config types reachable from agents in this package.
@@ -224,13 +271,18 @@ fn generate_derive_file(
   multimodal_enums : Array[@lib.MultimodalEnumInfo],
   config_types : Array[@lib.ConfigTypeInfo],
   all_config_types? : Array[@lib.ConfigTypeInfo] = [],
+  type_id_prefix? : String = "",
 ) -> Unit raise {
   let all_impls : Array[@syntax.Impl] = []
   if value_types.length() > 0 {
-    @lib.generate_value_type_impls(value_types).each(fn(i) { all_impls.push(i) })
+    @lib.generate_value_type_impls(value_types, type_id_prefix~).each(fn(i) {
+      all_impls.push(i)
+    })
   }
   if multimodal_enums.length() > 0 {
-    @lib.generate_multimodal_impls(multimodal_enums).each(fn(i) {
+    @lib.generate_multimodal_impls(multimodal_enums, type_id_prefix~).each(fn(
+      i,
+    ) {
       all_impls.push(i)
     })
   }
@@ -324,7 +376,12 @@ fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
   let exports = @lib.transform_exports(@lib.parse_pkg_exports(gen_pkg_content))
   let target_pkg_path = "\{target_dir}/moon.pkg"
   let target_pkg_content = @fs.read_file_to_string(target_pkg_path)
-  let updated = @lib.update_pkg_link(target_pkg_content, exports)
+  // The generated golem_reexports.mbt references the SDK's `gen` package, so
+  // make sure it is imported.
+  let with_gen_import = @lib.ensure_pkg_import(
+    target_pkg_content, "golemcloud/golem_sdk/gen", "@gen",
+  )
+  let updated = @lib.update_pkg_link(with_gen_import, exports)
   @fs.write_string_to_file(target_pkg_path, updated)
   println("Updated \{target_pkg_path} with \{exports.length()} exports")
 }

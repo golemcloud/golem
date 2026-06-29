@@ -1,10 +1,6 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/wasi/config/store"
 
-import {
-  "moonbitlang/core/debug",
-}
-
 // Values
 pub fn get(String) -> Result[String?, Error_]
 
@@ -14,7 +10,7 @@ pub fn get_all() -> Result[Array[(String, String)], Error_]
 pub(all) suberror Error_ {
   Upstream(String)
   Io(String)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Types and methods
 

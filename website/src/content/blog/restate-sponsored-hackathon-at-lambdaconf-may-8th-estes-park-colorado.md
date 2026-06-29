@@ -21,7 +21,7 @@ by Sandra Wolf
 
 Join us for the Grand Finale Hackathon at LambdaConf hosted by Restate on May 8th in Estes Park, Colorado! We're inviting developers skilled in TypeScript, Java, and Kotlin. Are you yearning back to the days when developing applications was simple because you did not have to worry about lost network messages and double writes? Then this hackathon is for you! You will explore the new possibilities of building modern reliable applications based on Restate. It should be as simple as building a PHP app back in the 2000s. Your efforts will be rewarded with amazing prizes, including an iPad for the top app. Join us, and LET's RESTATE how people develop modern applications from now on.
 
-![Restate](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055d9_67559f0f16c5f7501359f50e_1New%20restate-svg%20(1)%201%20(1).png)
+![Restate](/blog-images/restate-logo.svg)
 
 ### **About Restate**
 

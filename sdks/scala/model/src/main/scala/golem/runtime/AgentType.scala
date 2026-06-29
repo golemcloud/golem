@@ -16,11 +16,9 @@
 
 package golem.runtime
 
-import golem.data.GolemSchema
-
 /**
- * Reflected structure of an agent trait for client-side calling: schemas, WIT
- * function names, and invocation kind.
+ * Reflected structure of an agent trait for client-side calling: schema-native
+ * input/output codecs, WIT function names, and invocation kind.
  */
 final case class AgentType[Trait, Constructor](
   traitClassName: String,
@@ -29,13 +27,13 @@ final case class AgentType[Trait, Constructor](
   methods: List[AgentType.AnyMethod[Trait]]
 )
 
-final case class ConstructorType[Input](schema: GolemSchema[Input])
+final case class ConstructorType[Input](inputCodec: InputRecordCodec[Input])
 
 final case class AgentMethod[Trait, Input, Output](
   metadata: MethodMetadata,
   functionName: String,
-  inputSchema: GolemSchema[Input],
-  outputSchema: GolemSchema[Output],
+  inputCodec: InputRecordCodec[Input],
+  outputCodec: OutputCodec[Output],
   invocation: MethodInvocation
 )
 

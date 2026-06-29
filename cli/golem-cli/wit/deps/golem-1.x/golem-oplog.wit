@@ -3,7 +3,7 @@ package golem:api@1.5.0;
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema, wit-value};
+    use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value};
 
     use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
@@ -77,9 +77,10 @@ interface oplog {
         /// a HTTP request where reading the response involves multiple host function calls)
         ///
         /// On the first invocation of the batch, the parameter should be `None` - this triggers
-        /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
-        /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
-        /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+        /// writing a scope `Start` entry in the oplog. Followup invocations should contain this
+        /// entry's index as the parameter so their host-call `Start` entries can point back to the
+        /// scope. In batched remote writes it is the caller's responsibility to manually write the
+        /// matching scope `End` entry (using `end_function`) when the operation is completed.
         write-remote-batched(option<oplog-index>),
         write-remote-transaction(option<oplog-index>)
     }
@@ -94,12 +95,12 @@ interface oplog {
 
     record raw-local-agent-config-entry {
         path: list<string>,
-        value: wit-value
+        value: schema-value-tree
     }
 
     record local-agent-config-entry {
         path: list<string>,
-        value: value-and-type
+        value: typed-schema-value
     }
 
     record create-parameters {
@@ -119,12 +120,25 @@ interface oplog {
         instance-id: uuid
     }
 
-    record host-call-parameters {
+    record start-parameters {
         timestamp: datetime,
+        parent-start-index: option<oplog-index>,
         function-name: string,
-        request: value-and-type,
-        response: value-and-type,
+        request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
+    }
+
+    record end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<typed-schema-value>,
+        forced-commit: bool,
+    }
+
+    record cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<typed-schema-value>,
     }
 
     record local-span-data {
@@ -154,6 +168,7 @@ interface oplog {
     record agent-invocation-finished-parameters {
         timestamp: datetime,
         %result: agent-invocation-result,
+        method-name: option<string>,
         consumed-fuel: s64,
         component-revision: u64,
     }
@@ -189,24 +204,81 @@ interface oplog {
         name: string,
     }
 
+    record queued-card-event-card {
+        card-id: card-id,
+        card: option<list<u8>>,
+    }
+
+    record public-queued-card-event-card {
+        card-id: card-id,
+    }
+
+    variant queued-card-event {
+        install(queued-card-event-card),
+        revoke(queued-card-event-card),
+    }
+
+    variant public-queued-card-event {
+        install(public-queued-card-event-card),
+        revoke(public-queued-card-event-card),
+    }
+
+    enum card-install-failure {
+        card-revoked,
+        not-found,
+        recipient-mismatch,
+        not-permitted,
+    }
+
+    /// Parameters for a card-event-queued oplog entry.
+    record card-event-queued-parameters {
+        timestamp: datetime,
+        event: public-queued-card-event,
+    }
+
+    /// Raw parameters for a card-event-queued oplog entry.
+    record raw-card-event-queued-parameters {
+        timestamp: datetime,
+        event: queued-card-event,
+    }
+
+    /// Parameters for a card-installed oplog entry.
+    record card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card-id: card-id,
+    }
+
+    /// Raw parameters for a card-installed oplog entry.
+    record raw-card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card: list<u8>,
+    }
+
+    /// Parameters for a card-install-failed oplog entry.
+    record card-install-failed-parameters {
+        timestamp: datetime,
+        queued-event-index: oplog-index,
+        card-id: card-id,
+        reason: card-install-failure,
+    }
+
+    /// Parameters for a card-revoked oplog entry.
+    record card-revoked-parameters {
+        timestamp: datetime,
+        queued-event-index: oplog-index,
+        card-id: card-id,
+    }
+
     record end-atomic-region-parameters {
         timestamp: datetime,
         begin-index: oplog-index
     }
 
-    record end-remote-write-parameters {
-        timestamp: datetime,
-        begin-index: oplog-index
-    }
-
-    record typed-data-value {
-        value: data-value,
-        schema: data-schema,
-    }
-
     record agent-initialization-parameters {
         idempotency-key: string,
-        constructor-parameters: typed-data-value,
+        constructor-parameters: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
@@ -215,7 +287,7 @@ interface oplog {
     record agent-method-invocation-parameters {
         idempotency-key: string,
         method-name: string,
-        function-input: typed-data-value,
+        function-input: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
@@ -252,7 +324,7 @@ interface oplog {
     }
 
     record agent-invocation-output-parameters {
-        output: typed-data-value,
+        output: typed-schema-value,
     }
 
     record fallible-result-parameters {
@@ -490,12 +562,25 @@ interface oplog {
         instance-id: uuid
     }
 
-    record raw-host-call-parameters {
+    record raw-start-parameters {
         timestamp: datetime,
+        parent-start-index: option<oplog-index>,
         function-name: string,
-        request: oplog-payload,
-        response: oplog-payload,
+        request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
+    }
+
+    record raw-end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<oplog-payload>,
+        forced-commit: bool,
+    }
+
+    record raw-cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<oplog-payload>,
     }
 
     record raw-agent-invocation-started-parameters {
@@ -510,6 +595,7 @@ interface oplog {
     record raw-agent-invocation-finished-parameters {
         timestamp: datetime,
         %result: oplog-payload,
+        method-name: option<string>,
         consumed-fuel: s64,
         component-revision: u64,
     }
@@ -609,8 +695,13 @@ interface oplog {
     variant oplog-entry {
         /// The initial agent oplog entry
         create(raw-create-parameters),
-        /// The agent invoked a host function
-        host-call(raw-host-call-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(raw-start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(raw-end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(raw-cancelled-parameters),
         /// The agent has been invoked
         agent-invocation-started(raw-agent-invocation-started-parameters),
         /// The agent has completed an invocation
@@ -639,12 +730,6 @@ interface oplog {
         /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
         /// compaction.
         end-atomic-region(end-atomic-region-parameters),
-        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-        /// unfinished remote writes cannot be recovered.
-        begin-remote-write(timestamp),
-        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-        end-remote-write(end-remote-write-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(raw-pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts
@@ -698,14 +783,27 @@ interface oplog {
         /// Sets or overwrites a named retry policy
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
-        remove-retry-policy(remove-retry-policy-parameters)
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(raw-card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(raw-card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters)
     }
 
     variant public-oplog-entry {
         /// The initial agent oplog entry
         create(create-parameters),
-        /// The agent invoked a host function
-        host-call(host-call-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(cancelled-parameters),
         /// The agent has been invoked
         agent-invocation-started(agent-invocation-started-parameters),
         /// The agent has completed an invocation
@@ -734,12 +832,6 @@ interface oplog {
         /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
         /// compaction.
         end-atomic-region(end-atomic-region-parameters),
-        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-        /// unfinished remote writes cannot be recovered.
-        begin-remote-write(timestamp),
-        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-        end-remote-write(end-remote-write-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts
@@ -793,7 +885,15 @@ interface oplog {
         /// Sets or overwrites a named retry policy
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
-        remove-retry-policy(remove-retry-policy-parameters)
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

@@ -51,11 +51,13 @@ use crate::model::deploy::{
     preferred_source_language_for_setup,
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::text::deployment::DeploymentNewView;
+use crate::model::text::agent::AgentTypeListView;
+use crate::model::text::deployment::{DeploymentListView, DeploymentNewView};
 use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
+use crate::model::text::template::TemplateListView;
 use crate::model::worker::AgentUpdateMode;
 use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
@@ -80,7 +82,7 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::schema_type::SchemaType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -158,7 +160,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::BuildResult { built: true });
+                .log_output(crate::model::text::action_result::BuildResult { built: true })?;
         }
         outcome
     }
@@ -176,7 +178,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true });
+                .log_output(crate::model::text::action_result::CleanResult { cleaned: true })?;
         }
         outcome
     }
@@ -360,9 +362,9 @@ impl AppCommandHandler {
             },
         };
         if outcome.is_ok() {
-            self.ctx
-                .log_handler()
-                .log_view(&crate::model::text::action_result::DeployResultView { deployed: true });
+            self.ctx.log_handler().log_output(
+                crate::model::text::action_result::DeployResultView { deployed: true },
+            )?;
         }
         outcome
     }
@@ -478,7 +480,9 @@ impl AppCommandHandler {
             .map(|template| TemplateDescription::from_template(&template.0))
             .collect();
 
-        self.ctx.log_handler().log_view(&templates);
+        self.ctx
+            .log_handler()
+            .log_output(TemplateListView { templates })?;
 
         Ok(())
     }
@@ -492,7 +496,9 @@ impl AppCommandHandler {
 
         let agent_types = self.list_agent_types(&environment).await?;
 
-        self.ctx.log_handler().log_view(&agent_types);
+        self.ctx
+            .log_handler()
+            .log_output(AgentTypeListView { agent_types })?;
 
         Ok(())
     }
@@ -517,7 +523,7 @@ impl AppCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentTypeView::new(&agent_type, true));
+            .log_output(AgentTypeView::new(&agent_type, true))?;
 
         Ok(())
     }
@@ -615,7 +621,7 @@ impl AppCommandHandler {
                 "Multiple deployment found with version {}, use deployment revision instead!",
                 version.log_color_error_highlight()
             ));
-            self.ctx.log_handler().log_view(&deployments);
+            log_text_view(&DeploymentListView { deployments });
             return Err(DeployError::PrepareError(anyhow!(NonSuccessfulExit)));
         }
 
@@ -915,7 +921,7 @@ impl AppCommandHandler {
             log_action("Diffing", "");
             let _indent = self.ctx.log_handler().decorated_indent_primary();
 
-            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.masking_config(), full_diff)?;
             let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
@@ -975,7 +981,7 @@ impl AppCommandHandler {
                     Some(diff_stage) => {
                         log_action("Planned", "changes to be applied to the staging area:");
                         let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                        self.ctx.log_handler().log_view(diff_stage)
+                        self.ctx.log_handler().log_output(diff_stage.clone())?
                     }
                     None => log_skipping_up_to_date("planning changes for staging area"),
                 }
@@ -1000,10 +1006,10 @@ impl AppCommandHandler {
                 }
                 if deploy_diff.has_deployment_changes() || deploy_diff.environment_setup.is_some() {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                    self.ctx.log_handler().log_view(&DeployPlanView {
+                    self.ctx.log_handler().log_output(DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
-                    });
+                    })?;
                 }
             }
         }
@@ -1311,6 +1317,7 @@ impl AppCommandHandler {
         );
 
         build_environment_setup_plan(
+            self.ctx.masking_config(),
             resolved_agent_secret_defaults,
             retry_policy_defaults,
             resource_defaults,
@@ -1544,7 +1551,7 @@ impl AppCommandHandler {
             .await?;
         debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
-        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
+        let unified_diffs = rollback_diff.unified_diffs(self.ctx.masking_config(), full_diff)?;
 
         {
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
@@ -1554,7 +1561,9 @@ impl AppCommandHandler {
         {
             log_action("Planned", "changes to be applied to the environment:");
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
-            self.ctx.log_handler().log_view(&rollback_diff.diff)
+            self.ctx
+                .log_handler()
+                .log_output(rollback_diff.diff.clone())?
         }
 
         Ok(Some(rollback_diff))
@@ -2168,11 +2177,11 @@ impl AppCommandHandler {
             log_warn(warning.to_string());
         }
 
-        self.ctx.log_handler().log_view(&DeploymentNewView {
+        self.ctx.log_handler().log_output(DeploymentNewView {
             application_name: deploy_diff.environment.application_name.clone(),
             environment_name: deploy_diff.environment.environment_name.clone(),
             deployment: result.clone(),
-        });
+        })?;
 
         Ok(result)
     }
@@ -2214,11 +2223,11 @@ impl AppCommandHandler {
             log_warn(warning.to_string());
         }
 
-        self.ctx.log_handler().log_view(&DeploymentNewView {
+        self.ctx.log_handler().log_output(DeploymentNewView {
             application_name: rollback_diff.environment.application_name.clone(),
             environment_name: rollback_diff.environment.environment_name.clone(),
             deployment: result.clone(),
-        });
+        })?;
 
         Ok(result)
     }
@@ -2695,7 +2704,7 @@ impl AppCommandHandler {
             .await
             .map_service_error()?
             .values;
-        self.ctx.log_handler().log_view(&deployments);
+        log_text_view(&DeploymentListView { deployments });
 
         Ok(())
     }
@@ -2727,8 +2736,8 @@ fn resolve_secret_defaults(
 
 fn collect_declared_agent_secret_types(
     deploy_diff: &DeployDiff,
-) -> anyhow::Result<BTreeMap<String, AnalysedType>> {
-    let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
+) -> anyhow::Result<BTreeMap<String, SchemaType>> {
+    let mut declared_secret_types = BTreeMap::<Vec<String>, (SchemaType, String)>::new();
 
     for component in deploy_diff.deployable_components.values() {
         for agent_type in &component.agent_types {

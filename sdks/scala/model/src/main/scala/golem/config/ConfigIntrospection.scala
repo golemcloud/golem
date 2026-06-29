@@ -16,7 +16,7 @@
 
 package golem.config
 
-import golem.data.{DataInterop, ElementSchema}
+import golem.schema.Derivation
 import zio.blocks.schema.{Reflect, Schema}
 import zio.blocks.schema.binding.Binding
 import zio.blocks.typeid.TypeId
@@ -48,7 +48,7 @@ private[golem] object ConfigIntrospection {
         AgentConfigDeclaration(
           AgentConfigSource.Secret,
           path,
-          ElementSchema.Component(DataInterop.reflectToDataType(inner))
+          Derivation.graphOf(new Schema(inner))
         )
       )
     } else {
@@ -66,7 +66,7 @@ private[golem] object ConfigIntrospection {
                 AgentConfigDeclaration(
                   AgentConfigSource.Local,
                   path,
-                  ElementSchema.Component(DataInterop.reflectToDataType(reflect))
+                  Derivation.graphOf(new Schema(reflect))
                 )
               )
           }

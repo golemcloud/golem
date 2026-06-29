@@ -14,9 +14,10 @@
 
 use crate::custom_api::openapi::HttpApiOpenApiSpec;
 use chrono::{DateTime, Utc};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{BinarySource, TextSource};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
     OpenApiSpecFormat, SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
@@ -62,6 +63,7 @@ impl OidcSession {
 #[derive(Debug)]
 pub struct RichCompiledRoute {
     pub account_id: AccountId,
+    pub account_email: AccountEmail,
     pub environment_id: EnvironmentId,
     pub route_id: RouteId,
     pub method: Method,
@@ -72,6 +74,7 @@ pub struct RichCompiledRoute {
     pub cors: CorsOptions,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum RichRouteBehaviour {
     CallAgent(CallAgentBehaviour),
@@ -116,10 +119,11 @@ pub struct RouteExecutionResult {
     pub body: ResponseBody,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseBody {
     NoBody,
     ComponentModelJsonBody {
-        body: golem_wasm::ValueAndType,
+        body: golem_common::schema::TypedSchemaValue,
     },
     UnstructuredBinaryBody {
         body: BinarySource,
@@ -152,11 +156,21 @@ impl fmt::Debug for ResponseBody {
     }
 }
 
+/// A raw unstructured-binary request body. Unlike [`BinarySource`], the MIME
+/// type is optional: a request without a `Content-Type` header carries no MIME
+/// type, and that absence must be preserved (lenient MIME handling — a missing
+/// MIME type is always allowed and surfaces to the guest as `None`, rather than
+/// being defaulted to `application/octet-stream`).
+pub struct RawBinaryBody {
+    pub data: Vec<u8>,
+    pub mime_type: Option<String>,
+}
+
 pub enum ParsedRequestBody {
     Unused,
-    JsonBody(golem_wasm::Value),
+    JsonBody(SchemaValue),
     // Always Some initially, will be None after being consumed by handler code
-    UnstructuredBinary(Option<BinarySource>),
+    UnstructuredBinary(Option<RawBinaryBody>),
     // Always Some initially, will be None after being consumed by handler code
     UnstructuredText(Option<TextSource>),
 }

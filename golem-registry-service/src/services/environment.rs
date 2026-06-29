@@ -16,7 +16,10 @@ use super::account_usage::AccountUsageService;
 use super::account_usage::error::{AccountUsageError, LimitExceededError};
 use super::application::ApplicationService;
 use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
-use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
+use crate::repo::environment::{
+    EnvironmentRepo, EnvironmentRevisionRecord, EnvironmentVisibilityFilter,
+    EnvironmentVisibilityScope,
+};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
@@ -24,13 +27,17 @@ use crate::repo::plugin::PluginRepo;
 use crate::services::application::ApplicationError;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EffectiveSurface, EnvironmentResourcePattern, EnvironmentVerb,
+    PermissionTarget,
+};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
     EnvironmentUpdate, EnvironmentWithDetails,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -133,7 +140,13 @@ impl EnvironmentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(application.account_id, AccountAction::CreateEnvironment)?;
+        authorize_environment_permission(
+            auth,
+            &application.account_email,
+            &application.name,
+            &data.name,
+            EnvironmentVerb::Create,
+        )?;
 
         self.account_usage_service
             .ensure_environment_within_limits(application.account_id)
@@ -167,7 +180,11 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(
+                application.name,
+                application.account_id,
+                application.account_email,
+            )?;
 
         Ok(result)
     }
@@ -180,11 +197,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateEnvironment,
-        )?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Update)?;
 
         if update.current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
@@ -204,6 +217,9 @@ impl EnvironmentService {
             environment.security_overrides = security_overrides;
         }
 
+        let application_name = environment.application_name.clone();
+        let owner_account_id = environment.owner_account_id;
+        let owner_account_email = environment.owner_account_email.clone();
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
@@ -220,7 +236,7 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(application_name, owner_account_id, owner_account_email)?;
 
         Ok(result)
     }
@@ -233,11 +249,7 @@ impl EnvironmentService {
     ) -> Result<(), EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteEnvironment,
-        )?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Delete)?;
 
         if current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
@@ -270,22 +282,13 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let environment: Environment = self
             .environment_repo
-            .get_by_id(
-                environment_id.0,
-                auth.access_account_id().0,
-                include_deleted,
-                auth.should_override_storage_visibility_rules(),
-            )
+            .get_by_id(environment_id.0, include_deleted)
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(environment_id))?
             .try_into()?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironment,
-        )
-        .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::View)
+            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
 
         Ok(environment)
     }
@@ -296,24 +299,36 @@ impl EnvironmentService {
         name: &EnvironmentName,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let result: Environment = self
-            .environment_repo
-            .get_by_name(
-                application_id.0,
-                &name.0,
-                auth.access_account_id().0,
-                auth.should_override_storage_visibility_rules(),
-            )
-            .await?
-            .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
-            .try_into()?;
+        let application = self
+            .application_service
+            .get(application_id, auth)
+            .await
+            .map_err(|err| match err {
+                ApplicationError::ApplicationNotFound(application_id) => {
+                    EnvironmentError::ParentApplicationNotFound(application_id)
+                }
+                other => other.into(),
+            })?;
 
-        auth.authorize_environment_action(
-            result.owner_account_id,
-            &result.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironment,
+        authorize_environment_permission(
+            auth,
+            &application.account_email,
+            &application.name,
+            name,
+            EnvironmentVerb::View,
         )
         .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
+
+        let result = self
+            .environment_repo
+            .get_by_name(application_id.0, &name.0)
+            .await?
+            .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
+            .try_into_model(
+                application.name,
+                application.account_id,
+                application.account_email,
+            )?;
 
         Ok(result)
     }
@@ -323,60 +338,37 @@ impl EnvironmentService {
         application_id: ApplicationId,
         auth: &AuthCtx,
     ) -> Result<Vec<Environment>, EnvironmentError> {
-        let mut authorized_environments = Vec::new();
-        let mut application_owner_id = None;
+        let application = self
+            .application_service
+            .get(application_id, auth)
+            .await
+            .map_err(|err| match err {
+                ApplicationError::ApplicationNotFound(application_id) => {
+                    EnvironmentError::ParentApplicationNotFound(application_id)
+                }
+                other => other.into(),
+            })?;
 
-        for record in self
+        let environments = self
             .environment_repo
-            .list_by_app(
-                application_id.0,
-                auth.access_account_id().0,
-                auth.should_override_storage_visibility_rules(),
-            )
+            .list_by_app(application_id.0)
             .await?
-        {
-            let owner_account_id = record.owner_account_id();
-            let environment_roles_from_shares = record.environment_roles_from_shares();
+            .into_iter()
+            .map(|record| {
+                record.try_into_model(
+                    application.name.clone(),
+                    application.account_id,
+                    application.account_email.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-            let environment: Option<Environment> = record
-                .into_revision_record()
-                .map(|r| r.try_into())
-                .transpose()?;
-
-            application_owner_id.get_or_insert(owner_account_id);
-
-            if let Some(environment) = environment
-                && auth
-                    .authorize_environment_action(
-                        owner_account_id,
-                        &environment_roles_from_shares,
-                        EnvironmentAction::ViewEnvironment,
-                    )
-                    .is_ok()
-            {
-                authorized_environments.push(environment);
-            }
-        }
-
-        match (application_owner_id, authorized_environments.is_empty()) {
-            (Some(_), false) => {
-                // checked above using the authorized environment actions -> only return authorized environments
-                Ok(authorized_environments)
-            }
-            (Some(application_owner_id), true) => {
-                // application exists but has no environments -> only leak existence if account-level permissions are present
-                auth.authorize_account_action(
-                    application_owner_id,
-                    AccountAction::ListAllApplicationEnvironments,
-                )?;
-
-                Ok(authorized_environments)
-            }
-            (None, _) => {
-                // parent application does not exist -> return notfound to prevent leakage
-                Err(EnvironmentError::ParentApplicationNotFound(application_id))
-            }
-        }
+        Ok(environments
+            .into_iter()
+            .filter(|environment| {
+                authorize_environment_model(auth, environment, EnvironmentVerb::View).is_ok()
+            })
+            .collect())
     }
 
     pub async fn list_visible_environments(
@@ -387,9 +379,12 @@ impl EnvironmentService {
         auth: &AuthCtx,
     ) -> Result<Vec<EnvironmentWithDetails>, EnvironmentError> {
         // When we go for an admin ui / view, this should be extended with an optional, admin-only parameter that allows listing for a different account.
+        let visibility_filter = visible_environment_filter(auth);
+
         self.environment_repo
             .list_visible_to_account(
                 auth.access_account_id().0,
+                &visibility_filter,
                 account_email.map(|ae| ae.as_str()),
                 app_name.map(|an| an.0.as_str()),
                 env_name.map(|en| en.0.as_str()),
@@ -399,16 +394,214 @@ impl EnvironmentService {
             .map(EnvironmentWithDetails::try_from)
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
-            // Should not be necessary due to the repo already filtering, but check auth here to be on the safe side
-            .filter(|e| {
-                auth.authorize_environment_action(
-                    e.account.id,
-                    &e.environment.roles_from_active_shares,
-                    EnvironmentAction::ViewEnvironment,
-                )
-                .is_ok()
-            })
+            // The repo fetches candidates; card authorization decides visibility.
+            .filter(|e| authorize_environment_details(auth, e, EnvironmentVerb::View).is_ok())
             .collect::<Vec<_>>()
             .pipe(Ok)
+    }
+}
+
+fn visible_environment_filter(auth: &AuthCtx) -> EnvironmentVisibilityFilter {
+    match auth {
+        AuthCtx::System => EnvironmentVisibilityFilter::All,
+        AuthCtx::User(user) => visible_environment_filter_from_surface(&user.effective_surface),
+        AuthCtx::AdminImpersonation(ctx) => {
+            visible_environment_filter_from_surface(&ctx.effective_surface)
+        }
+        AuthCtx::Agent(agent) => {
+            EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::account(
+                agent.account_email.as_str(),
+            )])
+        }
+    }
+}
+
+fn visible_environment_filter_from_surface(
+    effective_surface: &EffectiveSurface,
+) -> EnvironmentVisibilityFilter {
+    EnvironmentVisibilityFilter::from_scopes(
+        effective_surface
+            .lower
+            .iter()
+            .flat_map(|surface| surface.positive.iter())
+            .filter_map(visible_environment_scope_from_target),
+    )
+}
+
+fn visible_environment_scope_from_target(
+    target: &PermissionTarget,
+) -> Option<EnvironmentVisibilityScope> {
+    let PermissionTarget::Environment(target) = target else {
+        return None;
+    };
+
+    if !matches!(target.verb, None | Some(EnvironmentVerb::View)) {
+        return None;
+    }
+
+    match &target.owner {
+        EnvironmentOwnerPattern::AnyEnvironments => {
+            Some(EnvironmentVisibilityScope::any_owner(None))
+        }
+        EnvironmentOwnerPattern::AccountEnvironments { account } => {
+            Some(EnvironmentVisibilityScope {
+                account_email: Some(account.as_str().to_string()),
+                app_name: None,
+                env_name: None,
+            })
+        }
+        EnvironmentOwnerPattern::ApplicationEnvironments {
+            account,
+            application,
+        } => Some(EnvironmentVisibilityScope::application(
+            account.as_str(),
+            application.0.clone(),
+            None,
+        )),
+        EnvironmentOwnerPattern::Environment {
+            account,
+            application,
+            environment,
+        } => Some(EnvironmentVisibilityScope::application(
+            account.as_str(),
+            application.0.clone(),
+            Some(environment.0.clone()),
+        )),
+    }
+}
+
+fn authorize_environment_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    application_name: &ApplicationName,
+    environment_name: &EnvironmentName,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: account_email.clone(),
+            application: application_name.clone(),
+            environment: environment_name.clone(),
+        },
+        resource: EnvironmentResourcePattern::Any,
+    }))
+}
+
+fn authorize_environment_model(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    authorize_environment_permission(
+        auth,
+        &environment.owner_account_email,
+        &environment.application_name,
+        &environment.name,
+        verb,
+    )
+}
+
+fn authorize_environment_details(
+    auth: &AuthCtx,
+    environment: &EnvironmentWithDetails,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    authorize_environment_permission(
+        auth,
+        &environment.account.email,
+        &environment.application.name,
+        &environment.environment.name,
+        verb,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::card::{EffectiveSurface, GrantSurface};
+    use test_r::test;
+
+    fn environment_target(
+        account: &str,
+        application: &str,
+        environment: &str,
+        verb: Option<EnvironmentVerb>,
+        resource: EnvironmentResourcePattern,
+    ) -> PermissionTarget {
+        PermissionTarget::Environment(ClassPermissionTarget {
+            verb,
+            owner: EnvironmentOwnerPattern::Environment {
+                account: AccountEmail::new(account),
+                application: ApplicationName(application.to_string()),
+                environment: EnvironmentName(environment.to_string()),
+            },
+            resource,
+        })
+    }
+
+    #[test]
+    fn visible_environment_filter_uses_lower_view_grants_only_and_normalizes_scopes() {
+        let surface = EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![
+                    PermissionTarget::Environment(ClassPermissionTarget {
+                        verb: Some(EnvironmentVerb::View),
+                        owner: EnvironmentOwnerPattern::AccountEnvironments {
+                            account: AccountEmail::new("owner@golem"),
+                        },
+                        resource: EnvironmentResourcePattern::Any,
+                    }),
+                    environment_target(
+                        "owner@golem",
+                        "narrower-app",
+                        "narrower-env",
+                        Some(EnvironmentVerb::View),
+                        EnvironmentResourcePattern::Any,
+                    ),
+                    environment_target(
+                        "shared@golem",
+                        "shared-app",
+                        "shared-env",
+                        Some(EnvironmentVerb::View),
+                        EnvironmentResourcePattern::Any,
+                    ),
+                    environment_target(
+                        "ignored@golem",
+                        "ignored-app",
+                        "ignored-env",
+                        Some(EnvironmentVerb::Deploy),
+                        EnvironmentResourcePattern::Any,
+                    ),
+                ],
+                negative: vec![environment_target(
+                    "owner@golem",
+                    "negative-app",
+                    "negative-env",
+                    Some(EnvironmentVerb::View),
+                    EnvironmentResourcePattern::Any,
+                )],
+            }],
+            upper: Vec::new(),
+        };
+
+        let filter = visible_environment_filter_from_surface(&surface);
+
+        assert_eq!(
+            filter,
+            EnvironmentVisibilityFilter::Scopes(vec![
+                EnvironmentVisibilityScope {
+                    account_email: Some("owner@golem".to_string()),
+                    app_name: None,
+                    env_name: None,
+                },
+                EnvironmentVisibilityScope {
+                    account_email: Some("shared@golem".to_string()),
+                    app_name: Some("shared-app".to_string()),
+                    env_name: Some("shared-env".to_string()),
+                },
+            ])
+        );
     }
 }

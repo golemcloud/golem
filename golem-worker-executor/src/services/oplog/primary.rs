@@ -726,10 +726,21 @@ impl PrimaryOplogState {
         )
     }
 
-    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
-        record_oplog_call("add");
-
+    /// Pushes an entry into the in-memory buffer and advances the oplog index,
+    /// without checking the commit threshold. Callers must run [`maybe_commit`]
+    /// afterwards. Used by `add_pair` to buffer a `Start`/`End` pair before a
+    /// single commit-threshold check, so the pair is never split by a commit.
+    fn push(&mut self, entry: OplogEntry) -> OplogIndex {
         let is_hint = entry.is_hint();
+        self.buffer.push_back(entry);
+        self.last_oplog_idx = self.last_oplog_idx.next();
+        if !is_hint {
+            self.last_added_non_hint_entry = Some(self.last_oplog_idx);
+        }
+        self.last_oplog_idx
+    }
+
+    async fn maybe_commit(&mut self) {
         let limit = match &self.persistence_level {
             PersistenceLevel::PersistNothing => {
                 self.max_operations_before_commit_in_persist_nothing
@@ -738,15 +749,17 @@ impl PrimaryOplogState {
                 self.max_operations_before_commit
             }
         };
-        self.buffer.push_back(entry);
         if self.buffer.len() > limit as usize {
             self.commit(CommitLevel::Always).await;
         }
-        self.last_oplog_idx = self.last_oplog_idx.next();
-        if !is_hint {
-            self.last_added_non_hint_entry = Some(self.last_oplog_idx);
-        }
-        self.last_oplog_idx
+    }
+
+    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
+        record_oplog_call("add");
+
+        let idx = self.push(entry);
+        self.maybe_commit().await;
+        idx
     }
 
     async fn commit(&mut self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -951,6 +964,19 @@ impl Oplog for PrimaryOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let mut state = self.state.lock().await;
         state.add(entry).await
+    }
+
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        let mut state = self.state.lock().await;
+        let first_idx = state.push(start);
+        let second = make_second(first_idx);
+        let second_idx = state.push(second);
+        state.maybe_commit().await;
+        (first_idx, second_idx)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

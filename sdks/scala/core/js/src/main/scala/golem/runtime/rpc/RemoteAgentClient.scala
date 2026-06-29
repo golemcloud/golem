@@ -20,10 +20,11 @@ import golem.Datetime
 import golem.Uuid
 import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.FutureInterop
-import golem.host.js._
+import golem.host.js.{JsErr, JsOk}
+import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
 import golem.runtime.rpc.host.AgentHostApi.RegisteredAgentType
 import golem.runtime.rpc.host.WasmRpcApi.WasmRpcClient
-import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
+import golem.runtime.rpc.host.{AgentHostApi, JsRpcError, WasmRpcApi}
 
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -37,19 +38,19 @@ final case class RemoteAgentClient(
 )
 
 object RemoteAgentClient {
-  def resolve(agentTypeName: String, constructorPayload: JsDataValue): Either[String, RemoteAgentClient] =
+  def resolve(agentTypeName: String, constructorPayload: JsSchemaValueTree): Either[String, RemoteAgentClient] =
     resolve(agentTypeName, constructorPayload, phantom = None)
 
   def resolve(
     agentTypeName: String,
-    constructorPayload: JsDataValue,
+    constructorPayload: JsSchemaValueTree,
     phantom: Option[Uuid]
   ): Either[String, RemoteAgentClient] =
     resolve(agentTypeName, constructorPayload, phantom, configOverrides = Nil)
 
   def resolve(
     agentTypeName: String,
-    constructorPayload: JsDataValue,
+    constructorPayload: JsSchemaValueTree,
     phantom: Option[Uuid],
     configOverrides: List[ConfigOverride]
   ): Either[String, RemoteAgentClient] =
@@ -74,70 +75,88 @@ object RemoteAgentClient {
       }
 
   private final class WasmRpcInvoker(client: WasmRpcClient) extends RpcInvoker {
-    override def invokeAndAwait(functionName: String, input: JsDataValue): Either[String, JsDataValue] =
-      invokeWithFallback(functionName)(fn => client.invokeAndAwait(fn, input).left.map(_.toString))
+    override def invokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[String, Option[JsSchemaValueTree]] =
+      invokeWithFallback(functionName)(fn => client.invokeAndAwait(fn, input).map(_.toOption).left.map(_.toString))
 
-    override def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Future[JsDataValue] =
+    override def asyncInvokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Future[Option[JsSchemaValueTree]] =
       safeCall(client.asyncInvokeAndAwait(functionName, input).left.map(_.toString)) match {
-        case Left(err) => Future.failed(JavaScriptException(err))
-        case Right(futureResult) =>
-          val pollable = futureResult.subscribe()
-          FutureInterop.fromPromise(pollable.promise()).flatMap { _ =>
-            futureResult.get().toOption match {
-              case Some(result) =>
-                if (result.tag == "ok") {
-                  Future.successful(result.asInstanceOf[JsOk[JsDataValue]].value)
-                } else {
-                  val rpcError = result.asInstanceOf[JsErr[JsRpcError]].value
-                  Future.failed(JavaScriptException(rpcError.toString))
-                }
-              case None =>
-                Future.failed(JavaScriptException("async RPC: pollable ready but no result available"))
-            }
-          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+        case Left(err)           => Future.failed(JavaScriptException(err))
+        case Right(futureResult) => awaitFutureResult(futureResult)
       }
 
-    override def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (Future[JsDataValue], CancellationToken) =
+    override def cancelableAsyncInvokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
       safeCall(client.asyncInvokeAndAwait(functionName, input).left.map(_.toString)) match {
         case Left(err) =>
           (Future.failed(JavaScriptException(err)), CancellationToken.fromFunction(() => ()))
         case Right(futureResult) =>
           val token = CancellationToken.fromFunction(() => futureResult.cancel())
-          val future = {
-            val pollable = futureResult.subscribe()
-            FutureInterop.fromPromise(pollable.promise()).flatMap { _ =>
-              futureResult.get().toOption match {
-                case Some(result) =>
-                  if (result.tag == "ok") {
-                    Future.successful(result.asInstanceOf[JsOk[JsDataValue]].value)
-                  } else {
-                    val rpcError = result.asInstanceOf[JsErr[JsRpcError]].value
-                    Future.failed(JavaScriptException(rpcError.toString))
-                  }
-                case None =>
-                  Future.failed(JavaScriptException("async RPC: pollable ready but no result available"))
-              }
-            }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
-          }
-          (future, token)
+          (awaitFutureResult(futureResult), token)
       }
 
-    override def invoke(functionName: String, input: JsDataValue): Either[String, Unit] =
+    /**
+     * Drives a host `future-invoke-result` to completion. The synchronous
+     * `subscribe()`/`promise()` calls are guarded so a host/JS interop failure
+     * surfaces as a failed `Future` rather than an uncaught `TypeError` that
+     * would trap the whole guest invocation; `get()` runs inside the `flatMap`
+     * body and is already captured by `Future` semantics.
+     */
+    private def awaitFutureResult(
+      futureResult: WasmRpcApi.RawFutureInvokeResult
+    ): Future[Option[JsSchemaValueTree]] =
+      try {
+        val pollable = futureResult.subscribe()
+        FutureInterop
+          .fromPromise(pollable.promise())
+          .flatMap { _ =>
+            readAsyncResult(futureResult.get().toOption)
+          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+      } catch {
+        case JavaScriptException(e) => Future.failed(JavaScriptException(s"async RPC failed: ${e.toString}"))
+      }
+
+    override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
       invokeWithFallback(functionName)(fn => client.invoke(fn, input).left.map(_.toString))
 
     override def scheduleInvocation(
       datetime: Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[String, Unit] =
       invokeWithFallback(functionName)(fn => client.scheduleInvocation(datetime, fn, input).left.map(_.toString))
 
     override def scheduleCancelableInvocation(
       datetime: Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[String, CancellationToken] =
-      invokeWithFallback(functionName)(fn => client.scheduleCancelableInvocation(datetime, fn, input).left.map(_.toString))
+      invokeWithFallback(functionName)(fn =>
+        client.scheduleCancelableInvocation(datetime, fn, input).left.map(_.toString)
+      )
+
+    private def readAsyncResult(
+      result: Option[golem.host.js.JsResult[js.UndefOr[JsSchemaValueTree], JsRpcError]]
+    ): Future[Option[JsSchemaValueTree]] =
+      result match {
+        case Some(res) =>
+          if (res.tag == "ok") {
+            val okValue = res.asInstanceOf[JsOk[js.UndefOr[JsSchemaValueTree]]].value
+            Future.successful(okValue.toOption)
+          } else {
+            val rpcError = res.asInstanceOf[JsErr[JsRpcError]].value
+            Future.failed(JavaScriptException(WasmRpcApi.decodeRpcError(rpcError).toString))
+          }
+        case None =>
+          Future.failed(JavaScriptException("async RPC: pollable ready but no result available"))
+      }
   }
 
   private def invokeWithFallback[A](functionName: String)(call: String => Either[String, A]): Either[String, A] =
@@ -148,5 +167,4 @@ object RemoteAgentClient {
     catch {
       case JavaScriptException(err) => Left(err.toString)
     }
-
 }

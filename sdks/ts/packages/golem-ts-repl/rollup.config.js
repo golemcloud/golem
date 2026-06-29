@@ -19,6 +19,7 @@ export default defineConfig([
       'node:repl',
       'node:stream',
       'node:util',
+      '@golemcloud/golem-ts-bridge',
       'picocolors',
       'ts-morph',
       'uuid',

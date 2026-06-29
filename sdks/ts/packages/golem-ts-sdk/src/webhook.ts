@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createWebhook as createWebhookHost, PromiseId } from 'golem:agent/host@1.5.0';
+import { createWebhook as createWebhookHost, PromiseId } from 'golem:agent/host@2.0.0';
 import { createPromise } from 'golem:api/host@1.5.0';
 import { awaitPromise } from './host/hostapi';
 

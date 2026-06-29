@@ -16,12 +16,14 @@
 
 package golem.host.js
 
+import golem.host.js.schema.{JsAgentError => JsSchemaAgentError}
+
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSName
 import scala.scalajs.js.typedarray.Uint8Array
 
 // ---------------------------------------------------------------------------
-// golem:agent/host@1.5.0  +  golem:api/host@1.5.0  –  JS facade traits
+// golem:agent/host@2.0.0  +  golem:api/host@1.5.0  –  JS facade traits
 // ---------------------------------------------------------------------------
 
 // --- RpcError  –  tagged union ---
@@ -38,7 +40,7 @@ sealed trait JsRpcErrorString extends JsRpcError {
 
 @js.native
 sealed trait JsRpcErrorRemoteAgent extends JsRpcError {
-  @JSName("val") def value: JsAgentError = js.native
+  @JSName("val") def value: JsSchemaAgentError = js.native
 }
 
 object JsRpcError {
@@ -54,7 +56,7 @@ object JsRpcError {
   def remoteInternalError(message: String): JsRpcError =
     JsShape.tagged[JsRpcError]("remote-internal-error", message.asInstanceOf[js.Any])
 
-  def remoteAgentError(error: JsAgentError): JsRpcError =
+  def remoteAgentError(error: JsSchemaAgentError): JsRpcError =
     JsShape.tagged[JsRpcError]("remote-agent-error", error)
 }
 
@@ -118,14 +120,14 @@ object JsEnvironmentId {
 
 @js.native
 sealed trait JsAgentMetadata extends js.Object {
-  def agentId: JsAgentId                       = js.native
-  def args: js.Array[String]                   = js.native
-  def env: js.Array[js.Tuple2[String, String]] = js.native
+  def agentId: JsAgentId                          = js.native
+  def args: js.Array[String]                      = js.native
+  def env: js.Array[js.Tuple2[String, String]]    = js.native
   def config: js.Array[js.Tuple2[String, String]] = js.native
-  def status: JsAgentStatus                    = js.native
-  def componentRevision: js.BigInt             = js.native
-  def retryCount: js.BigInt                    = js.native
-  def environmentId: JsEnvironmentId           = js.native
+  def status: JsAgentStatus                       = js.native
+  def componentRevision: js.BigInt                = js.native
+  def retryCount: js.BigInt                       = js.native
+  def environmentId: JsEnvironmentId              = js.native
 }
 
 @js.native

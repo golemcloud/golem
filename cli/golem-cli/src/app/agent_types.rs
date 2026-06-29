@@ -15,15 +15,16 @@
 use crate::log::LogColorize;
 use anyhow::bail;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
+use golem_common::schema::AgentTypeSchema;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct AgentTypeRegistry {
-    cache: Cache<ComponentName, (), Vec<AgentType>, Arc<anyhow::Error>>,
+    cache: Cache<ComponentName, (), Vec<AgentTypeSchema>, Arc<anyhow::Error>>,
     uniqueness: tokio::sync::RwLock<UniquenessIndex>,
     enable_wasmtime_fs_cache: bool,
 }
@@ -52,7 +53,7 @@ impl AgentTypeRegistry {
         &self,
         component_name: &ComponentName,
         wasm_path: &Path,
-    ) -> anyhow::Result<Vec<AgentType>> {
+    ) -> anyhow::Result<Vec<AgentTypeSchema>> {
         let wasm_path = wasm_path.to_path_buf();
         let enable_wasmtime_fs_cache = self.enable_wasmtime_fs_cache;
 
@@ -73,9 +74,9 @@ impl AgentTypeRegistry {
     pub async fn add_cached_component_agent_types(
         &self,
         component_name: &ComponentName,
-        agent_types: Vec<AgentType>,
-    ) -> anyhow::Result<Vec<AgentType>> {
-        let normalized = AgentType::normalized_vec(agent_types);
+        agent_types: Vec<AgentTypeSchema>,
+    ) -> anyhow::Result<Vec<AgentTypeSchema>> {
+        let normalized = AgentTypeSchema::normalized_vec(agent_types);
 
         self.cache.remove(component_name).await;
 
@@ -104,7 +105,7 @@ impl AgentTypeRegistry {
     async fn validate_uniqueness(
         &self,
         component_name: &ComponentName,
-        agent_types: &[AgentType],
+        agent_types: &[AgentTypeSchema],
     ) -> anyhow::Result<()> {
         let mut index = self.uniqueness.write().await;
 
@@ -162,10 +163,12 @@ impl AgentTypeRegistry {
 async fn extract(
     wasm_path: PathBuf,
     enable_wasmtime_fs_cache: bool,
-) -> Result<Vec<AgentType>, Arc<anyhow::Error>> {
-    let agent_types =
-        crate::model::agent::extraction::extract_agent_types(&wasm_path, enable_wasmtime_fs_cache)
-            .await
-            .map_err(Arc::new)?;
-    Ok(AgentType::normalized_vec(agent_types))
+) -> Result<Vec<AgentTypeSchema>, Arc<anyhow::Error>> {
+    let agent_types = crate::model::agent::extraction::extract_agent_type_schemas(
+        &wasm_path,
+        enable_wasmtime_fs_cache,
+    )
+    .await
+    .map_err(Arc::new)?;
+    Ok(AgentTypeSchema::normalized_vec(agent_types))
 }

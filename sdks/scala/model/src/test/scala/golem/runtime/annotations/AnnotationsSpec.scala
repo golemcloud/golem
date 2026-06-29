@@ -33,8 +33,6 @@ object AnnotationsSpec extends ZIOSpecDefault {
         val a1 = new description("desc")
         val a2 = new prompt("prompt")
         val a3 = new agentImplementation()
-        val a4 = new languageCode("en")
-        val a5 = new mimeType("image/png")
         val a6 = new agentDefinition("MyAgent", DurabilityMode.Durable)
         val a7 = new agentDefinition()
         val a8 = new agentDefinition("Custom")
@@ -43,8 +41,6 @@ object AnnotationsSpec extends ZIOSpecDefault {
           a1.value == "desc",
           a2.value == "prompt",
           a3 != null,
-          a4.value == "en",
-          a5.value == "image/png",
           a6.typeName == "MyAgent",
           a6.mode == DurabilityMode.Durable,
           a7.typeName == "",

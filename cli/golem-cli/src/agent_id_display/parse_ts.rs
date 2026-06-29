@@ -13,26 +13,19 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{self, Dialect, ParseError, parse_cm_value, parse_uint, perr};
-use golem_common::model::agent::{
-    BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, TextReference, TextSource,
-    TextType, Url,
+use super::parse_common::{
+    Dialect, ParseError, duration_value_from_nanos, duration_value_from_text, parse_cm_value,
+    parse_quantity_constructor, parse_rich_constructor_body, parse_uint, perr,
+    quantity_value_from_text,
 };
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{Value, ValueAndType};
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
+use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 use heck::ToLowerCamelCase;
-
-pub fn parse_data_value_ts(input: &str, schema: &DataSchema) -> Result<DataValue, ParseError> {
-    parse_common::parse_data_value::<TsDialect>(input, schema)
-}
 
 pub(super) struct TsDialect;
 
 impl Dialect for TsDialect {
-    fn normalize_field_name(name: &str) -> String {
-        name.to_lower_camel_case()
-    }
-
     fn parse_char(lexer: &mut Lexer) -> Result<char, ParseError> {
         let (s, pos, _) = lexer.expect_string()?;
         let mut chars = s.chars();
@@ -47,36 +40,36 @@ impl Dialect for TsDialect {
 
     fn parse_tuple(
         lexer: &mut Lexer,
-        tt: &golem_wasm::analysis::TypeTuple,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        elements: &[SchemaType],
+    ) -> Result<SchemaValue, ParseError> {
         lexer.expect(&Token::LBrack)?;
         let mut items = Vec::new();
-        for (i, item_type) in tt.items.iter().enumerate() {
+        for (i, ty) in elements.iter().enumerate() {
             if i > 0 {
                 lexer.expect(&Token::Comma)?;
             }
-            items.push(parse_cm_value::<Self>(lexer, item_type)?.value);
+            items.push(parse_cm_value::<Self>(lexer, graph, ty)?);
         }
         lexer.expect(&Token::RBrack)?;
-        Ok(ValueAndType::new(Value::Tuple(items), typ.clone()))
+        Ok(SchemaValue::Tuple { elements: items })
     }
 
     fn parse_record(
         lexer: &mut Lexer,
-        tr: &golem_wasm::analysis::TypeRecord,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        _def_name: Option<&str>,
+        fields: &[NamedFieldType],
+    ) -> Result<SchemaValue, ParseError> {
         lexer.expect(&Token::LBrace)?;
-        let name_map: Vec<(String, usize)> = tr
-            .fields
+        let name_map: Vec<(String, usize)> = fields
             .iter()
             .enumerate()
             .map(|(i, f)| (f.name.to_lower_camel_case(), i))
             .collect();
-        let mut fields: Vec<Option<Value>> = vec![None; tr.fields.len()];
+        let mut values: Vec<Option<SchemaValue>> = (0..fields.len()).map(|_| None).collect();
         while *lexer.peek()? != Token::RBrace {
-            if fields.iter().any(|f| f.is_some()) {
+            if values.iter().any(|f| f.is_some()) {
                 lexer.expect(&Token::Comma)?;
                 if *lexer.peek()? == Token::RBrace {
                     break;
@@ -88,43 +81,40 @@ impl Dialect for TsDialect {
                 .iter()
                 .find(|(n, _)| *n == key)
                 .ok_or_else(|| perr(pos, &format!("unknown field '{key}'")))?;
-            fields[*idx] = Some(parse_cm_value::<Self>(lexer, &tr.fields[*idx].typ)?.value);
+            values[*idx] = Some(parse_cm_value::<Self>(lexer, graph, &fields[*idx].body)?);
         }
         lexer.expect(&Token::RBrace)?;
-        let values = fields
+        let out: Result<Vec<SchemaValue>, _> = values
             .into_iter()
             .enumerate()
-            .map(|(i, v)| {
-                v.ok_or_else(|| perr(0, &format!("missing field '{}'", tr.fields[i].name)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ValueAndType::new(Value::Record(values), typ.clone()))
+            .map(|(i, v)| v.ok_or_else(|| perr(0, &format!("missing field '{}'", fields[i].name))))
+            .collect();
+        Ok(SchemaValue::Record { fields: out? })
     }
 
     fn parse_variant(
         lexer: &mut Lexer,
-        tv: &golem_wasm::analysis::TypeVariant,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        _def_name: Option<&str>,
+        cases: &[VariantCaseType],
+    ) -> Result<SchemaValue, ParseError> {
         lexer.expect(&Token::LBrace)?;
         expect_ident_key(lexer, "tag")?;
         let (case_name, pos, _) = lexer.expect_string()?;
-        let case_idx = tv
-            .cases
+        let case_idx = cases
             .iter()
             .position(|c| c.name == case_name)
             .ok_or_else(|| perr(pos, &format!("unknown variant case '{case_name}'")))?;
-        let case_value = if *lexer.peek()? == Token::Comma {
+        let payload = if *lexer.peek()? == Token::Comma {
             lexer.next_token()?;
             if *lexer.peek()? == Token::RBrace {
                 None
             } else {
                 expect_ident_key(lexer, "value")?;
-                tv.cases[case_idx]
-                    .typ
-                    .as_ref()
-                    .map(|t| parse_cm_value::<Self>(lexer, t).map(|vt| vt.value))
-                    .transpose()?
+                match &cases[case_idx].payload {
+                    Some(t) => Some(parse_cm_value::<Self>(lexer, graph, t)?),
+                    None => None,
+                }
             }
         } else {
             None
@@ -133,39 +123,35 @@ impl Dialect for TsDialect {
             lexer.next_token()?;
         }
         lexer.expect(&Token::RBrace)?;
-        Ok(ValueAndType::new(
-            Value::Variant {
-                case_idx: case_idx as u32,
-                case_value: case_value.map(Box::new),
-            },
-            typ.clone(),
-        ))
+        Ok(SchemaValue::Variant(VariantValuePayload {
+            case: case_idx as u32,
+            payload: payload.map(Box::new),
+        }))
     }
 
     fn parse_enum(
         lexer: &mut Lexer,
-        te: &golem_wasm::analysis::TypeEnum,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        _def_name: Option<&str>,
+        cases: &[String],
+    ) -> Result<SchemaValue, ParseError> {
         let (s, pos, _) = lexer.expect_string()?;
-        let idx = te
-            .cases
+        let idx = cases
             .iter()
             .position(|c| *c == s)
             .ok_or_else(|| perr(pos, &format!("unknown enum case '{s}'")))?;
-        Ok(ValueAndType::new(Value::Enum(idx as u32), typ.clone()))
+        Ok(SchemaValue::Enum { case: idx as u32 })
     }
 
     fn parse_option(
         lexer: &mut Lexer,
-        to: &golem_wasm::analysis::TypeOption,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
-        let is_nested = matches!(&*to.inner, AnalysedType::Option(_));
+        graph: &SchemaGraph,
+        inner: &SchemaType,
+    ) -> Result<SchemaValue, ParseError> {
+        let is_nested = matches!(inner, SchemaType::Option { .. });
         match lexer.peek()? {
             Token::Null | Token::Undefined => {
                 lexer.next_token()?;
-                Ok(ValueAndType::new(Value::Option(None), typ.clone()))
+                Ok(SchemaValue::Option { inner: None })
             }
             Token::LBrace if is_nested => {
                 lexer.next_token()?;
@@ -174,35 +160,33 @@ impl Dialect for TsDialect {
                     return Err(perr(pos, &format!("expected 'some', got '{key}'")));
                 }
                 lexer.expect(&Token::Colon)?;
-                let inner = parse_cm_value::<Self>(lexer, &to.inner)?;
+                let value = parse_cm_value::<Self>(lexer, graph, inner)?;
                 lexer.expect(&Token::RBrace)?;
-                Ok(ValueAndType::new(
-                    Value::Option(Some(Box::new(inner.value))),
-                    typ.clone(),
-                ))
+                Ok(SchemaValue::Option {
+                    inner: Some(Box::new(value)),
+                })
             }
             _ => {
-                let inner = parse_cm_value::<Self>(lexer, &to.inner)?;
-                Ok(ValueAndType::new(
-                    Value::Option(Some(Box::new(inner.value))),
-                    typ.clone(),
-                ))
+                let value = parse_cm_value::<Self>(lexer, graph, inner)?;
+                Ok(SchemaValue::Option {
+                    inner: Some(Box::new(value)),
+                })
             }
         }
     }
 
     fn parse_result(
         lexer: &mut Lexer,
-        tr: &golem_wasm::analysis::TypeResult,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        spec: &ResultSpec,
+    ) -> Result<SchemaValue, ParseError> {
         lexer.expect(&Token::LBrace)?;
         let (key, pos, _) = lexer.expect_ident()?;
         lexer.expect(&Token::Colon)?;
         let result = match key.as_str() {
             "ok" => {
-                let val = match &tr.ok {
-                    Some(ok_type) => Some(Box::new(parse_cm_value::<Self>(lexer, ok_type)?.value)),
+                let val = match &spec.ok {
+                    Some(ok_ty) => Some(Box::new(parse_cm_value::<Self>(lexer, graph, ok_ty)?)),
                     None => {
                         if matches!(lexer.peek()?, Token::Null | Token::Undefined) {
                             lexer.next_token()?;
@@ -210,13 +194,11 @@ impl Dialect for TsDialect {
                         None
                     }
                 };
-                Value::Result(Ok(val))
+                ResultValuePayload::Ok { value: val }
             }
             "error" => {
-                let val = match &tr.err {
-                    Some(err_type) => {
-                        Some(Box::new(parse_cm_value::<Self>(lexer, err_type)?.value))
-                    }
+                let val = match &spec.err {
+                    Some(err_ty) => Some(Box::new(parse_cm_value::<Self>(lexer, graph, err_ty)?)),
                     None => {
                         if matches!(lexer.peek()?, Token::Null | Token::Undefined) {
                             lexer.next_token()?;
@@ -224,7 +206,7 @@ impl Dialect for TsDialect {
                         None
                     }
                 };
-                Value::Result(Err(val))
+                ResultValuePayload::Err { value: val }
             }
             _ => return Err(perr(pos, &format!("expected 'ok' or 'error', got '{key}'"))),
         };
@@ -232,24 +214,23 @@ impl Dialect for TsDialect {
             lexer.next_token()?;
         }
         lexer.expect(&Token::RBrace)?;
-        Ok(ValueAndType::new(result, typ.clone()))
+        Ok(SchemaValue::Result(result))
     }
 
     fn parse_flags(
         lexer: &mut Lexer,
-        tf: &golem_wasm::analysis::TypeFlags,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        _def_name: Option<&str>,
+        flags: &[String],
+    ) -> Result<SchemaValue, ParseError> {
         lexer.expect(&Token::LBrace)?;
-        let name_map: Vec<(String, usize)> = tf
-            .names
+        let name_map: Vec<(String, usize)> = flags
             .iter()
             .enumerate()
             .map(|(i, n)| (n.to_lower_camel_case(), i))
             .collect();
-        let mut flags = vec![false; tf.names.len()];
+        let mut bits = vec![false; flags.len()];
         while *lexer.peek()? != Token::RBrace {
-            if flags.iter().any(|f| *f) {
+            if bits.iter().any(|f| *f) {
                 lexer.expect(&Token::Comma)?;
                 if *lexer.peek()? == Token::RBrace {
                     break;
@@ -266,108 +247,85 @@ impl Dialect for TsDialect {
                 .find(|(n, _)| *n == key)
                 .ok_or_else(|| perr(pos, &format!("unknown flag '{key}'")))?;
             if val {
-                flags[*idx] = true;
+                bits[*idx] = true;
             }
         }
         lexer.expect(&Token::RBrace)?;
-        Ok(ValueAndType::new(Value::Flags(flags), typ.clone()))
+        Ok(SchemaValue::Flags { bits })
     }
 
-    fn parse_unstructured_text(lexer: &mut Lexer) -> Result<TextReference, ParseError> {
-        lexer.expect(&Token::LBrace)?;
-        expect_ident_key(lexer, "tag")?;
-        let (tag, pos, _) = lexer.expect_string()?;
-        lexer.expect(&Token::Comma)?;
-        expect_ident_key(lexer, "val")?;
-        let (val, _, _) = lexer.expect_string()?;
-        let result = match tag.as_str() {
-            "url" => TextReference::Url(Url { value: val }),
-            "inline" => {
-                let text_type = if *lexer.peek()? == Token::Comma {
-                    lexer.next_token()?;
-                    if *lexer.peek()? != Token::RBrace {
-                        expect_ident_key(lexer, "lang")?;
-                        let (lang, _, _) = lexer.expect_string()?;
-                        Some(TextType {
-                            language_code: lang,
-                        })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                TextReference::Inline(TextSource {
-                    data: val,
-                    text_type,
-                })
-            }
-            _ => {
+    /// TypeScript quantities accept the native `Nn * unit` literal (e.g.
+    /// `5n * kg`, `-5n * kg`) in addition to the `Quantity("5kg")` constructor.
+    /// Only integer BigInt magnitudes and identifier units are recognised
+    /// natively; decimals and complex units stay constructor-only.
+    fn parse_quantity(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        if matches!(lexer.peek()?, Token::IntLit(_) | Token::UintLit(_)) {
+            let (_, start, end) = lexer.next_token()?;
+            let number = lexer.slice(start, end).to_string();
+            if !matches!(lexer.peek()?, Token::Ident(id) if id == "n") {
                 return Err(perr(
-                    pos,
-                    &format!("expected 'url' or 'inline', got '{tag}'"),
+                    lexer.position(),
+                    "expected 'n' BigInt suffix in quantity literal",
                 ));
             }
-        };
-        if *lexer.peek()? == Token::Comma {
             lexer.next_token()?;
+            lexer.expect(&Token::Star)?;
+            let (unit, _, _) = lexer.expect_ident()?;
+            quantity_value_from_text(start, &format!("{number}{unit}"))
+        } else {
+            parse_quantity_constructor(lexer)
         }
-        lexer.expect(&Token::RBrace)?;
-        Ok(result)
     }
 
-    fn parse_unstructured_binary(lexer: &mut Lexer) -> Result<BinaryReference, ParseError> {
-        lexer.expect(&Token::LBrace)?;
-        expect_ident_key(lexer, "tag")?;
-        let (tag, pos, _) = lexer.expect_string()?;
-        lexer.expect(&Token::Comma)?;
-        match tag.as_str() {
-            "url" => {
-                expect_ident_key(lexer, "val")?;
-                let (val, _, _) = lexer.expect_string()?;
-                if *lexer.peek()? == Token::Comma {
-                    lexer.next_token()?;
-                }
-                lexer.expect(&Token::RBrace)?;
-                Ok(BinaryReference::Url(Url { value: val }))
-            }
-            "inline" => {
-                expect_ident_key(lexer, "val")?;
-                let (ident, ipos, _) = lexer.expect_ident()?;
-                if ident != "Uint8Array" {
-                    return Err(perr(ipos, &format!("expected 'Uint8Array', got '{ident}'")));
-                }
-                lexer.expect(&Token::LParen)?;
-                lexer.expect(&Token::LBrack)?;
-                let mut bytes = Vec::new();
-                while *lexer.peek()? != Token::RBrack {
-                    if !bytes.is_empty() {
-                        lexer.expect(&Token::Comma)?;
-                        if *lexer.peek()? == Token::RBrack {
-                            break;
-                        }
-                    }
-                    let b = parse_uint(lexer)? as u8;
-                    bytes.push(b);
-                }
-                lexer.expect(&Token::RBrack)?;
-                lexer.expect(&Token::RParen)?;
-                lexer.expect(&Token::Comma)?;
-                expect_ident_key(lexer, "mime")?;
-                let (mime, _, _) = lexer.expect_string()?;
-                if *lexer.peek()? == Token::Comma {
-                    lexer.next_token()?;
-                }
-                lexer.expect(&Token::RBrace)?;
-                Ok(BinaryReference::Inline(BinarySource {
-                    data: bytes,
-                    binary_type: BinaryType { mime_type: mime },
-                }))
-            }
-            _ => Err(perr(
+    /// TypeScript durations accept the native `Duration.<unit>(N)` family
+    /// (`nanoseconds`/`microseconds`/`milliseconds`/`seconds`/`minutes`/`hours`,
+    /// with a non-negative integer or BigInt argument) in addition to the
+    /// `Duration("PT30S")` constructor.
+    fn parse_duration(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        let (name, pos, _) = lexer.expect_ident()?;
+        if name != "Duration" {
+            return Err(perr(
                 pos,
-                &format!("expected 'url' or 'inline', got '{tag}'"),
-            )),
+                &format!("expected 'Duration' constructor or literal, got '{name}'"),
+            ));
+        }
+        match lexer.peek()? {
+            Token::Dot => {
+                lexer.next_token()?;
+                let (unit, upos, _) = lexer.expect_ident()?;
+                let factor: i64 = match unit.as_str() {
+                    "nanoseconds" => 1,
+                    "microseconds" => 1_000,
+                    "milliseconds" => 1_000_000,
+                    "seconds" => 1_000_000_000,
+                    "minutes" => 60 * 1_000_000_000,
+                    "hours" => 3_600 * 1_000_000_000,
+                    _ => return Err(perr(upos, &format!("unknown Duration unit '{unit}'"))),
+                };
+                lexer.expect(&Token::LParen)?;
+                let n = parse_uint(lexer)?;
+                if matches!(lexer.peek()?, Token::Ident(id) if id == "n") {
+                    lexer.next_token()?;
+                }
+                lexer.expect(&Token::RParen)?;
+                let nanos = (n as i128)
+                    .checked_mul(factor as i128)
+                    .and_then(|v| i64::try_from(v).ok())
+                    .ok_or_else(|| perr(upos, "duration literal overflows i64 nanoseconds"))?;
+                Ok(duration_value_from_nanos(nanos))
+            }
+            Token::LParen => {
+                let bpos = lexer.position();
+                let body = parse_rich_constructor_body(lexer)?;
+                duration_value_from_text(bpos, &body)
+            }
+            other => {
+                let other = other.clone();
+                Err(perr(
+                    lexer.position(),
+                    &format!("expected '.' or '(' after 'Duration', got {other:?}"),
+                ))
+            }
         }
     }
 }

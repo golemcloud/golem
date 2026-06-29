@@ -243,7 +243,9 @@ object RpcCodegen {
     sb.append(s"    def apply($paramDecls): _root_.scala.concurrent.Future[$outputType] =\n")
     sb.append(s"      awaitWith($packExpr)\n\n")
 
-    sb.append(s"    def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n")
+    sb.append(
+      s"    def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n"
+    )
     sb.append(s"      cancelableAwaitWith($packExpr)\n\n")
 
     sb.append(s"    def trigger($paramDecls): _root_.scala.concurrent.Future[_root_.scala.Unit] =\n")
@@ -256,7 +258,9 @@ object RpcCodegen {
     sb.append(s"      scheduleWith($packExpr, when)\n\n")
 
     val scheduleCancelableParamDecls = scheduleParamDecls
-    sb.append(s"    def scheduleCancelableAt($scheduleCancelableParamDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancellationToken] =\n")
+    sb.append(
+      s"    def scheduleCancelableAt($scheduleCancelableParamDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancellationToken] =\n"
+    )
     sb.append(s"      scheduleCancelableWith($packExpr, when)\n\n")
 
     sb.append(s"  }\n\n")
@@ -269,7 +273,7 @@ object RpcCodegen {
     ctorParams match {
       case Nil      => "()"
       case p :: Nil => p.name
-      case ps       => "(" + ps.map(_.name).mkString(", ") + ")"
+      case ps       => "_root_.scala.Vector[_root_.scala.Any](" + ps.map(_.name).mkString(", ") + ")"
     }
 
   /**
@@ -414,6 +418,6 @@ object RpcCodegen {
     ctor.params match {
       case Nil      => "_root_.scala.Unit"
       case p :: Nil => p.typeExpr
-      case ps       => ps.map(_.typeExpr).mkString("(", ", ", ")")
+      case _        => "_root_.scala.collection.immutable.Vector[_root_.scala.Any]"
     }
 }

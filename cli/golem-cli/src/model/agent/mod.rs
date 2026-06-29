@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod extraction;
+pub mod stream;
 pub mod view;

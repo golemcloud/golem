@@ -14,8 +14,8 @@
 
 use crate::repo::model::BindFields;
 use crate::repo::model::component::{
-    ComponentExtRevisionRecord, ComponentRepoError, ComponentRevisionIdentityRecord,
-    ComponentRevisionRecord,
+    ComponentAuthExtRevisionRecord, ComponentExtRevisionRecord, ComponentRepoError,
+    ComponentRevisionIdentityRecord, ComponentRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -55,7 +55,7 @@ pub trait ComponentRepo: Send + Sync {
     async fn get_staged_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>>;
 
     async fn get_staged_by_name(
         &self,
@@ -66,7 +66,7 @@ pub trait ComponentRepo: Send + Sync {
     async fn get_deployed_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>>;
 
     async fn get_deployed_by_name(
         &self,
@@ -77,14 +77,14 @@ pub trait ComponentRepo: Send + Sync {
     async fn get_all_deployed_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Vec<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<ComponentAuthExtRevisionRecord>>;
 
     async fn get_by_id_and_revision(
         &self,
         component_id: Uuid,
         revision_id: i64,
         include_deleted: bool,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
@@ -187,7 +187,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn get_staged_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(component_id)
             .instrument(Self::span_id(component_id))
@@ -208,7 +208,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn get_deployed_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
         self.repo
             .get_deployed_by_id(component_id)
             .instrument(Self::span_id(component_id))
@@ -229,7 +229,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn get_all_deployed_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentAuthExtRevisionRecord>> {
         self.repo
             .get_all_deployed_by_id(component_id)
             .instrument(Self::span_id(component_id))
@@ -241,7 +241,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         component_id: Uuid,
         revision_id: i64,
         include_deleted: bool,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
         self.repo
             .get_by_id_and_revision(component_id, revision_id, include_deleted)
             .instrument(Self::span_id_and_revision(component_id, revision_id))
@@ -472,18 +472,36 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn get_staged_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
-        let revision: Option<ComponentExtRevisionRecord> = self.with_ro("get_staged_by_id")
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
+        let revision: Option<ComponentAuthExtRevisionRecord> = self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata,
-                           cr.object_store_key, cr.binary_hash
+                           cr.object_store_key, cr.binary_hash,
+                           ap.application_id, ap.name AS application_name,
+                           a.account_id AS owner_account_id,
+                           a.email AS owner_account_email,
+                           er.name AS environment_name,
+                           er.revision_id AS environment_revision_id,
+                           er.compatibility_check AS environment_compatibility_check,
+                           er.version_check AS environment_version_check,
+                           er.security_overrides AS environment_security_overrides
                     FROM components c
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
-                    WHERE c.component_id = $1 AND c.deleted_at IS NULL
+                    WHERE c.component_id = $1
+                        AND c.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                     .bind(component_id),
             )
@@ -526,7 +544,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn get_deployed_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
         let revision = self.with_ro("get_deployed_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -534,7 +552,15 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                         cr.component_id, cr.revision_id, cr.hash,
                         cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata,
-                           cr.object_store_key, cr.binary_hash
+                           cr.object_store_key, cr.binary_hash,
+                           ap.application_id, ap.name AS application_name,
+                           a.account_id AS owner_account_id,
+                           a.email AS owner_account_email,
+                           er.name AS environment_name,
+                           er.revision_id AS environment_revision_id,
+                           er.compatibility_check AS environment_compatibility_check,
+                           er.version_check AS environment_version_check,
+                           er.security_overrides AS environment_security_overrides
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
@@ -543,8 +569,18 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     JOIN component_revisions cr
                         ON cr.component_id = dcr.component_id AND cr.revision_id = dcr.component_revision_id
                     JOIN components c
-                        ON c.component_id  = cr.component_id
+                        ON c.component_id  = cr.component_id AND c.environment_id = cd.environment_id
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     WHERE c.component_id = $1
+                        AND c.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                     .bind(component_id),
             )
@@ -594,7 +630,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn get_all_deployed_by_id(
         &self,
         component_id: Uuid,
-    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentAuthExtRevisionRecord>> {
         let revisions = self.with_ro("get_all_deployed_by_id")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -614,13 +650,31 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata,
-                           cr.object_store_key, cr.binary_hash
+                           cr.object_store_key, cr.binary_hash,
+                           ap.application_id, ap.name AS application_name,
+                           a.account_id AS owner_account_id,
+                           a.email AS owner_account_email,
+                           er.name AS environment_name,
+                           er.revision_id AS environment_revision_id,
+                           er.compatibility_check AS environment_compatibility_check,
+                           er.version_check AS environment_version_check,
+                           er.security_overrides AS environment_security_overrides
                     FROM distinct_revs dr
                     JOIN component_revisions cr
                         ON cr.revision_id = dr.revision_id
                     JOIN components c
                         ON c.component_id = cr.component_id
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     WHERE c.component_id = $1
+                        AND c.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                     ORDER BY cr.revision_id;
                 "#})
                     .bind(component_id),
@@ -635,7 +689,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         component_id: Uuid,
         revision_id: i64,
         include_deleted: bool,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
         let revision = self
             .with_ro("get_by_id_and_revision")
             .fetch_optional_as(
@@ -644,10 +698,29 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata,
-                           cr.object_store_key, cr.binary_hash
+                           cr.object_store_key, cr.binary_hash,
+                           ap.application_id, ap.name AS application_name,
+                           a.account_id AS owner_account_id,
+                           a.email AS owner_account_email,
+                           er.name AS environment_name,
+                           er.revision_id AS environment_revision_id,
+                           er.compatibility_check AS environment_compatibility_check,
+                           er.version_check AS environment_version_check,
+                           er.security_overrides AS environment_security_overrides
                     FROM components c
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     JOIN component_revisions cr ON c.component_id = cr.component_id
-                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR c.deleted_at IS NULL)
+                    WHERE c.component_id = $1
+                        AND cr.revision_id = $2
+                        AND ($3 OR c.deleted_at IS NULL)
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                 .bind(component_id)
                 .bind(revision_id)
@@ -749,7 +822,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         deployment_revision_id: i64,
         name: &str,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
-        let revision = self.with_ro("get_deployed_by_name")
+        let revision = self
+            .with_ro("get_deployed_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT c.environment_id, c.name,
@@ -759,12 +833,15 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
-                    JOIN deployment_component_revisions dcr ON dcr.component_id = c.component_id AND dcr.component_revision_id = cr.revision_id
+                    JOIN deployment_component_revisions dcr
+                        ON dcr.component_id = c.component_id
+                            AND dcr.component_revision_id = cr.revision_id
+                            AND dcr.environment_id = $1
                     WHERE c.environment_id = $1 AND dcr.deployment_revision_id = $2 AND c.name = $3
                 "#})
-                    .bind(environment_id)
-                    .bind(deployment_revision_id)
-                    .bind(name),
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(name),
             )
             .await?;
 

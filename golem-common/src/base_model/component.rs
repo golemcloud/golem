@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::{AgentFileContentHash, AgentType};
+use crate::base_model::agent::AgentFileContentHash;
 use crate::base_model::application::ApplicationId;
 use crate::base_model::component_metadata::ComponentMetadata;
 use crate::base_model::diff;
@@ -24,19 +24,19 @@ use crate::base_model::plugin_registration::PluginRegistrationId;
 use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::base_model::worker::AgentConfigEntryDto;
 use crate::model::agent::AgentTypeName;
+use crate::schema::agent::AgentTypeSchema;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
 };
 use derive_more::Display;
-use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
 newtype_uuid!(
     ComponentId,
     wit_name: "component-id",
-    wit_owner: "golem:core@1.5.0/types",
+    wit_owner: "golem:core@2.0.0/types",
     golem_api_grpc::proto::golem::component::ComponentId
 );
 
@@ -50,7 +50,7 @@ declare_transparent_newtypes! {
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
     /// There can only be a single plugin with a given priority installed to a component.
-    #[derive(Copy, PartialOrd, Eq, Hash, Ord, Display, IntoValue, FromValue)]
+    #[derive(Copy, PartialOrd, Eq, Hash, Ord, Display)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(transparent))]
     pub struct PluginPriority(pub i32);
@@ -127,7 +127,7 @@ declare_structs! {
         pub component_name: ComponentName,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub agent_types: Vec<AgentType>,
+        pub agent_types: Vec<AgentTypeSchema>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
@@ -135,7 +135,7 @@ declare_structs! {
 
     pub struct ComponentUpdate {
         pub current_revision: ComponentRevision,
-        pub agent_types: Option<Vec<AgentType>>,
+        pub agent_types: Option<Vec<AgentTypeSchema>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,

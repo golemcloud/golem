@@ -32,9 +32,9 @@ use anyhow::anyhow;
 use desert_rust::BinaryCodec;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::agent::{AgentType, RegisteredAgentTypeImplementer};
+use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent_secret::AgentSecretId;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
@@ -48,6 +48,7 @@ use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionI
 use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
+use golem_common::schema::AgentTypeSchema;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -374,9 +375,12 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub canonical_agent_type_name: String,
 
     pub component_id: Uuid,
+    pub component_name: String,
     pub component_revision_id: i64,
+    pub owner_account_id: Uuid,
+    pub owner_account_email: String,
     pub webhook_prefix_authority_and_path: Option<String>,
-    pub agent_type: Blob<AgentType>,
+    pub agent_type: Blob<AgentTypeSchema>,
 }
 
 impl DeploymentRegisteredAgentTypeRecord {
@@ -395,10 +399,17 @@ impl DeploymentRegisteredAgentTypeRecord {
                 .to_string()
                 .to_kebab_case(),
             component_id: registered_agent_type.implemented_by.component_id.0,
+            component_name: registered_agent_type.implemented_by.component_name,
             component_revision_id: registered_agent_type
                 .implemented_by
                 .component_revision
                 .into(),
+            owner_account_id: registered_agent_type.implemented_by.account_id.0,
+            owner_account_email: registered_agent_type
+                .implemented_by
+                .account_email
+                .as_str()
+                .to_string(),
             webhook_prefix_authority_and_path: registered_agent_type
                 .webhook_prefix_authority_and_path,
             agent_type: Blob::new(registered_agent_type.agent_type),
@@ -414,8 +425,45 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
+                component_name: value.component_name,
+                account_id: value.owner_account_id.into(),
+                account_email: AccountEmail::new(value.owner_account_email),
             },
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentRegisteredAgentTypeScopedRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub agent_type_name: String,
+    pub canonical_agent_type_name: String,
+
+    pub component_id: Uuid,
+    pub component_name: String,
+    pub component_revision_id: i64,
+    pub webhook_prefix_authority_and_path: Option<String>,
+    pub agent_type: Blob<AgentTypeSchema>,
+}
+
+impl DeploymentRegisteredAgentTypeScopedRecord {
+    pub fn try_into_deployed(
+        self,
+        owner_account_id: AccountId,
+        owner_account_email: AccountEmail,
+    ) -> Result<DeployedRegisteredAgentType, DeployRepoError> {
+        Ok(DeployedRegisteredAgentType {
+            agent_type: self.agent_type.into_value(),
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: self.component_id.into(),
+                component_revision: self.component_revision_id.try_into()?,
+                component_name: self.component_name,
+                account_id: owner_account_id,
+                account_email: owner_account_email,
+            },
+            webhook_prefix_authority_and_path: self.webhook_prefix_authority_and_path,
         })
     }
 }
@@ -428,11 +476,12 @@ pub struct ResolvedAgentTypeRecord {
     pub agent_type_name: String,
     pub canonical_agent_type_name: String,
     pub component_id: Uuid,
+    pub component_name: String,
     pub component_revision_id: i64,
     pub webhook_prefix_authority_and_path: Option<String>,
-    pub agent_type: Blob<AgentType>,
+    pub agent_type: Blob<AgentTypeSchema>,
     pub owner_account_id: Uuid,
-    pub environment_roles_from_shares: i32,
+    pub owner_account_email: String,
 }
 
 impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
@@ -443,6 +492,9 @@ impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
+                component_name: value.component_name,
+                account_id: value.owner_account_id.into(),
+                account_email: AccountEmail::new(value.owner_account_email),
             },
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })
@@ -631,6 +683,7 @@ pub struct CompiledMcpData {
 #[derive(FromRow)]
 pub struct DeploymentCompiledMcpRecord {
     pub account_id: Uuid,
+    pub account_email: String,
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub domain: String,
@@ -641,6 +694,7 @@ impl DeploymentCompiledMcpRecord {
     pub fn from_model(compiled_mcp: CompiledMcp) -> Self {
         Self {
             account_id: compiled_mcp.account_id.0,
+            account_email: compiled_mcp.account_email.as_str().to_string(),
             environment_id: compiled_mcp.environment_id.0,
             deployment_revision_id: compiled_mcp.deployment_revision.into(),
             domain: compiled_mcp.domain.0.clone(),
@@ -660,6 +714,7 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
 
         Ok(Self {
             account_id: AccountId(value.account_id),
+            account_email: AccountEmail::new(value.account_email),
             environment_id: EnvironmentId(value.environment_id),
             deployment_revision: value.deployment_revision_id.try_into()?,
             domain: Domain(value.domain),
@@ -674,6 +729,7 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
 #[derive(FromRow)]
 pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
     pub account_id: Uuid,
+    pub account_email: String,
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub domain: String,
@@ -756,6 +812,7 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
 
         Ok(Self {
             account_id: AccountId(value.account_id),
+            account_email: AccountEmail::new(value.account_email),
             environment_id: EnvironmentId(value.environment_id),
             deployment_revision: value.deployment_revision_id.try_into()?,
             security_scheme_missing: value.security_scheme_missing,

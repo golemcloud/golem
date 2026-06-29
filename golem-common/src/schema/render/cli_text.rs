@@ -20,6 +20,7 @@
 
 use crate::schema::canonical;
 use crate::schema::graph::SchemaGraph;
+use crate::schema::host_managed::HostManagedKind;
 use crate::schema::metadata::TypeId;
 use crate::schema::render::error::RenderError;
 use crate::schema::render::walker::{SchemaWalker, walk};
@@ -286,8 +287,9 @@ fn discriminator_text(rule: &DiscriminatorRule) -> String {
 
 /// Render a [`SchemaValue`] using the schema for context.
 ///
-/// Capability values (`Secret`, `QuotaToken`) are emitted as `<redacted>`.
-/// Use [`value_to_cli_text_unredacted`] only when the caller needs the raw
+/// Capability values (`Secret`, `QuotaToken`) are emitted as
+/// `<redacted: kind>` (see [`HostManagedKind`]). Use
+/// [`value_to_cli_text_unredacted`] only when the caller needs the raw
 /// canonical encoding (admin tooling, test fixtures).
 pub fn value_to_cli_text(
     graph: &SchemaGraph,
@@ -355,6 +357,16 @@ fn render_value(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<String, RenderError> {
+    if r.redact
+        && let (Some(type_kind), Some(value_kind)) = (
+            HostManagedKind::from_type(ty),
+            HostManagedKind::from_value(value),
+        )
+        && type_kind == value_kind
+    {
+        return Ok(type_kind.redacted_placeholder().to_string());
+    }
+
     match (ty, value) {
         (SchemaType::Bool { .. }, SchemaValue::Bool(b)) => Ok(b.to_string()),
         (SchemaType::S8 { .. }, SchemaValue::S8(i)) => Ok(i.to_string()),
@@ -385,19 +397,11 @@ fn render_value(
         (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => {
             Ok(canonical::quantity::to_text(q)?)
         }
-        (SchemaType::Secret { .. }, SchemaValue::Secret(p)) => {
-            if r.redact {
-                Ok("<redacted>".to_string())
-            } else {
-                Ok(canonical::secret::to_text(p)?)
-            }
-        }
+        // Redaction is handled by the early return at the top of this function
+        // when `r.redact` is set; reaching here means the unredacted path.
+        (SchemaType::Secret { .. }, SchemaValue::Secret(p)) => Ok(canonical::secret::to_text(p)?),
         (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(p)) => {
-            if r.redact {
-                Ok("<redacted>".to_string())
-            } else {
-                Ok(canonical::quota_token::to_text(p)?)
-            }
+            Ok(canonical::quota_token::to_text(p)?)
         }
 
         (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {

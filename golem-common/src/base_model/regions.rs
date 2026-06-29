@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::base_model::OplogIndex;
-use golem_wasm_derive::{FromValue, IntoValue};
 use range_set_blaze::RangeSetBlaze;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -22,7 +21,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Bound::{Included, Unbounded};
 use std::ops::RangeInclusive;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -30,7 +29,6 @@ use std::ops::RangeInclusive;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "oplog-region", owner = "golem:api@1.5.0/oplog")]
 pub struct OplogRegion {
     pub start: OplogIndex,
     pub end: OplogIndex,

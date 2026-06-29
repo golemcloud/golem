@@ -20,15 +20,14 @@ Path|Method|Protected
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
       "revision": 0,
       "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+      "applicationName": "string",
       "name": "string",
       "diffModelVersion": 0,
       "compatibilityCheck": true,
       "versionCheck": true,
       "securityOverrides": true,
       "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
-      "rolesFromActiveShares": [
-        "admin"
-      ],
+      "ownerAccountEmail": "string",
       "currentDeployment": {
         "revision": 0,
         "deploymentRevision": 0,
@@ -66,15 +65,14 @@ Path|Method|Protected
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "applicationName": "string",
   "name": "string",
   "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
   "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
-  "rolesFromActiveShares": [
-    "admin"
-  ],
+  "ownerAccountEmail": "string",
   "currentDeployment": {
     "revision": 0,
     "deploymentRevision": 0,
@@ -102,15 +100,14 @@ Path|Method|Protected
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "applicationName": "string",
   "name": "string",
   "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
   "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
-  "rolesFromActiveShares": [
-    "admin"
-  ],
+  "ownerAccountEmail": "string",
   "currentDeployment": {
     "revision": 0,
     "deploymentRevision": 0,
@@ -138,15 +135,14 @@ Path|Method|Protected
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "applicationName": "string",
   "name": "string",
   "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
   "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
-  "rolesFromActiveShares": [
-    "admin"
-  ],
+  "ownerAccountEmail": "string",
   "currentDeployment": {
     "revision": 0,
     "deploymentRevision": 0,
@@ -200,15 +196,14 @@ Path|Method|Protected
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "applicationName": "string",
   "name": "string",
   "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
   "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
-  "rolesFromActiveShares": [
-    "admin"
-  ],
+  "ownerAccountEmail": "string",
   "currentDeployment": {
     "revision": 0,
     "deploymentRevision": 0,
@@ -456,30 +451,97 @@ Path|Method|Protected
   "values": [
     {
       "agentType": {
-        "typeName": "string",
+        "type_name": "string",
         "description": "string",
-        "sourceLanguage": "string",
+        "source_language": "string",
+        "schema": {
+          "defs": [
+            {
+              "id": "string",
+              "name": "string",
+              "body": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "root": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        },
         "constructor": {
           "name": "string",
           "description": "string",
-          "promptHint": "string",
-          "inputSchema": {
-            "type": "Multimodal",
-            "elements": [
+          "prompt_hint": "string",
+          "input_schema": {
+            "tag": "parameters",
+            "value": [
               {
                 "name": "string",
+                "source": {
+                  "tag": "user-supplied"
+                },
                 "schema": {
-                  "type": "ComponentModel",
-                  "elementType": {
-                    "type": "Variant",
-                    "name": "string",
-                    "owner": "string",
-                    "cases": [
-                      {
-                        "name": "string",
-                        "typ": {}
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
-                    ]
+                    }
+                  }
+                },
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
                   }
                 }
               }
@@ -490,52 +552,54 @@ Path|Method|Protected
           {
             "name": "string",
             "description": "string",
-            "promptHint": "string",
-            "inputSchema": {
-              "type": "Multimodal",
-              "elements": [
+            "prompt_hint": "string",
+            "input_schema": {
+              "tag": "parameters",
+              "value": [
                 {
                   "name": "string",
+                  "source": {
+                    "tag": "user-supplied"
+                  },
                   "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
                         }
-                      ]
+                      }
+                    }
+                  },
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
                   }
                 }
               ]
             },
-            "outputSchema": {
-              "type": "Multimodal",
-              "elements": [
-                {
-                  "name": "string",
-                  "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
+            "output_schema": {
+              "tag": "unit"
             },
-            "httpEndpoint": [
+            "http_endpoint": [
               {
                 "httpMethod": {
                   "type": "Patch"
@@ -568,7 +632,7 @@ Path|Method|Protected
                 }
               }
             ],
-            "readOnly": {
+            "read_only": {
               "cachePolicy": {
                 "type": "UntilWrite"
               },
@@ -578,29 +642,96 @@ Path|Method|Protected
         ],
         "dependencies": [
           {
-            "typeName": "string",
+            "type_name": "string",
             "description": "string",
+            "schema": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
             "constructor": {
               "name": "string",
               "description": "string",
-              "promptHint": "string",
-              "inputSchema": {
-                "type": "Multimodal",
-                "elements": [
+              "prompt_hint": "string",
+              "input_schema": {
+                "tag": "parameters",
+                "value": [
                   {
                     "name": "string",
+                    "source": {
+                      "tag": "user-supplied"
+                    },
                     "schema": {
-                      "type": "ComponentModel",
-                      "elementType": {
-                        "type": "Variant",
-                        "name": "string",
-                        "owner": "string",
-                        "cases": [
-                          {
-                            "name": "string",
-                            "typ": {}
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
                           }
-                        ]
+                        }
+                      }
+                    },
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
                     }
                   }
@@ -611,46 +742,52 @@ Path|Method|Protected
               {
                 "name": "string",
                 "description": "string",
-                "promptHint": "string",
-                "inputSchema": {
-                  "type": "Multimodal",
-                  "elements": [
+                "prompt_hint": "string",
+                "input_schema": {
+                  "tag": "parameters",
+                  "value": [
                     {
                       "name": "string",
+                      "source": {
+                        "tag": "user-supplied"
+                      },
                       "schema": {
-                        "type": "ComponentModel",
-                        "elementType": {
-                          "type": "Variant",
-                          "name": "string",
-                          "owner": "string",
-                          "cases": [
-                            {}
-                          ]
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
                         }
                       }
                     }
                   ]
                 },
-                "outputSchema": {
-                  "type": "Multimodal",
-                  "elements": [
-                    {
-                      "name": "string",
-                      "schema": {
-                        "type": "ComponentModel",
-                        "elementType": {
-                          "type": "Variant",
-                          "name": "string",
-                          "owner": "string",
-                          "cases": [
-                            {}
-                          ]
-                        }
-                      }
-                    }
-                  ]
+                "output_schema": {
+                  "tag": "unit"
                 },
-                "httpEndpoint": [
+                "http_endpoint": [
                   {
                     "httpMethod": {
                       "type": "Patch"
@@ -683,7 +820,7 @@ Path|Method|Protected
                     }
                   }
                 ],
-                "readOnly": {
+                "read_only": {
                   "cachePolicy": {
                     "type": "UntilWrite"
                   },
@@ -694,7 +831,7 @@ Path|Method|Protected
           }
         ],
         "mode": "Durable",
-        "httpMount": {
+        "http_mount": {
           "pathPrefix": [
             {
               "type": "Literal",
@@ -726,23 +863,34 @@ Path|Method|Protected
             "path": [
               "string"
             ],
-            "valueType": {
-              "type": "Variant",
-              "name": "string",
-              "owner": "string",
-              "cases": [
-                {
-                  "name": "string",
-                  "typ": {}
+            "value_type": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
                 }
-              ]
+              }
             }
           }
         ]
       },
       "implementedBy": {
         "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-        "componentRevision": 0
+        "componentRevision": 0,
+        "componentName": "string",
+        "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+        "accountEmail": "string"
       },
       "webhookPrefixAuthorityAndPath": "string"
     }
@@ -766,30 +914,97 @@ Path|Method|Protected
 ```json copy
 {
   "agentType": {
-    "typeName": "string",
+    "type_name": "string",
     "description": "string",
-    "sourceLanguage": "string",
+    "source_language": "string",
+    "schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
+    },
     "constructor": {
       "name": "string",
       "description": "string",
-      "promptHint": "string",
-      "inputSchema": {
-        "type": "Multimodal",
-        "elements": [
+      "prompt_hint": "string",
+      "input_schema": {
+        "tag": "parameters",
+        "value": [
           {
             "name": "string",
+            "source": {
+              "tag": "user-supplied"
+            },
             "schema": {
-              "type": "ComponentModel",
-              "elementType": {
-                "type": "Variant",
-                "name": "string",
-                "owner": "string",
-                "cases": [
-                  {
-                    "name": "string",
-                    "typ": {}
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
                   }
-                ]
+                }
+              }
+            },
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
               }
             }
           }
@@ -800,52 +1015,54 @@ Path|Method|Protected
       {
         "name": "string",
         "description": "string",
-        "promptHint": "string",
-        "inputSchema": {
-          "type": "Multimodal",
-          "elements": [
+        "prompt_hint": "string",
+        "input_schema": {
+          "tag": "parameters",
+          "value": [
             {
               "name": "string",
+              "source": {
+                "tag": "user-supplied"
+              },
               "schema": {
-                "type": "ComponentModel",
-                "elementType": {
-                  "type": "Variant",
-                  "name": "string",
-                  "owner": "string",
-                  "cases": [
-                    {
-                      "name": "string",
-                      "typ": {}
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
-                  ]
+                  }
+                }
+              },
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
                 }
               }
             }
           ]
         },
-        "outputSchema": {
-          "type": "Multimodal",
-          "elements": [
-            {
-              "name": "string",
-              "schema": {
-                "type": "ComponentModel",
-                "elementType": {
-                  "type": "Variant",
-                  "name": "string",
-                  "owner": "string",
-                  "cases": [
-                    {
-                      "name": "string",
-                      "typ": {}
-                    }
-                  ]
-                }
-              }
-            }
-          ]
+        "output_schema": {
+          "tag": "unit"
         },
-        "httpEndpoint": [
+        "http_endpoint": [
           {
             "httpMethod": {
               "type": "Patch"
@@ -878,7 +1095,7 @@ Path|Method|Protected
             }
           }
         ],
-        "readOnly": {
+        "read_only": {
           "cachePolicy": {
             "type": "UntilWrite"
           },
@@ -888,29 +1105,96 @@ Path|Method|Protected
     ],
     "dependencies": [
       {
-        "typeName": "string",
+        "type_name": "string",
         "description": "string",
+        "schema": {
+          "defs": [
+            {
+              "id": "string",
+              "name": "string",
+              "body": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "root": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        },
         "constructor": {
           "name": "string",
           "description": "string",
-          "promptHint": "string",
-          "inputSchema": {
-            "type": "Multimodal",
-            "elements": [
+          "prompt_hint": "string",
+          "input_schema": {
+            "tag": "parameters",
+            "value": [
               {
                 "name": "string",
+                "source": {
+                  "tag": "user-supplied"
+                },
                 "schema": {
-                  "type": "ComponentModel",
-                  "elementType": {
-                    "type": "Variant",
-                    "name": "string",
-                    "owner": "string",
-                    "cases": [
-                      {
-                        "name": "string",
-                        "typ": {}
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
-                    ]
+                    }
+                  }
+                },
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
                   }
                 }
               }
@@ -921,52 +1205,54 @@ Path|Method|Protected
           {
             "name": "string",
             "description": "string",
-            "promptHint": "string",
-            "inputSchema": {
-              "type": "Multimodal",
-              "elements": [
+            "prompt_hint": "string",
+            "input_schema": {
+              "tag": "parameters",
+              "value": [
                 {
                   "name": "string",
+                  "source": {
+                    "tag": "user-supplied"
+                  },
                   "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
                         }
-                      ]
+                      }
+                    }
+                  },
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
                   }
                 }
               ]
             },
-            "outputSchema": {
-              "type": "Multimodal",
-              "elements": [
-                {
-                  "name": "string",
-                  "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
+            "output_schema": {
+              "tag": "unit"
             },
-            "httpEndpoint": [
+            "http_endpoint": [
               {
                 "httpMethod": {
                   "type": "Patch"
@@ -999,7 +1285,7 @@ Path|Method|Protected
                 }
               }
             ],
-            "readOnly": {
+            "read_only": {
               "cachePolicy": {
                 "type": "UntilWrite"
               },
@@ -1010,7 +1296,7 @@ Path|Method|Protected
       }
     ],
     "mode": "Durable",
-    "httpMount": {
+    "http_mount": {
       "pathPrefix": [
         {
           "type": "Literal",
@@ -1042,23 +1328,34 @@ Path|Method|Protected
         "path": [
           "string"
         ],
-        "valueType": {
-          "type": "Variant",
-          "name": "string",
-          "owner": "string",
-          "cases": [
-            {
-              "name": "string",
-              "typ": {}
+        "value_type": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
             }
-          ]
+          }
         }
       }
     ]
   },
   "implementedBy": {
     "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-    "componentRevision": 0
+    "componentRevision": 0,
+    "componentName": "string",
+    "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+    "accountEmail": "string"
   },
   "webhookPrefixAuthorityAndPath": "string"
 }

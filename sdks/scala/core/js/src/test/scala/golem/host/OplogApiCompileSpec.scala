@@ -18,6 +18,7 @@ package golem.host
 
 import golem.HostApi
 import golem.runtime.rpc.host.AgentHostApi
+import golem.schema.{IntoSchema, TypedSchemaValue}
 import zio.test._
 
 import scala.scalajs.js
@@ -25,13 +26,9 @@ import scala.scalajs.js
 object OplogApiCompileSpec extends ZIOSpecDefault {
   import OplogApi._
 
-  private val ts        = ContextApi.DateTime(BigInt(1700000000L), 500000000)
-  private val attr      = ContextApi.Attribute("k", ContextApi.AttributeValue.StringValue("v"))
-  private val sampleVat = WitValueTypes.ValueAndType(
-    WitValueTypes.WitValue(List(WitValueTypes.WitNode.PrimString("test"))),
-    WitValueTypes.WitType(List(WitValueTypes.NamedWitTypeNode(None, None, WitValueTypes.WitTypeNode.PrimStringType)))
-  )
-  private val sampleTdv = TypedDataValue("""{"tag":"tuple","val":[]}""", """{"tag":"tuple","val":[]}""")
+  private val ts                            = ContextApi.DateTime(BigInt(1700000000L), 500000000)
+  private val attr                          = ContextApi.Attribute("k", ContextApi.AttributeValue.StringValue("v"))
+  private val sampleTyped: TypedSchemaValue = IntoSchema[String].toTyped("test")
 
   private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
@@ -45,7 +42,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       AgentMethodInvocationParameters(
         "idem-1",
         "func",
-        Some(List(sampleTdv)),
+        Some(List(sampleTyped)),
         "trace1",
         List("state1"),
         List(spanDatas)
@@ -84,6 +81,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   @SuppressWarnings(Array("all"))
   private def describeEntry(e: OplogEntry): String = e match {
     case OplogEntry.Create(p)                       => s"create(${p.componentRevision})"
+    case OplogEntry.Start(p)                        => s"start(${p.functionName})"
+    case OplogEntry.End(p)                          => s"end(${p.startIndex})"
+    case OplogEntry.Cancelled(p)                    => s"cancelled(${p.startIndex})"
     case OplogEntry.HostCall(p)                     => s"import(${p.functionName})"
     case OplogEntry.AgentInvocationStarted(p)       => s"export(${p.functionName})"
     case OplogEntry.AgentInvocationFinished(p)      => s"completed(${p.consumedFuel})"
@@ -171,22 +171,33 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
       OplogEntry.CommittedRemoteTransaction(RemoteTransactionParameters(ts, BigInt(12))),
       OplogEntry.RolledBackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(13))),
-      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTdv), 1000L)),
+      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
       OplogEntry.HostCall(
         HostCallParameters(
           ts,
           "wasi:io/read",
-          sampleVat,
-          sampleVat,
+          sampleTyped,
+          sampleTyped,
           DurabilityApi.DurableFunctionType.ReadRemote
         )
       ),
+      OplogEntry.Start(
+        StartParameters(
+          ts,
+          None,
+          "wasi:io/read",
+          Some(sampleTyped),
+          DurabilityApi.DurableFunctionType.ReadRemote
+        )
+      ),
+      OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleTyped), forcedCommit = true)),
+      OplogEntry.Cancelled(CancelledParameters(ts, BigInt(5), None)),
       OplogEntry.AgentInvocationStarted(
         AgentInvocationStartedParameters(
           ts,
           "increment",
-          List(sampleTdv),
+          List(sampleTyped),
           "idem-1",
           "trace-1",
           List("state"),
@@ -211,9 +222,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     )
 
   def spec = suite("OplogApiCompileSpec")(
-    test("all 38 OplogEntry variants constructed") {
+    test("all 41 OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 38)
+      assertTrue(distinctTags.size >= 41)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

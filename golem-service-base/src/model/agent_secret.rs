@@ -16,18 +16,26 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_value::SchemaValue;
 
+/// In-memory representation of an agent secret.
+///
+/// `secret_type` is a [`SchemaGraph`] (whose `root` is the secret's type
+/// and `defs` carry any named composites) and `secret_value` is an optional
+/// [`SchemaValue`] bound to that graph. Persisted repo blobs store these
+/// schema types directly via `BinaryCodec`.
+///
+/// The wire formats (REST DTO and gRPC) are schema-native as well, so the
+/// conversions below are structural pass-throughs.
 #[derive(Debug, Clone)]
 pub struct AgentSecret {
     pub id: AgentSecretId,
     pub environment_id: EnvironmentId,
     pub path: CanonicalAgentSecretPath,
     pub revision: AgentSecretRevision,
-    pub secret_type: AnalysedType,
-    pub secret_value: Option<golem_wasm::Value>,
+    pub secret_type: SchemaGraph,
+    pub secret_value: Option<SchemaValue>,
 }
 
 impl From<AgentSecret> for golem_common::model::agent_secret::AgentSecretDto {
@@ -37,13 +45,8 @@ impl From<AgentSecret> for golem_common::model::agent_secret::AgentSecretDto {
             environment_id: value.environment_id,
             path: value.path,
             revision: value.revision,
-            secret_value: value.secret_value.map(|sv| {
-                let value_and_type = ValueAndType::new(sv, value.secret_type.clone());
-                value_and_type
-                    .to_json_value()
-                    .expect("value and type in AgentSecret must be valid JSON")
-            }),
             secret_type: value.secret_type,
+            secret_value: value.secret_value,
         }
     }
 }
@@ -55,7 +58,7 @@ impl From<AgentSecret> for golem_api_grpc::proto::golem::registry::AgentSecret {
             environment_id: Some(value.environment_id.into()),
             path: value.path.0,
             revision: value.revision.into(),
-            secret_type: Some((&value.secret_type).into()),
+            secret_type: Some(value.secret_type.into()),
             secret_value: value.secret_value.map(Into::into),
         }
     }
@@ -71,6 +74,19 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecret> for AgentSecre
             "agent secret path must be in canonical form"
         );
 
+        let secret_type: SchemaGraph = value
+            .secret_type
+            .ok_or("Missing secret_type field")?
+            .try_into()
+            .map_err(|e| format!("Failed to decode secret_type SchemaGraph: {e}"))?;
+        let secret_value = value
+            .secret_value
+            .map(|pv| -> Result<SchemaValue, String> {
+                pv.try_into()
+                    .map_err(|e| format!("Failed to decode secret_value SchemaValue: {e}"))
+            })
+            .transpose()?;
+
         Ok(Self {
             id: value
                 .agent_secret_id
@@ -82,8 +98,8 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecret> for AgentSecre
                 .try_into()?,
             path: CanonicalAgentSecretPath(value.path),
             revision: AgentSecretRevision::try_from(value.revision)?,
-            secret_type: (&value.secret_type.ok_or("Missing secret_type field")?).try_into()?,
-            secret_value: value.secret_value.map(TryInto::try_into).transpose()?,
+            secret_type,
+            secret_value,
         })
     }
 }

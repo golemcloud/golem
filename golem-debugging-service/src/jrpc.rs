@@ -325,6 +325,7 @@ impl JrpcSession {
                             &owned_agent_id,
                             &params.target_agent_id,
                             params.oplog_index_cut_off,
+                            &self.auth_ctx,
                         )
                         .await;
                     to_json_rpc_result(&jrpc_id, result)

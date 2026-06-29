@@ -44,11 +44,14 @@
 //! case_idx 4 => RemoteInternalError { details: String }
 //! ```
 
-use golem_common::model::auth::EnvironmentRole;
+use golem_client::api::RegistryServiceClient;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
+use golem_test_framework::dsl::{AgentResult, TestDsl, TestDslExtended};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -69,19 +72,19 @@ async fn store_rpc_component(
         .await
 }
 
-/// Assert that a `DataValue` result from `RpcAuthTester.try_call_counter` is `Ok`.
-fn assert_rpc_outcome_is_ok(result: golem_common::model::agent::DataValue) {
+/// Assert that a result from `RpcAuthTester.try_call_counter` is `Ok`.
+fn assert_rpc_outcome_is_ok(result: AgentResult) {
     let value = result.into_return_value().expect("Expected a return value");
     match value {
-        Value::Variant { case_idx, .. } => {
+        SchemaValue::Variant(payload) => {
             assert_eq!(
-                case_idx, OK_CASE_IDX,
+                payload.case, OK_CASE_IDX,
                 "Expected RpcCallOutcome::Ok (case_idx={}), got case_idx={}",
-                OK_CASE_IDX, case_idx
+                OK_CASE_IDX, payload.case
             );
         }
         other => {
-            panic!("Expected Value::Variant for RpcCallOutcome, got: {other:?}");
+            panic!("Expected SchemaValue::Variant for RpcCallOutcome, got: {other:?}");
         }
     }
 }
@@ -108,12 +111,53 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
     let (_, caller_env) = caller.app_and_env().await?;
     let caller_component = store_rpc_component(&caller, &caller_env.id).await?;
 
-    // Grant caller Deployer access to owner's environment.
+    // Grant caller access to the owner's component and agents through permission shares.
     owner
-        .share_environment(
-            &owner_env.id,
-            &caller.account_id,
-            &[EnvironmentRole::Deployer],
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: caller.account_email.clone(),
+                name: PermissionShareName("rpc-auth-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!(
+                            "environment({}/{}/{}) @ {} : view :",
+                            owner.account_email.as_str(),
+                            owner_env.application_name.0,
+                            owner_env.name.0,
+                            caller.account_email.as_str(),
+                        ),
+                        format!(
+                            "component({}/{}/{}/*) @ {} : view : *",
+                            owner.account_email.as_str(),
+                            owner_env.application_name.0,
+                            owner_env.name.0,
+                            caller.account_email.as_str(),
+                        ),
+                        format!(
+                            "agent({}/{}/{}/{}/*) @ {} : view : *",
+                            owner.account_email.as_str(),
+                            owner_env.application_name.0,
+                            owner_env.name.0,
+                            owner_component.component_name.0,
+                            caller.account_email.as_str(),
+                        ),
+                        format!(
+                            "agent({}/{}/{}/{}/*) @ {} : invoke : *",
+                            owner.account_email.as_str(),
+                            owner_env.application_name.0,
+                            owner_env.name.0,
+                            owner_component.component_name.0,
+                            caller.account_email.as_str(),
+                        ),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
         )
         .await?;
 

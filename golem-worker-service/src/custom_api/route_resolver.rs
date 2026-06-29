@@ -206,6 +206,7 @@ impl RouteResolver {
 
             let enriched = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
+                account_email: compiled_routes.account_email.clone(),
                 environment_id: compiled_routes.environment_id,
                 route_id: route.route_id,
                 method: route
@@ -239,6 +240,7 @@ impl RouteResolver {
             // This is too late to show an error to the user, so just continue as best we can in that case.
             let callback_route = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
+                account_email: compiled_routes.account_email.clone(),
                 environment_id: compiled_routes.environment_id,
                 // TODO: Have some helper for synthethic vs user defined routes
                 route_id: -1,

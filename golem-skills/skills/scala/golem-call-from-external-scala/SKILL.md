@@ -5,57 +5,57 @@ description: "Calling Golem agents from external applications when the agent is 
 
 # Calling Agents from External Applications (Scala)
 
-## Bridge Generation Not Yet Available
+## Generate a Scala Bridge SDK
 
-Golem's bridge SDK generation currently supports **TypeScript** and **Rust** target languages only. There is no Scala bridge generator yet.
+Golem can generate typed Scala bridge SDKs for calling agents from external JVM applications. The bridge target language is independent of the agent's source language: a Scala bridge can call agents written in Rust, TypeScript, Scala, or MoonBit.
 
-## Alternative: Call the REST API from Scala
+Configure bridge generation in `golem.yaml`:
 
-You can call any Golem agent using the REST API from a standalone Scala (JVM) application. Use Java's built-in `java.net.http.HttpClient` — no additional dependencies needed.
+```yaml
+bridge:
+  scala:
+    agents: "*"
+```
+
+Or generate a bridge directly:
+
+```shell
+golem generate-bridge --language scala --agent-type-name MyAgent --output-dir scala-bridge
+```
+
+The generated output is a self-contained sbt project. For an agent type named `CounterAgent`, the client package is `golem.bridge.client.counter_agent` and the generated client object is `CounterAgentClient`.
 
 ### Setup
 
-Create a separate Scala project (outside the Golem component) for the external CLI app. This is a regular JVM Scala project (not Scala.js):
+Use the generated sbt project as a dependency from your external Scala application, or add your application entry point inside the generated project while prototyping.
 
 ```scala
 // build.sbt
-scalaVersion := "3.6.4"
+scalaVersion := "3.8.2"
 name := "external-client"
+
+lazy val bridge = RootProject(file("../scala-bridge/counter-agent-client"))
+
+lazy val root = (project in file("."))
+  .dependsOn(bridge)
 ```
 
 ### Example
 
 ```scala
-import java.net.URI
-import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+import golem.bridge.client.counter_agent.CounterAgentClient
+import golem.bridge.runtime.GolemServer
+
+import scala.concurrent.Await
+import scala.concurrent.duration._
 
 @main def main(): Unit =
-  val client = HttpClient.newHttpClient()
-  val token  = "5c832d93-ff85-4a8f-9803-513950fdfdb1"  // local well-known token
+  CounterAgentClient.configure(GolemServer.Local, "my-app", "local")
 
-  def invokeAgent(
-    appName: String, envName: String,
-    agentTypeName: String, agentName: String,
-    methodName: String
-  ): String =
-    val body = s"""{
-      "appName": "$appName",
-      "envName": "$envName",
-      "agentTypeName": "$agentTypeName",
-      "parameters": { "type": "Tuple", "elements": [{ "type": "ComponentModel", "value": "$agentName" }] },
-      "methodName": "$methodName",
-      "methodParameters": { "type": "Tuple", "elements": [] },
-      "mode": "await"
-    }"""
-    val request = HttpRequest.newBuilder()
-      .uri(URI.create("http://localhost:9881/v1/agents/invoke-agent"))
-      .header("Content-Type", "application/json")
-      .header("Authorization", s"Bearer $token")
-      .POST(HttpRequest.BodyPublishers.ofString(body))
-      .build()
-    client.send(request, HttpResponse.BodyHandlers.ofString()).body()
+  val timeout = 30.seconds
+  val counter = Await.result(CounterAgentClient.get("my-counter"), timeout)
+  val result  = Await.result(counter.increment(), timeout)
 
-  val result = invokeAgent("my-app", "local", "MyAgent", "my-instance", "doSomething")
   println(result)
 ```
 
@@ -65,56 +65,25 @@ import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 sbt run
 ```
 
-### REST API Reference
-
-**Endpoint**: `POST /v1/agents/invoke-agent`
-
-**Request body**:
-
-```json
-{
-  "appName": "my-app",
-  "envName": "local",
-  "agentTypeName": "MyAgent",
-  "parameters": {
-    "type": "Tuple",
-    "elements": [
-      { "type": "ComponentModel", "value": "my-instance" }
-    ]
-  },
-  "methodName": "doSomething",
-  "methodParameters": {
-    "type": "Tuple",
-    "elements": [
-      { "type": "ComponentModel", "value": "input" }
-    ]
-  },
-  "mode": "await"
-}
-```
-
-**Response body** (when mode is `"await"`):
-
-```json
-{
-  "result": {
-    "type": "Tuple",
-    "elements": [
-      { "type": "ComponentModel", "value": <result_value> }
-    ]
-  }
-}
-```
-
 ### Authentication
 
-- **Local server**: Use bearer token `5c832d93-ff85-4a8f-9803-513950fdfdb1`
-- **Golem Cloud**: Use your API token
-- **Custom deployment**: Use the configured bearer token
+- **Local server**: Use `GolemServer.Local`.
+- **Golem Cloud**: Use `GolemServer.Cloud(token)` with your API token.
+- **Custom deployment**: Use `GolemServer.Custom(url, token)`.
+
+### Agent Constructors and Methods
+
+Generated Scala bridge clients follow the same conventions as agent-to-agent RPC:
+
+- `Client.get(...)` attaches to an existing agent instance.
+- `Client.getPhantom(...)` attaches to an existing phantom instance.
+- `Client.newPhantom(...)` creates a new phantom instance.
+- Methods returning a result are exposed as `Future[T]`.
+- Fire-and-forget and scheduled methods return `Future[Unit]`.
 
 ## Using a Generated TypeScript or Rust Bridge
 
-If you need a typed client, you can generate a **TypeScript** or **Rust** bridge SDK even for agents written in Scala. The bridge target language is independent of the agent's source language:
+You can also generate a **TypeScript** or **Rust** bridge SDK for agents written in Scala. The bridge target language is independent of the agent's source language:
 
 ```yaml
 bridge:

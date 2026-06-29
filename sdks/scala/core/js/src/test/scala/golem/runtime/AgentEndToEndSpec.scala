@@ -16,18 +16,26 @@
 
 package golem.runtime
 
-import golem.runtime.autowire.{AgentImplementation, HostPayload, MethodBinding}
+import golem.runtime.autowire.{AgentImplementation, MethodBinding, SchemaPayload}
+import golem.runtime.{InputRecordCodec, ParamCodec}
 import golem.runtime.Sum
 import golem.{BaseAgent, Principal}
 import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation}
 import golem.FutureInterop
+import golem.host.js.schema.JsSchemaValueTree
+import golem.schema.{FromSchema, IntoSchema}
 import zio._
 import zio.test._
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
-import scala.scalajs.js
 
+/**
+ * Drives the wired agent bindings through the `golem:agent@2.0.0` boundary: the
+ * input is the parameter-list `schema-value-tree` (one [[InputRecordCodec]]
+ * field per user parameter) and the result is an `option<schema-value-tree>`
+ * (`Some(tree)` for a single output, `None` for a `unit` output).
+ */
 object AgentEndToEndSpec extends ZIOSpecDefault {
 
   // ---------------------------------------------------------------------------
@@ -84,14 +92,27 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
 
   private val testPrincipal: Principal = Principal.Anonymous
 
-  private def liftEither[A](e: Either[String, A]): Future[A] =
-    e.fold(err => Future.failed(js.JavaScriptException(err)), Future.successful)
-
   private def binding[T](
     name: String,
     defn: golem.runtime.autowire.AgentDefinition[T]
   ): MethodBinding[T] =
     defn.methodMetadata.find(_.metadata.name == name).getOrElse(sys.error(s"binding not found: $name"))
+
+  /** Encode a single user-supplied parameter as the 1-field input record. */
+  private def singleInput[A](a: A)(implicit i: IntoSchema[A], f: FromSchema[A]): JsSchemaValueTree =
+    SchemaPayload.encode[A](a)(InputRecordCodec.single[A]("in"))
+
+  private def paramCodec[A](name: String)(implicit i: IntoSchema[A], f: FromSchema[A]): ParamCodec =
+    ParamCodec(name, i.asInstanceOf[IntoSchema[Any]], f.asInstanceOf[FromSchema[Any]])
+
+  /** Decode the `some(tree)` result of a single-output method. */
+  private def decodeSingle[Out](raw: Option[JsSchemaValueTree])(implicit f: FromSchema[Out]): Out =
+    raw match {
+      case Some(tree) =>
+        SchemaPayload.decode[Out](tree).fold(err => throw new RuntimeException(err.toString), identity)
+      case None =>
+        throw new RuntimeException("expected a single result, got none")
+    }
 
   private def roundtrip[In: Schema, Out: Schema](
     methodName: String,
@@ -100,11 +121,7 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
   ): ZIO[Any, Throwable, TestResult] = {
     val b = binding(methodName, broadDefn)
     ZIO.fromFuture { implicit ec =>
-      for {
-        payload <- liftEither(HostPayload.encode[In](input))
-        raw     <- FutureInterop.fromPromise(b.invoke(broadImpl, payload, testPrincipal))
-        decoded <- liftEither(HostPayload.decode[Out](raw))
-      } yield decoded
+      FutureInterop.fromPromise(b.invoke(broadImpl, singleInput[In](input), testPrincipal)).map(decodeSingle[Out])
     }.map(decoded => assertTrue(decoded == expected))
   }
 
@@ -148,24 +165,19 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
       roundtrip[Outer, Outer]("echoNested", input, input)
     },
     test("multi-parameter method roundtrips through binding") {
-      val b = binding("multiParam", broadDefn)
+      val b         = binding("multiParam", broadDefn)
+      val inputTree = SchemaPayload.encode[Vector[Any]](Vector("hello", 42))(
+        InputRecordCodec.fromParams(List(paramCodec[String]("a"), paramCodec[Int]("b")))
+      )
       ZIO.fromFuture { implicit ec =>
-        for {
-          payload <- liftEither(HostPayload.encode[(String, Int)](("hello", 42)))
-          raw     <- FutureInterop.fromPromise(b.invoke(broadImpl, payload, testPrincipal))
-          decoded <- liftEither(HostPayload.decode[String](raw))
-        } yield decoded
+        FutureInterop.fromPromise(b.invoke(broadImpl, inputTree, testPrincipal)).map(decodeSingle[String])
       }.map(decoded => assertTrue(decoded == "hello-42"))
     },
-    test("Future[Unit] return roundtrips through binding") {
+    test("Future[Unit] return roundtrips through binding as an absent result") {
       val b = binding("asyncVoid", broadDefn)
       ZIO.fromFuture { implicit ec =>
-        for {
-          payload <- liftEither(HostPayload.encode[String]("ignored"))
-          raw     <- FutureInterop.fromPromise(b.invoke(broadImpl, payload, testPrincipal))
-          decoded <- liftEither(HostPayload.decode[Unit](raw))
-        } yield decoded
-      }.as(assertCompletes)
+        FutureInterop.fromPromise(b.invoke(broadImpl, singleInput[String]("ignored"), testPrincipal))
+      }.map(raw => assertTrue(raw.isEmpty))
     }
   )
 }

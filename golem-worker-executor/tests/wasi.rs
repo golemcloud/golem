@@ -25,9 +25,10 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
 };
 use golem_common::model::{AgentStatus, IdempotencyKey};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::schema_value::ResultValuePayload;
 use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::Value;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
 };
@@ -67,6 +68,16 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+fn sorted_config_entries(value: SchemaValue) -> SchemaValue {
+    let SchemaValue::List { mut elements } = value else {
+        return value;
+    };
+
+    elements.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+
+    SchemaValue::List { elements }
+}
 
 #[test]
 #[tracing::instrument]
@@ -225,18 +236,18 @@ async fn clocks(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let Value::Record(fields) = &result else {
+    let SchemaValue::Record { fields } = &result else {
         panic!("expected record, got {:?}", result)
     };
     assert_eq!(fields.len(), 3);
 
-    let Value::F64(elapsed1) = &fields[0] else {
+    let SchemaValue::F64(elapsed1) = &fields[0] else {
         panic!("expected f64")
     };
-    let Value::F64(elapsed2) = &fields[1] else {
+    let SchemaValue::F64(elapsed2) = &fields[1] else {
         panic!("expected f64")
     };
-    let Value::String(odt) = &fields[2] else {
+    let SchemaValue::String(odt) = &fields[2] else {
         panic!("expected string")
     };
 
@@ -297,11 +308,15 @@ async fn file_write_read_delete(
 
     assert_eq!(
         result,
-        Value::Record(vec![
-            Value::Option(None),
-            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-            Value::Option(None)
-        ])
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("hello world".to_string())))
+                },
+                SchemaValue::Option { inner: None }
+            ]
+        }
     );
 
     Ok(())
@@ -357,13 +372,21 @@ async fn initial_file_read_write(
 
     assert_eq!(
         result,
-        Value::Tuple(vec![
-            Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
-            Value::Option(None),
-            Value::Option(None),
-            Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
-            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-        ])
+        SchemaValue::Tuple {
+            elements: vec![
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("foo\n".to_string())))
+                },
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("baz\n".to_string())))
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("hello world".to_string())))
+                },
+            ]
+        }
     );
 
     Ok(())
@@ -593,42 +616,52 @@ async fn directories(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let Value::Record(fields) = &result else {
+    let SchemaValue::Record { fields } = &result else {
         panic!("expected record, got {:?}", result)
     };
     assert_eq!(fields.len(), 4);
 
-    assert_eq!(fields[0], Value::U32(0)); // initial number of entries
+    assert_eq!(fields[0], SchemaValue::U32(0)); // initial number of entries
     assert_eq!(
         fields[1],
-        Value::List(vec![Value::Record(vec![
-            Value::String("/test".to_string()),
-            Value::Bool(true)
-        ])])
+        SchemaValue::List {
+            elements: vec![SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test".to_string()),
+                    SchemaValue::Bool(true)
+                ]
+            }]
+        }
     ); // contents of /
 
     // contents of /test
-    let Value::List(list) = &fields[2] else {
+    let SchemaValue::List { elements: list } = &fields[2] else {
         panic!("expected list")
     };
     assert_eq!(
         *list,
         vec![
-            Value::Record(vec![
-                Value::String("/test/dir1".to_string()),
-                Value::Bool(true)
-            ]),
-            Value::Record(vec![
-                Value::String("/test/dir2".to_string()),
-                Value::Bool(true)
-            ]),
-            Value::Record(vec![
-                Value::String("/test/hello.txt".to_string()),
-                Value::Bool(false)
-            ]),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test/dir1".to_string()),
+                    SchemaValue::Bool(true)
+                ]
+            },
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test/dir2".to_string()),
+                    SchemaValue::Bool(true)
+                ]
+            },
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test/hello.txt".to_string()),
+                    SchemaValue::Bool(false)
+                ]
+            },
         ]
     );
-    assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    assert_eq!(fields[3], SchemaValue::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
     Ok(())
 }
@@ -674,42 +707,52 @@ async fn directories_replay(
 
     assert_eq!(metadata.status, AgentStatus::Idle);
 
-    let Value::Record(fields) = &result else {
+    let SchemaValue::Record { fields } = &result else {
         panic!("expected record, got {:?}", result)
     };
     assert_eq!(fields.len(), 4);
 
-    assert_eq!(fields[0], Value::U32(0)); // initial number of entries
+    assert_eq!(fields[0], SchemaValue::U32(0)); // initial number of entries
     assert_eq!(
         fields[1],
-        Value::List(vec![Value::Record(vec![
-            Value::String("/test".to_string()),
-            Value::Bool(true)
-        ])])
+        SchemaValue::List {
+            elements: vec![SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test".to_string()),
+                    SchemaValue::Bool(true)
+                ]
+            }]
+        }
     ); // contents of /
 
     // contents of /test
-    let Value::List(list) = &fields[2] else {
+    let SchemaValue::List { elements: list } = &fields[2] else {
         panic!("expected list")
     };
     assert_eq!(
         *list,
         vec![
-            Value::Record(vec![
-                Value::String("/test/dir1".to_string()),
-                Value::Bool(true)
-            ]),
-            Value::Record(vec![
-                Value::String("/test/dir2".to_string()),
-                Value::Bool(true)
-            ]),
-            Value::Record(vec![
-                Value::String("/test/hello.txt".to_string()),
-                Value::Bool(false)
-            ]),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test/dir1".to_string()),
+                    SchemaValue::Bool(true)
+                ]
+            },
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test/dir2".to_string()),
+                    SchemaValue::Bool(true)
+                ]
+            },
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("/test/hello.txt".to_string()),
+                    SchemaValue::Bool(false)
+                ]
+            },
         ]
     );
-    assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    assert_eq!(fields[3], SchemaValue::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
     Ok(())
 }
@@ -763,7 +806,9 @@ async fn file_write_read(
 
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("hello world".to_string())))
+        })
     );
 
     Ok(())
@@ -808,10 +853,9 @@ async fn file_update_1(
         let content_before_update = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(content_before_update, Value::String("foo\n".to_string()));
+        assert_eq!(content_before_update, "foo\n");
     }
 
     {
@@ -837,10 +881,9 @@ async fn file_update_1(
         let content_after_update = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(content_after_update, Value::String("foo\n".to_string()));
+        assert_eq!(content_after_update, "foo\n");
     }
 
     executor.simulated_crash(&worker_id).await?;
@@ -849,10 +892,9 @@ async fn file_update_1(
         let content_after_crash = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(content_after_crash, Value::String("foo\n".to_string()));
+        assert_eq!(content_after_crash, "foo\n");
     }
 
     executor
@@ -863,10 +905,9 @@ async fn file_update_1(
         let content_after_reload = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(content_after_reload, Value::String("bar\n".to_string()));
+        assert_eq!(content_after_reload, "bar\n");
     }
 
     executor.simulated_crash(&worker_id).await?;
@@ -875,10 +916,9 @@ async fn file_update_1(
         let content_after_crash = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(content_after_crash, Value::String("bar\n".to_string()));
+        assert_eq!(content_after_crash, "bar\n");
     }
 
     {
@@ -904,13 +944,9 @@ async fn file_update_1(
         let content_after_manual_update = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(
-            content_after_manual_update,
-            Value::String("restored".to_string())
-        );
+        assert_eq!(content_after_manual_update, "restored");
     }
 
     executor
@@ -921,10 +957,9 @@ async fn file_update_1(
         let content_after_reload = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(content_after_reload, Value::String("baz\n".to_string()));
+        assert_eq!(content_after_reload, "baz\n");
     }
 
     executor.simulated_crash(&worker_id).await?;
@@ -933,10 +968,9 @@ async fn file_update_1(
         let content_after_crash = executor
             .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+            .into_typed::<String>()?;
 
-        assert_eq!(content_after_crash, Value::String("baz\n".to_string()));
+        assert_eq!(content_after_crash, "baz\n");
     }
 
     executor.delete_worker(&worker_id).await?;
@@ -1057,10 +1091,12 @@ async fn file_update_in_the_middle_of_exported_function(
 
         assert_eq!(
             result,
-            Value::Tuple(vec![
-                Value::String("foo\n".to_string()),
-                Value::String("bar\n".to_string())
-            ])
+            SchemaValue::Tuple {
+                elements: vec![
+                    SchemaValue::String("foo\n".to_string()),
+                    SchemaValue::String("bar\n".to_string())
+                ]
+            }
         );
     }
 
@@ -1103,32 +1139,48 @@ async fn environment_variables(
     let worker_name = agent_id.to_string();
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("TEST_ENV".to_string()),
-                Value::String("test-value".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String(worker_name.clone())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String(worker_name)
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(component.id.to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
-                Value::String("0".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_TYPE".to_string()),
-                Value::String("Environment".to_string())
-            ])
-        ])))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("TEST_ENV".to_string()),
+                            SchemaValue::String("test-value".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_ID".to_string()),
+                            SchemaValue::String(worker_name.clone())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
+                            SchemaValue::String(worker_name)
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
+                            SchemaValue::String(component.id.to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_REVISION".to_string()),
+                            SchemaValue::String("0".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_TYPE".to_string()),
+                            SchemaValue::String("Environment".to_string())
+                        ]
+                    }
+                ]
+            }))
+        })
     );
 
     Ok(())
@@ -1202,7 +1254,10 @@ async fn http_client_response_persisted_between_invocations(
 
     http_server.abort();
 
-    assert_eq!(result, data_value!("200 response is test-header test-body"));
+    assert_eq!(
+        result.into_typed::<String>()?,
+        "200 response is test-header test-body"
+    );
 
     Ok(())
 }
@@ -1324,7 +1379,7 @@ async fn http_client_interrupting_response_stream(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, data_value!(100u64 * 1024u64));
+    assert_eq!(result.into_typed::<u64>()?, 100u64 * 1024u64);
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
     assert_eq!(idempotency_keys.len(), 2);
@@ -1449,7 +1504,7 @@ async fn http_client_interrupting_response_stream_async(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, data_value!(100u64 * 1024u64));
+    assert_eq!(result.into_typed::<u64>()?, 100u64 * 1024u64);
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
     assert_eq!(idempotency_keys.len(), 2);
@@ -1529,8 +1584,7 @@ async fn sleep_less_than_suspend_threshold(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1538,7 +1592,7 @@ async fn sleep_less_than_suspend_threshold(
     debug!("duration: {:?}", duration);
 
     assert!(duration.as_secs() >= 1);
-    assert_eq!(result, Value::Bool(true));
+    assert!(result);
     Ok(())
 }
 
@@ -1572,8 +1626,7 @@ async fn sleep_longer_than_suspend_threshold(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1581,7 +1634,7 @@ async fn sleep_longer_than_suspend_threshold(
     debug!("duration: {:?}", duration);
 
     assert!(duration.as_secs() >= 12);
-    assert_eq!(result, Value::Bool(true));
+    assert!(result);
 
     Ok(())
 }
@@ -1689,8 +1742,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
             data_value!(2u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1702,7 +1754,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
 
     assert!(duration.as_secs() >= 2);
     assert!(duration.as_secs() < 10);
-    assert_eq!(result, Value::String("Timeout".to_string()));
+    assert_eq!(result, "Timeout");
     Ok(())
 }
 
@@ -1740,8 +1792,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
             data_value!(30u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1753,7 +1804,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
 
     assert!(duration.as_secs() >= 5);
     assert!(duration.as_secs() < 30);
-    assert_eq!(result, Value::String("slow response".to_string()));
+    assert_eq!(result, "slow response");
     Ok(())
 }
 
@@ -1791,8 +1842,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
             data_value!(15u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1804,7 +1854,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
 
     assert!(duration.as_secs() >= 15);
     assert!(duration.as_secs() < 30);
-    assert_eq!(result, Value::String("Timeout".to_string()));
+    assert_eq!(result, "Timeout");
 
     Ok(())
 }
@@ -1843,8 +1893,7 @@ async fn sleep_and_awaiting_parallel_responses(
             data_value!(20u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1861,13 +1910,15 @@ async fn sleep_and_awaiting_parallel_responses(
     let healthcheck_result = executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     assert!(duration.as_secs() >= 10);
     assert!(duration.as_secs() < 20);
-    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
-    assert_eq!(healthcheck_result, Value::Bool(true));
+    assert_eq!(
+        result,
+        "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n"
+    );
+    assert!(healthcheck_result);
 
     Ok(())
 }
@@ -1908,8 +1959,7 @@ async fn sleep_below_threshold_between_http_responses(
             data_value!(1u64, 5u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1925,12 +1975,14 @@ async fn sleep_below_threshold_between_http_responses(
     let healthcheck_result = executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     assert!(duration.as_secs() >= 10);
-    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
-    assert_eq!(healthcheck_result, Value::Bool(true));
+    assert_eq!(
+        result,
+        "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n"
+    );
+    assert!(healthcheck_result);
     Ok(())
 }
 
@@ -1968,8 +2020,7 @@ async fn sleep_above_threshold_between_http_responses(
             data_value!(12u64, 2u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1985,15 +2036,11 @@ async fn sleep_above_threshold_between_http_responses(
     let healthcheck_result = executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     assert!(duration.as_secs() >= 14);
-    assert_eq!(
-        result,
-        Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string())
-    );
-    assert_eq!(healthcheck_result, Value::Bool(true));
+    assert_eq!(result, "Ok(\"slow response\")\nOk(\"slow response\")\n");
+    assert!(healthcheck_result);
 
     Ok(())
 }
@@ -2173,7 +2220,9 @@ async fn file_service_write_direct(
 
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("hello world".to_string())))
+        })
     );
 
     Ok(())
@@ -2343,7 +2392,9 @@ async fn file_hard_link(
 
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("hello world".to_string())))
+        })
     );
 
     Ok(())
@@ -2990,10 +3041,10 @@ async fn ip_address_resolve(
 
     // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the same order) but we can expect
     // that it could resolve golem.cloud to at least one address.
-    let Value::List(entries1) = &result1 else {
+    let SchemaValue::List { elements: entries1 } = &result1 else {
         panic!("expected list, got {:?}", result1)
     };
-    let Value::List(entries2) = &result2 else {
+    let SchemaValue::List { elements: entries2 } = &result2 else {
         panic!("expected list, got {:?}", result2)
     };
     assert!(!entries1.is_empty());
@@ -3050,7 +3101,9 @@ async fn wasi_config_initial_worker_config(
 
         assert_eq!(
             result,
-            Value::Option(Some(Box::new(Value::String("v1".to_string()))))
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String("v1".to_string())))
+            }
         )
     }
 
@@ -3063,30 +3116,38 @@ async fn wasi_config_initial_worker_config(
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(result, Value::Option(None))
+        assert_eq!(result, SchemaValue::Option { inner: None })
     }
 
     {
         // get all keys
 
-        let result = executor
-            .invoke_and_await_agent(&component, &agent_id, "get_all", data_value!())
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+        let result = sorted_config_entries(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "get_all", data_value!())
+                .await?
+                .into_return_value()
+                .ok_or_else(|| anyhow!("expected return value"))?,
+        );
 
         assert_eq!(
             result,
-            Value::List(vec![
-                Value::Tuple(vec![
-                    Value::String("k1".to_string()),
-                    Value::String("v1".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("k2".to_string()),
-                    Value::String("v2".to_string())
-                ])
-            ])
+            SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k1".to_string()),
+                            SchemaValue::String("v1".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k2".to_string()),
+                            SchemaValue::String("v2".to_string())
+                        ]
+                    }
+                ]
+            }
         )
     }
 
@@ -3155,20 +3216,28 @@ async fn wasi_config_component_update(
 
         assert_eq!(
             result,
-            Value::List(vec![
-                Value::Tuple(vec![
-                    Value::String("k1".to_string()),
-                    Value::String("v1".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("k2".to_string()),
-                    Value::String("v2".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("k3".to_string()),
-                    Value::String("v3".to_string())
-                ]),
-            ])
+            SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k1".to_string()),
+                            SchemaValue::String("v1".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k2".to_string()),
+                            SchemaValue::String("v2".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k3".to_string()),
+                            SchemaValue::String("v3".to_string())
+                        ]
+                    },
+                ]
+            }
         )
     }
 
@@ -3206,32 +3275,44 @@ async fn wasi_config_component_update(
         .await?;
 
     {
-        let result = executor
-            .invoke_and_await_agent(&updated_component, &agent_id, "get_all", data_value!())
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+        let result = sorted_config_entries(
+            executor
+                .invoke_and_await_agent(&updated_component, &agent_id, "get_all", data_value!())
+                .await?
+                .into_return_value()
+                .ok_or_else(|| anyhow!("expected return value"))?,
+        );
 
         assert_eq!(
             result,
-            Value::List(vec![
-                Value::Tuple(vec![
-                    Value::String("k1".to_string()),
-                    Value::String("v1".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("k2".to_string()),
-                    Value::String("v2".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("k3".to_string()),
-                    Value::String("v4".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("k4".to_string()),
-                    Value::String("v4".to_string())
-                ]),
-            ])
+            SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k1".to_string()),
+                            SchemaValue::String("v1".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k2".to_string()),
+                            SchemaValue::String("v2".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k3".to_string()),
+                            SchemaValue::String("v4".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("k4".to_string()),
+                            SchemaValue::String("v4".to_string())
+                        ]
+                    },
+                ]
+            }
         )
     }
 
@@ -3288,14 +3369,11 @@ async fn oplog_replay_after_http_requests_with_suspend(
             data_value!(1u64, 3u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     assert_eq!(
         result,
-        Value::String(
-            "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()
-        )
+        "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n"
     );
 
     info!("First invocation completed, dropping executor to force oplog replay on restart");
@@ -3323,13 +3401,9 @@ async fn oplog_replay_after_http_requests_with_suspend(
             data_value!(1u64, 2u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    assert_eq!(
-        result2,
-        Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string())
-    );
+    assert_eq!(result2, "Ok(\"slow response\")\nOk(\"slow response\")\n");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -3382,14 +3456,10 @@ async fn oplog_replay_after_parallel_http_requests(
             data_value!(30u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
     // All 3 concurrent loops should complete (each with 5 "slow response" results)
-    let result_str = match &result {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result_str = result.clone();
     let line_count = result_str.lines().count();
     assert!(
         line_count >= 5,
@@ -3423,13 +3493,9 @@ async fn oplog_replay_after_parallel_http_requests(
             data_value!(30u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result2_str = match &result2 {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result2_str = result2.clone();
     let line_count2 = result2_str.lines().count();
     assert!(
         line_count2 >= 5,
@@ -3586,17 +3652,13 @@ async fn http_connection_pool_contention_between_agents(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
     let fast_elapsed = fast_start.elapsed();
 
     info!("Fast agent completed in {fast_elapsed:?}");
 
     // The slow agent should also have completed
-    let slow_result = slow_handle
-        .await??
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+    let slow_result = slow_handle.await??.into_typed::<u64>()?;
 
     // The fast invoke should have been blocked by the pool for most of the slow stream's duration
     assert!(
@@ -3605,9 +3667,9 @@ async fn http_connection_pool_contention_between_agents(
     );
 
     // slow: 100 chunks * 1024 bytes = 102400
-    assert_eq!(slow_result, Value::U64(100 * 1024));
+    assert_eq!(slow_result, 100 * 1024);
     // fast: 2048 bytes
-    assert_eq!(fast_result, Value::U64(2048));
+    assert_eq!(fast_result, 2048);
 
     executor.check_oplog_is_queryable(&worker_id_slow).await?;
     executor.check_oplog_is_queryable(&worker_id_fast).await?;
@@ -3767,16 +3829,13 @@ async fn http_connection_pool_contention_with_restart(
     info!("Fast agent completed in {fast_elapsed:?} with result: {fast_result:?}");
 
     // The fast agent should have timed out and returned None
-    assert_eq!(fast_result, Value::Option(None));
+    assert_eq!(fast_result, SchemaValue::Option { inner: None });
 
     // The slow agent should also have completed
-    let slow_result = slow_handle
-        .await??
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+    let slow_result = slow_handle.await??.into_typed::<u64>()?;
 
     // slow: 100 chunks * 1024 bytes = 102400
-    assert_eq!(slow_result, Value::U64(100 * 1024));
+    assert_eq!(slow_result, 100 * 1024);
 
     // Drop executor and restart to force oplog replay on both agents
     info!("Dropping executor to force restart...");
@@ -3806,10 +3865,9 @@ async fn http_connection_pool_contention_with_restart(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
-    assert_eq!(slow_result2, Value::U64(2048));
+    assert_eq!(slow_result2, 2048);
 
     // The fast agent that previously timed out should also be usable after restart
     let fast_result2 = executor
@@ -3820,10 +3878,9 @@ async fn http_connection_pool_contention_with_restart(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
-    assert_eq!(fast_result2, Value::U64(2048));
+    assert_eq!(fast_result2, 2048);
 
     executor.check_oplog_is_queryable(&worker_id_slow).await?;
     executor.check_oplog_is_queryable(&worker_id_fast).await?;
@@ -3910,7 +3967,7 @@ async fn http_timeout_and_restart(
 
         info!("Timeout call iteration {i}: {result:?}");
         match &result {
-            Value::Option(None) | Value::Option(Some(_)) => {}
+            SchemaValue::Option { inner: None } | SchemaValue::Option { inner: Some(_) } => {}
             other => panic!("expected Option, got {other:?}"),
         }
     }
@@ -3930,11 +3987,10 @@ async fn http_timeout_and_restart(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "slow_body_stream", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     info!("Post-restart slow_body_stream result: {result:?}");
-    assert_eq!(result, Value::U64(100 * 1024));
+    assert_eq!(result, 100 * 1024);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -4034,13 +4090,9 @@ async fn oplog_replay_after_streaming_http_read(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "streaming_http_read", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result_str = match &result {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result_str = result.clone();
     assert!(
         result_str.contains("chunk-0"),
         "Expected streaming response to contain chunk-0, got: {}",
@@ -4073,13 +4125,9 @@ async fn oplog_replay_after_streaming_http_read(
     let result2 = executor
         .invoke_and_await_agent(&component, &agent_id, "streaming_http_read", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result2_str = match &result2 {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result2_str = result2.clone();
     assert!(
         result2_str.contains("chunk-0"),
         "Expected streaming response to contain chunk-0 in second invocation, got: {}",
@@ -4143,13 +4191,9 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result_str = match &result {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result_str = result.clone();
     assert!(
         result_str.contains("slept"),
         "Expected result to contain 'slept', got: {}",
@@ -4183,13 +4227,9 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result2_str = match &result2 {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result2_str = result2.clone();
     assert!(
         result2_str.contains("slept"),
         "Expected result to contain 'slept', got: {}",
@@ -4245,13 +4285,9 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
             data_value!(3u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result_str = match &result {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result_str = result.clone();
     assert!(
         !result_str.contains("Timeout"),
         "Parallel streaming reads should not have timed out, got: {}",
@@ -4280,13 +4316,9 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
             data_value!(3u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result2_str = match &result2 {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result2_str = result2.clone();
     assert!(
         !result2_str.contains("Timeout"),
         "Second invocation should not have timed out, got: {}",
@@ -4347,13 +4379,9 @@ async fn oplog_replay_after_raw_streaming_http_read(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result_str = match &result {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result_str = result.clone();
     assert!(
         result_str.contains("chunk-0"),
         "Expected streaming response to contain chunk-0, got: {}",
@@ -4391,13 +4419,9 @@ async fn oplog_replay_after_raw_streaming_http_read(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result2_str = match &result2 {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result2_str = result2.clone();
     assert!(
         result2_str.contains("chunk-0"),
         "Expected streaming response to contain chunk-0 in second invocation, got: {}",
@@ -4457,13 +4481,9 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
             data_value!(3u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result_str = match &result {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result_str = result.clone();
     assert!(
         !result_str.contains("Timeout"),
         "Parallel raw streaming reads should not have timed out, got: {}",
@@ -4494,13 +4514,9 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
             data_value!(3u64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<String>()?;
 
-    let result2_str = match &result2 {
-        Value::String(s) => s.clone(),
-        other => panic!("Expected string result, got {:?}", other),
-    };
+    let result2_str = result2.clone();
     assert!(
         !result2_str.contains("Timeout"),
         "Second invocation should not have timed out, got: {}",

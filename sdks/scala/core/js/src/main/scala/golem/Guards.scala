@@ -78,8 +78,8 @@ object Guards {
    * On success the atomic region is committed via `markEndOperation`. On
    * failure the SDK calls the host `trap` function, which surfaces as an
    * uncatchable wasm trap so user code cannot observe the failure with a
-   * `try/catch` or `recover`. The atomic region is intentionally left open
-   * so the existing replay-time fallback in `markBeginOperation` deletes the
+   * `try/catch` or `recover`. The atomic region is intentionally left open so
+   * the existing replay-time fallback in `markBeginOperation` deletes the
    * partial inner side effects via a `Jump` and re-executes the block.
    */
   def atomically[A](block: => Future[A]): Future[A] = {

@@ -116,6 +116,16 @@ pub struct EnvironmentPluginGrantWithDetailsRecord {
     pub plugin_account_email: String,
 }
 
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct EnvironmentPluginGrantAuthWithDetailsRecord {
+    #[sqlx(flatten)]
+    pub grant: EnvironmentPluginGrantWithDetailsRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl TryFrom<EnvironmentPluginGrantWithDetailsRecord> for EnvironmentPluginGrantWithDetails {
     type Error = anyhow::Error;
     fn try_from(value: EnvironmentPluginGrantWithDetailsRecord) -> Result<Self, Self::Error> {

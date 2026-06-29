@@ -16,7 +16,7 @@ What makes this project interesting is not only the feature set, but how it is p
 
 This post walks through the actual implementation of [JournAI](https://github.com/danieletorelli/golem-journai) on top of [Golem 1.4](/blog/golem-1-4-code-first-rust-atomic-deployments-and-a-more-powerful-agent-runtime), focusing on the design decisions that fall out of durable agents. It assumes you already understand conventional log pipelines and instead looks at what changes when state, retries, and recovery are handled by the runtime rather than by queues, schedulers, and workflow code.
 
-![High-level system architecture with Golem runtime, agents, Postgres, and LLM provider](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/698467b3259bc40b6b144cb7_01-architecture.png)
+![High-level system architecture with Golem runtime, agents, Postgres, and LLM provider](/blog-images/698467b3259bc40b6b144cb7_01-architecture.png)
 *High-level system architecture with Golem runtime, agents, Postgres, and LLM provider*
 
 ## What is Golem (and why durable computing matters here)
@@ -41,10 +41,10 @@ The codebase is a Cargo workspace with three WASM components and a shared librar
 
 The live data path is intentionally narrow. There is one ingestion path, one analysis path, and one dashboard path. That constraint is deliberate. It keeps the operational surface area small and makes failures easier to reason about.
 
-![Architecture at a glance: live data path through gateway, agents, Postgres, and LLM provider](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/69846803f5fdce2d5d2bb0e8_02-data-path.png)
+![Architecture at a glance: live data path through gateway, agents, Postgres, and LLM provider](/blog-images/69846803f5fdce2d5d2bb0e8_02-data-path.png)
 *Architecture at a glance: live data path through gateway, agents, Postgres, and LLM provider*
 
-![Spike detection and analysis sequence](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/6984682473d6b6b771cf9279_03-spike-sequence.png)
+![Spike detection and analysis sequence](/blog-images/6984682473d6b6b771cf9279_03-spike-sequence.png)
 *Spike detection and analysis sequence*
 
 ## Data flow in practice
@@ -57,10 +57,10 @@ The analyzer calls an LLM to generate a human-readable summary and a structured 
 
 The persistence layer is deliberately simple. There are three core tables: `entries` for raw journal payloads, `analyses` for LLM outputs, and `analyzed_entries` as a join table. The detailed schema, including keys and indexes, is defined below, which is close to the minimum required to trace every summary back to the exact log lines that produced it.
 
-![Core data model ERD](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/698468508b25b48cdb53baf5_04-erd.png)
+![Core data model ERD](/blog-images/698468508b25b48cdb53baf5_04-erd.png)
 *Core data model ERD*
 
-![Schema and index strategy](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/69846875bf3a106de916e657_05-indexes.png)
+![Schema and index strategy](/blog-images/69846875bf3a106de916e657_05-indexes.png)
 *Schema and index strategy*
 
 ## Component deep dive
@@ -85,7 +85,7 @@ For each spike, the analyzer performs two LLM calls. One produces a detailed inc
 
 Two constraints shaped the implementation. First, context size has to be bounded. The analyzer compacts its conversation history and uses a reduced "lite" prompt to keep token usage under control. Second, structured output must be reliable. JSON responses are validated against a schema and discarded if they fail to parse cleanly. In practice, this avoids a surprising number of downstream problems.
 
-![Prompt construction and context compaction flow](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/69847511ff315e4741e38a54_06-prompt-flow.png)
+![Prompt construction and context compaction flow](/blog-images/69847511ff315e4741e38a54_06-prompt-flow.png)
 *Prompt construction and context compaction flow*
 
 ### Visualizer (journai:visualizer)
@@ -94,19 +94,19 @@ The visualizer is an ephemeral agent that renders minimal HTML. There is no fron
 
 It provides a system overview dashboard, an alerts view for high and critical analyses, a queue view with a pending count derived from recent error entries and a list of recent analyses, per-host history pages, and a details page showing the summary and its metadata. The output is intentionally simple, which makes it easy to host, cache, and extend without reworking the backend.
 
-![Dashboard overview](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/69847534a035dec2b99c0547_07-dashboard-overview.png)
+![Dashboard overview](/blog-images/69847534a035dec2b99c0547_07-dashboard-overview.png)
 *Dashboard overview*
 
-![Active alerts](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/698475542938f5bc4d7cf75e_08-active-alerts.png)
+![Active alerts](/blog-images/698475542938f5bc4d7cf75e_08-active-alerts.png)
 *Active alerts*
 
-![Analysis queue](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/698475d5a6e69fda3a182a24_09-analysis-queue.png)
+![Analysis queue](/blog-images/698475d5a6e69fda3a182a24_09-analysis-queue.png)
 *Analysis queue*
 
-![Analysis history](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/69847609aa0ec5436c75bbf7_10-analysis-history.png)
+![Analysis history](/blog-images/69847609aa0ec5436c75bbf7_10-analysis-history.png)
 *Analysis history*
 
-![Analysis details](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/6984762a72d0519d57334349_11-analysis-details.png)
+![Analysis details](/blog-images/6984762a72d0519d57334349_11-analysis-details.png)
 *Analysis details*
 
 ## Where Golem shapes the design
@@ -139,7 +139,7 @@ The most important lesson from building [JournAI](https://github.com/danieletore
 
 Bounding LLM context early is also critical. The compacted history and reduced prompts in the analyzer are not micro-optimizations; without them, costs and latency become unpredictable. Finally, storing analysis results alongside the exact log entry IDs that produced them makes the system auditable and helps answer uncomfortable "why did it say this?" questions.
 
-![Classic pipeline vs Golem JournAI architecture comparison](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/6984765ea035dec2b99c4dd2_12-comparison.png)
+![Classic pipeline vs Golem JournAI architecture comparison](/blog-images/6984765ea035dec2b99c4dd2_12-comparison.png)
 *Classic pipeline vs Golem JournAI architecture comparison*
 
 ## Future developments

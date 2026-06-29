@@ -1,7 +1,7 @@
-use golem_rust::{ConfigSchema, agent_definition, agent_implementation, Schema};
 use golem_rust::agentic::{Config, Secret};
-use serde_json::json;
+use golem_rust::{ConfigSchema, FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::Serialize;
+use serde_json::json;
 
 #[derive(ConfigSchema)]
 pub struct NestedConfig {
@@ -14,19 +14,19 @@ pub struct NestedConfig {
 #[derive(ConfigSchema, Serialize)]
 pub struct AliasedNestedConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub c: Option<i32>
+    pub c: Option<i32>,
 }
 
 #[derive(ConfigSchema)]
 pub struct ConfigAgentConfig {
-  pub foo: i32,
-  pub bar: String,
-  #[config_schema(secret)]
-  pub secret: Secret<String>,
-  #[config_schema(nested)]
-  pub nested: NestedConfig,
-  #[config_schema(nested)]
-  pub aliased_nested: AliasedNestedConfig,
+    pub foo: i32,
+    pub bar: String,
+    #[config_schema(secret)]
+    pub secret: Secret<String>,
+    #[config_schema(nested)]
+    pub nested: NestedConfig,
+    #[config_schema(nested)]
+    pub aliased_nested: AliasedNestedConfig,
 }
 
 #[agent_definition]
@@ -37,7 +37,7 @@ pub trait ConfigAgent {
 }
 
 struct ConfigAgentImpl {
-    config: Config<ConfigAgentConfig>
+    config: Config<ConfigAgentConfig>,
 }
 
 #[agent_implementation]
@@ -72,12 +72,12 @@ pub struct NestedLocalAgentConfig {
 
 #[derive(ConfigSchema)]
 pub struct LocalConfigAgentConfig {
-  pub foo: i32,
-  pub bar: String,
-  #[config_schema(nested)]
-  pub nested: NestedLocalAgentConfig,
-  #[config_schema(nested)]
-  pub aliased_nested: AliasedNestedConfig,
+    pub foo: i32,
+    pub bar: String,
+    #[config_schema(nested)]
+    pub nested: NestedLocalAgentConfig,
+    #[config_schema(nested)]
+    pub aliased_nested: AliasedNestedConfig,
 }
 
 #[agent_definition]
@@ -88,7 +88,7 @@ pub trait LocalConfigAgent {
 }
 
 struct LocalConfigAgentImpl {
-    config: Config<LocalConfigAgentConfig>
+    config: Config<LocalConfigAgentConfig>,
 }
 
 #[agent_implementation]
@@ -110,10 +110,10 @@ impl LocalConfigAgent for LocalConfigAgentImpl {
     }
 }
 
-#[derive(Schema, Serialize)]
+#[derive(IntoSchema, FromSchema, Serialize)]
 pub struct ComplexSecret {
     foo: String,
-    bar: u32
+    bar: u32,
 }
 
 #[derive(ConfigSchema)]
@@ -132,7 +132,7 @@ pub trait SharedConfigAgent {
 }
 
 struct SharedConfigAgentImpl {
-    config: Config<SharedConfigAgentConfig>
+    config: Config<SharedConfigAgentConfig>,
 }
 
 #[agent_implementation]
@@ -160,18 +160,24 @@ pub struct LocalCasingSharedConfigAgentConfig {
 
 #[agent_definition]
 pub trait LocalCasingSharedConfigAgent {
-    fn new(name: String, #[agent_config] config: Config<LocalCasingSharedConfigAgentConfig>) -> Self;
+    fn new(
+        name: String,
+        #[agent_config] config: Config<LocalCasingSharedConfigAgentConfig>,
+    ) -> Self;
 
     fn echo_local_config(&self) -> String;
 }
 
 struct LocalCasingSharedConfigAgentImpl {
-    config: Config<LocalCasingSharedConfigAgentConfig>
+    config: Config<LocalCasingSharedConfigAgentConfig>,
 }
 
 #[agent_implementation]
 impl LocalCasingSharedConfigAgent for LocalCasingSharedConfigAgentImpl {
-    fn new(_name: String, #[agent_config] config: Config<LocalCasingSharedConfigAgentConfig>) -> Self {
+    fn new(
+        _name: String,
+        #[agent_config] config: Config<LocalCasingSharedConfigAgentConfig>,
+    ) -> Self {
         Self { config }
     }
 
@@ -187,8 +193,8 @@ impl LocalCasingSharedConfigAgent for LocalCasingSharedConfigAgentImpl {
 
 #[derive(ConfigSchema)]
 pub struct RpcLocalConfigAgentConfig {
-  pub foo: i32,
-  pub nested_a: Option<bool>
+    pub foo: i32,
+    pub nested_a: Option<bool>,
 }
 
 #[agent_definition]
@@ -200,7 +206,7 @@ pub trait RpcLocalConfigAgent {
 
 struct RpcLocalConfigAgentImpl {
     name: String,
-    config: Config<RpcLocalConfigAgentConfig>
+    config: Config<RpcLocalConfigAgentConfig>,
 }
 
 #[agent_implementation]
@@ -220,7 +226,7 @@ impl RpcLocalConfigAgent for RpcLocalConfigAgentImpl {
                     ..Default::default()
                 },
                 ..Default::default()
-            }
+            },
         );
         client.echo_local_config().await
     }

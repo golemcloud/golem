@@ -39,7 +39,7 @@ impl Clock for ClockImpl {
             wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
             Err("Timeout".to_string())
         };
-        let (Ok(result) | Err(result)) = ((response, timeout)).race().await;
+        let (Ok(result) | Err(result)) = (response, timeout).race().await;
         result
     }
 
@@ -69,7 +69,7 @@ impl Clock for ClockImpl {
             wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
             Err("Timeout".to_string())
         };
-        let (Ok(result) | Err(result)) = ((response1, response2, response3, timeout)).race().await;
+        let (Ok(result) | Err(result)) = (response1, response2, response3, timeout).race().await;
         result
     }
 

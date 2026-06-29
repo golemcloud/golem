@@ -114,7 +114,25 @@ if [ "$check_only" = true ] && ([ "$clean_only" = true ] || [ "$rebuild" = true 
   exit 1
 fi
 
-GOLEM_CLI="${TEST_COMP_DIR:-$(pwd)}/../target/debug/golem-cli"
+# Resolve the cargo target directory robustly so the script works even when the
+# target dir is redirected (e.g. via CARGO_TARGET_DIR, cargo config, or a cargo
+# wrapper). Falls back to CARGO_TARGET_DIR, then the default `<repo>/target`.
+resolve_target_dir() {
+  local repo_root="$1"
+  local target_dir=""
+  if command -v cargo >/dev/null 2>&1; then
+    target_dir=$(cargo metadata --no-deps --format-version 1 --manifest-path "${repo_root}/Cargo.toml" 2>/dev/null \
+      | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+  fi
+  if [ -z "$target_dir" ]; then
+    target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}"
+  fi
+  printf '%s' "$target_dir"
+}
+
+REPO_ROOT="$(cd "${TEST_COMP_DIR:-$(pwd)}/.." && pwd)"
+TARGET_DIR="$(resolve_target_dir "$REPO_ROOT")"
+GOLEM_CLI="${TARGET_DIR}/debug/golem-cli"
 
 should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]

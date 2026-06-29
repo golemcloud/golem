@@ -17,20 +17,33 @@
 package golem.runtime.rpc
 
 import golem.Datetime
-import golem.host.js._
+import golem.host.js.schema.JsSchemaValueTree
 
 import scala.concurrent.Future
 
+/**
+ * The `golem:agent/host@2.0.0` RPC client surface. Method inputs are a single
+ * `schema-value-tree` (the parameter-list record) and awaited results are an
+ * `option<schema-value-tree>` (modelled as a Scala [[Option]]): `None` for a
+ * `unit` output, `Some(tree)` for a `single` output.
+ */
 private[rpc] trait RpcInvoker {
-  def invokeAndAwait(functionName: String, input: JsDataValue): Either[String, JsDataValue]
+  def invokeAndAwait(functionName: String, input: JsSchemaValueTree): Either[String, Option[JsSchemaValueTree]]
 
-  def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Future[JsDataValue]
+  def asyncInvokeAndAwait(functionName: String, input: JsSchemaValueTree): Future[Option[JsSchemaValueTree]]
 
-  def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (Future[JsDataValue], CancellationToken)
+  def cancelableAsyncInvokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): (Future[Option[JsSchemaValueTree]], CancellationToken)
 
-  def invoke(functionName: String, input: JsDataValue): Either[String, Unit]
+  def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit]
 
-  def scheduleInvocation(datetime: Datetime, functionName: String, input: JsDataValue): Either[String, Unit]
+  def scheduleInvocation(datetime: Datetime, functionName: String, input: JsSchemaValueTree): Either[String, Unit]
 
-  def scheduleCancelableInvocation(datetime: Datetime, functionName: String, input: JsDataValue): Either[String, CancellationToken]
+  def scheduleCancelableInvocation(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, CancellationToken]
 }

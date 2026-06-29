@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::token::TokenRecord;
+use crate::repo::model::token::{TokenAuthRecord, TokenRecord};
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
@@ -33,9 +33,9 @@ use uuid::Uuid;
 pub trait TokenRepo: Send + Sync {
     async fn create(&self, token: TokenRecord) -> RepoResult<Option<TokenRecord>>;
 
-    async fn get_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenRecord>>;
+    async fn get_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenAuthRecord>>;
 
-    async fn get_by_secret(&self, secret: &str) -> RepoResult<Option<TokenRecord>>;
+    async fn get_by_secret(&self, secret: &str) -> RepoResult<Option<TokenAuthRecord>>;
 
     async fn get_by_account(&self, account_id: Uuid) -> RepoResult<Vec<TokenRecord>>;
 
@@ -69,14 +69,14 @@ impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
         self.repo.create(token).instrument(span).await
     }
 
-    async fn get_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenAuthRecord>> {
         self.repo
             .get_by_id(token_id)
             .instrument(Self::span_id(token_id))
             .await
     }
 
-    async fn get_by_secret(&self, secret: &str) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_secret(&self, secret: &str) -> RepoResult<Option<TokenAuthRecord>> {
         self.repo
             .get_by_secret(secret)
             .instrument(info_span!(SPAN_NAME))
@@ -161,12 +161,12 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .none_on_unique_violation()
     }
 
-    async fn get_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_id(&self, token_id: Uuid) -> RepoResult<Option<TokenAuthRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at,
-                           t.impersonated_by
+                           t.impersonated_by, a.email AS account_email
                     FROM accounts a
                     JOIN tokens t
                         ON t.account_id = a.account_id
@@ -179,12 +179,12 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_secret(&self, secret: &str) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_secret(&self, secret: &str) -> RepoResult<Option<TokenAuthRecord>> {
         self.with_ro("get_by_secret")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at,
-                           t.impersonated_by
+                           t.impersonated_by, a.email AS account_email
                     FROM accounts a
                     JOIN tokens t
                         ON t.account_id = a.account_id
@@ -203,12 +203,9 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at,
                            t.impersonated_by
-                    FROM accounts a
-                    JOIN tokens t
-                        ON t.account_id = a.account_id
+                    FROM tokens t
                     WHERE
-                        a.account_id = $1
-                        AND a.deleted_at IS NULL
+                        t.account_id = $1
                     ORDER BY token_id
                 "#})
                 .bind(account_id),

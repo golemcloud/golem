@@ -12,27 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentError } from 'golem:agent/common@1.5.0';
-import { WitNodeBuilder } from './mapping/values/WitNodeBuilder';
+import { AgentError } from 'golem:agent/common@2.0.0';
+import { SchemaGraph, schemaGraphToWit, schemaValueToWit, t, v } from './schema-model';
 
 export function createCustomError(error: string): AgentError {
-  const builder = new WitNodeBuilder();
-  builder.string(error);
+  const graph: SchemaGraph = { defs: new Map(), root: t.string() };
   return {
     tag: 'custom-error',
     val: {
-      value: builder.build(),
-      typ: {
-        nodes: [
-          {
-            name: undefined,
-            owner: undefined,
-            type: {
-              tag: 'prim-string-type',
-            },
-          },
-        ],
-      },
+      graph: schemaGraphToWit(graph),
+      value: schemaValueToWit(v.string(error)),
     },
   };
 }
@@ -73,7 +62,7 @@ export function isAgentError(error: unknown): error is AgentError {
       (e.tag === 'custom-error' &&
         typeof e.val === 'object' &&
         e.val !== null &&
-        (e.val as Record<string, unknown>).value !== undefined &&
-        (e.val as Record<string, unknown>).typ !== undefined))
+        (e.val as Record<string, unknown>).graph !== undefined &&
+        (e.val as Record<string, unknown>).value !== undefined))
   );
 }

@@ -31,6 +31,7 @@ pub enum Format {
     PrettyJson,
     Yaml,
     PrettyYaml,
+    Toon,
     #[default]
     Text,
 }
@@ -42,9 +43,16 @@ impl Display for Format {
             Self::PrettyJson => "pretty-json",
             Self::Yaml => "yaml",
             Self::PrettyYaml => "pretty-yaml",
+            Self::Toon => "toon",
             Self::Text => "text",
         };
         Display::fmt(&s, f)
+    }
+}
+
+impl Format {
+    pub fn is_structured(&self) -> bool {
+        !matches!(self, Format::Text)
     }
 }
 
@@ -57,6 +65,7 @@ impl FromStr for Format {
             "pretty" | "pretty-json" => Ok(Format::PrettyJson),
             "yaml" => Ok(Format::Yaml),
             "pretty-yaml" => Ok(Format::PrettyYaml),
+            "toon" => Ok(Format::Toon),
             "text" => Ok(Format::Text),
             _ => {
                 let all = Format::iter()

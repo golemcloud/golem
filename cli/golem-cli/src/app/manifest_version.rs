@@ -16,17 +16,30 @@ use crate::log::LogColorize;
 use crate::model::app::manifest_metadata_from_yaml_file;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::versions;
+use semver::Version;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-static SUPPORTED_MANIFEST_VERSION: LazyLock<(u64, u64, u64)> = LazyLock::new(|| {
-    parse_strict_manifest_version(versions::sdk::MANIFEST).unwrap_or_else(|| {
+static LATEST_MANIFEST_VERSION: LazyLock<Version> = LazyLock::new(|| {
+    parse_manifest_version(versions::sdk::MANIFEST).unwrap_or_else(|| {
         panic!(
-            "Invalid supported manifest version literal '{}': expected strict x.y.z",
+            "Invalid supported manifest version literal '{}'",
             versions::sdk::MANIFEST
         )
     })
+});
+
+const SUPPORTED_MANIFEST_VERSIONS: &[&str] = &["1.5.0", versions::sdk::MANIFEST];
+
+static SUPPORTED_MANIFEST_VERSION_VALUES: LazyLock<Vec<Version>> = LazyLock::new(|| {
+    SUPPORTED_MANIFEST_VERSIONS
+        .iter()
+        .map(|version| {
+            parse_manifest_version(version)
+                .unwrap_or_else(|| panic!("Invalid supported manifest version literal '{version}'"))
+        })
+        .collect()
 });
 
 #[derive(Debug, Clone)]
@@ -44,7 +57,7 @@ enum SourceManifestVersionPolicyResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManifestVersionStatus {
     Supported,
-    TooOld,
+    Unsupported,
     TooNew,
     Invalid,
 }
@@ -128,11 +141,11 @@ fn source_manifest_version_policy(
         )),
         Some(manifest_version) => match manifest_version_status(manifest_version) {
             ManifestVersionStatus::Supported => SourceManifestVersionPolicyResult::Supported,
-            ManifestVersionStatus::TooOld | ManifestVersionStatus::Invalid => {
+            ManifestVersionStatus::Unsupported | ManifestVersionStatus::Invalid => {
                 SourceManifestVersionPolicyResult::Error(format!(
                     "Unknown application manifest version: {}. This CLI supports {}.",
                     manifest_version.log_color_highlight(),
-                    versions::sdk::MANIFEST.log_color_highlight()
+                    supported_manifest_versions_display().log_color_highlight()
                 ))
             }
             ManifestVersionStatus::TooNew => SourceManifestVersionPolicyResult::Error(format!(
@@ -145,31 +158,25 @@ fn source_manifest_version_policy(
 }
 
 fn manifest_version_status(manifest_version: &str) -> ManifestVersionStatus {
-    let Some(actual) = parse_strict_manifest_version(manifest_version) else {
+    let Some(actual) = parse_manifest_version(manifest_version) else {
         return ManifestVersionStatus::Invalid;
     };
-    let supported = *SUPPORTED_MANIFEST_VERSION;
 
-    if actual == supported {
+    if SUPPORTED_MANIFEST_VERSION_VALUES.contains(&actual) {
         ManifestVersionStatus::Supported
-    } else if actual < supported {
-        ManifestVersionStatus::TooOld
-    } else {
+    } else if actual > *LATEST_MANIFEST_VERSION {
         ManifestVersionStatus::TooNew
+    } else {
+        ManifestVersionStatus::Unsupported
     }
 }
 
-fn parse_strict_manifest_version(version: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = version.split('.');
-    let major = parts.next()?.parse::<u64>().ok()?;
-    let minor = parts.next()?.parse::<u64>().ok()?;
-    let patch = parts.next()?.parse::<u64>().ok()?;
+fn parse_manifest_version(version: &str) -> Option<Version> {
+    Version::parse(version).ok()
+}
 
-    if parts.next().is_some() {
-        return None;
-    }
-
-    Some((major, minor, patch))
+fn supported_manifest_versions_display() -> String {
+    SUPPORTED_MANIFEST_VERSIONS.join(", ")
 }
 
 #[cfg(test)]
@@ -188,6 +195,19 @@ mod tests {
             format!("manifestVersion: {}\n", versions::sdk::MANIFEST),
         )
         .unwrap();
+
+        let result = validate_manifest_versions(&BTreeSet::from([source]));
+        let (_value, warns, errors) = result.into_product();
+
+        assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn manifest_version_check_accepts_previous_compatible_version() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source = temp_dir.path().join("golem.yaml");
+        std::fs::write(&source, "manifestVersion: 1.5.0\n").unwrap();
 
         let result = validate_manifest_versions(&BTreeSet::from([source]));
         let (_value, warns, errors) = result.into_product();
@@ -227,11 +247,26 @@ mod tests {
     }
 
     #[test]
-    fn manifest_version_check_errors_for_newer_version() {
+    fn manifest_version_check_errors_for_unsupported_intermediate_version() {
         let temp_dir = tempfile::tempdir().unwrap();
         let source = temp_dir.path().join("golem.yaml");
 
         std::fs::write(&source, "manifestVersion: 1.5.1\n").unwrap();
+
+        let result = validate_manifest_versions(&BTreeSet::from([source]));
+        let (_value, warns, errors) = result.into_product();
+
+        assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("Unknown application manifest version"));
+    }
+
+    #[test]
+    fn manifest_version_check_errors_for_newer_version() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source = temp_dir.path().join("golem.yaml");
+
+        std::fs::write(&source, "manifestVersion: 1.6.1\n").unwrap();
 
         let result = validate_manifest_versions(&BTreeSet::from([source]));
         let (_value, warns, errors) = result.into_product();

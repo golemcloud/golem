@@ -27,6 +27,7 @@ pub enum Token {
     DoubleColon,
     Dot,
     Eq,
+    Star,
     Ident(String),
     StringLit(String),
     CharLit(char),
@@ -36,8 +37,7 @@ pub enum Token {
     BoolLit(bool),
     Null,
     Undefined,
-    AtT,
-    AtB,
+    At,
     Eof,
 }
 
@@ -76,6 +76,13 @@ impl<'a> Lexer<'a> {
 
     pub fn position(&self) -> usize {
         self.pos
+    }
+
+    /// Returns the raw source slice between two byte offsets (as produced by
+    /// [`Lexer::next_token`]). Used to recover the exact textual form of a
+    /// numeric literal when reconstructing canonical rich-type payloads.
+    pub fn slice(&self, start: usize, end: usize) -> &str {
+        &self.input[start..end]
     }
 
     pub fn skip_raw_char(&mut self, ch: u8) -> bool {
@@ -213,23 +220,22 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 Ok((Token::Dot, start, self.pos))
             }
+            b'*' => {
+                self.pos += 1;
+                Ok((Token::Star, start, self.pos))
+            }
             b'=' => {
                 self.pos += 1;
                 Ok((Token::Eq, start, self.pos))
             }
             b'@' => {
-                if self.pos + 1 < bytes.len() && bytes[self.pos + 1] == b't' {
-                    self.pos += 2;
-                    Ok((Token::AtT, start, self.pos))
-                } else if self.pos + 1 < bytes.len() && bytes[self.pos + 1] == b'b' {
-                    self.pos += 2;
-                    Ok((Token::AtB, start, self.pos))
-                } else {
-                    Err(LexError {
-                        position: start,
-                        message: "unexpected character after '@'".into(),
-                    })
-                }
+                // A lone `@` introduces a MoonBit package qualifier such as
+                // `@wallClock.Datetime`; the following identifier is lexed
+                // separately. Lexing it as its own token (rather than rejecting
+                // it) lets qualified literals appear in nested positions where
+                // the dispatcher peeks before choosing a parser.
+                self.pos += 1;
+                Ok((Token::At, start, self.pos))
             }
             b'"' => self.read_string(start),
             b'\'' => self.read_char(start),
@@ -303,7 +309,13 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         let mut is_float = false;
-        if self.pos < self.input.len() && self.bytes()[self.pos] == b'.' {
+        // Only treat a `.` as a decimal point when it is followed by a digit, so
+        // that `5.kg()` lexes as `5` `.` `kg` `(` `)` (a quantity literal) rather
+        // than the float `5.0` swallowing the dot.
+        if self.pos + 1 < self.input.len()
+            && self.bytes()[self.pos] == b'.'
+            && self.bytes()[self.pos + 1].is_ascii_digit()
+        {
             is_float = true;
             self.pos += 1;
             while self.pos < self.input.len() && self.bytes()[self.pos].is_ascii_digit() {
@@ -520,11 +532,58 @@ impl<'a> Lexer<'a> {
                 message: "incomplete \\uXXXX escape".into(),
             });
         }
-        let hex = &self.input[self.pos..self.pos + 4];
+        // Parse the four bytes directly rather than slicing `self.input`. The
+        // bytes following `\u` may be multi-byte UTF-8 (e.g. `'\u€€'`), in which
+        // case `self.pos + 4` does not land on a char boundary and a string
+        // slice would panic. Hex digits are ASCII, so byte-wise parsing is
+        // boundary-agnostic.
+        let bytes = self.bytes();
+        let mut value: u16 = 0;
+        for &b in &bytes[self.pos..self.pos + 4] {
+            let digit = match b {
+                b'0'..=b'9' => b - b'0',
+                b'a'..=b'f' => b - b'a' + 10,
+                b'A'..=b'F' => b - b'A' + 10,
+                _ => {
+                    return Err(LexError {
+                        position: esc_pos,
+                        message: format!(
+                            "invalid hex in \\u{}",
+                            String::from_utf8_lossy(&bytes[self.pos..self.pos + 4])
+                        ),
+                    });
+                }
+            };
+            value = value * 16 + digit as u16;
+        }
         self.pos += 4;
-        u16::from_str_radix(hex, 16).map_err(|_| LexError {
-            position: esc_pos,
-            message: format!("invalid hex in \\u{hex}"),
-        })
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn read_hex4_does_not_panic_on_multibyte_input_after_u_escape() {
+        // `'\u€€'` — backslash-u followed by two euro signs (each 3 bytes).
+        // The length check passes (6 >= 4 bytes after `\u`), but `pos + 4`
+        // lands mid-codepoint. Previously this panicked with
+        // "byte index N is not a char boundary"; it must report a LexError.
+        let input = "'\\u€€'";
+        let mut lexer = Lexer::new(input);
+        let token = lexer.next_token();
+        assert!(
+            token.is_err(),
+            "expected a LexError for non-hex characters after \\u, got {:?}",
+            token
+        );
+        let err = token.unwrap_err();
+        assert!(
+            err.message.contains("invalid hex") || err.message.contains("incomplete"),
+            "unexpected error message: {err}"
+        );
     }
 }

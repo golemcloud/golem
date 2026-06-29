@@ -16,24 +16,31 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
+use crate::app::manifest_upgrade::plan_manifest_upgrade_steps;
 use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
+use crate::command_handler::interactive::InteractiveHandler;
+use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{LogColorize, LogIndent, LogOutput, Output, log_action, logln};
 use crate::model::app::{
     AppBuildStep, Application, ApplicationComponentSelectMode, ApplicationConfig,
-    ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig, CleanMode,
-    ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, WithSource,
+    ApplicationPreload, ApplicationSourceMode, BuildConfig, CleanMode, ComponentPresetSelector,
+    CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, ResolvedLocalServer, WithSource,
     includes_from_yaml_file,
 };
+use crate::model::format::Format;
+use crate::model::text::diff::log_unified_diff_for_path;
+use crate::model::text::fmt::DecoratedIndent;
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
+use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -145,7 +152,8 @@ impl ToolsWithEnsuredCommonDeps {
 pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
-    pub application_name_and_environments: Option<ApplicationNameAndEnvironments>,
+    pub application_preload: Option<ApplicationPreload>,
+    pub resolved_local_server: Option<ResolvedLocalServer>,
     pub used_language_templates: HashSet<GuestLanguage>,
 }
 
@@ -160,6 +168,86 @@ pub struct ApplicationContext {
 }
 
 impl ApplicationContext {
+    pub fn plan_and_apply_manifest_upgrades_before_load(
+        source_mode: ApplicationSourceMode,
+        yes: bool,
+    ) -> anyhow::Result<()> {
+        Self::plan_and_apply_manifest_upgrades_before_load_from(
+            source_mode,
+            yes,
+            &fs::current_dir_lexical()?,
+        )
+    }
+
+    fn plan_and_apply_manifest_upgrades_before_load_from(
+        source_mode: ApplicationSourceMode,
+        yes: bool,
+        calling_working_dir: &Path,
+    ) -> anyhow::Result<()> {
+        let collected_sources = {
+            let _output = LogOutput::new(Output::None);
+            match &source_mode {
+                ApplicationSourceMode::Automatic => collect_sources_from(calling_working_dir, None),
+                ApplicationSourceMode::ByRootManifest(root_manifest) => {
+                    collect_sources_from(calling_working_dir, Some(root_manifest))
+                }
+                ApplicationSourceMode::Preloaded(_) | ApplicationSourceMode::None => None,
+            }
+        };
+
+        let Some(collected_sources) = collected_sources else {
+            return Ok(());
+        };
+
+        let collected_sources = validated_to_anyhow(
+            "Failed to collect application manifests for automatic upgrade",
+            collected_sources,
+            None,
+        )?;
+
+        let steps = plan_manifest_upgrade_steps(&collected_sources.sources)?;
+        if steps.is_empty() {
+            return Ok(());
+        }
+
+        let _output = LogOutput::new(Output::Stderr);
+        logln("");
+        log_action("Planned", "automatic application manifest upgrade changes");
+        let _indent = DecoratedIndent::new_primary(Format::Text);
+
+        for step in &steps {
+            logln(format!(
+                "- {} {}",
+                "update".green(),
+                step.path.display().to_string().log_color_highlight()
+            ));
+            let _indent = LogIndent::new();
+            let _indent = DecoratedIndent::new_secondary(Format::Text);
+            log_unified_diff_for_path(
+                &step.path,
+                &diff::unified_diff(step.current.as_str(), step.new.as_str()),
+            );
+        }
+
+        if !InteractiveHandler::confirm_manifest_upgrade_plan_apply(yes)? {
+            bail!(NonSuccessfulExit);
+        }
+
+        logln("");
+        log_action("Applying", "application manifest upgrades");
+        let _indent = LogIndent::new();
+
+        for step in &steps {
+            log_action(
+                "Updating",
+                format!("{}", step.path.display().to_string().log_color_highlight()),
+            );
+            fs::write_str(&step.path, step.new.as_str())?;
+        }
+
+        Ok(())
+    }
+
     pub fn preload_application(
         source_mode: ApplicationSourceMode,
         dev_mode: bool,
@@ -178,7 +266,8 @@ impl ApplicationContext {
             None => Ok(ApplicationPreloadResult {
                 source_mode: ApplicationSourceMode::None,
                 loaded_with_warnings: false,
-                application_name_and_environments: None,
+                application_preload: None,
+                resolved_local_server: None,
                 used_language_templates: HashSet::new(),
             }),
         }
@@ -189,12 +278,14 @@ impl ApplicationContext {
         config: ApplicationConfig,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
         file_download_client: reqwest::Client,
     ) -> anyhow::Result<Option<ApplicationContext>> {
         let Some(app_and_calling_working_dir) = load_app(
             application_name,
             environments,
+            local_server,
             component_presets,
             source_mode,
         ) else {
@@ -542,6 +633,28 @@ impl ApplicationContext {
                     ));
                 }
             }
+
+            let mcp_deployments = self
+                .application
+                .mcp_deployments(self.application.environment_name());
+            if let Some(mcp_deployments) = mcp_deployments {
+                logln(format!(
+                    "{}",
+                    format!(
+                        "Application MCP deployments for environment {}:",
+                        environment_name.0
+                    )
+                    .log_color_help_group()
+                ));
+
+                for (site, deployment) in mcp_deployments {
+                    logln(format!("  {}", site.to_string().log_color_highlight(),));
+                    for (agent_name, _) in deployment.value.agents.iter() {
+                        logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
+                    }
+                }
+                logln("");
+            }
         }
 
         if config.custom_commands() {
@@ -579,6 +692,7 @@ impl ApplicationContext {
 fn load_app(
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    local_server: Option<WithSource<app_raw::LocalServer>>,
     component_presets: ComponentPresetSelector,
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<(Application, PathBuf)>> {
@@ -588,6 +702,7 @@ fn load_app(
                 loaded_raw_apps.app_root_dir,
                 application_name,
                 environments,
+                local_server,
                 component_presets,
                 loaded_raw_apps.raw_apps,
             )
@@ -605,38 +720,45 @@ fn preload_app(
             let used_language_templates =
                 Application::language_templates_from_raw_apps(&loaded_raw_apps.raw_apps);
 
-            Application::environments_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
-                .and_then(|application_name_and_environments| {
+            Application::preload_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
+                .and_then(|application_preload| {
                     ValidatedResult::from_result(ensure_on_demand_commons(
                         &used_language_templates,
                         dev_mode,
                     ))
                     .map(|on_demand_common_raw_apps| {
-                        (on_demand_common_raw_apps, application_name_and_environments)
+                        (on_demand_common_raw_apps, application_preload)
                     })
                 })
-                .map(
-                    |(on_demand_common_raw_apps, application_name_and_environments)| {
-                        let raw_apps = {
-                            let mut raw_apps = loaded_raw_apps.raw_apps;
-                            raw_apps.extend(on_demand_common_raw_apps);
-                            raw_apps
-                        };
+                .map(|(on_demand_common_raw_apps, application_preload)| {
+                    let resolved_local_server =
+                        application_preload
+                            .local_server
+                            .as_ref()
+                            .map(|local_server| {
+                                ResolvedLocalServer::from_raw_with_source(
+                                    local_server,
+                                    &loaded_raw_apps.app_root_dir,
+                                )
+                            });
+                    let raw_apps = {
+                        let mut raw_apps = loaded_raw_apps.raw_apps;
+                        raw_apps.extend(on_demand_common_raw_apps);
+                        raw_apps
+                    };
 
-                        ApplicationPreloadResult {
-                            source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
-                                app_root_dir: loaded_raw_apps.app_root_dir,
-                                calling_working_dir: loaded_raw_apps.calling_working_dir,
-                                raw_apps,
-                            }),
-                            loaded_with_warnings: false,
-                            application_name_and_environments: Some(
-                                application_name_and_environments,
-                            ),
-                            used_language_templates,
-                        }
-                    },
-                )
+                    ApplicationPreloadResult {
+                        source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
+                            app_root_dir: loaded_raw_apps.app_root_dir,
+                            calling_working_dir: loaded_raw_apps.calling_working_dir,
+                            raw_apps,
+                        }),
+                        loaded_with_warnings: false,
+                        application_preload: Some(application_preload),
+                        resolved_local_server,
+                        used_language_templates,
+                    }
+                })
         })
     })
 }
@@ -710,7 +832,18 @@ fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
 ) -> Option<ValidatedResult<CollectedSources>> {
     let calling_working_dir = fs::current_dir_lexical().unwrap();
+    collect_sources_from(&calling_working_dir, root_manifest).map(|collected_sources| {
+        collected_sources.inspect(|collected_sources| {
+            std::env::set_current_dir(&collected_sources.app_root_dir)
+                .expect("Failed to set current dir for config parent");
+        })
+    })
+}
 
+fn collect_sources_from(
+    calling_working_dir: &Path,
+    root_manifest: Option<&Path>,
+) -> Option<ValidatedResult<CollectedSources>> {
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
 
@@ -719,7 +852,6 @@ fn collect_sources_and_switch_to_app_root(
     ) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
         let source_dir =
             fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
-        std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
 
         let includes = includes_from_yaml_file(source);
         if includes.is_empty() {
@@ -741,18 +873,14 @@ fn collect_sources_and_switch_to_app_root(
     }
 
     let sources_and_root_dir = match root_manifest {
-        None => match find_main_source() {
+        None => match find_main_source_from(calling_working_dir) {
             Some(source) => collect_by_main_source(&source),
             None => None,
         },
-        Some(source) => match fs::absolute_lexical_path(source) {
-            Ok(source) => collect_by_main_source(&source),
-            Err(err) => Some(ValidatedResult::from_error(format!(
-                "Cannot resolve requested application manifest source {}: {}",
-                source.log_color_highlight(),
-                err
-            ))),
-        },
+        Some(source) => {
+            let source = fs::absolute_lexical_path_from_base_dir(source, calling_working_dir);
+            collect_by_main_source(&source)
+        }
     };
 
     sources_and_root_dir.map(|sources_and_root_dir| {
@@ -776,15 +904,10 @@ fn collect_sources_and_switch_to_app_root(
             })
             .map(|sources_and_root_dir| CollectedSources {
                 app_root_dir: sources_and_root_dir.1,
-                calling_working_dir,
+                calling_working_dir: calling_working_dir.to_path_buf(),
                 sources: sources_and_root_dir.0,
             })
     })
-}
-
-fn find_main_source() -> Option<PathBuf> {
-    let current_dir = std::env::current_dir().expect("Failed to get current dir");
-    find_main_source_from(&current_dir)
 }
 
 pub(crate) fn find_main_source_from(start_dir: &Path) -> Option<PathBuf> {
@@ -829,5 +952,144 @@ pub fn validated_to_anyhow<T>(
             warns,
             errors,
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApplicationContext;
+    use crate::model::app::{Application, ApplicationSourceMode, ResolvedLocalServer};
+    use test_r::test;
+
+    #[test]
+    fn automatic_manifest_upgrade_applies_before_load_without_changing_cwd() {
+        let original_dir = std::env::current_dir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let app_dir = temp_dir.path().join("app");
+        std::fs::create_dir(&app_dir).unwrap();
+        let manifest = app_dir.join("golem.yaml");
+        std::fs::write(
+            &manifest,
+            r#"# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+manifestVersion: 1.5.0
+app: demo
+"#,
+        )
+        .unwrap();
+
+        let nested_dir = app_dir.join("src");
+        std::fs::create_dir(&nested_dir).unwrap();
+
+        let result = ApplicationContext::plan_and_apply_manifest_upgrades_before_load_from(
+            ApplicationSourceMode::Automatic,
+            true,
+            &nested_dir,
+        );
+
+        let current_dir = std::env::current_dir().unwrap();
+        result.unwrap();
+        assert_eq!(
+            std::fs::canonicalize(current_dir).unwrap(),
+            std::fs::canonicalize(original_dir).unwrap()
+        );
+
+        let upgraded = std::fs::read_to_string(manifest).unwrap();
+        assert!(upgraded.contains("manifestVersion: 1.6.0"));
+        assert!(upgraded.contains("/1.6.0-dev.3/golem.schema.json"));
+    }
+
+    #[test]
+    fn preload_resolves_local_server_paths_against_declaring_manifest_dir() {
+        let original_dir = std::env::current_dir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let app_dir = temp_dir.path().join("app");
+        let config_dir = app_dir.join("config");
+        std::fs::create_dir(&app_dir).unwrap();
+        std::fs::create_dir(&config_dir).unwrap();
+        let manifest = app_dir.join("golem.yaml");
+        let local_server_manifest = config_dir.join("local-server.yaml");
+        std::fs::write(
+            &manifest,
+            r#"
+manifestVersion: 1.6.0
+app: demo
+includes:
+  - config/local-server.yaml
+environments:
+  local:
+    server: local
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &local_server_manifest,
+            r#"
+manifestVersion: 1.6.0
+localServer:
+  portsFile: .golem/ports.json
+  dataDir: .golem/data
+  agentFilesystemRoot: .golem/agents
+"#,
+        )
+        .unwrap();
+
+        let result = super::collect_sources_from(&original_dir, Some(&manifest))
+            .expect("manifest should be found");
+        let (collected_sources, warns, errors) = result.into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+
+        let collected_sources = collected_sources.unwrap();
+        let raw_apps = collected_sources
+            .sources
+            .iter()
+            .map(|source| crate::model::app_raw::ApplicationWithSource::from_yaml_file(source))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let (application_preload, warns, errors) =
+            Application::preload_from_raw_apps(raw_apps.as_slice()).into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+
+        let application_preload = application_preload.unwrap();
+        let raw_local_server = application_preload
+            .local_server
+            .as_ref()
+            .unwrap()
+            .value
+            .clone();
+
+        assert_eq!(
+            raw_local_server.ports_file,
+            Some(std::path::PathBuf::from(".golem/ports.json"))
+        );
+        assert_eq!(
+            raw_local_server.data_dir,
+            Some(std::path::PathBuf::from(".golem/data"))
+        );
+        assert_eq!(
+            raw_local_server.agent_filesystem_root,
+            Some(std::path::PathBuf::from(".golem/agents"))
+        );
+
+        let resolved_local_server = ResolvedLocalServer::from_raw_with_source(
+            application_preload.local_server.as_ref().unwrap(),
+            &collected_sources.app_root_dir,
+        );
+
+        assert_eq!(
+            resolved_local_server.ports_file,
+            Some(config_dir.join(".golem/ports.json"))
+        );
+        assert_eq!(
+            resolved_local_server.data_dir,
+            Some(config_dir.join(".golem/data"))
+        );
+        assert_eq!(
+            resolved_local_server.agent_filesystem_root,
+            Some(config_dir.join(".golem/agents"))
+        );
     }
 }

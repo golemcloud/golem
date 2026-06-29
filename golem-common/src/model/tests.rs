@@ -17,13 +17,11 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode, AgentStatus,
-    AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
+    AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
+    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::analysed_type::str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::vec;
@@ -217,9 +215,13 @@ fn worker_filter_matches() {
         ],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
+        created_by_email: AccountEmail::new("test@golem"),
         config: vec![TypedAgentConfigEntry {
             path: vec!["var1".to_string()],
-            value: ValueAndType::new(golem_wasm::Value::String("value1".to_string()), str()),
+            value: crate::schema::IntoTypedSchemaValue::into_typed_schema_value(
+                &"value1".to_string(),
+            )
+            .unwrap(),
         }],
         created_at: Timestamp::now_utc(),
         parent: None,
@@ -498,4 +500,36 @@ fn agent_status_record_agent_mode_is_not_serialized() {
         ..original
     };
     assert_eq!(recovered, expected);
+}
+
+#[test]
+fn agent_invocation_result_redacted_debug_hides_capability_material() {
+    use crate::model::AgentInvocationResult;
+    use crate::schema::{SchemaValue, SecretValuePayload};
+
+    let result = AgentInvocationResult::AgentMethod {
+        output: SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("svc".to_string()),
+                SchemaValue::Secret(SecretValuePayload {
+                    secret_ref: "shhh-do-not-log".to_string(),
+                }),
+            ],
+        },
+    };
+
+    let rendered = format!("{:?}", result.redacted_debug());
+    assert!(
+        !rendered.contains("shhh-do-not-log"),
+        "secret ref leaked into diagnostic debug: {rendered}"
+    );
+    assert!(
+        rendered.contains("<redacted: secret>"),
+        "expected redacted placeholder, got: {rendered}"
+    );
+    // Non-capability variants render normally.
+    assert_eq!(
+        format!("{:?}", AgentInvocationResult::ManualUpdate.redacted_debug()),
+        format!("{:?}", AgentInvocationResult::ManualUpdate)
+    );
 }

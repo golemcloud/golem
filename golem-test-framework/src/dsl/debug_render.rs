@@ -13,15 +13,12 @@
 // limitations under the License.
 
 use golem_common::base_model::oplog::PublicSnapshotData;
-use golem_common::model::agent::{
-    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
-};
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
     PublicUpdateDescription, StringAttributeValue,
 };
-use golem_wasm::{ValueAndType, print_value_and_type};
+use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::render::value_to_cli_text;
 use std::fmt::Write;
 
 // backported from golem-cli to help debugging worker executor issues
@@ -56,19 +53,46 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 log_plugin_description(&mut result, &inner_pad, plugin);
             }
         }
-        PublicOplogEntry::HostCall(params) => {
-            let _ = writeln!(result, "CALL {}", &params.function_name,);
+        PublicOplogEntry::Start(params) => {
+            let _ = writeln!(result, "START {}", &params.function_name,);
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(
-                result,
-                "{pad}input:             {}",
-                value_to_string(&params.request)
-            );
-            let _ = writeln!(
-                result,
-                "{pad}result:            {}",
-                value_to_string(&params.response)
-            );
+            if let Some(parent) = params.parent_start_index {
+                let _ = writeln!(result, "{pad}parent start index: {parent}");
+            }
+            if let Some(request) = &params.request {
+                let _ = writeln!(
+                    result,
+                    "{pad}input:             {}",
+                    typed_schema_value_to_string(request)
+                );
+            }
+        }
+        PublicOplogEntry::End(params) => {
+            let _ = writeln!(result, "END");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}start index:       {}", &params.start_index);
+            if let Some(response) = &params.response {
+                let _ = writeln!(
+                    result,
+                    "{pad}result:            {}",
+                    typed_schema_value_to_string(response)
+                );
+            }
+            if params.forced_commit {
+                let _ = writeln!(result, "{pad}forced commit:     true");
+            }
+        }
+        PublicOplogEntry::Cancelled(params) => {
+            let _ = writeln!(result, "CANCELLED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}start index:       {}", &params.start_index);
+            if let Some(partial) = &params.partial {
+                let _ = writeln!(
+                    result,
+                    "{pad}partial result:    {}",
+                    typed_schema_value_to_string(partial)
+                );
+            }
         }
         PublicOplogEntry::AgentInvocationStarted(params) => {
             let _ = writeln!(result, "AGENT INVOCATION STARTED");
@@ -138,15 +162,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         }
         PublicOplogEntry::EndAtomicRegion(params) => {
             let _ = writeln!(result, "END ATOMIC REGION");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
-        }
-        PublicOplogEntry::BeginRemoteWrite(params) => {
-            let _ = writeln!(result, "BEGIN REMOTE WRITE");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-        }
-        PublicOplogEntry::EndRemoteWrite(params) => {
-            let _ = writeln!(result, "END REMOTE WRITE");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }
@@ -451,6 +466,42 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}name:              {}", &params.name);
         }
+        PublicOplogEntry::CardRevoked(params) => {
+            let _ = writeln!(result, "CARD REVOKED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}queued event:      {:?}",
+                &params.queued_event_index
+            );
+            let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+        }
+        PublicOplogEntry::CardEventQueued(params) => {
+            let _ = writeln!(result, "CARD EVENT QUEUED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}card id:           {}", params.event.card_id());
+        }
+        PublicOplogEntry::CardInstalled(params) => {
+            let _ = writeln!(result, "CARD INSTALLED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}queued event:      {:?}",
+                &params.queued_event_index
+            );
+            let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+        }
+        PublicOplogEntry::CardInstallFailed(params) => {
+            let _ = writeln!(result, "CARD INSTALL FAILED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}queued event:      {}",
+                &params.queued_event_index
+            );
+            let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+            let _ = writeln!(result, "{pad}reason:            {:?}", &params.reason);
+        }
     }
 
     result
@@ -469,55 +520,7 @@ fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstalla
     }
 }
 
-fn value_to_string(value: &ValueAndType) -> String {
-    print_value_and_type(value).unwrap_or_else(|_| format!("{value:?}"))
-}
-
-#[allow(dead_code)]
-fn log_data_value(output: &mut String, pad: &str, value: &DataValue) {
-    match value {
-        DataValue::Tuple(values) => {
-            let _ = writeln!(output, "{pad}  tuple:");
-            for value in &values.elements {
-                log_element_value(output, &format!("{pad}    "), value);
-            }
-        }
-        DataValue::Multimodal(values) => {
-            let _ = writeln!(output, "{pad}  multi-modal:");
-            for value in &values.elements {
-                log_element_value(output, &format!("{pad}    "), &value.value);
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn log_element_value(output: &mut String, pad: &str, value: &ElementValue) {
-    match value {
-        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-            let _ = writeln!(output, "{pad}- {}", value_to_string(value));
-        }
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Url(url) => {
-                let _ = writeln!(output, "{pad}- URL: {}", url.value);
-            }
-            TextReference::Inline(inline) => {
-                let _ = writeln!(output, "{pad}- Inline: {}", inline.data);
-                if let Some(text_type) = &inline.text_type {
-                    let _ = writeln!(output, "{pad}  Language code: {}", text_type.language_code);
-                }
-            }
-        },
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            match value {
-                BinaryReference::Url(url) => {
-                    let _ = writeln!(output, "{pad}- URL: {}", url.value);
-                }
-                BinaryReference::Inline(inline) => {
-                    let _ = writeln!(output, "{pad}- Inline: {} bytes", inline.data.len());
-                    let _ = writeln!(output, "{pad}  MIME type: {}", inline.binary_type.mime_type);
-                }
-            }
-        }
-    }
+fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
+    value_to_cli_text(value.graph(), value.root_type(), value.value())
+        .unwrap_or_else(|_| format!("{value:?}"))
 }

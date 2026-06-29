@@ -1,181 +1,244 @@
+// `IntoSchema` / `FromSchema` impls for MoonBit compound types, mirroring the
+// Rust SDK's `Option` / `Vec` / `Result` / `HashMap` / tuple impls in
+// `conversion.rs`. Like primitives these are structural (inline): they never
+// reserve a named definition, and their `type_id` is built from the argument
+// type ids via `type_id_with_args`.
+
 ///|
-pub impl[T : HasElementSchema] HasElementSchema for T? with element_schema() {
-  let inner = T::element_schema()
-  guard inner is @types.ElementSchema::ComponentModel(inner_wit_type) else {
-    inner
-  }
-  @types.ElementSchema::ComponentModel(
-    @builder.TypeBuilder::new().option_type(inner_wit_type),
-  )
+/// The canonical `TypeId` of the unit type, matching the Rust SDK's `()`
+/// (`core.tuple.Unit`). Used to detect unit ok/err branches of `Result`.
+let unit_type_id : @model.TypeId = "core.tuple.Unit"
+
+// ============================================================
+// Unit
+// ============================================================
+
+///|
+pub impl IntoSchema for Unit with type_id() {
+  unit_type_id
 }
 
 ///|
-pub impl[T : FromExtractor] FromExtractor for T? with from_extractor(e) {
-  match e.option() {
-    Some(None) => None
-    Some(Some(inner)) => Some(T::from_extractor(inner))
-    None => raise @common.AgentError::InvalidInput("Expected Option")
-  }
+pub impl IntoSchema for Unit with register_in(_b) {
+  @model.schema_type(Tuple([]))
 }
 
 ///|
-pub impl[T : FromExtractor] FromElementValue for T? with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Unit with to_value(_self) {
+  Tuple([])
 }
 
 ///|
-pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
-  match self {
-    None =>
-      @types.ElementValue::ComponentModel(@builder.Builder::new().option_none())
-    Some(v) => {
-      let inner = T::to_element_value(v)
-      guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
-        raise @common.AgentError::InvalidInput(
-          "Expected ComponentModel for Option inner value",
-        )
+pub impl FromSchema for Unit with from_value(v) {
+  match v {
+    Tuple(elems) =>
+      if elems.is_empty() {
+        ()
+      } else {
+        raise FromSchemaError::shape_mismatch("unit tuple", "tuple", "Unit")
       }
-      let wit_value = @builder.Builder::new().option_some(item => {
-        item.wit_value(inner_wit)
-      }) catch {
-        @builder.BuilderError(msg) =>
-          raise @common.AgentError::InvalidInput(msg)
-      }
-      @types.ElementValue::ComponentModel(wit_value)
-    }
-  }
-}
-
-///|
-pub impl[T : HasElementSchema] HasElementSchema for Array[T] with element_schema() {
-  let inner = T::element_schema()
-  guard inner is @types.ElementSchema::ComponentModel(inner_wit_type) else {
-    inner
-  }
-  @types.ElementSchema::ComponentModel(
-    @builder.TypeBuilder::new().list_type(inner_wit_type),
-  )
-}
-
-///|
-pub impl[T : FromExtractor] FromExtractor for Array[T] with from_extractor(e) {
-  guard e.list_elements() is Some(items) else {
-    raise @common.AgentError::InvalidInput("Expected List")
-  }
-  let result : Array[T] = []
-  for item in items {
-    result.push(T::from_extractor(item))
-  }
-  result
-}
-
-///|
-pub impl[T : FromExtractor] FromElementValue for Array[T] with from_element_value(
-  v,
-) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
-}
-
-///|
-pub impl[T : ToElementValue] ToElementValue for Array[T] with to_element_value(
-  self,
-) {
-  let inner_values : Array[@types.WitValue] = []
-  for item in self {
-    let inner = T::to_element_value(item)
-    guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
-      raise @common.AgentError::InvalidInput(
-        "Expected ComponentModel for Array element",
+    other =>
+      raise FromSchemaError::shape_mismatch(
+        "unit tuple",
+        value_kind(other),
+        "Unit",
       )
+  }
+}
+
+// ============================================================
+// Option[T] -> option
+// ============================================================
+
+///|
+pub impl[T : IntoSchema] IntoSchema for T? with type_id() {
+  type_id_with_args("core.option.Option", [T::type_id()])
+}
+
+///|
+pub impl[T : IntoSchema] IntoSchema for T? with register_in(b) {
+  @model.schema_type(Option(T::register_in(b)))
+}
+
+///|
+pub impl[T : IntoSchema] IntoSchema for T? with to_value(self) {
+  match self {
+    Some(x) => Option(Some(T::to_value(x)))
+    None => Option(None)
+  }
+}
+
+///|
+pub impl[T : FromSchema] FromSchema for T? with from_value(v) {
+  match v {
+    Option(Some(x)) => Some(T::from_value(x))
+    Option(None) => None
+    other =>
+      raise FromSchemaError::shape_mismatch(
+        "option",
+        value_kind(other),
+        "Option",
+      )
+  }
+}
+
+// ============================================================
+// Array[T] -> list
+// ============================================================
+
+///|
+pub impl[T : IntoSchema] IntoSchema for Array[T] with type_id() {
+  type_id_with_args("alloc.vec.Vec", [T::type_id()])
+}
+
+///|
+pub impl[T : IntoSchema] IntoSchema for Array[T] with register_in(b) {
+  @model.schema_type(List(T::register_in(b)))
+}
+
+///|
+pub impl[T : IntoSchema] IntoSchema for Array[T] with to_value(self) {
+  List(self.map(x => T::to_value(x)))
+}
+
+///|
+pub impl[T : FromSchema] FromSchema for Array[T] with from_value(v) {
+  match v {
+    List(items) => {
+      let result : Array[T] = []
+      for item in items {
+        result.push(T::from_value(item))
+      }
+      result
     }
-    inner_values.push(inner_wit)
+    other =>
+      raise FromSchemaError::shape_mismatch("list", value_kind(other), "Array")
   }
-  let wit_value = @builder.Builder::new().list(item => {
-    for v in inner_values {
-      item.wit_value(v)
-    }
-  }) catch {
-    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
-  }
-  @types.ElementValue::ComponentModel(wit_value)
+}
+
+// ============================================================
+// Result[T, E] -> result (unit ok/err omit the payload)
+// ============================================================
+
+///|
+pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E] with type_id() {
+  type_id_with_args("core.result.Result", [T::type_id(), E::type_id()])
 }
 
 ///|
-pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result[
-  T,
-  E,
-] with element_schema() {
-  let ok_schema = T::element_schema()
-  let err_schema = E::element_schema()
-  guard ok_schema is @types.ElementSchema::ComponentModel(ok_wit_type) else {
-    ok_schema
-  }
-  guard err_schema is @types.ElementSchema::ComponentModel(err_wit_type) else {
-    err_schema
-  }
-  @types.ElementSchema::ComponentModel(
-    @builder.TypeBuilder::new().result_type(ok_wit_type, err_wit_type),
-  )
-}
-
-///|
-pub impl[T : FromExtractor, E : FromExtractor] FromExtractor for Result[T, E] with from_extractor(
-  e,
+pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E] with register_in(
+  b,
 ) {
-  guard e.result() is Some(r) else {
-    raise @common.AgentError::InvalidInput("Expected Result")
+  let ok = if T::type_id() == unit_type_id {
+    None
+  } else {
+    Some(T::register_in(b))
   }
-  match r {
-    Ok(Some(ok_inner)) => Ok(T::from_extractor(ok_inner))
-    Ok(None) =>
-      raise @common.AgentError::InvalidInput("Expected Result Ok value")
-    Err(Some(err_inner)) => Err(E::from_extractor(err_inner))
-    Err(None) =>
-      raise @common.AgentError::InvalidInput("Expected Result Err value")
+  let err = if E::type_id() == unit_type_id {
+    None
+  } else {
+    Some(E::register_in(b))
   }
+  @model.schema_type(Result(ok, err))
 }
 
 ///|
-pub impl[T : FromExtractor, E : FromExtractor] FromElementValue for Result[T, E] with from_element_value(
-  v,
-) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
-}
-
-///|
-pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E] with to_element_value(
+pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E] with to_value(
   self,
 ) {
   match self {
-    Ok(v) => {
-      let inner = T::to_element_value(v)
-      guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
-        raise @common.AgentError::InvalidInput(
-          "Expected ComponentModel for Result Ok value",
-        )
+    Ok(x) =>
+      ResultOk(
+        if T::type_id() == unit_type_id {
+          None
+        } else {
+          Some(T::to_value(x))
+        },
+      )
+    Err(e) =>
+      ResultErr(
+        if E::type_id() == unit_type_id {
+          None
+        } else {
+          Some(E::to_value(e))
+        },
+      )
+  }
+}
+
+///|
+pub impl[T : FromSchema, E : FromSchema] FromSchema for Result[T, E] with from_value(
+  v,
+) {
+  let unit_value : @model.SchemaValue = Tuple([])
+  match v {
+    ResultOk(inner) =>
+      Ok(
+        T::from_value(
+          match inner {
+            Some(x) => x
+            None => unit_value
+          },
+        ),
+      )
+    ResultErr(inner) =>
+      Err(
+        E::from_value(
+          match inner {
+            Some(x) => x
+            None => unit_value
+          },
+        ),
+      )
+    other =>
+      raise FromSchemaError::shape_mismatch(
+        "result",
+        value_kind(other),
+        "Result",
+      )
+  }
+}
+
+// ============================================================
+// Map[K, V] -> map
+// ============================================================
+
+///|
+pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V] with type_id() {
+  type_id_with_args("moonbitlang.core.Map", [K::type_id(), V::type_id()])
+}
+
+///|
+pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V] with register_in(
+  b,
+) {
+  @model.schema_type(Map(K::register_in(b), V::register_in(b)))
+}
+
+///|
+pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V] with to_value(
+  self,
+) {
+  let entries : Array[@model.SchemaMapEntry] = []
+  for k, v in self {
+    entries.push({ key: K::to_value(k), value: V::to_value(v) })
+  }
+  Map(entries)
+}
+
+///|
+pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V] with from_value(
+  v,
+) {
+  match v {
+    Map(entries) => {
+      let m : Map[K, V] = Map::new()
+      for e in entries {
+        m[K::from_value(e.key)] = V::from_value(e.value)
       }
-      let wit_value = @builder.Builder::new().result_ok(item => {
-        item.wit_value(inner_wit)
-      }) catch {
-        @builder.BuilderError(msg) =>
-          raise @common.AgentError::InvalidInput(msg)
-      }
-      @types.ElementValue::ComponentModel(wit_value)
+      m
     }
-    Err(e) => {
-      let inner = E::to_element_value(e)
-      guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
-        raise @common.AgentError::InvalidInput(
-          "Expected ComponentModel for Result Err value",
-        )
-      }
-      let wit_value = @builder.Builder::new().result_err(item => {
-        item.wit_value(inner_wit)
-      }) catch {
-        @builder.BuilderError(msg) =>
-          raise @common.AgentError::InvalidInput(msg)
-      }
-      @types.ElementValue::ComponentModel(wit_value)
-    }
+    other =>
+      raise FromSchemaError::shape_mismatch("map", value_kind(other), "Map")
   }
 }

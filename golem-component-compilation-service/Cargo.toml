@@ -24,6 +24,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+humantime-serde = { workspace = true }
 lazy_static.workspace = true
 prometheus = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }

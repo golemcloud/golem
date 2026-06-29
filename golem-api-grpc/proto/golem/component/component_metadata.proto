@@ -5,6 +5,7 @@ package golem.component;
 import "golem/component/agent.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
+import "golem/schema/agent.proto";
 
 message KnownExports {
   optional string agent_guest_interface = 1;
@@ -19,6 +20,7 @@ message ComponentMetadata {
   repeated LinearMemory memories = 3;
   optional string root_package_name = 6;
   optional string root_package_version = 7;
-  repeated golem.component.AgentType agent_types = 8;
+  repeated golem.schema.AgentTypeSchema agent_types = 8;
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
+  map<string, bytes> agent_type_initial_permissions = 11;
 }

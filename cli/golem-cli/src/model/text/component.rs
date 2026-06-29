@@ -12,11 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app::ComponentLayerProperties;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::component::ComponentView;
+use crate::model::masking::{Masked, MaskingConfig, is_sensitive_key, mask_secret};
 use crate::model::text::fmt::*;
+use colored::control::SHOULD_COLORIZE;
+use golem_common::model::component::ComponentName;
+use serde::Serializer;
+use serde::ser::Error;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-impl TextView for Vec<ComponentView> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentListView {
+    pub components: Vec<ComponentView>,
+}
+
+impl Masked for ComponentListView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.components = self
+            .components
+            .into_iter()
+            .map(|component| component.masked(config))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(self)
+    }
+}
+
+impl StructuredOutput for ComponentListView {
+    const KIND: &'static str = "component.list";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl TextOutput for ComponentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
@@ -25,7 +63,7 @@ impl TextView for Vec<ComponentView> {
             Column::new("Size").fixed_right(),
             Column::new("Exports").fixed_right(),
         ]);
-        for comp in self {
+        for comp in &self.components {
             table.add_row(vec![
                 comp.component_name.to_string(),
                 comp.component_revision.to_string(),
@@ -35,6 +73,11 @@ impl TextView for Vec<ComponentView> {
             ]);
         }
         log_table(table);
+    }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        self.masked(config)?.log();
+        Ok(())
     }
 }
 
@@ -58,7 +101,7 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
                 &format!("{}Environment", prefix),
                 &provision_config.env,
                 !provision_config.env.is_empty(),
-                |env| format_env(view.show_sensitive, env),
+                format_env,
             )
             .fmt_field_optional(
                 &format!("{}Agent config", prefix),
@@ -86,6 +129,12 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentCreateView(pub ComponentView);
 
+impl Masked for ComponentCreateView {
+    fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
+        Ok(Self(self.0.masked(config)?))
+    }
+}
+
 impl MessageWithFields for ComponentCreateView {
     fn message(&self) -> String {
         format!(
@@ -101,6 +150,12 @@ impl MessageWithFields for ComponentCreateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentUpdateView(pub ComponentView);
+
+impl Masked for ComponentUpdateView {
+    fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
+        Ok(Self(self.0.masked(config)?))
+    }
+}
 
 impl MessageWithFields for ComponentUpdateView {
     fn message(&self) -> String {
@@ -119,6 +174,12 @@ impl MessageWithFields for ComponentUpdateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentGetView(pub ComponentView);
 
+impl Masked for ComponentGetView {
+    fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
+        Ok(Self(self.0.masked(config)?))
+    }
+}
+
 impl MessageWithFields for ComponentGetView {
     fn message(&self) -> String {
         format!(
@@ -132,24 +193,178 @@ impl MessageWithFields for ComponentGetView {
     }
 }
 
-const SENSITIVE_ENV_VAR_NAME_PATTERNS: &[&str] = &[
-    "CREDENTIAL",
-    "CREDENTIALS",
-    "KEY",
-    "PASS",
-    "PASSWORD",
-    "PWD",
-    "SECRET",
-    "TOKEN",
-];
+impl StructuredOutput for ComponentGetView {
+    const KIND: &'static str = "component.get";
 
-pub fn is_sensitive_env_var_name(show_sensitive: bool, name: &str) -> bool {
-    let name = name.to_uppercase();
-    if show_sensitive {
-        false
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentManifestTraceView {
+    pub component_name: ComponentName,
+    pub properties: ComponentLayerProperties,
+}
+
+impl StructuredOutput for ComponentManifestTraceView {
+    const KIND: &'static str = "component.manifest-trace";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_masked_value(config)
+            .map_err(S::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl TextOutput for ComponentManifestTraceView {
+    fn log(&self) {
+        log_manifest_trace_properties(&self.properties);
+    }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        if config.show_secrets {
+            self.log();
+        } else {
+            let mut properties = serde_json::to_value(&self.properties)?;
+            mask_component_layer_properties(&mut properties);
+            log_manifest_trace_value(&properties);
+        }
+        Ok(())
+    }
+}
+
+impl ComponentManifestTraceView {
+    fn to_masked_value(&self, config: MaskingConfig) -> anyhow::Result<Value> {
+        let mut value = serde_json::to_value(self)?;
+        if !config.show_secrets
+            && let Some(properties) = value
+                .as_object_mut()
+                .and_then(|object| object.get_mut("properties"))
+        {
+            mask_component_layer_properties(properties);
+        }
+        Ok(value)
+    }
+}
+
+fn log_manifest_trace_properties(properties: &ComponentLayerProperties) {
+    let rendered = if SHOULD_COLORIZE.should_colorize() {
+        to_colored_json(properties)
     } else {
-        SENSITIVE_ENV_VAR_NAME_PATTERNS
-            .iter()
-            .any(|pattern| name.contains(pattern))
+        serde_json::to_string_pretty(properties).map_err(Into::into)
+    };
+
+    log_manifest_trace_rendered(rendered);
+}
+
+fn log_manifest_trace_value(properties: &Value) {
+    let rendered = if SHOULD_COLORIZE.should_colorize() {
+        to_colored_json(properties)
+    } else {
+        serde_json::to_string_pretty(properties).map_err(Into::into)
+    };
+
+    log_manifest_trace_rendered(rendered);
+}
+
+fn log_manifest_trace_rendered(rendered: anyhow::Result<String>) {
+    match rendered {
+        Ok(rendered) => {
+            for line in rendered.lines() {
+                logln(line);
+            }
+        }
+        Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
+    }
+}
+
+fn mask_component_layer_properties(properties: &mut Value) {
+    let Some(properties) = properties.as_object_mut() else {
+        return;
+    };
+
+    if let Some(config) = properties.get_mut("config") {
+        mask_config_property_payloads(config);
+    }
+    if let Some(env) = properties.get_mut("env") {
+        mask_sensitive_keyed_values(env);
+    }
+    if let Some(plugins) = properties.get_mut("plugins") {
+        mask_sensitive_keyed_values(plugins);
+    }
+}
+
+fn mask_config_property_payloads(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                match key.as_str() {
+                    "value" | "newValue" => mask_json_leaf_values(value),
+                    "insertedEntries" | "updatedEntries" => mask_json_object_values(value),
+                    _ => mask_config_property_payloads(value),
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                mask_config_property_payloads(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mask_json_object_values(value: &mut Value) {
+    if let Some(object) = value.as_object_mut() {
+        for value in object.values_mut() {
+            mask_json_leaf_values(value);
+        }
+    }
+}
+
+fn mask_json_leaf_values(value: &mut Value) {
+    match value {
+        Value::Null => {}
+        Value::Array(values) => {
+            for value in values {
+                mask_json_leaf_values(value);
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                mask_json_leaf_values(value);
+            }
+        }
+        _ => *value = Value::String(mask_secret()),
+    }
+}
+
+fn mask_sensitive_keyed_values(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if is_sensitive_key(key) {
+                    mask_json_leaf_values(value);
+                } else {
+                    mask_sensitive_keyed_values(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                mask_sensitive_keyed_values(value);
+            }
+        }
+        _ => {}
     }
 }

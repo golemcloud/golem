@@ -13,18 +13,48 @@
 // limitations under the License.
 
 pub fn escape_js_ident(ident: impl AsRef<str>) -> String {
-    if KEYWORDS.contains(&ident.as_ref()) {
-        format!("{}_", ident.as_ref())
+    let escaped = ident
+        .as_ref()
+        .chars()
+        .enumerate()
+        .map(|(idx, ch)| {
+            if (idx == 0 && is_js_identifier_start(ch)) || (idx > 0 && is_js_identifier_part(ch)) {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    let escaped = if escaped.is_empty() || escaped.starts_with(|ch: char| ch.is_ascii_digit()) {
+        format!("_{escaped}")
     } else {
-        ident.as_ref().to_string()
+        escaped
+    };
+
+    if KEYWORDS.contains(&escaped.as_str()) {
+        format!("{escaped}_")
+    } else {
+        escaped
     }
 }
 
+fn is_js_identifier_start(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphabetic()
+}
+
+fn is_js_identifier_part(ch: char) -> bool {
+    is_js_identifier_start(ch) || ch.is_ascii_digit()
+}
+
 const KEYWORDS: &[&str] = &[
+    "any",
     "await",
+    "bigint",
     "break",
     "case",
     "catch",
+    "boolean",
     "class",
     "const",
     "continue",
@@ -49,13 +79,17 @@ const KEYWORDS: &[&str] = &[
     "interface",
     "let",
     "new",
+    "never",
     "null",
+    "number",
+    "object",
     "package",
     "private",
     "protected",
     "public",
     "return",
     "static",
+    "string",
     "super",
     "switch",
     "this",
@@ -63,6 +97,8 @@ const KEYWORDS: &[&str] = &[
     "true",
     "try",
     "typeof",
+    "undefined",
+    "unknown",
     "var",
     "void",
     "while",

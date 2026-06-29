@@ -18,7 +18,6 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{
@@ -26,6 +25,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
@@ -453,17 +455,23 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     // Phase 1: wait for the worker oplog to show all 4 completed invocations
     // (1 agent-initialization + 3 add calls).
+    //
+    // This is the first oplog-processor test to run in the group, so it pays the
+    // cold compilation cost of both the agent component and the oplog-processor
+    // plugin component. Plugin components embed the large wit-bindgen generated
+    // `oplog-entry` lifting code, whose cold compile time is high enough to
+    // exceed the default 120s waits; the budgets here are raised accordingly.
     wait_for_oplog_completions(
         &user,
         &worker_id,
         4,
-        Duration::from_secs(120),
+        Duration::from_secs(300),
         &received_batches,
     )
     .await;
 
     // E1: Wait for callbacks and verify function names + unique oplog indices
-    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
+    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(300)).await;
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 
@@ -490,7 +498,78 @@ async fn oplog_processor_in_different_env_after_unregistering(
     let client_2 = user_2.registry_service_client().await;
 
     user_1
-        .share_environment(&env_1.id, &user_2.account_id, &[EnvironmentRole::Admin])
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &user_1.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: user_2.account_email.clone(),
+                name: PermissionShareName("plugin-different-env-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!(
+                            "environment({}/{}/{}) @ {} : view :",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment({}/{}/{}) @ {} : view-deployment-plan :",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment({}/{}/{}) @ {} : deploy :",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "component({}/{}/{}/*) @ {} : create : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "component({}/{}/{}/*) @ {} : view : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : create : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : view : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : delete : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;

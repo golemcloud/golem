@@ -1,0 +1,88 @@
+package golem:tool@0.1.0;
+
+/// Interface the runtime exposes to agents and tools for discovering and
+/// invoking ambient tools — tools registered by other components in the
+/// same Golem environment.
+///
+/// Mirrors the structure of `golem:agent/host`, but keyed on tool name
+/// (rather than agent-id), and without the agent-instance constructor
+/// step (tools are stateless invocables).
+interface host {
+  use common.{tool, tool-error, invocation-result};
+  use golem:core/types@2.0.0.{typed-schema-value, component-id};
+  use wasi:io/streams@0.2.3.{input-stream};
+  use wasi:io/poll@0.2.3.{pollable};
+
+  /// A tool registered in the environment, addressable by name from
+  /// any agent or other tool. `definition` carries the full metadata;
+  /// `implemented-by` identifies the component that registers the
+  /// tool with the runtime — a Golem component exporting
+  /// `golem:tool/guest` for native tools, the runtime-internal
+  /// MCP-import bridge component for tools projected from
+  /// `mcp.imports` (§5.7.2), or the runtime itself (a synthesized
+  /// component-id) for host-implemented privileged tools (§4.6).
+  record registered-tool {
+    definition:     tool,
+    implemented-by: component-id,
+  }
+
+  /// Returns every tool **the calling agent has access to** in
+  /// the current environment, per the manifest's per-env and
+  /// per-agent binding rules (§5.6 / §6.4.3). The set returned
+  /// is exactly the set the calling agent could `tool-rpc.invoke`
+  /// against; tools the calling agent has no binding for are
+  /// excluded. Mirrors the *function shape* of
+  /// `golem:agent/host`'s `get-all-agent-types`, with the
+  /// addition of per-caller access filtering. Order is
+  /// unspecified; callers that
+  /// want a stable ordering should sort by
+  /// `definition.commands.nodes[0].name`.
+  get-all-tools: func() -> list<registered-tool>;
+
+  /// Returns the registered tool with the given name iff the
+  /// calling agent has access to it (per the same per-env and
+  /// per-agent binding rules as `get-all-tools`). Returns `none`
+  /// either if the tool is not registered or if the calling agent
+  /// has no binding for it; the two cases are not distinguished.
+  get-tool: func(name: string) -> option<registered-tool>;
+
+  variant rpc-error {
+    protocol-error(string),
+    denied(string),
+    not-found(string),
+    remote-internal-error(string),
+    remote-tool-error(tool-error),
+  }
+
+  resource tool-rpc {
+    constructor(tool-name: string);
+
+    invoke-and-await: func(
+      command-path: list<string>,
+      input:        typed-schema-value,
+      stdin:        option<input-stream>,
+    ) -> result<invocation-result, rpc-error>;
+
+    invoke: func(
+      command-path: list<string>,
+      input:        typed-schema-value,
+      stdin:        option<input-stream>,
+    ) -> result<_, rpc-error>;
+
+    async-invoke-and-await: func(
+      command-path: list<string>,
+      input:        typed-schema-value,
+      stdin:        option<input-stream>,
+    ) -> future-invoke-result;
+  }
+
+  resource future-invoke-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<result<invocation-result, rpc-error>>;
+    cancel: func();
+  }
+}
+
+world tool-host {
+  export host;
+}

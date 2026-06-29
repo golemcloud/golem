@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::preview2::golem_api_1_x::retry::{
     Host, NamedRetryPolicy as WitNamedRetryPolicy, PredicateValue as WitPredicateValue,
@@ -35,28 +36,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_retry_policies(&mut self) -> anyhow::Result<Vec<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policies");
 
-        let durability =
-            Durability::<GolemApiRetryGetRetryPolicies>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
+        let handle = CallHandle::<GolemApiRetryGetRetryPolicies, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
-        if durability.is_live() {
-            let policies: Vec<NamedRetryPolicy> = self.state.named_retry_policies().await;
+        let persisted = handle
+            .run(self, async |ctx| -> anyhow::Result<_> {
+                let policies: Vec<NamedRetryPolicy> = ctx.state.named_retry_policies().await;
+                Ok(HostResponseGolemRetryPolicies { policies })
+            })
+            .await?;
 
-            let persisted = durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemRetryPolicies {
-                        policies: policies.clone(),
-                    },
-                )
-                .await?;
-
-            Ok(persisted.policies.into_iter().map(|p| p.into()).collect())
-        } else {
-            let result = durability.replay(self).await?;
-            Ok(result.policies.into_iter().map(|p| p.into()).collect())
-        }
+        Ok(persisted.policies.into_iter().map(|p| p.into()).collect())
     }
 
     async fn get_retry_policy_by_name(
@@ -65,31 +59,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policy_by_name");
 
-        let durability = Durability::<GolemApiRetryGetRetryPolicyByName>::new(
+        let handle = CallHandle::<GolemApiRetryGetRetryPolicyByName, NotCancellable>::start(
             self,
+            HostRequestGolemRetryPolicyByName { name: name.clone() },
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
-        if durability.is_live() {
-            let policies = self.state.named_retry_policies().await;
-            let found = policies.iter().find(|p| p.name == name).cloned();
+        let persisted = handle
+            .run(self, async |ctx| -> anyhow::Result<_> {
+                let policies = ctx.state.named_retry_policies().await;
+                let found = policies.iter().find(|p| p.name == name).cloned();
+                Ok(HostResponseGolemRetryNamedPolicy { policy: found })
+            })
+            .await?;
 
-            let persisted = durability
-                .persist(
-                    self,
-                    HostRequestGolemRetryPolicyByName { name },
-                    HostResponseGolemRetryNamedPolicy {
-                        policy: found.clone(),
-                    },
-                )
-                .await?;
-
-            Ok(persisted.policy.map(|p| p.into()))
-        } else {
-            let result = durability.replay(self).await?;
-            Ok(result.policy.map(|p| p.into()))
-        }
+        Ok(persisted.policy.map(|p| p.into()))
     }
 
     async fn resolve_retry_policy(
@@ -100,49 +85,42 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<WitRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "resolve_retry_policy");
 
-        let durability = Durability::<GolemApiRetryResolveRetryPolicy>::new(
+        let mut props = RetryContext::custom(&verb, &noun_uri);
+        let properties_for_persist: Vec<(String, PredicateValue)> = properties
+            .into_iter()
+            .map(|(k, v)| {
+                let pv = PredicateValue::from(v);
+                props.set(k.clone(), pv.clone());
+                (k, pv)
+            })
+            .collect();
+
+        let handle = CallHandle::<GolemApiRetryResolveRetryPolicy, NotCancellable>::start(
             self,
+            HostRequestGolemRetryResolvePolicy {
+                verb,
+                noun_uri,
+                properties: properties_for_persist,
+            },
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
-        if durability.is_live() {
-            let mut props = RetryContext::custom(&verb, &noun_uri);
-            let properties_for_persist: Vec<(String, PredicateValue)> = properties
-                .into_iter()
-                .map(|(k, v)| {
-                    let pv = PredicateValue::from(v);
-                    props.set(k.clone(), pv.clone());
-                    (k, pv)
-                })
-                .collect();
+        let persisted = handle
+            .run(self, async |ctx| -> anyhow::Result<_> {
+                let policies = ctx.state.named_retry_policies().await;
+                let resolved = match NamedRetryPolicy::resolve(&policies, &props) {
+                    Ok(Some(matched)) => Some(matched.policy.clone()),
+                    Ok(None) => None,
+                    Err(err) => {
+                        return Err(anyhow::anyhow!("Retry policy resolution error: {err}"));
+                    }
+                };
+                Ok(HostResponseGolemRetryResolvedPolicy { policy: resolved })
+            })
+            .await?;
 
-            let policies = self.state.named_retry_policies().await;
-            let resolved = match NamedRetryPolicy::resolve(&policies, &props) {
-                Ok(Some(matched)) => Some(matched.policy.clone()),
-                Ok(None) => None,
-                Err(err) => return Err(anyhow::anyhow!("Retry policy resolution error: {err}")),
-            };
-
-            let persisted = durability
-                .persist(
-                    self,
-                    HostRequestGolemRetryResolvePolicy {
-                        verb,
-                        noun_uri,
-                        properties: properties_for_persist,
-                    },
-                    HostResponseGolemRetryResolvedPolicy {
-                        policy: resolved.clone(),
-                    },
-                )
-                .await?;
-
-            Ok(persisted.policy.map(|p| p.into()))
-        } else {
-            let result = durability.replay(self).await?;
-            Ok(result.policy.map(|p| p.into()))
-        }
+        Ok(persisted.policy.map(|p| p.into()))
     }
 
     async fn set_retry_policy(&mut self, policy: WitNamedRetryPolicy) -> anyhow::Result<()> {

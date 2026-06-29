@@ -15,8 +15,8 @@
 use super::optional_field_update::OptionalFieldUpdate;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::render_config_path;
+use crate::schema::{SchemaGraph, SchemaValue};
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
-use golem_wasm::analysis::AnalysedType;
 use std::fmt::Display;
 
 newtype_uuid!(
@@ -65,18 +65,18 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub path: CanonicalAgentSecretPath,
         pub revision: AgentSecretRevision,
-        pub secret_type: AnalysedType,
-        pub secret_value: Option<serde_json::Value>,
+        pub secret_type: SchemaGraph,
+        pub secret_value: Option<SchemaValue>,
     }
 
     pub struct AgentSecretCreation {
         pub path: AgentSecretPath,
-        pub secret_type: AnalysedType,
-        pub secret_value: Option<serde_json::Value>,
+        pub secret_type: SchemaGraph,
+        pub secret_value: Option<SchemaValue>,
     }
 
     pub struct AgentSecretUpdate {
         pub current_revision: AgentSecretRevision,
-        pub secret_value: OptionalFieldUpdate<serde_json::Value>
+        pub secret_value: OptionalFieldUpdate<SchemaValue>
     }
 }

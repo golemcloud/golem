@@ -2,7 +2,8 @@ use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 
 use golem_cli::fs;
-use indoc::indoc;
+use golem_cli::versions;
+use indoc::{formatdoc, indoc};
 use std::path::Path;
 use test_r::{inherit_test_dep, test};
 
@@ -102,8 +103,8 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-directory-source-ifs
 
@@ -122,7 +123,7 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                 - sourcePath: ./scratch/workspace/.keep
                   targetPath: /workspace/.keep
                   permissions: read-write
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 
@@ -134,8 +135,8 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-directory-source-ifs
 
@@ -154,7 +155,7 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                 - sourcePath: ./scratch/workspace
                   targetPath: /workspace
                   permissions: read-write
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 
@@ -194,8 +195,8 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-directory-source-ifs
 
@@ -219,7 +220,7 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                 - sourcePath: ./scratch/workspace
                   targetPath: /workspace
                   permissions: read-write
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 
@@ -352,8 +353,8 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-directory-source-ifs
 
@@ -377,7 +378,7 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                 - sourcePath: ./scratch/workspace
                   targetPath: /workspace
                   permissions: read-write
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 

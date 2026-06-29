@@ -19,8 +19,7 @@ use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
-use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::EnvironmentId;
@@ -28,6 +27,7 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::{AgentId, RoutingTable};
+use golem_common::schema::TypedSchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -347,8 +347,8 @@ impl Benchmark for ThroughputCpuIntensive {
 #[derive(Debug, Clone)]
 pub struct AgentIdPair {
     pub component_id: ComponentId,
-    pub parent: LegacyParsedAgentId,
-    pub child: LegacyParsedAgentId,
+    pub parent: ParsedAgentId,
+    pub child: ParsedAgentId,
 }
 
 impl AgentIdPair {
@@ -367,10 +367,11 @@ impl AgentIdPair {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum AgentInvocationTarget {
     Single {
         component: ComponentDto,
-        agent_id: LegacyParsedAgentId,
+        agent_id: ParsedAgentId,
     },
     Pair {
         component: ComponentDto,
@@ -386,7 +387,7 @@ impl AgentInvocationTarget {
         }
     }
 
-    pub fn agent_id(&self) -> &LegacyParsedAgentId {
+    pub fn agent_id(&self) -> &ParsedAgentId {
         match self {
             AgentInvocationTarget::Single { agent_id, .. } => agent_id,
             AgentInvocationTarget::Pair { pair, .. } => &pair.parent,
@@ -418,10 +419,10 @@ pub struct IterationContext {
     domain: Domain,
     rust_agent_component: ComponentDto,
     ts_agent_component: ComponentDto,
-    rust_agent_ids: Vec<LegacyParsedAgentId>,
-    ts_agent_ids: Vec<LegacyParsedAgentId>,
-    rust_agent_ids_for_http: Vec<LegacyParsedAgentId>,
-    ts_agent_ids_for_http: Vec<LegacyParsedAgentId>,
+    rust_agent_ids: Vec<ParsedAgentId>,
+    ts_agent_ids: Vec<ParsedAgentId>,
+    rust_agent_ids_for_http: Vec<ParsedAgentId>,
+    ts_agent_ids_for_http: Vec<ParsedAgentId>,
     length: usize,
     /// `None` when shard-manager host/port are not configured (cloud mode
     /// without port-forward). When `None`, RPC pairs go into a single unlabeled
@@ -441,7 +442,7 @@ type HttpRequestFn = Box<dyn for<'a> Fn(&'a str, usize, usize) -> Request + Send
 pub struct ThroughputBenchmark {
     rust_method_name: String,
     ts_method_name: String,
-    agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
+    agent_params: Box<dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static>,
     http_request: HttpRequestFn,
     rust_http_request: HttpRequestFn,
     deps: BenchmarkTestDependencies,
@@ -454,7 +455,7 @@ pub struct ThroughputBenchmark {
     cloud_http_client: Option<reqwest::Client>,
 }
 
-fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[LegacyParsedAgentId]) -> Vec<AgentId> {
+fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> Vec<AgentId> {
     ids.iter()
         .filter_map(|id| AgentId::from_agent_id(component_id, id).ok())
         .collect()
@@ -464,7 +465,7 @@ impl ThroughputBenchmark {
     pub async fn new(
         rust_method_name: &str,
         ts_method_name: &str,
-        agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
+        agent_params: Box<dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static>,
         http_request: HttpRequestFn,
         rust_http_request: HttpRequestFn,
         mode: &TestMode,
@@ -662,9 +663,9 @@ impl ThroughputBenchmark {
         async fn warmup_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
-            ids: &[LegacyParsedAgentId],
+            ids: &[ParsedAgentId],
             method_name: &str,
-            params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
+            params: &(dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static),
             length: usize,
         ) {
             let result_futures = ids
@@ -769,7 +770,7 @@ impl ThroughputBenchmark {
             call_count: usize,
             targets: &[AgentInvocationTarget],
             method_name: &str,
-            params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
+            params: &(dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static),
             prefix: &str,
         ) {
             let result_futures = targets

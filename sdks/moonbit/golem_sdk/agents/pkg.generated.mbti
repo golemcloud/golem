@@ -4,11 +4,23 @@ package "golemcloud/golem_sdk/agents"
 import {
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
 }
 
 // Values
-pub fn construct_and_set_instance(String, @types.DataValue, @common.Principal) -> Result[Unit, @common.AgentError]
+pub fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
+
+pub fn decode_invocation_input(@types.SchemaValueTree, Int, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
+
+pub fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
+
+pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @common.AgentError
+
+pub fn encode_invocation_input(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree raise @common.AgentError
+
+pub fn[T : @schema.IntoSchema] encode_output(T) -> @types.SchemaValueTree raise @common.AgentError
 
 pub fn get_agent_instance() -> AgentInstance?
 
@@ -36,6 +48,19 @@ pub suberror JsonCodecError {
 } derive(@debug.Debug)
 
 // Types and methods
+pub(all) struct AgentConfigDef {
+  source : @common.AgentConfigSource
+  path : Array[String]
+  value_type : @schema_model.SchemaGraph
+}
+
+pub(all) struct AgentConstructorDef {
+  name : String?
+  description : String
+  prompt_hint : String?
+  input : Array[InputParam]
+}
+
 pub(all) struct AgentInstance {
   name : String
   agent_type : @common.AgentType
@@ -45,16 +70,50 @@ pub(all) struct AgentInstance {
   snapshot_format : SnapshotFormat?
 }
 
+pub(all) struct AgentMethodDef {
+  name : String
+  description : String
+  http_endpoint : Array[@common.HttpEndpointDetails]
+  prompt_hint : String?
+  input : Array[InputParam]
+  output : @schema_model.SchemaGraph?
+  read_only : @common.ReadOnlyConfig?
+}
+
+pub(all) struct AgentTypeDef {
+  type_name : String
+  description : String
+  source_language : String
+  constructor_ : AgentConstructorDef
+  methods : Array[AgentMethodDef]
+  dependencies : Array[@common.AgentDependency]
+  mode : @common.AgentMode
+  http_mount : @common.HttpMountDetails?
+  snapshotting : @common.Snapshotting
+  config : Array[AgentConfigDef]
+}
+pub fn AgentTypeDef::to_agent_type(Self) -> @common.AgentType raise @schema_model.SchemaModelError
+
 pub(all) struct ConstructedAgent {
   raw : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
 }
 
+pub(all) struct InputParam {
+  name : String
+  source : InputParamSource
+}
+
+pub(all) enum InputParamSource {
+  UserSupplied(@schema_model.SchemaGraph)
+  AutoInjected(@common.AutoInjectedKind)
+}
+
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@types.DataValue, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
+  construct : (@types.SchemaValueTree, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
 }
 
 pub(all) enum SnapshotFormat {
@@ -66,7 +125,7 @@ pub(all) enum SnapshotFormat {
 
 // Traits
 pub(open) trait RawAgent {
-  invoke(Self, String, @types.DataValue, @common.Principal) -> Result[@types.DataValue, @common.AgentError]
+  invoke(Self, String, @types.SchemaValueTree, @common.Principal) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }
 
 pub(open) trait Snapshottable {

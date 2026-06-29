@@ -146,6 +146,16 @@ pub struct SecuritySchemeExtRevisionRecord {
     pub revision: SecuritySchemeRevisionRecord,
 }
 
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct SecuritySchemeAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub security_scheme: SecuritySchemeExtRevisionRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl TryFrom<SecuritySchemeExtRevisionRecord> for SecurityScheme {
     type Error = SecuritySchemeRepoError;
     fn try_from(value: SecuritySchemeExtRevisionRecord) -> Result<Self, Self::Error> {

@@ -29,8 +29,8 @@ use crate::process::{CommandExt, ExitStatusExt, which};
 use crate::sdk_overrides::sdk_overrides;
 use crate::{binary_path_to_string, fs};
 use golem_common::base_model::agent::AgentMode;
-use golem_common::model::agent::DataSchema;
 use golem_common::model::component::ComponentName;
+use golem_common::schema::agent::{FieldSource, InputSchema};
 use heck::ToLowerCamelCase;
 use indoc::formatdoc;
 use itertools::Itertools;
@@ -384,13 +384,12 @@ impl TypeScriptRepl {
                     .or_insert_with(BTreeMap::new);
 
                 for method in agent_type.methods {
-                    let args = match method.input_schema {
-                        DataSchema::Tuple(schema) | DataSchema::Multimodal(schema) => schema
-                            .elements
-                            .into_iter()
-                            .map(|element| element.name)
-                            .collect(),
-                    };
+                    let InputSchema::Parameters(fields) = method.input_schema;
+                    let args = fields
+                        .into_iter()
+                        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                        .map(|field| field.name)
+                        .collect();
                     entry.entry(method.name).or_insert(args);
                 }
             }

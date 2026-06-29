@@ -21,6 +21,11 @@ import scala.scalajs.js.annotation.JSName
 
 // ---------------------------------------------------------------------------
 // golem:quota/types@1.5.0  –  JS facade traits
+//
+// The quota-token capability itself is the opaque `quota-token` resource from
+// `golem:core/types@2.0.0`; the quota interface exposes only free functions and
+// the `reservation` resource that operate on a handle. There is no longer a
+// guest-visible record representation of a token.
 // ---------------------------------------------------------------------------
 
 // --- failed-reservation record ---
@@ -31,30 +36,14 @@ sealed trait JsFailedReservation extends js.Object {
 }
 
 // --- reservation resource ---
+// Opaque host resource. `commit` is a static free function (see QuotaApi).
 
 @js.native
-sealed trait JsReservation extends js.Object {
-  def commit(used: js.BigInt): Unit = js.native
-}
-
-// --- quota-token-record record ---
-
-@js.native
-sealed trait JsQuotaTokenRecord extends js.Object {
-  @JSName("environmentId") def environmentId: js.Dynamic = js.native
-  @JSName("resourceName") def resourceName: String       = js.native
-  @JSName("expectedUse") def expectedUse: js.BigInt      = js.native
-  @JSName("lastCredit") def lastCredit: js.BigInt        = js.native
-  @JSName("lastCreditAt") def lastCreditAt: JsDatetime   = js.native
-}
+sealed trait JsReservation extends js.Object
 
 // --- quota-token resource ---
-// The WIT constructor maps to a JS class; methods are instance methods.
+// Opaque, unforgeable host resource defined in `golem:core/types@2.0.0`. Guest
+// code can only hold and move the handle; it has no readable structure.
 
 @js.native
-sealed trait JsQuotaToken extends js.Object {
-  def reserve(amount: js.BigInt): JsReservation        = js.native
-  def split(childExpectedUse: js.BigInt): JsQuotaToken = js.native
-  def merge(other: JsQuotaToken): Unit                 = js.native
-  def toRecord(): JsQuotaTokenRecord                   = js.native
-}
+sealed trait JsQuotaTokenResource extends js.Object

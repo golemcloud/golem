@@ -410,7 +410,12 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
     complete: async (cli, currentToken) => {
       const result = await cli.runJson({ args: ['agent', 'list'] });
 
-      if (!result.ok || !result.json || !Array.isArray(result.json.agents)) {
+      if (
+        !result.ok ||
+        !result.json ||
+        result.json.$type !== 'agent.list' ||
+        !Array.isArray(result.json.agents)
+      ) {
         return [];
       }
 
@@ -435,11 +440,15 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
         return [];
       }
 
-      if (!result.json || !Array.isArray(result.json)) {
+      if (
+        !result.json ||
+        result.json.$type !== 'component.list' ||
+        !Array.isArray(result.json.components)
+      ) {
         return [];
       }
 
-      const values = result.json
+      const values = result.json.components
         .map((component: any) => component?.componentName)
         .filter((value: unknown): value is string => typeof value === 'string');
 
@@ -524,9 +533,20 @@ class GolemCli {
 
   async runJson(opts: {
     args: string[];
-  }): Promise<{ ok: boolean; code: number | null; json: any }> {
+  }): Promise<{ ok: boolean; code: number | null; json: any | undefined }> {
     const result = await this.run({ args: ['--format', 'json', ...opts.args], mode: 'collect' });
-    return { ok: result.ok, code: result.code, json: JSON.parse(result.stdout) };
+    return { ok: result.ok, code: result.code, json: tryParseJson(result.stdout) };
+  }
+}
+
+function tryParseJson(value: string): any | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
   }
 }
 

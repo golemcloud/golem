@@ -19,7 +19,7 @@ use golem_common::model::oplog::types::{
     EnumerationType, SerializableDbColumn, SerializableDbColumnType, SerializableDbColumnTypeNode,
     SerializableDbValueNode,
 };
-use golem_wasm::NodeIndex;
+use golem_schema::schema::wit::wire::ValueNodeIndex as NodeIndex;
 use std::fmt::Display;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

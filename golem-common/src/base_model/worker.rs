@@ -23,8 +23,6 @@ use crate::base_model::{
     AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp,
 };
 use crate::{declare_enums, declare_structs, declare_unions};
-use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{HashMap, HashSet};
 
 declare_enums! {
@@ -41,7 +39,10 @@ declare_unions! {
         FailedUpdate(FailedUpdate),
     }
 
-    #[derive(IntoValue, FromValue)]
+    #[derive(
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub enum RevertWorkerTarget {
@@ -51,18 +52,11 @@ declare_unions! {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "full",
-    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
-)]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "raw-local-agent-config-entry", owner = "golem:api@1.5.0/oplog")
-)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct UntypedAgentConfigEntry {
     pub path: Vec<String>,
-    pub value: golem_wasm::Value,
+    pub value: crate::schema::SchemaValue,
 }
 
 declare_structs! {
@@ -71,12 +65,15 @@ declare_structs! {
         pub value: NormalizedJsonValue
     }
 
-    #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
-    #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
+    // Schema-native local agent-config carrier. This type holds a
+    // `TypedSchemaValue`. Its guest-facing WIT realization
+    // (`local-agent-config-entry`) is produced via the schema WIT bridge
+    // (`encode_typed`) at the public-oplog edge.
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct TypedAgentConfigEntry {
         pub path: Vec<String>,
-        pub value: golem_wasm::ValueAndType
+        pub value: crate::schema::TypedSchemaValue
     }
 
     pub struct AgentCreationRequest {
@@ -143,14 +140,20 @@ declare_structs! {
         pub fingerprint: AgentFingerprint
     }
 
-    #[derive(IntoValue, FromValue)]
+    #[derive(
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct RevertToOplogIndex {
         pub last_oplog_index: OplogIndex,
     }
 
-    #[derive(IntoValue, FromValue)]
+    #[derive(
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct RevertLastInvocations {
@@ -173,24 +176,32 @@ declare_enums! {
     }
 }
 
-impl From<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
-    fn from(value: TypedAgentConfigEntry) -> Self {
-        Self {
+#[cfg(feature = "full")]
+impl TryFrom<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
+    type Error = String;
+
+    fn try_from(value: TypedAgentConfigEntry) -> Result<Self, Self::Error> {
+        let (_graph, schema_value) = value.value.into_parts();
+        Ok(Self {
             path: value.path,
-            value: value.value.value,
-        }
+            value: schema_value,
+        })
     }
 }
 
+#[cfg(feature = "full")]
 impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
     fn from(value: TypedAgentConfigEntry) -> Self {
+        let (graph, schema_value) = value.value.into_parts();
+        // The DTO carries plain (schema-guided) user JSON, not the
+        // adjacently-tagged `SchemaValue` wire form. Render it through the
+        // schema graph so it round-trips with
+        // `parse_worker_creation_agent_config` (`from_json_value`).
+        let json = crate::schema::render::to_json_value(&graph, &graph.root, &schema_value)
+            .expect("SchemaValue in TypedAgentConfigEntry must render to JSON");
         Self {
             path: value.path,
-            value: value
-                .value
-                .to_json_value()
-                .expect("ValueAndType in TypedAgentConfigEntry must be valid JSON")
-                .into(),
+            value: json.into(),
         }
     }
 }

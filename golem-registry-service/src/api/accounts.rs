@@ -15,7 +15,6 @@
 use super::ApiResult;
 use crate::services::account::AccountService;
 use crate::services::auth::AuthService;
-use crate::services::plan::PlanService;
 use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::Page;
@@ -36,7 +35,6 @@ use tracing::Instrument;
 
 pub struct AccountsApi {
     account_service: Arc<AccountService>,
-    plan_service: Arc<PlanService>,
     token_service: Arc<TokenService>,
     auth_service: Arc<AuthService>,
 }
@@ -49,13 +47,11 @@ pub struct AccountsApi {
 impl AccountsApi {
     pub fn new(
         account_service: Arc<AccountService>,
-        plan_service: Arc<PlanService>,
         token_service: Arc<TokenService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             account_service,
-            plan_service,
             token_service,
             auth_service,
         }
@@ -147,8 +143,7 @@ impl AccountsApi {
         account_id: AccountId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Plan>> {
-        let account = self.account_service.get(account_id, &auth).await?;
-        let plan = self.plan_service.get(&account.plan_id, &auth).await?;
+        let plan = self.account_service.get_plan(account_id, &auth).await?;
 
         Ok(Json(plan))
     }

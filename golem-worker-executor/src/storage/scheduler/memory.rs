@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime};
+use super::{
+    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError, datetime_to_millis,
+    millis_to_datetime,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
@@ -50,7 +53,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         due_at: DateTime<Utc>,
         shard_id: ShardId,
         action: &ScheduledAction,
-    ) -> Result<(), String> {
+    ) -> Result<(), SchedulerStorageError> {
         self.entries
             .lock()
             .unwrap()
@@ -66,7 +69,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         Ok(())
     }
 
-    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String> {
+    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         self.entries.lock().unwrap().remove(&schedule_id.id);
         Ok(())
     }
@@ -77,7 +80,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
-    ) -> Result<Vec<ClaimedScheduledAction>, String> {
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
         let now_ms = datetime_to_millis(now);
         let lease_until = datetime_to_millis(now + lease_ttl);
         let lease_owner = Uuid::now_v7();
@@ -122,7 +125,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, SchedulerStorageError> {
         let mut entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.get_mut(&schedule_id.id)
             && entry.lease_owner == Some(lease_owner)
@@ -134,7 +137,11 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         }
     }
 
-    async fn ack(&self, schedule_id: &ScheduleId, lease_owner: Uuid) -> Result<bool, String> {
+    async fn ack(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+    ) -> Result<bool, SchedulerStorageError> {
         let mut entries = self.entries.lock().unwrap();
         if entries
             .get(&schedule_id.id)

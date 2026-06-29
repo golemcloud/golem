@@ -149,6 +149,22 @@ pub const EXEC: &str = "Examples:
   golem-cli exec test
   golem-cli exec lint";
 
+pub const OUTPUT_SCHEMA: &str = "Examples:
+  # Print the full structured output JSON Schema
+  golem-cli output-schema
+
+  # List known structured output type names
+  golem-cli output-schema --types
+
+  # Print a pruned schema for one output type
+  golem-cli output-schema --type agent.invoke
+
+  # Print a pruned schema bundle for multiple output types
+  golem-cli output-schema --type agent.oplog --type agent.stream
+
+  # Use a different raw schema output format
+  golem-cli --format yaml output-schema --type agent.invoke";
+
 pub const COMPLETION: &str = "Examples:
   # Print bash completions to stdout
   golem-cli completion bash
@@ -248,7 +264,7 @@ pub const AGENT_LIST: &str = "Examples:
   # Force fresh status for each agent
   golem-cli agent list --precise
 
-  # Watch mode (default 400ms refresh)
+  # Watch mode (text output only, default 400ms refresh)
   golem-cli agent list --refresh
   golem-cli agent list --refresh=1000";
 
@@ -257,7 +273,10 @@ pub const AGENT_STREAM: &str = "Examples:
   golem-cli agent stream 'CounterAgent(\"my-counter\")'
 
   # Hide log levels and timestamps; show only payload entries
-  golem-cli agent stream 'CounterAgent(\"my-counter\")' --stream-no-timestamp --stream-no-log-level --logs-only";
+  golem-cli agent stream 'CounterAgent(\"my-counter\")' --stream-no-timestamp --stream-no-log-level --logs-only
+
+  # In structured formats, each stream event is emitted as a separate document
+  golem-cli --format json agent stream 'CounterAgent(\"my-counter\")'";
 
 pub const AGENT_UPDATE: &str = "Examples:
   # Update one agent in automatic mode (default), to the current deployed revision
@@ -296,7 +315,7 @@ pub const AGENT_SIMULATE_CRASH: &str = "Examples:
   golem-cli agent invoke   'Counter(\"c1\")' get_value";
 
 pub const AGENT_OPLOG: &str = "Examples:
-  # Dump the entire oplog of an agent
+  # Stream the entire oplog of an agent
   golem-cli agent oplog 'CounterAgent(\"my-counter\")'
 
   # Continue from a specific oplog index
@@ -304,7 +323,10 @@ pub const AGENT_OPLOG: &str = "Examples:
 
   # Filter using a Lucene query
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'error'
-  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment'";
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment'
+
+  # In structured formats, each oplog entry is emitted as a separate document
+  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'";
 
 pub const AGENT_REVERT: &str = "Examples:
   # Undo the agent's last N invocations
@@ -333,11 +355,14 @@ pub const AGENT_FILES: &str = "Examples:
   golem-cli agent files 'CounterAgent(\"c1\")' --format json";
 
 pub const AGENT_FILE_CONTENTS: &str = "Examples:
-  # Print a file's contents to stdout
+  # Save a file using its guest basename in the current directory
   golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt
 
   # Save the contents to a local file
-  golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt";
+  golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt
+
+  # Machine-readable metadata about the saved file
+  golem-cli --format json agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt";
 
 pub const AGENT_ACTIVATE_PLUGIN: &str = "Examples:
   # First list installed plugins for the agent's component (and their priorities):
@@ -549,6 +574,7 @@ pub const PROFILE_DELETE: &str = "Examples:
 pub const PROFILE_CONFIG_SET_FORMAT: &str = "Examples:
   # Set the default output format for a profile
   golem-cli profile config my-staging set-format json
+  golem-cli profile config my-staging set-format toon
   golem-cli profile config my-staging set-format text";
 
 // Server commands ----------------------------------------------------------------------------------
@@ -600,6 +626,46 @@ pub const ACCOUNT_DELETE: &str = "Examples:
   # Delete a specific account by ID
   golem-cli account delete --account-id acc-12345";
 
+pub const ACCOUNT_PERMISSION_SHARE_LIST: &str = "Examples:
+  # List permission shares owned by the current account
+  golem-cli account permission-share list
+
+  # List permission shares received by the current account
+  golem-cli account permission-share list --received";
+
+pub const ACCOUNT_PERMISSION_SHARE_GET: &str = "Examples:
+  # Get a permission share by ID
+  golem-cli account permission-share get 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+
+pub const ACCOUNT_PERMISSION_SHARE_GET_BY_NAME: &str = "Examples:
+  # Get a permission share by name from the current account
+  golem-cli account permission-share get-by-name staging-access";
+
+pub const ACCOUNT_PERMISSION_SHARE_NEW: &str = "Examples:
+  # Share permissions with another account
+  golem-cli account permission-share new target@example.com staging-access \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
+    --lower-positive 'component(my-account/my-app/staging) @ target@example.com : view : *'
+
+  # Add a lower negative grant by repeating the flag
+  golem-cli account permission-share new target@example.com staging-access \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
+    --lower-negative 'component(my-account/my-app/staging) @ target@example.com : delete : *'";
+
+pub const ACCOUNT_PERMISSION_SHARE_UPDATE: &str = "Examples:
+  # Replace lower permission grants on an existing share
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'
+
+  # Rename while replacing grants
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
+    --name staging-access-v2 \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'";
+
+pub const ACCOUNT_PERMISSION_SHARE_DELETE: &str = "Examples:
+  # Delete a permission share by ID
+  golem-cli account permission-share delete 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+
 // API token commands -------------------------------------------------------------------------------
 
 pub const API_TOKEN_LIST: &str = "Examples:
@@ -609,6 +675,9 @@ pub const API_TOKEN_LIST: &str = "Examples:
 pub const API_TOKEN_NEW: &str = "Examples:
   # Create a new long-lived token (default expires year 2100)
   golem-cli api-token new
+
+  # The token secret is printed once in this command's output, including with --format json.
+  # Store it securely; it cannot be retrieved later.
 
   # Create a token that expires on a specific RFC 3339 timestamp
   golem-cli api-token new --expires-at 2027-01-01T00:00:00Z";

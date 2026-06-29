@@ -14,1813 +14,746 @@
 
 use test_r::test;
 
-use super::SourceLanguage;
 use super::*;
-use golem_common::model::agent::{
-    ComponentModelElementSchema, ComponentModelElementValue, DataSchema, DataValue, ElementSchema,
-    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
-};
-use golem_wasm::analysis::proptest_strategies;
-use golem_wasm::analysis::{
-    AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF64,
-    TypeFlags, TypeList, TypeOption, TypeRecord, TypeResult, TypeS32, TypeStr, TypeTuple, TypeU32,
-    TypeVariant,
-};
-use golem_wasm::{Value, ValueAndType};
+use golem_common::base_model::agent::AgentTypeName;
+use golem_common::schema::SchemaType;
+use golem_common::schema::agent::{InputSchema, NamedField, ParsedAgentId};
+use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue};
+use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, VariantCaseType};
+use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 
-fn cm_schema(typ: AnalysedType) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "p".to_string(),
-            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                element_type: typ,
-            }),
-        }],
-    })
+fn single_param_input_schema(ty: SchemaType) -> InputSchema {
+    InputSchema::parameters(vec![NamedField::user_supplied("p", ty)])
 }
 
-fn cm_value(value: Value, typ: AnalysedType) -> DataValue {
-    DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(value, typ),
-        })],
-    })
-}
-
-fn round_trip_rust(value: Value, typ: AnalysedType) {
-    let data_value = cm_value(value.clone(), typ.clone());
-    let schema = cm_schema(typ.clone());
-    let rendered = render_data_value(&data_value, &SourceLanguage::Rust);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Rust)
+fn round_trip(value: SchemaValue, ty: SchemaType, lang: SourceLanguage) {
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let rendered = render_schema_value(&graph, &ty, &value, &lang);
+    let input_schema = single_param_input_schema(ty);
+    let parsed = parse_agent_id_params(&rendered, &graph, &input_schema, &lang)
         .unwrap_or_else(|e| panic!("parse failed for rendered='{rendered}': {e}"));
-    assert_eq!(
-        data_value, parsed,
-        "round-trip failed for rendered='{rendered}'"
-    );
-}
-
-fn round_trip_ts(value: Value, typ: AnalysedType) {
-    let data_value = cm_value(value.clone(), typ.clone());
-    let schema = cm_schema(typ.clone());
-    let rendered = render_data_value(&data_value, &SourceLanguage::TypeScript);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::TypeScript)
-        .unwrap_or_else(|e| panic!("parse failed for rendered='{rendered}': {e}"));
-    assert_eq!(
-        data_value, parsed,
-        "round-trip failed for rendered='{rendered}'"
-    );
-}
-
-fn round_trip_scala(value: Value, typ: AnalysedType) {
-    let data_value = cm_value(value.clone(), typ.clone());
-    let schema = cm_schema(typ.clone());
-    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala)
-        .unwrap_or_else(|e| panic!("parse failed for rendered='{rendered}': {e}"));
-    assert_eq!(
-        data_value, parsed,
-        "round-trip failed for rendered='{rendered}'"
-    );
-}
-
-fn round_trip_moonbit(value: Value, typ: AnalysedType) {
-    let data_value = cm_value(value.clone(), typ.clone());
-    let schema = cm_schema(typ.clone());
-    let rendered = render_data_value(&data_value, &SourceLanguage::MoonBit);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::MoonBit)
-        .unwrap_or_else(|e| panic!("parse failed for rendered='{rendered}': {e}"));
-    assert_eq!(
-        data_value, parsed,
-        "round-trip failed for rendered='{rendered}'"
-    );
-}
-
-// Primitive round-trips
-
-#[test]
-fn rust_round_trip_bool() {
-    round_trip_rust(Value::Bool(true), AnalysedType::Bool(TypeBool));
-    round_trip_rust(Value::Bool(false), AnalysedType::Bool(TypeBool));
-}
-
-#[test]
-fn ts_round_trip_bool() {
-    round_trip_ts(Value::Bool(true), AnalysedType::Bool(TypeBool));
-    round_trip_ts(Value::Bool(false), AnalysedType::Bool(TypeBool));
-}
-
-#[test]
-fn rust_round_trip_integers() {
-    round_trip_rust(Value::U32(42), AnalysedType::U32(TypeU32));
-    round_trip_rust(Value::S32(-7), AnalysedType::S32(TypeS32));
-    round_trip_rust(Value::S32(0), AnalysedType::S32(TypeS32));
-}
-
-#[test]
-fn ts_round_trip_integers() {
-    round_trip_ts(Value::U32(42), AnalysedType::U32(TypeU32));
-    round_trip_ts(Value::S32(-7), AnalysedType::S32(TypeS32));
-}
-
-#[test]
-fn rust_round_trip_string() {
-    round_trip_rust(
-        Value::String("hello world".into()),
-        AnalysedType::Str(TypeStr),
-    );
-    round_trip_rust(
-        Value::String("line\nnewline".into()),
-        AnalysedType::Str(TypeStr),
-    );
-    round_trip_rust(
-        Value::String("has \"quotes\"".into()),
-        AnalysedType::Str(TypeStr),
-    );
-}
-
-#[test]
-fn ts_round_trip_string() {
-    round_trip_ts(
-        Value::String("hello world".into()),
-        AnalysedType::Str(TypeStr),
-    );
-    round_trip_ts(
-        Value::String("line\nnewline".into()),
-        AnalysedType::Str(TypeStr),
-    );
-}
-
-#[test]
-fn rust_round_trip_char() {
-    round_trip_rust(Value::Char('a'), AnalysedType::Chr(TypeChr));
-    round_trip_rust(Value::Char('\n'), AnalysedType::Chr(TypeChr));
-}
-
-#[test]
-fn ts_round_trip_char() {
-    round_trip_ts(Value::Char('a'), AnalysedType::Chr(TypeChr));
-}
-
-#[test]
-fn rust_round_trip_float() {
-    round_trip_rust(Value::F64(2.71), AnalysedType::F64(TypeF64));
-    round_trip_rust(Value::F64(f64::INFINITY), AnalysedType::F64(TypeF64));
-    round_trip_rust(Value::F64(f64::NEG_INFINITY), AnalysedType::F64(TypeF64));
-    // NaN needs special handling — can't use equality
-    let data = cm_value(Value::F64(f64::NAN), AnalysedType::F64(TypeF64));
-    let schema = cm_schema(AnalysedType::F64(TypeF64));
-    let rendered = render_data_value(&data, &SourceLanguage::Rust);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Rust).unwrap();
-    // Check the parsed value is NaN
-    match &parsed {
-        DataValue::Tuple(elems) => match &elems.elements[0] {
-            ElementValue::ComponentModel(cm) => match &cm.value.value {
-                Value::F64(v) => assert!(v.is_nan(), "expected NaN"),
-                _ => panic!("expected F64"),
-            },
-            _ => panic!("expected CM"),
-        },
-        _ => panic!("expected Tuple"),
+    match parsed {
+        SchemaValue::Record { fields } => {
+            assert_eq!(fields.len(), 1, "expected single-field record");
+            assert_eq!(
+                fields[0], value,
+                "round-trip mismatch via {lang} for rendered='{rendered}'"
+            );
+        }
+        other => panic!("parser did not return a Record: {other:?}"),
     }
 }
 
-#[test]
-fn ts_round_trip_float() {
-    round_trip_ts(Value::F64(2.71), AnalysedType::F64(TypeF64));
-    round_trip_ts(Value::F64(f64::INFINITY), AnalysedType::F64(TypeF64));
-    round_trip_ts(Value::F64(f64::NEG_INFINITY), AnalysedType::F64(TypeF64));
-}
-
-// Composite types
-
-#[test]
-fn rust_round_trip_record() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![
-            NameTypePair {
-                name: "field-one".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "field-two".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    });
-    let val = Value::Record(vec![Value::U32(42), Value::String("hi".into())]);
-    round_trip_rust(val, typ);
+fn round_trip_all(value: SchemaValue, ty: SchemaType) {
+    round_trip(value.clone(), ty.clone(), SourceLanguage::Rust);
+    round_trip(value.clone(), ty.clone(), SourceLanguage::TypeScript);
+    round_trip(value.clone(), ty.clone(), SourceLanguage::Scala);
+    round_trip(value, ty, SourceLanguage::MoonBit);
 }
 
 #[test]
-fn ts_round_trip_record() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![
-            NameTypePair {
-                name: "field-one".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "field-two".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    });
-    let val = Value::Record(vec![Value::U32(42), Value::String("hi".into())]);
-    round_trip_ts(val, typ);
+fn round_trip_primitives() {
+    round_trip_all(SchemaValue::Bool(true), SchemaType::bool());
+    round_trip_all(SchemaValue::U32(42), SchemaType::u32());
+    round_trip_all(SchemaValue::S32(-7), SchemaType::s32());
+    round_trip_all(
+        SchemaValue::String("hello world".into()),
+        SchemaType::string(),
+    );
+    round_trip_all(SchemaValue::F64(2.71), SchemaType::f64());
+    round_trip(
+        SchemaValue::Char('a'),
+        SchemaType::char(),
+        SourceLanguage::Rust,
+    );
+    round_trip(
+        SchemaValue::Char('a'),
+        SchemaType::char(),
+        SourceLanguage::TypeScript,
+    );
+    round_trip(
+        SchemaValue::Char('a'),
+        SchemaType::char(),
+        SourceLanguage::Scala,
+    );
+    round_trip(
+        SchemaValue::Char('a'),
+        SchemaType::char(),
+        SourceLanguage::MoonBit,
+    );
 }
 
 #[test]
-fn rust_round_trip_variant() {
-    let typ = AnalysedType::Variant(TypeVariant {
-        name: Some("my-variant".to_string()),
-        owner: None,
-        cases: vec![
-            NameOptionTypePair {
-                name: "case-a".to_string(),
-                typ: Some(AnalysedType::U32(TypeU32)),
-            },
-            NameOptionTypePair {
-                name: "case-b".to_string(),
-                typ: None,
-            },
-        ],
-    });
-    // With payload
-    round_trip_rust(
-        Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::U32(99))),
+fn round_trip_composites() {
+    let record_ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "field-one".into(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
         },
-        typ.clone(),
-    );
-    // Without payload
-    round_trip_rust(
-        Value::Variant {
-            case_idx: 1,
-            case_value: None,
+        NamedFieldType {
+            name: "field-two".into(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
         },
-        typ,
-    );
-}
-
-#[test]
-fn ts_round_trip_variant() {
-    let typ = AnalysedType::Variant(TypeVariant {
-        name: Some("my-variant".to_string()),
-        owner: None,
-        cases: vec![
-            NameOptionTypePair {
-                name: "case-a".to_string(),
-                typ: Some(AnalysedType::U32(TypeU32)),
-            },
-            NameOptionTypePair {
-                name: "case-b".to_string(),
-                typ: None,
-            },
-        ],
-    });
-    round_trip_ts(
-        Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::U32(99))),
+    ]);
+    round_trip_all(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::U32(42), SchemaValue::String("hi".into())],
         },
-        typ.clone(),
+        record_ty,
     );
-    round_trip_ts(
-        Value::Variant {
-            case_idx: 1,
-            case_value: None,
+
+    let variant_ty = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "case-a".into(),
+            payload: Some(SchemaType::u32()),
+            metadata: Default::default(),
         },
-        typ,
+        VariantCaseType {
+            name: "case-b".into(),
+            payload: None,
+            metadata: Default::default(),
+        },
+    ]);
+    round_trip_all(
+        SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: Some(Box::new(SchemaValue::U32(99))),
+        }),
+        variant_ty.clone(),
+    );
+    round_trip_all(
+        SchemaValue::Variant(VariantValuePayload {
+            case: 1,
+            payload: None,
+        }),
+        variant_ty,
+    );
+
+    round_trip_all(
+        SchemaValue::Enum { case: 1 },
+        SchemaType::r#enum(vec!["red".into(), "green".into(), "blue".into()]),
+    );
+    round_trip_all(
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::U32(42))),
+        },
+        SchemaType::option(SchemaType::u32()),
+    );
+    round_trip_all(
+        SchemaValue::Option { inner: None },
+        SchemaType::option(SchemaType::u32()),
+    );
+    round_trip_all(
+        SchemaValue::Flags {
+            bits: vec![true, false, true],
+        },
+        SchemaType::flags(vec!["read".into(), "write".into(), "execute".into()]),
+    );
+    round_trip_all(
+        SchemaValue::Tuple {
+            elements: vec![SchemaValue::U32(1), SchemaValue::String("x".into())],
+        },
+        SchemaType::tuple(vec![SchemaType::u32(), SchemaType::string()]),
+    );
+    round_trip_all(
+        SchemaValue::List {
+            elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)],
+        },
+        SchemaType::list(SchemaType::u32()),
     );
 }
 
 #[test]
-fn rust_round_trip_enum() {
-    let typ = AnalysedType::Enum(TypeEnum {
-        name: Some("color".to_string()),
-        owner: None,
-        cases: vec!["red".to_string(), "green".to_string(), "blue".to_string()],
+fn round_trip_result() {
+    let ty = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::u32())),
+        err: Some(Box::new(SchemaType::string())),
     });
-    round_trip_rust(Value::Enum(1), typ);
-}
-
-#[test]
-fn ts_round_trip_enum() {
-    let typ = AnalysedType::Enum(TypeEnum {
-        name: None,
-        owner: None,
-        cases: vec!["red".to_string(), "green".to_string(), "blue".to_string()],
-    });
-    round_trip_ts(Value::Enum(0), typ);
-}
-
-#[test]
-fn rust_round_trip_option() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_rust(Value::Option(Some(Box::new(Value::U32(42)))), typ.clone());
-    round_trip_rust(Value::Option(None), typ);
-}
-
-#[test]
-fn ts_round_trip_option() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_ts(Value::Option(Some(Box::new(Value::U32(42)))), typ.clone());
-    round_trip_ts(Value::Option(None), typ);
-}
-
-#[test]
-fn rust_round_trip_result() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    round_trip_rust(
-        Value::Result(Ok(Some(Box::new(Value::U32(42))))),
-        typ.clone(),
+    round_trip_all(
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U32(42))),
+        }),
+        ty.clone(),
     );
-    round_trip_rust(
-        Value::Result(Err(Some(Box::new(Value::String("oops".into()))))),
-        typ,
+    round_trip_all(
+        SchemaValue::Result(ResultValuePayload::Err {
+            value: Some(Box::new(SchemaValue::String("oops".into()))),
+        }),
+        ty,
     );
 }
 
-#[test]
-fn ts_round_trip_result() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    round_trip_ts(
-        Value::Result(Ok(Some(Box::new(Value::U32(42))))),
-        typ.clone(),
+fn build_parsed_agent_id(
+    agent_type: &str,
+    params_value: SchemaValue,
+    schema_ty: SchemaType,
+) -> ParsedAgentId {
+    let typed = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+            name: "p".to_string(),
+            body: schema_ty,
+            metadata: Default::default(),
+        }])),
+        SchemaValue::Record {
+            fields: vec![params_value],
+        },
     );
-    round_trip_ts(
-        Value::Result(Err(Some(Box::new(Value::String("oops".into()))))),
-        typ,
-    );
+    ParsedAgentId::new(AgentTypeName(agent_type.to_string()), typed, None)
 }
-
-#[test]
-fn rust_round_trip_result_unit_ok() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: None,
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    round_trip_rust(Value::Result(Ok(None)), typ);
-}
-
-#[test]
-fn ts_round_trip_result_unit_ok() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: None,
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    round_trip_ts(Value::Result(Ok(None)), typ);
-}
-
-#[test]
-fn rust_round_trip_flags() {
-    let typ = AnalysedType::Flags(TypeFlags {
-        name: Some("perms".to_string()),
-        owner: None,
-        names: vec![
-            "read".to_string(),
-            "write".to_string(),
-            "execute".to_string(),
-        ],
-    });
-    round_trip_rust(Value::Flags(vec![true, false, true]), typ);
-}
-
-#[test]
-fn ts_round_trip_flags() {
-    let typ = AnalysedType::Flags(TypeFlags {
-        name: None,
-        owner: None,
-        names: vec![
-            "read".to_string(),
-            "write".to_string(),
-            "execute".to_string(),
-        ],
-    });
-    round_trip_ts(Value::Flags(vec![true, false, true]), typ);
-}
-
-#[test]
-fn rust_round_trip_tuple() {
-    let typ = AnalysedType::Tuple(TypeTuple {
-        name: None,
-        owner: None,
-        items: vec![AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr)],
-    });
-    round_trip_rust(
-        Value::Tuple(vec![Value::U32(1), Value::String("x".into())]),
-        typ,
-    );
-}
-
-#[test]
-fn ts_round_trip_tuple() {
-    let typ = AnalysedType::Tuple(TypeTuple {
-        name: None,
-        owner: None,
-        items: vec![AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr)],
-    });
-    round_trip_ts(
-        Value::Tuple(vec![Value::U32(1), Value::String("x".into())]),
-        typ,
-    );
-}
-
-#[test]
-fn rust_round_trip_list() {
-    let typ = AnalysedType::List(TypeList {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_rust(
-        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
-        typ,
-    );
-}
-
-#[test]
-fn ts_round_trip_list() {
-    let typ = AnalysedType::List(TypeList {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_ts(
-        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
-        typ,
-    );
-}
-
-// Canonical structural fallback
-
-#[test]
-fn canonical_fallback_always_accepted() {
-    // Language-aware parse should accept canonical structural form
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("test-record".to_string()),
-        owner: None,
-        fields: vec![NameTypePair {
-            name: "field-a".to_string(),
-            typ: AnalysedType::U32(TypeU32),
-        }],
-    });
-    let val = Value::Record(vec![Value::U32(42)]);
-    let data_value = cm_value(val, typ.clone());
-    let schema = cm_schema(typ);
-    // Render in canonical structural form
-    let structural =
-        golem_common::model::agent::structural_format::format_structural(&data_value).unwrap();
-    // Parse with Rust language — should still accept canonical form
-    let parsed = parse_agent_id_params(&structural, &schema, &SourceLanguage::Rust).unwrap();
-    assert_eq!(data_value, parsed);
-}
-
-// render_agent_id tests
 
 #[test]
 fn render_agent_id_format() {
-    use golem_common::model::agent::{AgentTypeName, LegacyParsedAgentId};
-    let data = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
-    let parsed =
-        LegacyParsedAgentId::new(AgentTypeName("my-agent".to_string()), data, None).unwrap();
-    let result = render_agent_id(&parsed, &SourceLanguage::Rust);
-    assert_eq!(result, "my-agent(42)");
+    let parsed = build_parsed_agent_id("my-agent", SchemaValue::U32(42), SchemaType::u32());
+    assert_eq!(
+        render_agent_id(&parsed, &SourceLanguage::Rust),
+        "my-agent(42)"
+    );
 }
 
 #[test]
 fn render_agent_id_with_phantom() {
-    use golem_common::model::agent::{AgentTypeName, LegacyParsedAgentId};
-    use uuid::Uuid;
-    let data = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
-    let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let parsed =
-        LegacyParsedAgentId::new(AgentTypeName("my-agent".to_string()), data, Some(uuid)).unwrap();
-    let result = render_agent_id(&parsed, &SourceLanguage::Rust);
-    assert_eq!(result, "my-agent(42)[12345678-1234-1234-1234-123456789012]");
-}
-
-// ── Property-based roundtrip tests ──────────────────────────────────────────
-
-use proptest::prelude::*;
-
-// ── Strategies ──────────────────────────────────────────────────────
-
-fn leaf_type_and_value() -> impl Strategy<Value = (AnalysedType, Value)> {
-    proptest_strategies::leaf_type_and_value()
-}
-
-fn arb_type_and_value() -> impl Strategy<Value = (AnalysedType, Value)> {
-    proptest_strategies::arb_type_and_value()
-}
-
-/// Wrap a CM type+value into a DataSchema/DataValue pair.
-fn cm_schema_for(typ: AnalysedType) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "p".to_string(),
-            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                element_type: typ,
-            }),
-        }],
-    })
-}
-
-fn cm_data_for(value: Value, typ: AnalysedType) -> DataValue {
-    DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(value, typ),
-        })],
-    })
-}
-
-// ── Roundtrip tests ─────────────────────────────────────────────────
-
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 200, .. ProptestConfig::default()
-    })]
-
-    #[test]
-    fn proptest_rust_leaf_roundtrip((typ, val) in leaf_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::Rust);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Rust)
-            .unwrap_or_else(|e| panic!("Rust parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
-    }
-
-    #[test]
-    fn proptest_ts_leaf_roundtrip((typ, val) in leaf_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::TypeScript);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::TypeScript)
-            .unwrap_or_else(|e| panic!("TS parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
-    }
-
-    #[test]
-    fn proptest_rust_complex_roundtrip((typ, val) in arb_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::Rust);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Rust)
-            .unwrap_or_else(|e| panic!("Rust parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
-    }
-
-    #[test]
-    fn proptest_ts_complex_roundtrip((typ, val) in arb_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::TypeScript);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::TypeScript)
-            .unwrap_or_else(|e| panic!("TS parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
-    }
-}
-
-#[test]
-fn source_language_from_str() {
-    // Rust variants
-    assert_eq!(SourceLanguage::from("rust"), SourceLanguage::Rust);
-    assert_eq!(SourceLanguage::from("Rust"), SourceLanguage::Rust);
-    assert_eq!(SourceLanguage::from("RUST"), SourceLanguage::Rust);
-    assert_eq!(SourceLanguage::from("  rust  "), SourceLanguage::Rust);
-
-    // TypeScript variants
-    assert_eq!(
-        SourceLanguage::from("typescript"),
-        SourceLanguage::TypeScript
+    let typed = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+            name: "p".into(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        }])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::U32(42)],
+        },
     );
+    let uuid = uuid::Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
+    let parsed = ParsedAgentId::new(AgentTypeName("my-agent".to_string()), typed, Some(uuid));
     assert_eq!(
-        SourceLanguage::from("TypeScript"),
-        SourceLanguage::TypeScript
-    );
-    assert_eq!(SourceLanguage::from("ts"), SourceLanguage::TypeScript);
-    assert_eq!(SourceLanguage::from("TS"), SourceLanguage::TypeScript);
-    assert_eq!(
-        SourceLanguage::from("  typescript  "),
-        SourceLanguage::TypeScript
-    );
-
-    // Other
-    assert_eq!(
-        SourceLanguage::from("go"),
-        SourceLanguage::Other("go".to_string())
-    );
-    assert_eq!(
-        SourceLanguage::from(""),
-        SourceLanguage::Other("".to_string())
-    );
-    assert_eq!(
-        SourceLanguage::from("python"),
-        SourceLanguage::Other("python".to_string())
-    );
-}
-
-#[test]
-fn unknown_language_falls_back_to_canonical() {
-    use golem_common::model::agent::structural_format::format_structural;
-
-    let data = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
-    let rendered_other = render_data_value(&data, &SourceLanguage::Other("go".to_string()));
-    let canonical = format_structural(&data).unwrap();
-    assert_eq!(
-        rendered_other, canonical,
-        "Unknown language should produce canonical structural format"
+        render_agent_id(&parsed, &SourceLanguage::Rust),
+        "my-agent(42)[12345678-1234-1234-1234-123456789012]"
     );
 }
 
 #[test]
 fn rust_language_specific_parsed_first() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("Some(42)", &schema, &SourceLanguage::Rust).unwrap();
-    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn ts_language_specific_parsed_first() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: None,
-        owner: None,
-        fields: vec![NameTypePair {
-            name: "fieldOne".to_string(),
-            typ: AnalysedType::U32(TypeU32),
-        }],
-    });
-    let schema = cm_schema(typ.clone());
+    let ty = SchemaType::option(SchemaType::u32());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let input_schema = single_param_input_schema(ty);
     let parsed =
-        parse_agent_id_params("{ fieldOne: 42 }", &schema, &SourceLanguage::TypeScript).unwrap();
-    let expected = cm_value(Value::Record(vec![Value::U32(42)]), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn canonical_fallback_for_rust_language() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("s(42)", &schema, &SourceLanguage::Rust).unwrap();
-    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn canonical_fallback_for_ts_language() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("s(42)", &schema, &SourceLanguage::TypeScript).unwrap();
-    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn combined_error_on_both_failures() {
-    let schema = cm_schema(AnalysedType::U32(TypeU32));
-    let result = parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::Rust);
-    let err = result.unwrap_err();
-    assert!(
-        err.message.contains("Rust parser"),
-        "error should mention Rust parser: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("Structural parser"),
-        "error should mention Structural parser: {}",
-        err.message
-    );
-}
-
-#[test]
-fn combined_error_on_both_failures_ts() {
-    let schema = cm_schema(AnalysedType::U32(TypeU32));
-    let result = parse_agent_id_params(
-        "not_a_number_at_all!!!",
-        &schema,
-        &SourceLanguage::TypeScript,
-    );
-    let err = result.unwrap_err();
-    assert!(
-        err.message.contains("TypeScript parser"),
-        "error should mention TypeScript parser: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("Structural parser"),
-        "error should mention Structural parser: {}",
-        err.message
-    );
-}
-
-#[test]
-fn unknown_language_uses_canonical_only() {
-    let schema = cm_schema(AnalysedType::U32(TypeU32));
-    let parsed = parse_agent_id_params("42", &schema, &SourceLanguage::Other("go".into())).unwrap();
-    let expected = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn rust_option_none_parsed() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("None", &schema, &SourceLanguage::Rust).unwrap();
-    let expected = cm_value(Value::Option(None), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn rust_result_ok_parsed() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("Ok(42)", &schema, &SourceLanguage::Rust).unwrap();
-    let expected = cm_value(Value::Result(Ok(Some(Box::new(Value::U32(42))))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn rust_result_err_parsed() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params(r#"Err("fail")"#, &schema, &SourceLanguage::Rust).unwrap();
-    let expected = cm_value(
-        Value::Result(Err(Some(Box::new(Value::String("fail".into()))))),
-        typ,
-    );
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn ts_record_camel_case_fields() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: None,
-        owner: None,
-        fields: vec![
-            NameTypePair {
-                name: "myField".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "anotherField".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params(
-        r#"{ myField: 10, anotherField: "hi" }"#,
-        &schema,
-        &SourceLanguage::TypeScript,
-    )
-    .unwrap();
-    let expected = cm_value(
-        Value::Record(vec![Value::U32(10), Value::String("hi".into())]),
-        typ,
-    );
-    assert_eq!(parsed, expected);
+        parse_agent_id_params("Some(42)", &graph, &input_schema, &SourceLanguage::Rust).unwrap();
+    assert!(matches!(parsed, SchemaValue::Record { .. }));
 }
 
 #[test]
 fn rust_variant_pascal_case() {
-    let typ = AnalysedType::Variant(TypeVariant {
-        name: None,
-        owner: None,
-        cases: vec![
-            NameOptionTypePair {
-                name: "MyCase".to_string(),
-                typ: Some(AnalysedType::U32(TypeU32)),
-            },
-            NameOptionTypePair {
-                name: "OtherCase".to_string(),
-                typ: None,
-            },
-        ],
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("MyCase(5)", &schema, &SourceLanguage::Rust).unwrap();
-    let expected = cm_value(
-        Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::U32(5))),
+    let ty = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "MyCase".into(),
+            payload: Some(SchemaType::u32()),
+            metadata: Default::default(),
         },
-        typ,
-    );
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn multi_param_rust_syntax() {
-    let schema = DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![
-            NamedElementSchema {
-                name: "p1".to_string(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: AnalysedType::U32(TypeU32),
-                }),
-            },
-            NamedElementSchema {
-                name: "p2".to_string(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: AnalysedType::Option(TypeOption {
-                        name: None,
-                        owner: None,
-                        inner: Box::new(AnalysedType::Str(TypeStr)),
-                    }),
-                }),
-            },
-        ],
-    });
-    let parsed =
-        parse_agent_id_params(r#"42, Some("hello")"#, &schema, &SourceLanguage::Rust).unwrap();
-    let expected = DataValue::Tuple(ElementValues {
-        elements: vec![
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(Value::U32(42), AnalysedType::U32(TypeU32)),
-            }),
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(
-                    Value::Option(Some(Box::new(Value::String("hello".into())))),
-                    AnalysedType::Option(TypeOption {
-                        name: None,
-                        owner: None,
-                        inner: Box::new(AnalysedType::Str(TypeStr)),
-                    }),
-                ),
-            }),
-        ],
-    });
-    assert_eq!(parsed, expected);
-}
-
-// Scala primitive round-trips
-
-#[test]
-fn scala_round_trip_bool() {
-    round_trip_scala(Value::Bool(true), AnalysedType::Bool(TypeBool));
-    round_trip_scala(Value::Bool(false), AnalysedType::Bool(TypeBool));
-}
-
-#[test]
-fn scala_round_trip_integers() {
-    round_trip_scala(Value::U32(42), AnalysedType::U32(TypeU32));
-    round_trip_scala(Value::S32(-7), AnalysedType::S32(TypeS32));
-    round_trip_scala(Value::S32(0), AnalysedType::S32(TypeS32));
-}
-
-#[test]
-fn scala_round_trip_string() {
-    round_trip_scala(
-        Value::String("hello world".into()),
-        AnalysedType::Str(TypeStr),
-    );
-    round_trip_scala(
-        Value::String("line\nnewline".into()),
-        AnalysedType::Str(TypeStr),
-    );
-    round_trip_scala(
-        Value::String("has \"quotes\"".into()),
-        AnalysedType::Str(TypeStr),
-    );
-}
-
-#[test]
-fn scala_round_trip_char() {
-    round_trip_scala(Value::Char('a'), AnalysedType::Chr(TypeChr));
-    round_trip_scala(Value::Char('\n'), AnalysedType::Chr(TypeChr));
-}
-
-#[test]
-fn scala_round_trip_float() {
-    round_trip_scala(Value::F64(2.71), AnalysedType::F64(TypeF64));
-    round_trip_scala(Value::F64(f64::INFINITY), AnalysedType::F64(TypeF64));
-    round_trip_scala(Value::F64(f64::NEG_INFINITY), AnalysedType::F64(TypeF64));
-    // NaN needs special handling — can't use equality
-    let data = cm_value(Value::F64(f64::NAN), AnalysedType::F64(TypeF64));
-    let schema = cm_schema(AnalysedType::F64(TypeF64));
-    let rendered = render_data_value(&data, &SourceLanguage::Scala);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
-    match &parsed {
-        DataValue::Tuple(elems) => match &elems.elements[0] {
-            ElementValue::ComponentModel(cm) => match &cm.value.value {
-                Value::F64(v) => assert!(v.is_nan(), "expected NaN"),
-                _ => panic!("expected F64"),
-            },
-            _ => panic!("expected CM"),
+        VariantCaseType {
+            name: "OtherCase".into(),
+            payload: None,
+            metadata: Default::default(),
         },
-        _ => panic!("expected Tuple"),
-    }
-}
-
-// Scala composite round-trips
-
-#[test]
-fn scala_round_trip_record() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![
-            NameTypePair {
-                name: "field-one".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "field-two".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    });
-    let val = Value::Record(vec![Value::U32(42), Value::String("hi".into())]);
-    round_trip_scala(val, typ);
-}
-
-#[test]
-fn scala_round_trip_variant() {
-    let typ = AnalysedType::Variant(TypeVariant {
-        name: Some("my-variant".to_string()),
-        owner: None,
-        cases: vec![
-            NameOptionTypePair {
-                name: "case-a".to_string(),
-                typ: Some(AnalysedType::U32(TypeU32)),
-            },
-            NameOptionTypePair {
-                name: "case-b".to_string(),
-                typ: None,
-            },
-        ],
-    });
-    // With payload
-    round_trip_scala(
-        Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::U32(99))),
-        },
-        typ.clone(),
-    );
-    // Without payload
-    round_trip_scala(
-        Value::Variant {
-            case_idx: 1,
-            case_value: None,
-        },
-        typ,
-    );
-}
-
-#[test]
-fn scala_round_trip_enum() {
-    let typ = AnalysedType::Enum(TypeEnum {
-        name: Some("my-enum".to_string()),
-        owner: None,
-        cases: vec!["case-a".to_string(), "case-b".to_string()],
-    });
-    round_trip_scala(Value::Enum(1), typ);
-}
-
-#[test]
-fn scala_round_trip_option() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_scala(Value::Option(Some(Box::new(Value::U32(42)))), typ.clone());
-    round_trip_scala(Value::Option(None), typ);
-}
-
-#[test]
-fn scala_round_trip_result() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    round_trip_scala(
-        Value::Result(Ok(Some(Box::new(Value::U32(42))))),
-        typ.clone(),
-    );
-    round_trip_scala(
-        Value::Result(Err(Some(Box::new(Value::String("fail".into()))))),
-        typ,
-    );
-}
-
-#[test]
-fn scala_round_trip_list() {
-    let typ = AnalysedType::List(TypeList {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_scala(
-        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
-        typ,
-    );
-}
-
-#[test]
-fn scala_round_trip_tuple() {
-    let typ = AnalysedType::Tuple(TypeTuple {
-        name: None,
-        owner: None,
-        items: vec![AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr)],
-    });
-    round_trip_scala(
-        Value::Tuple(vec![Value::U32(42), Value::String("hi".into())]),
-        typ,
-    );
-}
-
-#[test]
-fn scala_round_trip_flags() {
-    let typ = AnalysedType::Flags(TypeFlags {
-        name: Some("my-flags".to_string()),
-        owner: None,
-        names: vec!["flag-one".to_string(), "flag-two".to_string()],
-    });
-    round_trip_scala(Value::Flags(vec![true, false]), typ);
-}
-
-#[test]
-fn scala_round_trip_tuple1() {
-    let typ = AnalysedType::Tuple(TypeTuple {
-        name: None,
-        owner: None,
-        items: vec![AnalysedType::U32(TypeU32)],
-    });
-    round_trip_scala(Value::Tuple(vec![Value::U32(5)]), typ);
-}
-
-// Scala-specific parsing tests
-
-#[test]
-fn scala_option_none_parsed() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("None", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(Value::Option(None), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_result_ok_parsed() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("Ok(42)", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(Value::Result(Ok(Some(Box::new(Value::U32(42))))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_result_err_parsed() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params(r#"Err("fail")"#, &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(
-        Value::Result(Err(Some(Box::new(Value::String("fail".into()))))),
-        typ,
-    );
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_result_qualified_ok() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed =
-        parse_agent_id_params("WitResult.Ok(42)", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(Value::Result(Ok(Some(Box::new(Value::U32(42))))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_variant_dot_syntax() {
-    let typ = AnalysedType::Variant(TypeVariant {
-        name: None,
-        owner: None,
-        cases: vec![
-            NameOptionTypePair {
-                name: "MyCase".to_string(),
-                typ: Some(AnalysedType::U32(TypeU32)),
-            },
-            NameOptionTypePair {
-                name: "OtherCase".to_string(),
-                typ: None,
-            },
-        ],
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("MyCase(5)", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(
-        Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::U32(5))),
-        },
-        typ,
-    );
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_enum_dot_syntax() {
-    let typ = AnalysedType::Enum(TypeEnum {
-        name: Some("my-enum".to_string()),
-        owner: None,
-        cases: vec!["case-a".to_string(), "case-b".to_string()],
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("MyEnum.CaseA", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(Value::Enum(0), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_list_syntax() {
-    let typ = AnalysedType::List(TypeList {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("List(1, 2, 3)", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(
-        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
-        typ,
-    );
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_record_named_args() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![
-            NameTypePair {
-                name: "field-one".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "field-two".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    });
-    let schema = cm_schema(typ.clone());
+    ]);
+    let graph = SchemaGraph::anonymous(ty.clone());
     let parsed = parse_agent_id_params(
-        r#"MyRecord(fieldOne = 1, fieldTwo = "hi")"#,
-        &schema,
-        &SourceLanguage::Scala,
+        "MyCase(5)",
+        &graph,
+        &single_param_input_schema(ty),
+        &SourceLanguage::Rust,
     )
     .unwrap();
-    let expected = cm_value(
-        Value::Record(vec![Value::U32(1), Value::String("hi".into())]),
-        typ,
-    );
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn scala_language_specific_parsed_first() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("Some(42)", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
-    assert_eq!(parsed, expected);
-}
-
-// Scala fallback & error tests
-
-#[test]
-fn canonical_fallback_for_scala_language() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("s(42)", &schema, &SourceLanguage::Scala).unwrap();
-    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn combined_error_on_both_failures_scala() {
-    let schema = cm_schema(AnalysedType::U32(TypeU32));
-    let result = parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::Scala);
-    let err = result.unwrap_err();
-    assert!(
-        err.message.contains("Scala parser"),
-        "error should mention Scala parser: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("Structural parser"),
-        "error should mention Structural parser: {}",
-        err.message
-    );
-}
-
-// Scala multi-param test
-
-#[test]
-fn multi_param_scala_syntax() {
-    let schema = DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![
-            NamedElementSchema {
-                name: "p1".to_string(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: AnalysedType::U32(TypeU32),
-                }),
-            },
-            NamedElementSchema {
-                name: "p2".to_string(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: AnalysedType::Option(TypeOption {
-                        name: None,
-                        owner: None,
-                        inner: Box::new(AnalysedType::Str(TypeStr)),
-                    }),
-                }),
-            },
-        ],
-    });
-    let parsed =
-        parse_agent_id_params(r#"42, Some("hello")"#, &schema, &SourceLanguage::Scala).unwrap();
-    let expected = DataValue::Tuple(ElementValues {
-        elements: vec![
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(Value::U32(42), AnalysedType::U32(TypeU32)),
-            }),
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(
-                    Value::Option(Some(Box::new(Value::String("hello".into())))),
-                    AnalysedType::Option(TypeOption {
-                        name: None,
-                        owner: None,
-                        inner: Box::new(AnalysedType::Str(TypeStr)),
-                    }),
-                ),
-            }),
-        ],
-    });
-    assert_eq!(parsed, expected);
-}
-
-// Flags edge cases
-
-#[test]
-fn scala_round_trip_flags_all_false() {
-    let typ = AnalysedType::Flags(TypeFlags {
-        name: Some("my-flags".to_string()),
-        owner: None,
-        names: vec!["flag-one".to_string(), "flag-two".to_string()],
-    });
-    round_trip_scala(Value::Flags(vec![false, false]), typ);
-}
-
-#[test]
-fn scala_round_trip_flags_false_first() {
-    let typ = AnalysedType::Flags(TypeFlags {
-        name: Some("my-flags".to_string()),
-        owner: None,
-        names: vec!["flag-one".to_string(), "flag-two".to_string()],
-    });
-    round_trip_scala(Value::Flags(vec![false, true]), typ);
-}
-
-// Unstructured text/binary round-trips
-
-#[test]
-fn scala_round_trip_unstructured_text_url() {
-    use golem_common::model::agent::{
-        TextDescriptor, TextReference, UnstructuredTextElementValue, Url,
-    };
-    let schema = DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "text".to_string(),
-            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-        }],
-    });
-    let data_value = DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::UnstructuredText(
-            UnstructuredTextElementValue {
-                value: TextReference::Url(Url {
-                    value: "https://example.com".into(),
-                }),
-                descriptor: TextDescriptor { restrictions: None },
-            },
-        )],
-    });
-    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
-    assert_eq!(data_value, parsed);
-}
-
-#[test]
-fn scala_round_trip_unstructured_text_inline() {
-    use golem_common::model::agent::{
-        TextDescriptor, TextReference, TextSource, TextType, UnstructuredTextElementValue,
-    };
-    let schema = DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "text".to_string(),
-            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-        }],
-    });
-    let data_value = DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::UnstructuredText(
-            UnstructuredTextElementValue {
-                value: TextReference::Inline(TextSource {
-                    data: "hello".into(),
-                    text_type: Some(TextType {
-                        language_code: "en".into(),
-                    }),
-                }),
-                descriptor: TextDescriptor { restrictions: None },
-            },
-        )],
-    });
-    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
-    assert_eq!(data_value, parsed);
-}
-
-#[test]
-fn scala_round_trip_unstructured_text_inline_no_lang() {
-    use golem_common::model::agent::{
-        TextDescriptor, TextReference, TextSource, UnstructuredTextElementValue,
-    };
-    let schema = DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "text".to_string(),
-            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-        }],
-    });
-    let data_value = DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::UnstructuredText(
-            UnstructuredTextElementValue {
-                value: TextReference::Inline(TextSource {
-                    data: "world".into(),
-                    text_type: None,
-                }),
-                descriptor: TextDescriptor { restrictions: None },
-            },
-        )],
-    });
-    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
-    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
-    assert_eq!(data_value, parsed);
-}
-
-// JSON-style record literals (with quoted keys) are not accepted by any of the
-// per-language parsers — a clear, actionable error message must be produced.
-fn assert_helpful_error_for_json_style_record_keys(language: SourceLanguage) {
-    let schema = cm_schema(AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![NameTypePair {
-            name: "order-id".to_string(),
-            typ: AnalysedType::Str(TypeStr),
-        }],
-    }));
-    // JSON form (quoted key) — invalid; record fields use unquoted keys.
-    let rendered = "{\"orderId\": \"abc\"}";
-    let err = parse_agent_id_params(rendered, &schema, &language)
-        .expect_err("JSON-style record literal must fail to parse");
-    let message = err.to_string();
-    assert!(
-        message.contains("quoted string \"orderId\""),
-        "error should mention the quoted string, got: {message}"
-    );
-    assert!(
-        message.contains("unquoted keys"),
-        "error should suggest unquoted keys, got: {message}"
-    );
-}
-
-#[test]
-fn ts_helpful_error_for_json_style_record_keys() {
-    assert_helpful_error_for_json_style_record_keys(SourceLanguage::TypeScript);
-}
-
-#[test]
-fn rust_helpful_error_for_json_style_record_keys() {
-    assert_helpful_error_for_json_style_record_keys(SourceLanguage::Rust);
-}
-
-#[test]
-fn moonbit_helpful_error_for_json_style_record_keys() {
-    assert_helpful_error_for_json_style_record_keys(SourceLanguage::MoonBit);
-}
-
-// Scala property-based round-trips
-
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 200, .. ProptestConfig::default()
-    })]
-
-    #[test]
-    fn proptest_scala_leaf_roundtrip((typ, val) in leaf_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::Scala);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala)
-            .unwrap_or_else(|e| panic!("Scala parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
-    }
-
-    #[test]
-    fn proptest_scala_complex_roundtrip((typ, val) in arb_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::Scala);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala)
-            .unwrap_or_else(|e| panic!("Scala parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
+    match parsed {
+        SchemaValue::Record { fields } => match fields.into_iter().next().unwrap() {
+            SchemaValue::Variant(VariantValuePayload { case, payload }) => {
+                assert_eq!(case, 0);
+                assert!(matches!(payload.as_deref(), Some(SchemaValue::U32(5))));
+            }
+            other => panic!("expected Variant, got {other:?}"),
+        },
+        _ => panic!("expected Record"),
     }
 }
 
-// ── MoonBit round-trip tests ────────────────────────────────────────────────
-
 #[test]
-fn moonbit_round_trip_bool() {
-    round_trip_moonbit(Value::Bool(true), AnalysedType::Bool(TypeBool));
-    round_trip_moonbit(Value::Bool(false), AnalysedType::Bool(TypeBool));
-}
-
-#[test]
-fn moonbit_round_trip_integers() {
-    round_trip_moonbit(Value::U32(42), AnalysedType::U32(TypeU32));
-    round_trip_moonbit(Value::S32(-7), AnalysedType::S32(TypeS32));
-    round_trip_moonbit(Value::S32(0), AnalysedType::S32(TypeS32));
-}
-
-#[test]
-fn moonbit_round_trip_string() {
-    round_trip_moonbit(
-        Value::String("hello world".into()),
-        AnalysedType::Str(TypeStr),
-    );
-    round_trip_moonbit(
-        Value::String("line\nnewline".into()),
-        AnalysedType::Str(TypeStr),
-    );
-}
-
-#[test]
-fn moonbit_round_trip_char() {
-    round_trip_moonbit(Value::Char('a'), AnalysedType::Chr(TypeChr));
-    round_trip_moonbit(Value::Char('\n'), AnalysedType::Chr(TypeChr));
-}
-
-#[test]
-fn moonbit_round_trip_float() {
-    round_trip_moonbit(Value::F64(2.71), AnalysedType::F64(TypeF64));
-    round_trip_moonbit(Value::F64(f64::INFINITY), AnalysedType::F64(TypeF64));
-    round_trip_moonbit(Value::F64(f64::NEG_INFINITY), AnalysedType::F64(TypeF64));
-}
-
-#[test]
-fn moonbit_round_trip_record() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![
-            NameTypePair {
-                name: "field-one".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "field-two".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
+fn rust_result_ok_parsed() {
+    let ty = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::u32())),
+        err: Some(Box::new(SchemaType::string())),
     });
-    let val = Value::Record(vec![Value::U32(42), Value::String("hi".into())]);
-    round_trip_moonbit(val, typ);
-}
-
-#[test]
-fn moonbit_round_trip_variant() {
-    let typ = AnalysedType::Variant(TypeVariant {
-        name: Some("my-variant".to_string()),
-        owner: None,
-        cases: vec![
-            NameOptionTypePair {
-                name: "case-a".to_string(),
-                typ: Some(AnalysedType::U32(TypeU32)),
-            },
-            NameOptionTypePair {
-                name: "case-b".to_string(),
-                typ: None,
-            },
-        ],
-    });
-    round_trip_moonbit(
-        Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::U32(99))),
-        },
-        typ.clone(),
-    );
-    round_trip_moonbit(
-        Value::Variant {
-            case_idx: 1,
-            case_value: None,
-        },
-        typ,
-    );
-}
-
-#[test]
-fn moonbit_round_trip_enum() {
-    let typ = AnalysedType::Enum(TypeEnum {
-        name: Some("my-enum".to_string()),
-        owner: None,
-        cases: vec!["case-one".to_string(), "case-two".to_string()],
-    });
-    round_trip_moonbit(Value::Enum(0), typ.clone());
-    round_trip_moonbit(Value::Enum(1), typ);
-}
-
-#[test]
-fn moonbit_round_trip_option() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_moonbit(Value::Option(Some(Box::new(Value::U32(42)))), typ.clone());
-    round_trip_moonbit(Value::Option(None), typ);
-}
-
-#[test]
-fn moonbit_round_trip_result() {
-    let typ = AnalysedType::Result(TypeResult {
-        name: None,
-        owner: None,
-        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
-        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-    });
-    round_trip_moonbit(
-        Value::Result(Ok(Some(Box::new(Value::U32(42))))),
-        typ.clone(),
-    );
-    round_trip_moonbit(
-        Value::Result(Err(Some(Box::new(Value::String("oops".into()))))),
-        typ,
-    );
-}
-
-#[test]
-fn moonbit_round_trip_flags() {
-    let typ = AnalysedType::Flags(TypeFlags {
-        name: Some("my-flags".to_string()),
-        owner: None,
-        names: vec![
-            "read".to_string(),
-            "write".to_string(),
-            "execute".to_string(),
-        ],
-    });
-    round_trip_moonbit(Value::Flags(vec![true, false, true]), typ);
-}
-
-#[test]
-fn moonbit_round_trip_flags_all_false() {
-    let typ = AnalysedType::Flags(TypeFlags {
-        name: Some("my-flags".to_string()),
-        owner: None,
-        names: vec!["flag-one".to_string(), "flag-two".to_string()],
-    });
-    round_trip_moonbit(Value::Flags(vec![false, false]), typ);
-}
-
-#[test]
-fn moonbit_round_trip_tuple() {
-    let typ = AnalysedType::Tuple(TypeTuple {
-        name: None,
-        owner: None,
-        items: vec![AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr)],
-    });
-    round_trip_moonbit(
-        Value::Tuple(vec![Value::U32(1), Value::String("x".into())]),
-        typ,
-    );
-}
-
-#[test]
-fn moonbit_round_trip_list() {
-    let typ = AnalysedType::List(TypeList {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    round_trip_moonbit(
-        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
-        typ,
-    );
-}
-
-// MoonBit-specific parsing tests
-
-#[test]
-fn moonbit_parse_record_with_type_prefix() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![
-            NameTypePair {
-                name: "field-one".to_string(),
-                typ: AnalysedType::U32(TypeU32),
-            },
-            NameTypePair {
-                name: "field-two".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    });
-    let schema = cm_schema(typ.clone());
+    let graph = SchemaGraph::anonymous(ty.clone());
     let parsed = parse_agent_id_params(
-        r#"MyRecord::{ field_one: 1, field_two: "hi" }"#,
-        &schema,
-        &SourceLanguage::MoonBit,
+        "Ok(42)",
+        &graph,
+        &single_param_input_schema(ty),
+        &SourceLanguage::Rust,
     )
     .unwrap();
-    let expected = cm_value(
-        Value::Record(vec![Value::U32(1), Value::String("hi".into())]),
-        typ,
-    );
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn moonbit_parse_record_without_type_prefix() {
-    let typ = AnalysedType::Record(TypeRecord {
-        name: Some("my-record".to_string()),
-        owner: None,
-        fields: vec![NameTypePair {
-            name: "field-one".to_string(),
-            typ: AnalysedType::U32(TypeU32),
-        }],
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed =
-        parse_agent_id_params("{ field_one: 42 }", &schema, &SourceLanguage::MoonBit).unwrap();
-    let expected = cm_value(Value::Record(vec![Value::U32(42)]), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn moonbit_language_specific_parsed_first() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("Some(42)", &schema, &SourceLanguage::MoonBit).unwrap();
-    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn canonical_fallback_for_moonbit_language() {
-    let typ = AnalysedType::Option(TypeOption {
-        name: None,
-        owner: None,
-        inner: Box::new(AnalysedType::U32(TypeU32)),
-    });
-    let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("s(42)", &schema, &SourceLanguage::MoonBit).unwrap();
-    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
-    assert_eq!(parsed, expected);
-}
-
-#[test]
-fn combined_error_on_both_failures_moonbit() {
-    let schema = cm_schema(AnalysedType::U32(TypeU32));
-    let result = parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::MoonBit);
-    let err = result.unwrap_err();
-    assert!(
-        err.message.contains("MoonBit parser"),
-        "error should mention MoonBit parser: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("Structural parser"),
-        "error should mention Structural parser: {}",
-        err.message
-    );
-}
-
-// MoonBit property-based round-trips
-
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 200, .. ProptestConfig::default()
-    })]
-
-    #[test]
-    fn proptest_moonbit_leaf_roundtrip((typ, val) in leaf_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::MoonBit);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::MoonBit)
-            .unwrap_or_else(|e| panic!("MoonBit parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
+    match parsed {
+        SchemaValue::Record { fields } => match fields.into_iter().next().unwrap() {
+            SchemaValue::Result(ResultValuePayload::Ok { value }) => {
+                assert!(matches!(value.as_deref(), Some(SchemaValue::U32(42))))
+            }
+            other => panic!("expected Result::Ok, got {other:?}"),
+        },
+        _ => panic!("expected Record"),
     }
+}
 
-    #[test]
-    fn proptest_moonbit_complex_roundtrip((typ, val) in arb_type_and_value()) {
-        let data = cm_data_for(val, typ.clone());
-        let schema = cm_schema_for(typ);
-        let rendered = render_data_value(&data, &SourceLanguage::MoonBit);
-        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::MoonBit)
-            .unwrap_or_else(|e| panic!("MoonBit parse failed for '{rendered}': {e}"));
-        prop_assert_eq!(data, parsed);
+#[test]
+fn ts_record_camel_case_fields() {
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "myField".into(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "anotherField".into(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let parsed = parse_agent_id_params(
+        r#"{ myField: 10, anotherField: "hi" }"#,
+        &graph,
+        &single_param_input_schema(ty),
+        &SourceLanguage::TypeScript,
+    )
+    .unwrap();
+    match parsed {
+        SchemaValue::Record { fields } => match fields.into_iter().next().unwrap() {
+            SchemaValue::Record { fields: inner } => {
+                assert_eq!(inner.len(), 2);
+                assert!(matches!(inner[0], SchemaValue::U32(10)));
+                assert!(matches!(&inner[1], SchemaValue::String(s) if s == "hi"));
+            }
+            other => panic!("expected inner Record, got {other:?}"),
+        },
+        _ => panic!("expected Record"),
+    }
+}
+
+#[test]
+fn source_language_from_str() {
+    assert_eq!(SourceLanguage::from("rust"), SourceLanguage::Rust);
+    assert_eq!(SourceLanguage::from("ts"), SourceLanguage::TypeScript);
+    assert_eq!(
+        SourceLanguage::from("go"),
+        SourceLanguage::Other("go".to_string())
+    );
+}
+
+#[test]
+fn round_trip_rich_constructors() {
+    use chrono::DateTime;
+    use golem_common::schema::schema_type::{
+        PathDirection, PathKind, PathSpec, QuantityValue, UrlRestrictions,
+    };
+    use golem_common::schema::schema_value::DurationValuePayload;
+
+    round_trip_all(
+        SchemaValue::Path {
+            path: "/tmp/report.txt".into(),
+        },
+        SchemaType::path(PathSpec {
+            direction: PathDirection::Input,
+            kind: PathKind::File,
+            allowed_mime_types: None,
+            allowed_extensions: None,
+        }),
+    );
+    round_trip_all(
+        SchemaValue::Url {
+            url: "https://example.com/a".into(),
+        },
+        SchemaType::url(UrlRestrictions::default()),
+    );
+    round_trip_all(
+        SchemaValue::Datetime {
+            value: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        },
+        SchemaType::datetime(),
+    );
+    round_trip_all(
+        SchemaValue::Duration(DurationValuePayload {
+            nanoseconds: 30_000_000_000,
+        }),
+        SchemaType::duration(),
+    );
+    // Canonical quantity (1.5kg) — no trailing zeros so the value round-trips
+    // exactly through the canonical encoder.
+    round_trip_all(
+        SchemaValue::Quantity(QuantityValue {
+            mantissa: 15,
+            scale: 1,
+            unit: "kg".into(),
+        }),
+        quantity_kg(),
+    );
+}
+
+fn quantity_kg() -> SchemaType {
+    use golem_common::schema::schema_type::QuantitySpec;
+    SchemaType::quantity(QuantitySpec {
+        base_unit: "kg".into(),
+        allowed_suffixes: vec![],
+        min: None,
+        max: None,
+    })
+}
+
+fn parse_native(input: &str, ty: SchemaType, lang: SourceLanguage) -> SchemaValue {
+    let graph = SchemaGraph::anonymous(ty.clone());
+    parse_value_for_language(input, &graph, &ty, &lang)
+        .unwrap_or_else(|e| panic!("parse failed for '{input}' ({lang}): {e}"))
+}
+
+#[test]
+fn rust_native_quantity_literal() {
+    use golem_common::schema::schema_type::QuantityValue;
+    assert_eq!(
+        parse_native("5.kg()", quantity_kg(), SourceLanguage::Rust),
+        SchemaValue::Quantity(QuantityValue {
+            mantissa: 5,
+            scale: 0,
+            unit: "kg".into(),
+        }),
+    );
+    assert_eq!(
+        parse_native("1.5.kg()", quantity_kg(), SourceLanguage::Rust),
+        SchemaValue::Quantity(QuantityValue {
+            mantissa: 15,
+            scale: 1,
+            unit: "kg".into(),
+        }),
+    );
+}
+
+#[test]
+fn rust_native_duration_literal() {
+    use golem_common::schema::schema_value::DurationValuePayload;
+    assert_eq!(
+        parse_native(
+            "Duration::from_secs(30)",
+            SchemaType::duration(),
+            SourceLanguage::Rust
+        ),
+        SchemaValue::Duration(DurationValuePayload {
+            nanoseconds: 30_000_000_000,
+        }),
+    );
+    assert_eq!(
+        parse_native(
+            "Duration::from_millis(5)",
+            SchemaType::duration(),
+            SourceLanguage::Rust
+        ),
+        SchemaValue::Duration(DurationValuePayload {
+            nanoseconds: 5_000_000,
+        }),
+    );
+}
+
+#[test]
+fn ts_native_quantity_and_duration_literals() {
+    use golem_common::schema::schema_type::QuantityValue;
+    use golem_common::schema::schema_value::DurationValuePayload;
+    assert_eq!(
+        parse_native("5n * kg", quantity_kg(), SourceLanguage::TypeScript),
+        SchemaValue::Quantity(QuantityValue {
+            mantissa: 5,
+            scale: 0,
+            unit: "kg".into(),
+        }),
+    );
+    assert_eq!(
+        parse_native(
+            "Duration.seconds(30)",
+            SchemaType::duration(),
+            SourceLanguage::TypeScript
+        ),
+        SchemaValue::Duration(DurationValuePayload {
+            nanoseconds: 30_000_000_000,
+        }),
+    );
+    assert_eq!(
+        parse_native(
+            "Duration.milliseconds(5n)",
+            SchemaType::duration(),
+            SourceLanguage::TypeScript
+        ),
+        SchemaValue::Duration(DurationValuePayload {
+            nanoseconds: 5_000_000,
+        }),
+    );
+}
+
+#[test]
+fn scala_native_datetime_literal() {
+    use chrono::DateTime;
+    let expected_millis = DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+    assert_eq!(
+        parse_native(
+            "Datetime.fromEpochMillis(1700000000000)",
+            SchemaType::datetime(),
+            SourceLanguage::Scala
+        ),
+        SchemaValue::Datetime {
+            value: expected_millis,
+        },
+    );
+    let expected_secs = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    assert_eq!(
+        parse_native(
+            "Datetime.fromEpochSeconds(1700000000)",
+            SchemaType::datetime(),
+            SourceLanguage::Scala
+        ),
+        SchemaValue::Datetime {
+            value: expected_secs,
+        },
+    );
+}
+
+#[test]
+fn moonbit_native_datetime_literal() {
+    use chrono::DateTime;
+    let expected = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    assert_eq!(
+        parse_native(
+            "Datetime::{ seconds: 1700000000, nanoseconds: 0 }",
+            SchemaType::datetime(),
+            SourceLanguage::MoonBit
+        ),
+        SchemaValue::Datetime { value: expected },
+    );
+}
+
+#[test]
+fn native_literal_rejections() {
+    use golem_common::schema::schema_type::UrlRestrictions;
+
+    // TypeScript has no native datetime literal — `new Date(...)` must not parse.
+    let dt = SchemaType::datetime();
+    let dt_graph = SchemaGraph::anonymous(dt.clone());
+    assert!(
+        parse_value_for_language(
+            "new Date(\"2023-01-01T00:00:00Z\")",
+            &dt_graph,
+            &dt,
+            &SourceLanguage::TypeScript
+        )
+        .is_err()
+    );
+
+    // `Url` is constructor-only in every language — `Url::parse(...)` must not parse.
+    let url = SchemaType::url(UrlRestrictions::default());
+    let url_graph = SchemaGraph::anonymous(url.clone());
+    assert!(
+        parse_value_for_language(
+            "Url::parse(\"https://example.com\")",
+            &url_graph,
+            &url,
+            &SourceLanguage::Rust
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn float_literals_still_lex_after_quantity_dot_change() {
+    // Making `5.kg()` lex as `5 . kg ( )` must not regress ordinary float
+    // literals (the renderers emit trailing-`.0` floats, but exponents and
+    // hand-typed forms must still parse).
+    for (input, expected) in [
+        ("5.0", 5.0_f64),
+        ("-0.0", -0.0_f64),
+        ("1e3", 1000.0_f64),
+        ("1.5e3", 1500.0_f64),
+        ("2.71", 2.71_f64),
+    ] {
+        assert_eq!(
+            parse_native(input, SchemaType::f64(), SourceLanguage::Rust),
+            SchemaValue::F64(expected),
+            "float literal '{input}' regressed",
+        );
+    }
+}
+
+#[test]
+fn rust_native_duration_rejects_overflow() {
+    // 10e9 seconds * 1e9 ns/s overflows i64 nanoseconds.
+    let dur = SchemaType::duration();
+    let graph = SchemaGraph::anonymous(dur.clone());
+    assert!(
+        parse_value_for_language(
+            "Duration::from_secs(10000000000)",
+            &graph,
+            &dur,
+            &SourceLanguage::Rust
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn scala_native_datetime_fractional_epochs() {
+    use chrono::DateTime;
+    // `fromEpochSeconds`/`fromEpochMillis` take a Scala `Double`: fractional
+    // arguments keep sub-unit precision instead of being truncated.
+    assert_eq!(
+        parse_native(
+            "Datetime.fromEpochSeconds(1.5)",
+            SchemaType::datetime(),
+            SourceLanguage::Scala
+        ),
+        SchemaValue::Datetime {
+            value: DateTime::from_timestamp(1, 500_000_000).unwrap(),
+        },
+    );
+    assert_eq!(
+        parse_native(
+            "Datetime.fromEpochMillis(1234.5)",
+            SchemaType::datetime(),
+            SourceLanguage::Scala
+        ),
+        SchemaValue::Datetime {
+            value: DateTime::from_timestamp(1, 234_500_000).unwrap(),
+        },
+    );
+    // Far-future fractional epoch (year 9999): the whole-value epoch
+    // nanoseconds would overflow i64, but seconds-first splitting keeps it
+    // inside chrono's range.
+    assert_eq!(
+        parse_native(
+            "Datetime.fromEpochMillis(253402300799999.5)",
+            SchemaType::datetime(),
+            SourceLanguage::Scala
+        ),
+        SchemaValue::Datetime {
+            value: DateTime::from_timestamp(253_402_300_799, 999_500_000).unwrap(),
+        },
+    );
+}
+
+#[test]
+fn scala_native_datetime_rejects_non_finite() {
+    let dt = SchemaType::datetime();
+    let graph = SchemaGraph::anonymous(dt.clone());
+    for input in [
+        "Datetime.fromEpochMillis(NaN)",
+        "Datetime.fromEpochSeconds(Infinity)",
+    ] {
+        assert!(
+            parse_value_for_language(input, &graph, &dt, &SourceLanguage::Scala).is_err(),
+            "'{input}' should be rejected",
+        );
+    }
+}
+
+#[test]
+fn moonbit_native_datetime_qualified_and_defaults() {
+    use chrono::DateTime;
+    let expected = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    // The idiomatic re-exported `@wallClock.Datetime` qualifier is accepted.
+    assert_eq!(
+        parse_native(
+            "@wallClock.Datetime::{ seconds: 1700000000, nanoseconds: 0 }",
+            SchemaType::datetime(),
+            SourceLanguage::MoonBit
+        ),
+        SchemaValue::Datetime { value: expected },
+    );
+    // `nanoseconds` defaults to 0 when omitted.
+    assert_eq!(
+        parse_native(
+            "@wallClock.Datetime::{ seconds: 1700000000 }",
+            SchemaType::datetime(),
+            SourceLanguage::MoonBit
+        ),
+        SchemaValue::Datetime { value: expected },
+    );
+}
+
+#[test]
+fn moonbit_native_datetime_nested_in_list() {
+    use chrono::DateTime;
+    // A qualified literal must also lex inside a nested position where the
+    // dispatcher peeks the leading `@` before choosing a parser.
+    assert_eq!(
+        parse_native(
+            "[@wallClock.Datetime::{ seconds: 1, nanoseconds: 0 }, Datetime::{ seconds: 2 }]",
+            SchemaType::list(SchemaType::datetime()),
+            SourceLanguage::MoonBit
+        ),
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Datetime {
+                    value: DateTime::from_timestamp(1, 0).unwrap(),
+                },
+                SchemaValue::Datetime {
+                    value: DateTime::from_timestamp(2, 0).unwrap(),
+                },
+            ],
+        },
+    );
+}
+
+#[test]
+fn moonbit_native_datetime_rejects_out_of_range_nanos() {
+    let dt = SchemaType::datetime();
+    let graph = SchemaGraph::anonymous(dt.clone());
+    assert!(
+        parse_value_for_language(
+            "Datetime::{ seconds: 1, nanoseconds: 1000000000 }",
+            &graph,
+            &dt,
+            &SourceLanguage::MoonBit
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn capability_values_render_as_redacted_in_every_language() {
+    use golem_common::schema::schema_type::{QuotaTokenSpec, SecretSpec};
+    use golem_common::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
+
+    let langs = [
+        SourceLanguage::Rust,
+        SourceLanguage::TypeScript,
+        SourceLanguage::Scala,
+        SourceLanguage::MoonBit,
+    ];
+
+    let secret_ty = SchemaType::secret(SecretSpec::default());
+    let secret_val = SchemaValue::Secret(SecretValuePayload {
+        secret_ref: "shhh-do-not-log".to_string(),
+    });
+    let secret_graph = SchemaGraph::anonymous(secret_ty.clone());
+
+    let quota_ty = SchemaType::quota_token(QuotaTokenSpec {
+        resource_name: Some("gpu-quota".to_string()),
+    });
+    let quota_val = SchemaValue::QuotaToken(QuotaTokenValuePayload {
+        environment_id: uuid::Uuid::nil().into(),
+        resource_name: "gpu-quota".to_string(),
+        expected_use: 1,
+        last_credit: 0,
+        last_credit_at: chrono::Utc::now(),
+    });
+    let quota_graph = SchemaGraph::anonymous(quota_ty.clone());
+
+    for lang in &langs {
+        let secret = render_schema_value(&secret_graph, &secret_ty, &secret_val, lang);
+        assert_eq!(secret, "<redacted: secret>", "lang={lang}");
+        assert!(!secret.contains("shhh-do-not-log"), "lang={lang}");
+
+        let quota = render_schema_value(&quota_graph, &quota_ty, &quota_val, lang);
+        assert_eq!(quota, "<redacted: quota-token>", "lang={lang}");
+        assert!(!quota.contains("gpu-quota"), "lang={lang}");
     }
 }

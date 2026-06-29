@@ -22,9 +22,10 @@ use golem_common::model::oplog::{
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
-use crate::durable_host::{Durability, DurableWorkerCtx, HostFailureKind, InternalRetryResult};
+use crate::durable_host::{DurableWorkerCtx, HostFailureKind, InternalRetryResult};
 use crate::metrics::storage::{
     STORAGE_TYPE_KV, record_storage_bytes_written, record_storage_objects_deleted,
     record_storage_objects_written,
@@ -48,10 +49,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let mut durability =
-            Durability::<KeyvalueEventualGet>::new(self, DurableFunctionType::ReadRemote).await?;
+        let mut handle = CallHandle::<KeyvalueEventualGet, NotCancellable>::start(
+            self,
+            HostRequestKVBucketAndKey {
+                bucket: bucket.clone(),
+                key: key.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
@@ -59,7 +74,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .get(environment_id, bucket.clone(), key.clone())
                     .await
                     .map_err(|err| err.to_string());
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
                 {
@@ -67,16 +82,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            durability
-                .persist(
-                    self,
-                    HostRequestKVBucketAndKey { bucket, key },
-                    HostResponseKVGet { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle.complete(self, HostResponseKVGet { result }).await?
+        };
 
         match result.result {
             Ok(Some(value)) => {
@@ -116,16 +123,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .unwrap()
             .clone();
 
-        let mut durability =
-            Durability::<KeyvalueEventualSet>::new(self, DurableFunctionType::WriteRemote).await?;
-
-        let result = if durability.is_live() {
-            let length = outgoing_value.len() as u64;
-            let input = HostRequestKVBucketKeyAndSize {
+        let length = outgoing_value.len() as u64;
+        let mut handle = CallHandle::<KeyvalueEventualSet, NotCancellable>::start(
+            self,
+            HostRequestKVBucketKeyAndSize {
                 bucket: bucket.clone(),
                 key: key.clone(),
                 length: outgoing_value.len(),
-            };
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
@@ -138,7 +155,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .map_err(|err| err.to_string());
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
                 {
@@ -162,12 +179,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     1,
                 );
             }
-            durability
-                .persist(self, input, HostResponseKVUnit { result })
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle.complete(self, HostResponseKVUnit { result }).await?
+        };
 
         match result.result {
             Ok(()) => Ok(Ok(())),
@@ -191,15 +204,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let mut durability =
-            Durability::<KeyvalueEventualDelete>::new(self, DurableFunctionType::WriteRemote)
-                .await?;
-
-        let result = if durability.is_live() {
-            let input = HostRequestKVBucketAndKey {
+        let mut handle = CallHandle::<KeyvalueEventualDelete, NotCancellable>::start(
+            self,
+            HostRequestKVBucketAndKey {
                 bucket: bucket.clone(),
                 key: key.clone(),
-            };
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
@@ -207,7 +229,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .delete(environment_id, bucket.clone(), key.clone())
                     .await
                     .map_err(|err| err.to_string());
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
                 {
@@ -225,12 +247,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     1,
                 );
             }
-            durability
-                .persist(self, input, HostResponseKVUnit { result })
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle.complete(self, HostResponseKVUnit { result }).await?
+        };
 
         match result.result {
             Ok(()) => Ok(Ok(())),
@@ -254,15 +272,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let mut durability =
-            Durability::<KeyvalueEventualExists>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-
-        let result = if durability.is_live() {
-            let input = HostRequestKVBucketAndKey {
+        let mut handle = CallHandle::<KeyvalueEventualExists, NotCancellable>::start(
+            self,
+            HostRequestKVBucketAndKey {
                 bucket: bucket.clone(),
                 key: key.clone(),
-            };
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
@@ -270,7 +297,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .exists(environment_id, bucket.clone(), key.clone())
                     .await
                     .map_err(|err| err.to_string());
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
                 {
@@ -278,12 +305,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            durability
-                .persist(self, input, HostResponseKVDelete { result })
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseKVDelete { result })
+                .await?
+        };
 
         match result.result {
             Ok(exists) => Ok(Ok(exists)),

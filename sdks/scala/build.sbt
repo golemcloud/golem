@@ -122,6 +122,7 @@ lazy val model = crossProject(JVMPlatform, JSPlatform)
     crossScalaVersions := Seq(Scala3Golem, Scala213),
     libraryDependencies ++= Seq(
       zioBlocksDep("schema").value,
+      "io.github.cquiroz" %%% "scala-java-time" % scalaJavaTimeVersion,
       "dev.zio" %%% "zio-test"     % zioTestVersion % Test,
       "dev.zio" %%% "zio-test-sbt" % zioTestVersion % Test
     )

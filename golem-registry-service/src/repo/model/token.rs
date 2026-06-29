@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{Token, TokenId, TokenSecret, TokenWithSecret};
 use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
@@ -30,6 +30,19 @@ pub struct TokenRecord {
     /// here and is used as the actor (created_by) in audit trails, while `account_id`
     /// is the target account used for access checks.
     pub impersonated_by: Option<Uuid>,
+}
+
+#[derive(FromRow, Clone, PartialEq)]
+pub struct TokenAuthRecord {
+    #[sqlx(flatten)]
+    pub token: TokenRecord,
+    pub account_email: String,
+}
+
+impl TokenAuthRecord {
+    pub fn account_email(&self) -> AccountEmail {
+        AccountEmail::new(self.account_email.clone())
+    }
 }
 
 impl Debug for TokenRecord {

@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_rust::quota::{QuotaToken, with_reservation};
-use golem_rust::{Schema, agent_definition, agent_implementation};
+use golem_rust::quota::QuotaToken;
+use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use golem_wasi_http::Client;
 use serde::{Deserialize, Serialize};
 
 /// The amount that was actually reserved (always equal to the requested amount
 /// on the happy path) and the amount committed back to the pool.
-#[derive(Clone, Debug, Schema, Serialize, Deserialize)]
+#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct ReserveCommitResult {
     pub reserved: u64,
     pub committed: u64,
 }
 
 /// Result of a split-then-reserve pair.
-#[derive(Clone, Debug, Schema, Serialize, Deserialize)]
+#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct SplitResult {
     /// How many units were reserved from the parent half.
     pub parent_reserved: u64,
@@ -210,7 +210,7 @@ impl QuotaApi for QuotaApiImpl {
                 Err(_) => break,
                 Ok(reservation) => {
                     let _resp = client
-                        .get(&format!("http://{host}:{port}/call"))
+                        .get(format!("http://{host}:{port}/call"))
                         .send()
                         .unwrap();
                     reservation.commit(1);

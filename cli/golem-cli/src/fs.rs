@@ -562,17 +562,71 @@ fn split_absolute_glob(base_dir: &Path, glob: &str) -> anyhow::Result<(PathBuf, 
     let normalized_path = normalize_for_comparison(path);
     let normalized_base_dir = normalize_for_comparison(base_dir);
 
-    let relative = normalized_path
-        .strip_prefix(&normalized_base_dir)
-        .map_err(|_| {
-            anyhow!(
-                "Absolute glob {} is outside base directory {}",
-                glob.log_color_error_highlight(),
-                base_dir.display().to_string().log_color_highlight()
-            )
-        })?;
+    if let Ok(relative) = normalized_path.strip_prefix(&normalized_base_dir) {
+        return Ok((base_dir.to_path_buf(), path_to_str(relative)?.to_string()));
+    }
 
-    Ok((base_dir.to_path_buf(), path_to_str(relative)?.to_string()))
+    // The glob points outside the base directory. This happens for legitimately external
+    // build artifacts, such as a cargo target directory redirected via CARGO_TARGET_DIR,
+    // a cargo `build.target-dir` config, or a cargo wrapper script. In that case we cannot
+    // express the pattern relative to the base directory, so we walk from the glob's own
+    // literal prefix instead.
+    split_glob_at_literal_prefix(&normalized_path)
+}
+
+/// Splits an absolute glob into a walk root (its leading literal path components) and the
+/// remaining glob pattern. For a fully literal path (no glob metacharacters), the parent
+/// directory becomes the walk root and the file name becomes the pattern.
+fn split_glob_at_literal_prefix(path: &Path) -> anyhow::Result<(PathBuf, String)> {
+    fn has_glob_meta(value: &str) -> bool {
+        value.contains(['*', '?', '[', ']', '{', '}'])
+    }
+
+    let mut root_dir = PathBuf::new();
+    let mut pattern = PathBuf::new();
+    let mut in_pattern = false;
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => root_dir.push(prefix.as_os_str()),
+            Component::RootDir => root_dir.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if in_pattern {
+                    pattern.push("..");
+                } else {
+                    root_dir.push("..");
+                }
+            }
+            Component::Normal(part) => {
+                if in_pattern || has_glob_meta(&part.to_string_lossy()) {
+                    in_pattern = true;
+                    pattern.push(part);
+                } else {
+                    root_dir.push(part);
+                }
+            }
+        }
+    }
+
+    // Fully literal path (no glob metacharacters): use the parent directory as the walk
+    // root and the file name as the pattern.
+    if !in_pattern {
+        match path.file_name() {
+            Some(file_name) => {
+                root_dir.pop();
+                pattern.push(file_name);
+            }
+            None => {
+                bail!(
+                    "Invalid absolute glob: {}",
+                    path.display().to_string().log_color_error_highlight()
+                );
+            }
+        }
+    }
+
+    Ok((root_dir, path_to_str(&pattern)?.to_string()))
 }
 
 #[cfg(not(windows))]
@@ -919,7 +973,31 @@ mod test {
     fn resolve_absolute_globs_outside_base_dir() {
         let base_dir = PathBuf::from("/tmp/golem");
 
-        assert!(fs::split_absolute_glob(&base_dir, "/tmp/other/**/*.ts").is_err());
+        // An absolute glob outside the base directory walks from its own literal prefix.
+        assert_eq!(
+            fs::split_absolute_glob(&base_dir, "/tmp/other/**/*.ts").unwrap(),
+            (PathBuf::from("/tmp/other"), "**/*.ts".to_string())
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn resolve_absolute_literal_path_outside_base_dir() {
+        let base_dir = PathBuf::from("/tmp/golem");
+
+        // A fully literal absolute path outside the base directory (e.g. a redirected cargo
+        // target directory) walks from its parent directory.
+        assert_eq!(
+            fs::split_absolute_glob(
+                &base_dir,
+                "/var/cargo-target/wasm32-wasip2/release/foo.wasm"
+            )
+            .unwrap(),
+            (
+                PathBuf::from("/var/cargo-target/wasm32-wasip2/release"),
+                "foo.wasm".to_string()
+            )
+        );
     }
 
     #[test]

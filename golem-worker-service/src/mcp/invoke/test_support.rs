@@ -24,25 +24,24 @@ use futures::Stream;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, AgentType, AgentTypeName};
-use golem_common::model::agent::{NamedElementSchemas, Snapshotting};
-use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
 };
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
-use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -57,15 +56,6 @@ impl RegistryService for NoopRegistryService {
         &self,
         _: &golem_common::model::auth::TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError> {
-        unimplemented!()
-    }
-
-    async fn get_auth_details_for_environment(
-        &self,
-        _: EnvironmentId,
-        _: bool,
-        _: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
         unimplemented!()
     }
 
@@ -274,9 +264,7 @@ impl ComponentService for StaticComponentService {
     }
 }
 
-struct AllowAllAuthService {
-    account_id: AccountId,
-}
+struct AllowAllAuthService;
 
 #[async_trait]
 impl AuthService for AllowAllAuthService {
@@ -285,18 +273,6 @@ impl AuthService for AllowAllAuthService {
         _: golem_common::model::auth::TokenSecret,
     ) -> Result<AuthCtx, AuthServiceError> {
         unimplemented!()
-    }
-
-    async fn authorize_environment_actions(
-        &self,
-        _: EnvironmentId,
-        _: EnvironmentAction,
-        _: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, AuthServiceError> {
-        Ok(AuthDetailsForEnvironment {
-            account_id_owning_environment: self.account_id,
-            environment_roles_from_shares: BTreeSet::<EnvironmentRole>::new(),
-        })
     }
 }
 
@@ -316,6 +292,7 @@ impl LimitService for NoopLimitService {
 
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
     invocation_output: AgentInvocationOutput,
 }
 
@@ -482,6 +459,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: EnvironmentId,
         _: AccountId,
+        _: AccountEmail,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -511,7 +489,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         agent_id: &AgentId,
         _: Option<String>,
-        _: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_params: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
         _: Option<IdempotencyKey>,
@@ -522,6 +500,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<AgentInvocationOutput> {
         self.agent_ids.lock().unwrap().push(agent_id.clone());
+        self.method_params.lock().unwrap().push(method_params);
         Ok(self.invocation_output.clone())
     }
 
@@ -547,7 +526,9 @@ pub(crate) struct InvocationHarness {
     pub(crate) component_id: ComponentId,
     pub(crate) environment_id: EnvironmentId,
     pub(crate) account_id: AccountId,
+    pub(crate) account_email: AccountEmail,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
 }
 
 impl InvocationHarness {
@@ -555,6 +536,7 @@ impl InvocationHarness {
         let component_id = ComponentId(Uuid::new_v4());
         let environment_id = EnvironmentId(Uuid::new_v4());
         let account_id = AccountId(Uuid::new_v4());
+        let account_email = golem_common::model::account::AccountEmail::new("mcp@golem");
         let component = Component {
             id: component_id,
             revision: ComponentRevision::INITIAL,
@@ -563,23 +545,25 @@ impl InvocationHarness {
             hash: Hash::empty(),
             application_id: ApplicationId(Uuid::new_v4()),
             account_id,
+            account_email: account_email.clone(),
+            application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 0,
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
                 None,
                 None,
-                vec![AgentType {
+                vec![AgentTypeSchema {
                     type_name: AgentTypeName("mcp-agent".to_string()),
                     description: String::new(),
                     source_language: String::new(),
-                    constructor: golem_common::model::agent::AgentConstructor {
+                    schema: SchemaGraph::empty(),
+                    constructor: AgentConstructorSchema {
                         name: None,
                         description: String::new(),
                         prompt_hint: None,
-                        input_schema: golem_common::model::agent::DataSchema::Tuple(
-                            NamedElementSchemas::empty(),
-                        ),
+                        input_schema: InputSchema::Parameters(vec![]),
                     },
                     methods: vec![],
                     dependencies: vec![],
@@ -595,15 +579,17 @@ impl InvocationHarness {
             object_store_key: String::new(),
         };
         let agent_ids = Arc::new(Mutex::new(Vec::new()));
+        let method_params = Arc::new(Mutex::new(Vec::new()));
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
+            method_params: method_params.clone(),
             invocation_output,
         });
 
         Self {
             worker_service: Arc::new(WorkerService::new(
                 Arc::new(StaticComponentService { component }),
-                Arc::new(AllowAllAuthService { account_id }),
+                Arc::new(AllowAllAuthService),
                 Arc::new(NoopLimitService),
                 worker_client,
                 Arc::new(AgentResolutionCache::new(
@@ -616,12 +602,24 @@ impl InvocationHarness {
             component_id,
             environment_id,
             account_id,
+            account_email,
             agent_ids,
+            method_params,
         }
     }
 
     pub(crate) fn recorded_agent_id(&self) -> AgentId {
         self.agent_ids.lock().unwrap()[0].clone()
+    }
+
+    /// The method parameters recorded for the first invocation, decoded back
+    /// from the gRPC carrier into the runtime `SchemaValue`.
+    pub(crate) fn recorded_method_params(&self) -> golem_common::schema::SchemaValue {
+        self.method_params.lock().unwrap()[0]
+            .clone()
+            .expect("method params were recorded")
+            .try_into()
+            .expect("method params decode back into SchemaValue")
     }
 }
 

@@ -1,9 +1,8 @@
 use golem_rust::bindings::golem::api::oplog::{
-    enrich_oplog_entries, AgentInvocation, AgentInvocationStartedParameters, OplogEntry,
-    OplogIndex, PublicOplogEntry,
+    AgentInvocation, OplogEntry, OplogIndex, PublicOplogEntry, enrich_oplog_entries,
 };
-use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
+use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 use uuid::Uuid;
 use wstd::http::{Body, Client, Request};
 use wstd::runtime::block_on;
@@ -35,7 +34,7 @@ struct InvocationRecord {
 }
 
 thread_local! {
-    static CURRENT_INVOCATIONS: RefCell<HashMap<String, AgentInvocationStartedParameters>> =
+    static CURRENT_INVOCATIONS: RefCell<HashMap<String, String>> =
         RefCell::new(HashMap::new());
 }
 
@@ -47,7 +46,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
         config: Vec<(String, String)>,
         component_id: ComponentId,
         worker_id: AgentId,
-        metadata: golem_rust::bindings::golem::api::host::AgentMetadata,
+        metadata: golem_rust::oplog_processor::host::AgentMetadata,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), String> {
@@ -65,10 +64,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             account_info.account_id.uuid.low_bits,
         );
 
-        let comp_id = Uuid::from_u64_pair(
-            component_id.uuid.high_bits,
-            component_id.uuid.low_bits,
-        );
+        let comp_id = Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits);
 
         let mut invocations: Vec<InvocationRecord> = Vec::new();
 
@@ -77,38 +73,39 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             .enumerate()
             .map(|(idx, entry)| ((first_entry_index + (idx as u64)), entry))
             .collect();
+        let entry_count = indexed_entries.len() as u64;
+        let oplog_indexes: Vec<OplogIndex> = indexed_entries
+            .iter()
+            .map(|(oplog_index, _)| *oplog_index)
+            .collect();
         let enriched_entries = enrich_oplog_entries(
             metadata.environment_id.clone(),
             &metadata.agent_id.clone(),
-            &indexed_entries,
+            indexed_entries,
             metadata.component_revision,
         )
         .unwrap();
-        for ((oplog_index, _raw_entry), entry) in indexed_entries.iter().zip(enriched_entries.iter())
-        {
+        for (oplog_index, entry) in oplog_indexes.iter().zip(enriched_entries.iter()) {
             if let PublicOplogEntry::AgentInvocationStarted(params) = entry {
+                let function_name = match &params.invocation {
+                    AgentInvocation::AgentInitialization(_) => "agent-initialization".to_string(),
+                    AgentInvocation::AgentMethodInvocation(method_params) => {
+                        method_params.method_name.clone()
+                    }
+                    AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
+                    AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
+                    AgentInvocation::ProcessOplogEntries(_) => "process-oplog-entries".to_string(),
+                    AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
+                };
                 CURRENT_INVOCATIONS.with(|ci| {
                     ci.borrow_mut()
-                        .insert(format!("{worker_id:?}"), params.clone());
+                        .insert(format!("{worker_id:?}"), function_name);
                 });
             } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
-                let function_name = if let Some(invocation) =
-                    CURRENT_INVOCATIONS.with(|ci| ci.borrow().get(&format!("{worker_id:?}")).cloned())
+                let function_name = if let Some(function_name) = CURRENT_INVOCATIONS
+                    .with(|ci| ci.borrow_mut().remove(&format!("{worker_id:?}")))
                 {
-                    match &invocation.invocation {
-                        AgentInvocation::AgentInitialization(_) => {
-                            "agent-initialization".to_string()
-                        }
-                        AgentInvocation::AgentMethodInvocation(method_params) => {
-                            method_params.method_name.clone()
-                        }
-                        AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
-                        AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
-                        AgentInvocation::ProcessOplogEntries(_) => {
-                            "process-oplog-entries".to_string()
-                        }
-                        AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
-                    }
+                    function_name
                 } else {
                     // AgentInvocationStarted was in a previous batch sent to a
                     // different plugin worker (e.g. shard reassignment / locality
@@ -126,8 +123,6 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                 });
             }
         }
-
-        let entry_count = indexed_entries.len() as u64;
 
         if let Some(url) = callback_url {
             let batch = BatchCallback {
@@ -155,7 +150,6 @@ impl OplogProcessorGuest for OplogProcessorComponent {
 
         Ok(())
     }
-
 }
 
 golem_rust::oplog_processor::export_oplog_processor!(OplogProcessorComponent with_types_in golem_rust::oplog_processor);

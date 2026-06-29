@@ -14,6 +14,7 @@
 
 use super::golem_config::ComponentCacheConfig;
 use crate::metrics::component::record_compilation_time;
+use crate::services::compilation_limiter::CompilationLimiter;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
@@ -102,6 +103,7 @@ pub fn configured(
         cache_config.max_capacity,
         cache_config.max_metadata_capacity,
         cache_config.time_to_idle,
+        cache_config.max_concurrent_compilations,
         compiled_component_service,
     ))
 }
@@ -112,6 +114,7 @@ pub struct ComponentServiceDefault {
     current_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
+    compilation_limiter: CompilationLimiter,
 }
 
 impl ComponentServiceDefault {
@@ -120,6 +123,7 @@ impl ComponentServiceDefault {
         max_component_capacity: usize,
         max_metadata_capacity: usize,
         time_to_idle: Duration,
+        max_concurrent_compilations: usize,
         compiled_component_service: Arc<dyn CompiledComponentService>,
     ) -> Self {
         Self {
@@ -134,6 +138,7 @@ impl ComponentServiceDefault {
                 time_to_idle,
             ),
             compiled_component_service,
+            compilation_limiter: CompilationLimiter::new(max_concurrent_compilations),
         }
     }
 }
@@ -152,6 +157,7 @@ impl ComponentService for ComponentServiceDefault {
         };
         let engine = engine.clone();
         let compiled_component_service = self.compiled_component_service.clone();
+        let compilation_limiter = self.compilation_limiter.clone();
         let metadata = self
             .get_metadata(component_id, Some(component_revision))
             .await?;
@@ -176,52 +182,71 @@ impl ComponentService for ComponentServiceDefault {
                     match component {
                         Some(component) => Ok(component),
                         None => {
-                            let bytes = self
-                                .registry_client
-                                .download_component(component_id, component_revision)
-                                .await
-                                .map_err(|e| WorkerExecutorError::ComponentDownloadFailed {
-                                    component_id,
-                                    component_revision,
-                                    reason: e.to_safe_string(),
-                                })?;
+                            // Bound the local compile fallback working set when
+                            // both the in-process cache and compiled artifact
+                            // store miss.
+                            compilation_limiter
+                                .run(async move {
+                                    let bytes = self
+                                        .registry_client
+                                        .download_component(component_id, component_revision)
+                                        .await
+                                        .map_err(|e| {
+                                            WorkerExecutorError::ComponentDownloadFailed {
+                                                component_id,
+                                                component_revision,
+                                                reason: e.to_safe_string(),
+                                            }
+                                        })?;
 
-                            let start = Instant::now();
-                            let span = info_span!("Loading WASM component");
-                            let component = spawn_blocking(move || {
-                                let _enter = span.enter();
-                                wasmtime::component::Component::from_binary(&engine, &bytes)
-                                    .map_err(|e| WorkerExecutorError::ComponentParseFailed {
-                                        component_id,
-                                        component_revision,
-                                        reason: format!("{e}"),
+                                    let start = Instant::now();
+                                    let span = info_span!("Loading WASM component");
+                                    let component = spawn_blocking(move || {
+                                        let _enter = span.enter();
+                                        wasmtime::component::Component::from_binary(&engine, &bytes)
+                                            .map_err(|e| {
+                                                WorkerExecutorError::ComponentParseFailed {
+                                                    component_id,
+                                                    component_revision,
+                                                    reason: format!("{e}"),
+                                                }
+                                            })
                                     })
-                            })
-                            .await
-                            .map_err(|join_err| {
-                                WorkerExecutorError::unknown(join_err.to_string())
-                            })??;
-                            let end = Instant::now();
+                                    .await
+                                    .map_err(|join_err| {
+                                        WorkerExecutorError::unknown(join_err.to_string())
+                                    })??;
+                                    let end = Instant::now();
 
-                            let compilation_time = end.duration_since(start);
-                            record_compilation_time(compilation_time);
-                            debug!(
-                                "Compiled {} in {}ms",
-                                component_id,
-                                compilation_time.as_millis(),
-                            );
+                                    let compilation_time = end.duration_since(start);
+                                    record_compilation_time(compilation_time);
+                                    debug!(
+                                        "Compiled {} in {}ms",
+                                        component_id,
+                                        compilation_time.as_millis(),
+                                    );
 
-                            let result = compiled_component_service
-                                .put(environment_id, component_id, component_revision, &component)
-                                .await;
+                                    let result = compiled_component_service
+                                        .put(
+                                            environment_id,
+                                            component_id,
+                                            component_revision,
+                                            &component,
+                                        )
+                                        .await;
 
-                            match result {
-                                Ok(_) => Ok(component),
-                                Err(err) => {
-                                    warn!("Failed to upload compiled component {:?}: {}", key, err);
-                                    Ok(component)
-                                }
-                            }
+                                    match result {
+                                        Ok(_) => Ok(component),
+                                        Err(err) => {
+                                            warn!(
+                                                "Failed to upload compiled component {:?}: {}",
+                                                key, err
+                                            );
+                                            Ok(component)
+                                        }
+                                    }
+                                })
+                                .await
                         }
                     }
                 })
@@ -462,7 +487,7 @@ mod tests {
     use golem_service_base::clients::registry::{RegistryInvalidationHandler, ResourceUsageUpdate};
     use golem_service_base::custom_api::CompiledRoutes;
     use golem_service_base::mcp::CompiledMcp;
-    use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+    use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::environment::EnvironmentState;
     use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
@@ -497,15 +522,6 @@ mod tests {
             &self,
             _token: &TokenSecret,
         ) -> Result<AuthCtx, RegistryServiceError> {
-            unimplemented!()
-        }
-
-        async fn get_auth_details_for_environment(
-            &self,
-            _environment_id: EnvironmentId,
-            _include_deleted: bool,
-            _auth_ctx: &AuthCtx,
-        ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
             unimplemented!()
         }
 
@@ -687,6 +703,9 @@ mod tests {
             hash: golem_common::model::diff::Hash::new(blake3::hash(b"component-hash")),
             application_id: ApplicationId::new(),
             account_id: golem_common::model::account::AccountId::new(),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
+            application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 1,
             metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
             created_at: chrono::Utc::now(),
@@ -709,6 +728,7 @@ mod tests {
             1,
             8,
             Duration::from_secs(60),
+            0,
             Arc::new(CompiledComponentServiceDisabled::new()),
         );
 
@@ -738,6 +758,7 @@ mod tests {
             1,
             8,
             Duration::from_secs(60),
+            0,
             Arc::new(CompiledComponentServiceDisabled::new()),
         );
 
@@ -770,6 +791,7 @@ mod tests {
             1,
             8,
             Duration::from_secs(60),
+            0,
             Arc::new(CompiledComponentServiceDisabled::new()),
         );
 

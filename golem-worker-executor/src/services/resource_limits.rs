@@ -708,7 +708,7 @@ mod tests {
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::custom_api::CompiledRoutes;
     use golem_service_base::mcp::CompiledMcp;
-    use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+    use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::environment::EnvironmentState;
     use golem_service_base::model::{
@@ -1389,15 +1389,6 @@ mod tests {
             &self,
             _token: &TokenSecret,
         ) -> Result<AuthCtx, RegistryServiceError> {
-            unimplemented!()
-        }
-
-        async fn get_auth_details_for_environment(
-            &self,
-            _environment_id: EnvironmentId,
-            _include_deleted: bool,
-            _auth_ctx: &AuthCtx,
-        ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
             unimplemented!()
         }
 

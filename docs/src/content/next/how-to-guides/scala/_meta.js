@@ -25,6 +25,7 @@ export default {
   "golem-invoke-agent-scala": "Invoking a Golem Agent with `golem agent invoke`",
   "golem-logging-scala": "Logging from a Scala Agent",
   "golem-make-http-request-scala": "Making Outgoing HTTP Requests (Scala)",
+  "golem-mark-read-only-scala": "Marking Agent Methods as Read-Only (Scala)",
   "golem-parallel-workers-scala": "Parallel Workers — Fan-Out / Fan-In (Scala)",
   "golem-multi-instance-agent-scala": "Phantom Agents in Scala",
   "golem-recurring-task-scala": "Recurring Tasks via Self-Scheduling (Scala)",

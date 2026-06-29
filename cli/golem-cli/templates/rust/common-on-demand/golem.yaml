@@ -14,8 +14,6 @@ componentTemplates:
           - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_debug.wasm"
-        clean:
-        - "{{ cargoTarget }}"
       release:
         build:
         - command: cargo build --target wasm32-wasip2 --release
@@ -26,5 +24,3 @@ componentTemplates:
           - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
-        clean:
-        - "{{ cargoTarget }}"

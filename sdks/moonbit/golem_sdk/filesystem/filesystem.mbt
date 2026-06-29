@@ -81,7 +81,7 @@ fn normalize_path(path : String) -> String {
   if start == 0 {
     path
   } else {
-    path.substring(start=start, end=len)
+    path.substring(start~, end=len)
   }
 }
 

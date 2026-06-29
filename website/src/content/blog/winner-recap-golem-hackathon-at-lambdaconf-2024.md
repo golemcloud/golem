@@ -9,7 +9,7 @@ originalUrl: "https://golem.cloud/post/winner-recap-golem-hackathon-at-lambdacon
 
 The Golem Hackathon, held on May 8th, 2024, at LambdaConf in Estes Park, Colorado, brought together developers from various programming backgrounds to compete in a weekend of coding and innovation. With over 70 participants, the event featured intense competition and exciting prizes.
 
-![Golem Hackathon at LambdaConf 2024](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e9_67559f0f16c5f7501359f52b_IMG_2924.jpeg)
+![Golem Hackathon at LambdaConf 2024](/blog-images/68d76ba7edec7ec0b5c055e9_67559f0f16c5f7501359f52b_IMG_2924.jpeg)
 
 On May 8th, 2024, we invited developers skilled in Rust, Go, C/C++, Python, Zig, Swift, JS, Grain, C#, and all languages supported by WebAssembly to participate in the Grand Finale Golem Hackathon in LambdaConf 2024. We were thrilled to have sponsored both the conference and the hackathon and can't wait to do it again next year.
 

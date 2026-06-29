@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::account::AccountId;
+use crate::base_model::account::{AccountEmail, AccountId};
 use crate::base_model::card::CardId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
@@ -47,7 +47,7 @@ declare_structs! {
     }
 
     pub struct PermissionShareCreation {
-        pub target_account_id: AccountId,
+        pub target_account_email: AccountEmail,
         pub name: PermissionShareName,
         pub data: PermissionShareData
     }

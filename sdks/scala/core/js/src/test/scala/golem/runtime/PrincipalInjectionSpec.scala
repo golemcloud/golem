@@ -18,14 +18,16 @@ package golem.runtime
 
 import golem.{BaseAgent, Principal}
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
-import golem.runtime.autowire.{AgentDefinition, AgentImplementation, HostPayload, MethodBinding}
+import golem.runtime.autowire.{AgentDefinition, AgentImplementation, MethodBinding, SchemaPayload}
+import golem.runtime.InputRecordCodec
+import golem.schema.{FromSchema, IntoSchema}
+import golem.host.js.schema.JsSchemaValueTree
 import golem.FutureInterop
 import zio._
 import zio.test._
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
-import scala.scalajs.js
 
 object PrincipalInjectionSpec extends ZIOSpecDefault {
 
@@ -33,14 +35,23 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  private def liftEither[A](e: Either[String, A]): Future[A] =
-    e.fold(err => Future.failed(js.JavaScriptException(err)), Future.successful)
-
   private def binding[T](
     name: String,
     defn: AgentDefinition[T]
   ): MethodBinding[T] =
     defn.methodMetadata.find(_.metadata.name == name).getOrElse(sys.error(s"binding not found: $name"))
+
+  /** Encode a single user-supplied parameter as the 1-field input record. */
+  private def singleInput[A](a: A)(implicit i: IntoSchema[A], f: FromSchema[A]): JsSchemaValueTree =
+    SchemaPayload.encode[A](a)(InputRecordCodec.single[A]("in"))
+
+  private def decodeSingle[Out](raw: Option[JsSchemaValueTree])(implicit f: FromSchema[Out]): Out =
+    raw match {
+      case Some(tree) =>
+        SchemaPayload.decode[Out](tree).fold(err => throw new RuntimeException(err.toString), identity)
+      case None =>
+        throw new RuntimeException("expected a single result, got none")
+    }
 
   // ---------------------------------------------------------------------------
   // 1. Constructor injection
@@ -165,20 +176,16 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
       },
       test("constructor agent initializes with Anonymous principal") {
         ZIO.fromFuture { implicit ec =>
-          for {
-            payload  <- liftEither(HostPayload.encode[String]("hello"))
-            instance <- FutureInterop.fromPromise(ctorDefn.initialize(payload, anonymousPrincipal))
-            result   <- instance.getCreator()
-          } yield result
+          FutureInterop
+            .fromPromise(ctorDefn.initialize(singleInput[String]("hello"), anonymousPrincipal))
+            .flatMap(_.getCreator())
         }.map(r => assertTrue(r == "anonymous:hello"))
       },
       test("constructor agent initializes with Oidc principal") {
         ZIO.fromFuture { implicit ec =>
-          for {
-            payload  <- liftEither(HostPayload.encode[String]("world"))
-            instance <- FutureInterop.fromPromise(ctorDefn.initialize(payload, oidcPrincipal))
-            result   <- instance.getCreator()
-          } yield result
+          FutureInterop
+            .fromPromise(ctorDefn.initialize(singleInput[String]("world"), oidcPrincipal))
+            .flatMap(_.getCreator())
         }.map(r => assertTrue(r == "oidc:user-42:world"))
       }
     ),
@@ -188,43 +195,33 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
       test("method receives Principal.Anonymous through binding invoke") {
         val b = binding("identify", methodDefn)
         ZIO.fromFuture { implicit ec =>
-          for {
-            payload <- liftEither(HostPayload.encode[String]("alice"))
-            raw     <- FutureInterop.fromPromise(b.invoke(methodImpl, payload, anonymousPrincipal))
-            decoded <- liftEither(HostPayload.decode[String](raw))
-          } yield decoded
+          FutureInterop
+            .fromPromise(b.invoke(methodImpl, singleInput[String]("alice"), anonymousPrincipal))
+            .map(decodeSingle[String])
         }.map(r => assertTrue(r == "alice:anonymous"))
       },
       test("method receives Principal.Oidc through binding invoke") {
         val b = binding("identify", methodDefn)
         ZIO.fromFuture { implicit ec =>
-          for {
-            payload <- liftEither(HostPayload.encode[String]("bob"))
-            raw     <- FutureInterop.fromPromise(b.invoke(methodImpl, payload, oidcPrincipal))
-            decoded <- liftEither(HostPayload.decode[String](raw))
-          } yield decoded
+          FutureInterop
+            .fromPromise(b.invoke(methodImpl, singleInput[String]("bob"), oidcPrincipal))
+            .map(decodeSingle[String])
         }.map(r => assertTrue(r == "bob:oidc:user-42"))
       }
     ),
 
     // 3. Schema exclusion
     suite("schema exclusion")(
-      test("method inputSchema excludes Principal (single user param)") {
+      test("method input excludes Principal (single user param)") {
         val greetBinding = binding("greet", schemaDefn)
-        val input        = greetBinding.inputSchema.asInstanceOf[js.Dynamic]
-        val elements     = input.selectDynamic("val").asInstanceOf[js.Array[js.Any]]
-        assertTrue(elements.length == 1)
+        assertTrue(greetBinding.metadata.input.userSupplied.length == 1)
       },
-      test("method inputSchema excludes Principal (multiple user params)") {
+      test("method input excludes Principal (multiple user params)") {
         val multiBinding = binding("multi", schemaDefn)
-        val input        = multiBinding.inputSchema.asInstanceOf[js.Dynamic]
-        val elements     = input.selectDynamic("val").asInstanceOf[js.Array[js.Any]]
-        assertTrue(elements.length == 2)
+        assertTrue(multiBinding.metadata.input.userSupplied.length == 2)
       },
-      test("constructor schema excludes Principal") {
-        val ctorSchema = ctorDefn.constructor.schema.asInstanceOf[js.Dynamic]
-        val elements   = ctorSchema.selectDynamic("val").asInstanceOf[js.Array[js.Any]]
-        assertTrue(elements.length == 1)
+      test("constructor input excludes Principal") {
+        assertTrue(ctorDefn.constructor.info.input.userSupplied.length == 1)
       }
     ),
 

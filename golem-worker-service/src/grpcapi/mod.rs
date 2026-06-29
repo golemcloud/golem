@@ -29,7 +29,6 @@ use golem_common::base_model::api;
 use golem_common::model::AgentId;
 use golem_common::model::component::CanonicalFilePath;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
-use golem_wasm::json::OptionallyValueAndTypeJson;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -261,8 +260,8 @@ pub fn error_to_status(error: AgentError) -> Status {
 
 pub fn parse_json_invoke_parameters(
     parameters: &[String],
-) -> Result<Vec<OptionallyValueAndTypeJson>, AgentError> {
-    let optionally_typed_parameters: Vec<OptionallyValueAndTypeJson> = parameters
+) -> Result<Vec<serde_json::Value>, AgentError> {
+    let optionally_typed_parameters: Vec<serde_json::Value> = parameters
         .iter()
         .map(|param| serde_json::from_str(param))
         .collect::<Result<Vec<_>, _>>()

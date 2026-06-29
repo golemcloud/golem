@@ -34,6 +34,7 @@ import {
     ResultLike,
     ResultExact,
     UnionWithOnlyLiterals, ResultLikeWithVoid,
+    Tree,
 } from './model';
 
 
@@ -228,6 +229,11 @@ class FooAgent extends BaseAgent {
     }
 
 
+    async funRecursive(tree: Tree): Promise<Tree> {
+        return await this.barAgent.funRecursive(tree);
+    }
+
+
     async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
         return await this.barAgent.funUnionWithLiterals(unionWithLiterals);
     }
@@ -414,6 +420,10 @@ class BarAgent extends BaseAgent {
 
     async funObjectType(objectType: ObjectType): Promise<ObjectType> {
         return objectType
+    }
+
+    async funRecursive(tree: Tree): Promise<Tree> {
+        return tree
     }
 
     async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {

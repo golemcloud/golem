@@ -85,7 +85,7 @@ pub struct CompressedOplogArchiveService {
 
 impl CompressedOplogArchiveService {
     const MAX_CHUNK_SIZE: usize = 4096;
-    const CACHE_SIZE: usize = 4096;
+    const CACHE_SIZE: usize = 2048;
     const ZSTD_LEVEL: i32 = 0;
 
     pub fn new(

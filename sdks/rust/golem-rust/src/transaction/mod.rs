@@ -19,8 +19,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
-use crate::bindings::golem::api::host::{OplogIndex, get_oplog_index, set_oplog_index};
 use crate::mark_atomic_operation;
+use crate::{OplogIndex, get_oplog_index, set_oplog_index};
 
 pub use compfn::*;
 

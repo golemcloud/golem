@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
+    Column, FieldsBuilder, MessageWithFields, NoTextOutput, TextOutput, format_id, format_main_id,
     format_message_highlight, log_table, new_table_full_condensed,
 };
 use golem_common::model::plugin_registration::PluginRegistrationDto;
-use serde_derive::Serialize;
+use serde_derive::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PluginNameAndVersion {
@@ -25,7 +28,7 @@ pub struct PluginNameAndVersion {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginSource {
     Own,
     Builtin,
@@ -42,13 +45,24 @@ impl std::fmt::Display for PluginSource {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginListEntry {
     pub plugin: PluginRegistrationDto,
     pub source: PluginSource,
 }
 
-impl TextView for Vec<PluginListEntry> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginListView {
+    pub plugins: Vec<PluginListEntry>,
+}
+
+impl StructuredOutput for PluginListView {
+    const KIND: &'static str = "plugin.list";
+}
+
+impl TextOutput for PluginListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Plugin name").fixed(),
@@ -58,7 +72,7 @@ impl TextView for Vec<PluginListEntry> {
             Column::new("Description"),
             Column::new("Homepage"),
         ]);
-        for entry in self {
+        for entry in &self.plugins {
             table.add_row(vec![
                 entry.plugin.name.clone(),
                 entry.plugin.version.clone(),
@@ -72,7 +86,7 @@ impl TextView for Vec<PluginListEntry> {
     }
 }
 
-impl TextView for Vec<PluginRegistrationDto> {
+impl TextOutput for Vec<PluginRegistrationDto> {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Plugin name").fixed(),
@@ -94,8 +108,10 @@ impl TextView for Vec<PluginRegistrationDto> {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistrationRegisterView(pub PluginRegistrationDto);
+
+impl Masked for PluginRegistrationRegisterView {}
 
 impl MessageWithFields for PluginRegistrationRegisterView {
     fn message(&self) -> String {
@@ -111,8 +127,14 @@ impl MessageWithFields for PluginRegistrationRegisterView {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl StructuredOutput for PluginRegistrationRegisterView {
+    const KIND: &'static str = "plugin.register";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistrationGetView(pub PluginRegistrationDto);
+
+impl Masked for PluginRegistrationGetView {}
 
 impl MessageWithFields for PluginRegistrationGetView {
     fn message(&self) -> String {
@@ -126,6 +148,26 @@ impl MessageWithFields for PluginRegistrationGetView {
     fn fields(&self) -> Vec<(String, String)> {
         plugin_registration_fields(&self.0)
     }
+}
+
+impl StructuredOutput for PluginRegistrationGetView {
+    const KIND: &'static str = "plugin.get";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginUnregisterResult {
+    pub unregistered: bool,
+    pub plugin_id: Uuid,
+    pub name: String,
+    pub version: String,
+}
+
+impl NoTextOutput for PluginUnregisterResult {}
+impl TextOutput for PluginUnregisterResult {}
+
+impl StructuredOutput for PluginUnregisterResult {
+    const KIND: &'static str = "plugin.unregister";
 }
 
 fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, String)> {
@@ -206,7 +248,7 @@ impl From<&PluginRegistrationDto> for PluginInstallationTableView {
     }
 }
 
-impl TextView for Vec<PluginRegistrationDto> {
+impl TextRender for Vec<PluginRegistrationDto> {
     fn log(&self) {
         log_table::<_, PluginInstallationTableView>(self.as_slice())
     }

@@ -29,7 +29,7 @@ use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptS
 use anyhow::bail;
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use golem_common::model::component::ComponentName;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -70,7 +70,7 @@ impl ReplHandler {
         };
 
         self.bridge_repl(
-            language.map(|l| l.to_guest_language()),
+            language,
             script,
             stream_logs,
             disable_auto_imports,
@@ -81,18 +81,19 @@ impl ReplHandler {
 
     async fn bridge_repl(
         &self,
-        agent_language: Option<GuestLanguage>,
+        repl_language: Option<ReplLanguage>,
         script: Option<ReplScriptSource>,
         stream_logs: bool,
         disable_auto_imports: bool,
         post_deploy_args: Option<&PostDeployArgs>,
     ) -> anyhow::Result<()> {
-        let agent_language = match agent_language {
+        let repl_language = match repl_language {
             Some(language) => language,
             None => {
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.some_or_err()?;
-                let languages = app_ctx
+
+                let repl_languages = app_ctx
                     .application()
                     .component_names()
                     .filter_map(|component_name| {
@@ -101,23 +102,23 @@ impl ReplHandler {
                             .component(component_name)
                             .guess_language()
                     })
-                    .collect::<HashSet<_>>();
+                    .map(ReplLanguage::recommended_for_guest_language)
+                    .collect::<BTreeSet<_>>();
 
-                if languages.len() == 1 {
-                    *languages.iter().next().unwrap()
+                if repl_languages.len() <= 1 {
+                    repl_languages
+                        .into_iter()
+                        .next()
+                        .unwrap_or(ReplLanguage::TypeScript)
                 } else {
                     self.ctx
                         .interactive_handler()
-                        .select_repl_language(&languages)?
+                        .select_repl_language(repl_languages.into_iter().collect())?
                 }
             }
         };
 
-        // Map agent language to REPL implementation language. Currently every agent
-        // language uses the TypeScript REPL implementation, but the dispatch is kept
-        // here so additional REPLs can be added in the future.
-        let repl_language: ReplLanguage = agent_language.try_into()?;
-        let repl_guest_language = repl_language.to_guest_language();
+        let repl_guest_language = repl_language.bridge_sdk_target();
 
         let environment = self
             .ctx

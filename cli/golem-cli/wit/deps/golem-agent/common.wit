@@ -1,9 +1,8 @@
-package golem:agent@1.5.0;
+package golem:agent@2.0.0;
 
 interface common {
-  use golem:core/types@1.5.0.{value-and-type, wit-type, wit-value, agent-id, account-id, component-id,
-    text-type, text-reference, binary-type, binary-reference,
-    text-descriptor, binary-descriptor, element-schema, element-value, data-schema, data-value};
+  use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
+    metadata-envelope, agent-id, account-id, component-id};
   use wasi:clocks/monotonic-clock@0.2.3.{duration};
 
   enum agent-mode {
@@ -11,10 +10,17 @@ interface common {
     ephemeral
   }
 
+  /// Full agent type declaration.
+  ///
+  /// `schema` is the per-agent type-node pool. Constructor / method / config
+  /// schema roots below are `type-node-index` values into `schema`. The
+  /// `schema.root` field is a structurally-required placeholder and is not the
+  /// semantic root of the agent type.
   record agent-type {
     type-name:       string,
     description:     string,
     source-language: string,
+    schema:          schema-graph,
     %constructor:    agent-constructor,
     methods:         list<agent-method>,
     dependencies:    list<agent-dependency>,
@@ -30,11 +36,43 @@ interface common {
     implemented-by: component-id
   }
 
+  /// Dependent agent type. All schema roots inside it resolve against its own
+  /// `schema`, not against the parent agent-type's graph.
   record agent-dependency {
     type-name:    string,
     description:  option<string>,
+    schema:       schema-graph,
     %constructor: agent-constructor,
     methods:      list<agent-method>,
+  }
+
+  /// Ordered, named input parameters with per-field source annotation.
+  variant input-schema {
+    parameters(list<named-field>),
+  }
+
+  record named-field {
+    name:     string,
+    source:   field-source,
+    /// Index into the owning agent-type / dependency `schema` graph.
+    schema:   type-node-index,
+    metadata: metadata-envelope,
+  }
+
+  variant field-source {
+    user-supplied,
+    auto-injected(auto-injected-kind),
+  }
+
+  enum auto-injected-kind {
+    principal,
+  }
+
+  /// Output is either unit (no value) or a single value of the given type.
+  variant output-schema {
+    unit,
+    /// Index into the owning agent-type / dependency `schema` graph.
+    single(type-node-index),
   }
 
   record agent-method {
@@ -42,8 +80,8 @@ interface common {
     description:   string,
     http-endpoint: list<http-endpoint-details>,
     prompt-hint:   option<string>,
-    input-schema:  data-schema,
-    output-schema: data-schema,
+    input-schema:  input-schema,
+    output-schema: output-schema,
     read-only:     option<read-only-config>,
   }
 
@@ -157,7 +195,7 @@ interface common {
     name:          option<string>,
     description:   string,
     prompt-hint:   option<string>,
-    input-schema:  data-schema,
+    input-schema:  input-schema,
   }
 
   variant snapshotting {
@@ -179,12 +217,13 @@ interface common {
   record agent-config-declaration {
     source: agent-config-source,
     path: list<string>,
-    value-type: wit-type,
+    /// Index into the owning agent-type `schema` graph.
+    value-type: type-node-index,
   }
 
   record typed-agent-config-value {
     path: list<string>,
-    value: value-and-type,
+    value: typed-schema-value,
   }
 
   /// Agent-level failures
@@ -193,6 +232,6 @@ interface common {
     invalid-method(string),
     invalid-type(string),
     invalid-agent-id(string),
-    custom-error(value-and-type),
+    custom-error(typed-schema-value),
   }
 }

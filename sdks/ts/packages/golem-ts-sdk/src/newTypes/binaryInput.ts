@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { BinaryReference } from 'golem:agent/common@1.5.0';
-
 /**
  * Represents unstructured binary input, which can be either a URL or inline binary data.
  *
@@ -67,34 +65,6 @@ export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> =
     };
 
 export const UnstructuredBinary = {
-  fromDataValue<MT extends string[] | MimeType = MimeType>(
-    parameterName: string,
-    dataValue: BinaryReference,
-    allowedMimeTypes: string[],
-  ): UnstructuredBinary<MT> {
-    if (dataValue.tag === 'url') {
-      return {
-        tag: 'url',
-        val: dataValue.val,
-      } as UnstructuredBinary<MT>;
-    }
-
-    if (
-      allowedMimeTypes.length > 0 &&
-      !allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)
-    ) {
-      throw new Error(
-        `Invalid value for parameter ${parameterName}. Mime type \`${dataValue.val.binaryType.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
-      );
-    }
-
-    return {
-      tag: 'inline',
-      val: dataValue.val.data,
-      mimeType: dataValue.val.binaryType.mimeType,
-    } as UnstructuredBinary<MT>;
-  },
-
   /**
    *
    * Creates a `UnstructuredBinary` from a URL.

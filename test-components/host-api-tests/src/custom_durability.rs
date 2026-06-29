@@ -1,128 +1,30 @@
-use golem_rust::bindings::golem::durability::durability::{
-    DurableFunctionType, LazyInitializedPollable,
-};
-use golem_rust::durability::Durability;
-use golem_rust::golem_wasm::{NodeBuilder, Pollable, WitValueExtractor};
-use golem_rust::value_and_type::type_builder::TypeNodeBuilder;
-use golem_rust::value_and_type::{FromValueAndType, IntoValue};
+use golem_rust::durability::{Durability, DurableFunctionType, LazyInitializedPollable};
 use golem_rust::{
-    PersistenceLevel, agent_definition, agent_implementation, with_persistence_level,
+    FromSchema, IntoSchema, PersistenceLevel, agent_definition, agent_implementation,
+    with_persistence_level,
 };
 use golem_wasi_http::{Client, IncomingBody, InputStream, Method};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
 struct StructuredInput {
     pub payload: String,
 }
 
-impl IntoValue for StructuredInput {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        builder.record().item().string(&self.payload).finish()
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        builder
-            .record(
-                Some("StructuredInput".to_string()),
-                Some("golem:it/golem-it-api".to_string()),
-            )
-            .field("payload")
-            .string()
-            .finish()
-    }
-}
-
-impl FromValueAndType for StructuredInput {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        Ok(Self {
-            payload: extractor
-                .field(0)
-                .ok_or_else(|| "Missing field: 'payload'".to_string())?
-                .string()
-                .ok_or_else(|| "The 'payload' field is not a string".to_string())?
-                .to_string(),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
 struct StructuredResult {
     pub result: String,
 }
 
-impl IntoValue for StructuredResult {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        builder.record().item().string(&self.result).finish()
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        builder
-            .record(
-                Some("StructuredResult".to_string()),
-                Some("golem:it/golem-it-api".to_string()),
-            )
-            .field("result")
-            .string()
-            .finish()
-    }
+#[derive(Debug, IntoSchema, FromSchema)]
+enum UnusedError {
+    UnusedError,
 }
-
-impl FromValueAndType for StructuredResult {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        Ok(Self {
-            result: extractor
-                .field(0)
-                .ok_or_else(|| "Missing field: 'result'".to_string())?
-                .string()
-                .ok_or_else(|| "The 'result' field is not a string".to_string())?
-                .to_string(),
-        })
-    }
-}
-
-#[derive(Debug)]
-struct UnusedError;
 
 impl Display for UnusedError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "UnusedError")
-    }
-}
-
-impl IntoValue for UnusedError {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        builder.variant_unit(0)
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        builder
-            .variant(
-                Some("UnusedError".to_string()),
-                Some("golem:it/golem-it-api".to_string()),
-            )
-            .unit_case("unused-error")
-            .finish()
-    }
-}
-
-impl FromValueAndType for UnusedError {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        let (idx, _inner) = extractor
-            .variant()
-            .ok_or_else(|| "UnusedError should be variant".to_string())?;
-        if idx == 0 {
-            Ok(UnusedError)
-        } else {
-            Err(format!("UnusedError should be variant 0, but got {idx}"))
-        }
     }
 }
 
@@ -139,7 +41,7 @@ pub trait CustomDurability {
 pub struct CustomDurabilityImpl {
     _name: String,
     lazy_pollable: Option<LazyInitializedPollable>,
-    pollable: Option<Pollable>,
+    pollable: Option<golem_rust::wasip2::io::poll::Pollable>,
     response: RefCell<Option<golem_wasi_http::Response>>,
     input_stream: RefCell<Option<InputStream>>,
     body: RefCell<Option<IncomingBody>>,
@@ -207,7 +109,7 @@ impl CustomDurability for CustomDurabilityImpl {
                     self.lazy_pollable
                         .as_ref()
                         .expect("lazy_pollable_init must be called first")
-                        .set(unsafe { std::mem::transmute(pollable) });
+                        .set(pollable);
                     *response = Some(new_response);
                     self.body.replace(Some(body));
                     self.input_stream.replace(Some(input_stream));

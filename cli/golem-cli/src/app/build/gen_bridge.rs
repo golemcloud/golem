@@ -2,7 +2,9 @@ use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
+use crate::bridge_gen::moonbit::MoonBitBridgeGenerator;
 use crate::bridge_gen::rust::RustBridgeGenerator;
+use crate::bridge_gen::scala::ScalaBridgeGenerator;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use crate::command::GolemCliCommand;
@@ -233,12 +235,16 @@ async fn gen_bridge_sdk_target(
                         &output_dir,
                         false,
                     )?),
-                    GuestLanguage::Scala => {
-                        bail!("Bridge generation is not yet supported for Scala")
-                    }
-                    GuestLanguage::MoonBit => {
-                        bail!("Bridge generation is not yet supported for MoonBit")
-                    }
+                    GuestLanguage::Scala => Box::new(ScalaBridgeGenerator::new(
+                        target.agent_type,
+                        &output_dir,
+                        false,
+                    )?),
+                    GuestLanguage::MoonBit => Box::new(MoonBitBridgeGenerator::new(
+                        target.agent_type,
+                        &output_dir,
+                        false,
+                    )?),
                 };
 
                 fs::remove(&output_dir)?;

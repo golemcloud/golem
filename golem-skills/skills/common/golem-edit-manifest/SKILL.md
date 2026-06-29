@@ -7,12 +7,12 @@ description: "Editing the Golem Application Manifest (golem.yaml). Use when modi
 
 The `golem.yaml` file in the project root is the **Golem Application Manifest**. It defines the entire application: components, agents, build steps, environments, HTTP/MCP deployments, and more.
 
-**Schema version**: The `manifestVersion` field at the top of the file identifies the schema version. Do not change it.
+**Manifest version**: The `manifestVersion` field at the top of the file identifies the application manifest document version. Do not change it.
 
 ## Top-Level Structure
 
 ```yaml
-manifestVersion: "1.5.0-dev.3"   # Schema version — do not change
+manifestVersion: "1.5.0"          # Manifest document version — do not change
 app: my-app                       # Application name
 
 includes:                          # (optional) Glob patterns for additional manifest fragments
@@ -327,10 +327,12 @@ auth:
 
 | Field | Description |
 |-------|-------------|
-| `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml` |
+| `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
 | `autoConfirm` | Auto-confirm prompts (`true`) |
 | `redeployAgents` | Redeploy agents by default (`true`) |
 | `reset` | Reset agents by default (`true`) |
+
+When `format: toon` is used, structured stdout is emitted as framed TOON documents. Parse exact `@toon` and `@end` marker lines, and treat the content between them as one TOON document. Stderr may still contain progress or diagnostics and should not be parsed as the structured payload.
 
 ### Deployment options
 
@@ -344,20 +346,25 @@ auth:
 
 Configure HTTP API domain deployments per environment.
 
+Each deployment must define exactly one of:
+
+- `subdomain`: a single DNS label resolved through the target environment server (`my-app.localhost:9006` locally by default, `my-app.apps.golem.cloud` on built-in cloud).
+- `domain`: a full custom domain such as `api.example.com` for custom DNS or custom server environments.
+
 ```yaml
 httpApi:
   deployments:
     local:
-      - domain: my-app.localhost:9006
-        webhookUrl: http://my-app.localhost:9006   # Optional webhook base URL
+      - subdomain: my-app  # resolves to my-app.localhost:9006 by default
+        webhookUrl: /webhooks/                     # Optional webhook path prefix
         agents:
           TaskAgent: {}                             # No auth
           SecureAgent:
             securityScheme: my-oidc                 # OIDC security scheme name
           DevAgent:
             testSessionHeaderName: X-Test-Auth      # Test auth header
-    prod:
-      - domain: api.myapp.com
+    cloud:
+      - subdomain: my-app  # resolves to my-app.apps.golem.cloud
         agents:
           TaskAgent: {}
           SecureAgent:
@@ -370,11 +377,16 @@ Agent names use **PascalCase** matching the agent type name in code.
 
 Configure MCP (Model Context Protocol) deployments per environment.
 
+Each deployment must define exactly one of:
+
+- `subdomain`: a single DNS label resolved through the target environment server (`my-mcp.localhost:9007` locally by default, `my-mcp.mcps.golem.cloud` on built-in cloud).
+- `domain`: a full custom domain such as `mcp.example.com` for custom DNS or custom server environments.
+
 ```yaml
 mcp:
   deployments:
     local:
-      - domain: mcp.localhost:9006
+      - subdomain: my-mcp  # resolves to my-mcp.localhost:9007 by default
         agents:
           ToolAgent: {}
           SecureToolAgent:
@@ -655,7 +667,7 @@ This table shows where each property can be defined:
 ## Edit Guardrails
 
 - **Do not invent fields**: most manifest objects use `additionalProperties: false` — only use fields documented above.
-- **Preserve `manifestVersion`**: never change the schema version.
+- **Preserve `manifestVersion`**: never change the manifest document version.
 - **Agent names use PascalCase**: matching the class/trait name in code (e.g., `MyAgent`, not `my-agent`).
 - **Component names use `namespace:name`** format (e.g., `my-app:billing`).
 - **Only one `default: true` preset** per preset map.

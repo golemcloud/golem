@@ -16,15 +16,23 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::retry_policy::{
-    RetryPolicyCreationRecord, RetryPolicyRepoError, RetryPolicyRevisionRecord,
+    RetryPolicyAuthExtRevisionRecord, RetryPolicyCreationRecord, RetryPolicyRepoError,
+    RetryPolicyRevisionRecord,
 };
 use crate::repo::retry_policy::RetryPolicyRepo;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::account::AccountEmail;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentRetryPolicyName, EnvironmentRetryPolicyResourcePattern,
+    EnvironmentRetryPolicyVerb, PermissionTarget,
+};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::retry_policy::{
     RetryPolicyCreation, RetryPolicyId, RetryPolicyRevision, RetryPolicyUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
 use std::sync::Arc;
 
@@ -101,10 +109,11 @@ impl RetryPolicyService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateRetryPolicy,
+        authorize_retry_policy_permission(
+            auth,
+            &environment,
+            Some(&data.name),
+            EnvironmentRetryPolicyVerb::Create,
         )?;
 
         let id = RetryPolicyId::new();
@@ -140,13 +149,13 @@ impl RetryPolicyService {
         update: RetryPolicyUpdate,
         auth: &AuthCtx,
     ) -> Result<StoredRetryPolicy, RetryPolicyError> {
-        let (mut retry_policy, environment) =
-            self.get_with_environment(retry_policy_id, auth).await?;
+        let (mut retry_policy, owner) = self.get_with_environment(retry_policy_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateRetryPolicy,
+        authorize_retry_policy_permission_for_owner(
+            auth,
+            owner,
+            Some(&retry_policy.name),
+            EnvironmentRetryPolicyVerb::Update,
         )?;
 
         if update.current_revision != retry_policy.revision {
@@ -191,13 +200,13 @@ impl RetryPolicyService {
         current_revision: RetryPolicyRevision,
         auth: &AuthCtx,
     ) -> Result<StoredRetryPolicy, RetryPolicyError> {
-        let (mut retry_policy, environment) =
-            self.get_with_environment(retry_policy_id, auth).await?;
+        let (mut retry_policy, owner) = self.get_with_environment(retry_policy_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteRetryPolicy,
+        authorize_retry_policy_permission_for_owner(
+            auth,
+            owner,
+            Some(&retry_policy.name),
+            EnvironmentRetryPolicyVerb::Delete,
         )?;
 
         if retry_policy.revision != current_revision {
@@ -257,15 +266,20 @@ impl RetryPolicyService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<StoredRetryPolicy>, RetryPolicyError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewRetryPolicy,
-        )?;
-
         let result = self.list_in_environment_unchecked(environment.id).await?;
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|retry_policy| {
+                authorize_retry_policy_permission(
+                    auth,
+                    environment,
+                    Some(&retry_policy.name),
+                    EnvironmentRetryPolicyVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn list_in_environment_unchecked(
@@ -287,34 +301,75 @@ impl RetryPolicyService {
         &self,
         retry_policy_id: RetryPolicyId,
         auth: &AuthCtx,
-    ) -> Result<(StoredRetryPolicy, Environment), RetryPolicyError> {
-        let retry_policy: StoredRetryPolicy = self
+    ) -> Result<(StoredRetryPolicy, EnvironmentOwnerPattern), RetryPolicyError> {
+        let record = self
             .retry_policy_repo
             .get_by_id(retry_policy_id.0)
             .await?
-            .ok_or(RetryPolicyError::RetryPolicyNotFound(retry_policy_id))?
-            .try_into()?;
+            .ok_or(RetryPolicyError::RetryPolicyNotFound(retry_policy_id))?;
 
-        let environment = self
-            .environment_service
-            .get(retry_policy.environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    RetryPolicyError::RetryPolicyNotFound(retry_policy_id)
-                }
-                other => other.into(),
-            })?;
+        let owner = environment_owner_from_retry_policy(&record);
+        let retry_policy: StoredRetryPolicy = record.retry_policy.try_into()?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewRetryPolicy,
+        authorize_retry_policy_permission_for_owner(
+            auth,
+            owner.clone(),
+            Some(&retry_policy.name),
+            EnvironmentRetryPolicyVerb::View,
         )
         .map_err(|_| RetryPolicyError::RetryPolicyNotFound(retry_policy_id))?;
 
-        Ok((retry_policy, environment))
+        Ok((retry_policy, owner))
     }
+}
+
+fn environment_owner_from_retry_policy(
+    retry_policy: &RetryPolicyAuthExtRevisionRecord,
+) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: AccountEmail::new(retry_policy.owner_account_email.clone()),
+        application: ApplicationName(retry_policy.application_name.clone()),
+        environment: EnvironmentName(retry_policy.environment_name.clone()),
+    }
+}
+
+fn authorize_retry_policy_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&str>,
+    verb: EnvironmentRetryPolicyVerb,
+) -> Result<(), AuthorizationError> {
+    authorize_retry_policy_permission_for_owner(
+        auth,
+        EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        name,
+        verb,
+    )
+}
+
+fn authorize_retry_policy_permission_for_owner(
+    auth: &AuthCtx,
+    owner: EnvironmentOwnerPattern,
+    name: Option<&str>,
+    verb: EnvironmentRetryPolicyVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentRetryPolicy(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner,
+            resource: name
+                .map(|name| {
+                    EnvironmentRetryPolicyResourcePattern::Name(EnvironmentRetryPolicyName(
+                        name.to_string(),
+                    ))
+                })
+                .unwrap_or(EnvironmentRetryPolicyResourcePattern::Any),
+        },
+    ))
 }
 
 fn predicate_json(value: serde_json::Value) -> Result<String, RetryPolicyError> {

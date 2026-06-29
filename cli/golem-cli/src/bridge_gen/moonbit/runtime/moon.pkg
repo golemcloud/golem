@@ -1,0 +1,9 @@
+import {
+  "moonbitlang/async" @async,
+  "moonbitlang/async/http" @http,
+  "moonbitlang/core/string" @string,
+  "moonbitlang/core/buffer" @buffer,
+  "moonbitlang/core/json" @json,
+  "moonbitlang/core/random" @random,
+  "moonbitlang/core/debug" @debug,
+}

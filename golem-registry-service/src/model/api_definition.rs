@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use desert_rust::BinaryCodec;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::HttpMethod;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
@@ -64,6 +64,7 @@ impl UnboundCompiledRoute {
 
 pub struct BoundCompiledRoute {
     pub account_id: AccountId,
+    pub account_email: AccountEmail,
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub security_scheme_missing: bool,

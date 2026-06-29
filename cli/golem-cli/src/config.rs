@@ -33,8 +33,16 @@ use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
 
-pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
-const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
+pub const DEFAULT_LOCAL_ROUTER_PORT: u16 = 9881;
+pub const DEFAULT_LOCAL_CUSTOM_REQUEST_PORT: u16 = 9006;
+pub const DEFAULT_LOCAL_MCP_PORT: u16 = 9007;
+
+pub const DEFAULT_LOCAL_URL: &str = "http://localhost:9881";
+pub const DEFAULT_CLOUD_URL: &str = "https://release.api.golem.cloud";
+
+pub const CLOUD_HTTP_API_DOMAIN: &str = "apps.golem.cloud";
+pub const CLOUD_MCP_DOMAIN: &str = "mcps.golem.cloud";
+
 const BUILTIN_LOCAL_URL_ENV: &str = "GOLEM_BUILTIN_LOCAL_URL";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
@@ -58,7 +66,7 @@ fn builtin_local_url_state() -> &'static BuiltinLocalUrlState {
         }
 
         BuiltinLocalUrlState {
-            url: Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse BUILTIN_LOCAL_URL"),
+            url: Url::parse(DEFAULT_LOCAL_URL).expect("Failed to parse DEFAULT_LOCAL_URL"),
             uses_default: true,
         }
     })
@@ -331,7 +339,7 @@ pub struct ClientConfig {
 
 impl From<&Profile> for ClientConfig {
     fn from(profile: &Profile) -> Self {
-        let default_cloud_url = Url::parse(CLOUD_URL).unwrap();
+        let default_cloud_url = Url::parse(DEFAULT_CLOUD_URL).unwrap();
         let registry_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
         let worker_url = profile
             .custom_worker_url
@@ -373,7 +381,8 @@ impl From<&Server> for ClientConfig {
                     allow_insecure: false,
                 },
                 BuiltinServer::Cloud => {
-                    let cloud_url = Url::parse(CLOUD_URL).expect("Failed to parse CLOUD_URL");
+                    let cloud_url =
+                        Url::parse(DEFAULT_CLOUD_URL).expect("Failed to parse DEFAULT_CLOUD_URL");
                     BaseConfig {
                         registry_url: cloud_url.clone(),
                         worker_url: cloud_url.clone(),

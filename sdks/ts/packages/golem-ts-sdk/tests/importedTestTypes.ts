@@ -13,3 +13,11 @@
 // limitations under the License.
 
 export type ImportedSourceOrderedUnion = number | string | boolean | { n: number };
+
+// A recursive interface defined in a *different module* from the agent that uses
+// it. This exercises cross-module recursive type resolution (the back-edge of a
+// recursive type must resolve to the same type id as the imported root).
+export interface ImportedRecTree {
+  value: number;
+  children: ImportedRecTree[];
+}

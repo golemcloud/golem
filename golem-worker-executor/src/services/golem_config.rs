@@ -42,6 +42,21 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    /// Retry policy applied to SQL-backed key-value storage operations when the connection pool
+    /// is briefly exhausted (a pool acquisition timeout). Retrying these transient failures keeps
+    /// hot paths such as promise and worker status updates from crashing the executor under load.
+    #[serde(default = "default_key_value_storage_retry")]
+    pub key_value_storage_retry: RetryConfig,
+    /// Retry policy applied to SQL-backed scheduler storage operations when the connection pool
+    /// is briefly exhausted (a pool acquisition timeout). The scheduler background loop panics
+    /// on exhaustion because its `schedule`/`cancel` entry points cannot propagate errors.
+    #[serde(default = "default_scheduler_storage_retry")]
+    pub scheduler_storage_retry: RetryConfig,
+    /// Retry policy applied to SQL-backed indexed storage (oplog) operations when the connection
+    /// pool is briefly exhausted (a pool acquisition timeout). Transient failures are retried so
+    /// oplog commits do not crash the executor under load.
+    #[serde(default = "default_indexed_storage_retry")]
+    pub indexed_storage_retry: RetryConfig,
     pub scheduler_storage: SchedulerStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -79,6 +94,23 @@ pub struct GolemConfig {
     pub max_websocket_connections: usize,
     pub http_address: String,
     pub http_port: u16,
+    /// How often runtime/allocator metrics are sampled and refreshed into the
+    /// gauges exposed on `/metrics`. Prometheus scrapes the rendered values
+    /// independently; this is the in-process resolution.
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
+}
+
+fn default_key_value_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
+}
+
+fn default_scheduler_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
+}
+
+fn default_indexed_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
 }
 
 impl SafeDisplay for GolemConfig {
@@ -99,6 +131,24 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.key_value_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "key-value storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.key_value_storage_retry.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "scheduler storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.scheduler_storage_retry.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "indexed storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.indexed_storage_retry.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "scheduler storage:");
         let _ = writeln!(
@@ -270,6 +320,9 @@ impl Default for GolemConfig {
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
+            key_value_storage_retry: default_key_value_storage_retry(),
+            scheduler_storage_retry: default_scheduler_storage_retry(),
+            indexed_storage_retry: default_indexed_storage_retry(),
             scheduler_storage: SchedulerStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
@@ -312,6 +365,7 @@ impl Default for GolemConfig {
             max_websocket_connections: 100,
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
     }
 }
@@ -653,10 +707,6 @@ pub struct OplogConfig {
     /// (`oplog_writes_per_second`). Defaults to false (disabled).
     #[serde(default)]
     pub oplog_rate_limit_enabled: bool,
-    /// Retry configuration for transient indexed-storage errors (pool exhaustion,
-    /// connection resets). Defaults to 3 attempts, 100 ms–1 s exponential backoff.
-    #[serde(default = "default_oplog_indexed_storage_retry")]
-    pub indexed_storage_retry: RetryConfig,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -712,17 +762,8 @@ impl SafeDisplay for OplogConfig {
             "oplog rate limit enabled: {}",
             self.oplog_rate_limit_enabled
         );
-        let _ = writeln!(
-            &mut result,
-            "indexed storage retry: {:?}",
-            self.indexed_storage_retry
-        );
         result
     }
-}
-
-fn default_oplog_indexed_storage_retry() -> RetryConfig {
-    RetryConfig::max_attempts_3()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1067,28 +1108,31 @@ pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
     pub worker_estimate_coefficient: f64,
+    /// Multiplier applied to a component's `component_size` when reserving its
+    /// compiled-module memory with the admission gate, charged once per resident
+    /// component (shared across all its workers) rather than per worker.
+    pub component_size_coefficient: f64,
+    /// Whether the measured-headroom admission gate is active. Requires the
+    /// executor to own its memory environment (its own cgroup/process), as in a
+    /// production pod. Disable in shared environments — such as the in-process
+    /// test harness — where the probe cannot isolate this executor's footprint
+    /// from co-resident processes.
+    pub enable_measured_admission: bool,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
     pub oom_retry_config: RetryConfig,
 }
 
 impl MemoryConfig {
-    pub fn total_system_memory(&self) -> u64 {
-        self.system_memory_override.unwrap_or_else(|| {
-            let mut sysinfo = sysinfo::System::new();
-            sysinfo.refresh_memory();
-            sysinfo.total_memory()
-        })
-    }
-
-    pub fn system_memory(&self) -> u64 {
-        let mut sysinfo = sysinfo::System::new();
-        sysinfo.refresh_memory();
-        sysinfo.available_memory()
-    }
-
-    pub fn worker_memory(&self) -> usize {
-        (self.total_system_memory() as f64 * self.worker_memory_ratio) as usize
+    /// The admission policy for the measured-headroom gate. Reuses
+    /// `worker_memory_ratio` as the usable fraction of the measured limit (the
+    /// host keeps the remainder).
+    pub(crate) fn admission_policy(
+        &self,
+    ) -> crate::services::active_workers::admission::AdmissionPolicy {
+        crate::services::active_workers::admission::AdmissionPolicy {
+            usable_ratio: self.worker_memory_ratio,
+        }
     }
 }
 
@@ -1107,6 +1151,16 @@ impl SafeDisplay for MemoryConfig {
             &mut result,
             "worker estimate coefficient: {}",
             self.worker_estimate_coefficient
+        );
+        let _ = writeln!(
+            &mut result,
+            "component size coefficient: {}",
+            self.component_size_coefficient
+        );
+        let _ = writeln!(
+            &mut result,
+            "measured admission enabled: {}",
+            self.enable_measured_admission
         );
         let _ = writeln!(
             &mut result,
@@ -1234,6 +1288,11 @@ pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     pub max_metadata_capacity: usize,
     pub max_resolved_component_capacity: usize,
+    /// Maximum number of local component compile fallback attempts allowed to
+    /// run concurrently on this executor. This bounds the transient working set
+    /// used after both the in-process cache and compiled artifact store miss.
+    /// `0` means unlimited.
+    pub max_concurrent_compilations: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
 }
@@ -1251,6 +1310,11 @@ impl SafeDisplay for ComponentCacheConfig {
             &mut result,
             "max resolved component capacity: {}",
             self.max_resolved_component_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "max concurrent compilations: {}",
+            self.max_concurrent_compilations
         );
         let _ = writeln!(&mut result, "time to idle: {:?}", self.time_to_idle);
         result
@@ -1600,7 +1664,6 @@ impl Default for OplogConfig {
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
             oplog_rate_limit_enabled: false,
-            indexed_storage_retry: default_oplog_indexed_storage_retry(),
         }
     }
 }
@@ -1669,6 +1732,8 @@ impl Default for MemoryConfig {
             system_memory_override: None,
             worker_memory_ratio: 0.8,
             worker_estimate_coefficient: 1.1,
+            component_size_coefficient: 2.0,
+            enable_measured_admission: true,
             acquire_retry_delay: Duration::from_millis(500),
             oom_retry_config: RetryConfig {
                 max_attempts: u32::MAX,
@@ -1804,6 +1869,7 @@ impl Default for ComponentCacheConfig {
             max_capacity: 32,
             max_metadata_capacity: 16384,
             max_resolved_component_capacity: 1024,
+            max_concurrent_compilations: 16,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }

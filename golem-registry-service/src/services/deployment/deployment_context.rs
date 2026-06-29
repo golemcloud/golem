@@ -29,8 +29,7 @@ use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::deployment::route_compilation::validate_path_segments;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
-    RegisteredAgentTypeImplementer,
+    AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
@@ -42,18 +41,20 @@ use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::render;
+use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 
 #[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
     pub webhook_domain_and_segments: Option<(Domain, Vec<String>)>,
 }
@@ -192,6 +193,7 @@ impl DeploymentContext {
                 let constructor_parameters = ok_or_continue!(
                     build_http_agent_constructor_parameters(
                         http_mount,
+                        &registered_agent_type.agent_type.schema,
                         &registered_agent_type.agent_type.constructor.input_schema,
                         &make_mount_validation_error
                     ),
@@ -297,6 +299,7 @@ impl DeploymentContext {
 
             let compiled_mcp = golem_service_base::mcp::CompiledMcp {
                 account_id,
+                account_email: self.environment.owner_account_email.clone(),
                 environment_id: self.environment.id,
                 deployment_revision,
                 domain: domain.clone(),
@@ -349,12 +352,31 @@ impl DeploymentContext {
                 let canonical_agent_secret_path =
                     CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
 
+                // The agent-type-declared secret value type is already a
+                // schema-native `SchemaType`; pair it with the agent's shared
+                // graph defs so any `SchemaType::Ref` inside resolves.
+                let config_secret_schema = SchemaGraph {
+                    defs: agent_type.agent_type.schema.defs.clone(),
+                    root: config.value_type.clone(),
+                };
+
                 match seen_secrets.entry(canonical_agent_secret_path.clone()) {
                     hash_map::Entry::Vacant(e) => {
-                        e.insert(config.value_type.clone());
+                        e.insert(config_secret_schema.clone());
                     }
                     hash_map::Entry::Occupied(e) => {
-                        if *e.get() != config.value_type {
+                        let seen_secret_schema = e.get();
+                        // Compare the two agent-declared secret types
+                        // structurally across their own graphs: each agent type
+                        // carries its own `defs`, so a raw `SchemaGraph` equality
+                        // would spuriously differ even when the secret type is
+                        // logically identical.
+                        if !is_equivalent_cross_graph(
+                            seen_secret_schema,
+                            &seen_secret_schema.root,
+                            &config_secret_schema,
+                            &config_secret_schema.root,
+                        ) {
                             ok_or_continue!(
                                 Err(DeployValidationError::AgentSecretTypeConflict {
                                     path: canonical_agent_secret_path
@@ -371,42 +393,41 @@ impl DeploymentContext {
                     env_secrets.get(&canonical_agent_secret_path)
                 {
                     // secret does exist in environment, we need to check that types are compatible with deployment
-                    if environment_agent_secret_declaration.secret_type != config.value_type {
+                    if !is_equivalent_cross_graph(
+                        &environment_agent_secret_declaration.secret_type,
+                        &environment_agent_secret_declaration.secret_type.root,
+                        &config_secret_schema,
+                        &config_secret_schema.root,
+                    ) {
                         if replace_incompatible_agent_secrets {
                             let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                             let agent_secret_value = ok_or_continue!(
-                                agent_secret_default
-                                    .map(|sd| ValueAndType::parse_with_type(
-                                        &sd.secret_value,
-                                        &config.value_type
-                                    ))
-                                    .transpose()
-                                    .map_err(|errors| {
-                                        DeployValidationError::AgentSecretDefaultTypeMismatch {
-                                            path: canonical_agent_secret_path.clone(),
-                                            errors,
-                                        }
-                                    }),
+                                parse_default_secret_value(
+                                    &canonical_agent_secret_path,
+                                    agent_secret_default,
+                                    &config_secret_schema,
+                                ),
                                 errors
-                            )
-                            .map(|vat| vat.value);
+                            );
 
                             replacements.push(DeploymentAgentSecretReplacement {
                                 agent_secret_id: environment_agent_secret_declaration.id,
                                 current_revision: environment_agent_secret_declaration.revision,
                                 path: canonical_agent_secret_path.clone(),
-                                secret_type: config.value_type.clone(),
+                                secret_type: config_secret_schema,
                                 secret_value: agent_secret_value,
                             });
                         } else {
                             errors.push(
                                 DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
                                     path: canonical_agent_secret_path.clone(),
-                                    agent_secret_type: config.value_type.clone(),
-                                    environment_secret_type: environment_agent_secret_declaration
-                                        .secret_type
-                                        .clone(),
+                                    agent_secret_type: Box::new(config_secret_schema),
+                                    environment_secret_type: Box::new(
+                                        environment_agent_secret_declaration
+                                            .secret_type
+                                            .clone(),
+                                    ),
                                 },
                             );
                         }
@@ -420,21 +441,13 @@ impl DeploymentContext {
                         let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                         let agent_secret_value = ok_or_continue!(
-                            agent_secret_default
-                                .map(|sd| ValueAndType::parse_with_type(
-                                    &sd.secret_value,
-                                    &config.value_type
-                                ))
-                                .transpose()
-                                .map_err(|errors| {
-                                    DeployValidationError::AgentSecretDefaultTypeMismatch {
-                                        path: canonical_agent_secret_path,
-                                        errors,
-                                    }
-                                }),
+                            parse_default_secret_value(
+                                &canonical_agent_secret_path,
+                                agent_secret_default,
+                                &config_secret_schema,
+                            ),
                             errors
-                        )
-                        .map(|vat| vat.value);
+                        );
 
                         if let Some(secret_value) = agent_secret_value {
                             updates.push(DeploymentAgentSecretUpdate {
@@ -449,25 +462,17 @@ impl DeploymentContext {
                     let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                     let agent_secret_value = ok_or_continue!(
-                        agent_secret_default
-                            .map(|sd| ValueAndType::parse_with_type(
-                                &sd.secret_value,
-                                &config.value_type
-                            ))
-                            .transpose()
-                            .map_err(|errors| {
-                                DeployValidationError::AgentSecretDefaultTypeMismatch {
-                                    path: canonical_agent_secret_path.clone(),
-                                    errors,
-                                }
-                            }),
+                        parse_default_secret_value(
+                            &canonical_agent_secret_path,
+                            agent_secret_default,
+                            &config_secret_schema,
+                        ),
                         errors
-                    )
-                    .map(|vat| vat.value);
+                    );
 
                     creations.push(DeploymentAgentSecretCreation {
                         path: canonical_agent_secret_path,
-                        secret_type: config.value_type.clone(),
+                        secret_type: config_secret_schema,
                         secret_value: agent_secret_value,
                     });
                 }
@@ -564,6 +569,35 @@ impl DeploymentContext {
     }
 }
 
+/// Parse the optional JSON-encoded default for an agent secret against the
+/// agent's declared schema graph.
+///
+/// Returns `Ok(None)` when no default was supplied. Returns
+/// [`DeployValidationError::AgentSecretDefaultTypeMismatch`] when the JSON
+/// payload cannot be decoded into a [`SchemaValue`] for the given graph.
+///
+/// The deployment request DTO carries ergonomic, human-shaped JSON (raw
+/// scalars, field-named record objects). It is decoded directly into a
+/// schema-native [`SchemaValue`] via [`render::from_json_value`], which both
+/// type-checks the payload against the agent-declared schema and produces the
+/// value in one step.
+fn parse_default_secret_value(
+    path: &CanonicalAgentSecretPath,
+    default: Option<&&DeploymentAgentSecretDefault>,
+    schema: &SchemaGraph,
+) -> Result<Option<golem_common::schema::schema_value::SchemaValue>, DeployValidationError> {
+    default
+        .map(|sd| {
+            render::from_json_value(schema, &schema.root, &sd.secret_value).map_err(|e| {
+                DeployValidationError::AgentSecretDefaultTypeMismatch {
+                    path: path.clone(),
+                    errors: vec![e.to_string()],
+                }
+            })
+        })
+        .transpose()
+}
+
 pub fn extract_registered_agent_types(
     components: &BTreeMap<ComponentName, Component>,
     http_api_deployments: &BTreeMap<Domain, HttpApiDeployment>,
@@ -577,6 +611,9 @@ pub fn extract_registered_agent_types(
             let implementer = RegisteredAgentTypeImplementer {
                 component_id: component.id,
                 component_revision: component.revision,
+                component_name: component.component_name.0.clone(),
+                account_id: component.account_id,
+                account_email: component.account_email.clone(),
             };
 
             let webhook_domain_and_segments = ok_or_continue!(
@@ -594,6 +631,9 @@ pub fn extract_registered_agent_types(
                 implemented_by: RegisteredAgentTypeImplementer {
                     component_id: component.id,
                     component_revision: component.revision,
+                    component_name: component.component_name.0.clone(),
+                    account_id: component.account_id,
+                    account_email: component.account_email.clone(),
                 },
                 webhook_domain_and_segments,
             };

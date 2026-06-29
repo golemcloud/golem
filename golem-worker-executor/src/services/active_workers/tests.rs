@@ -729,3 +729,888 @@ async fn scheduler_accounts_are_independent() {
     drop(a1);
     drop(a2);
 }
+
+// ── Component module charge against the admission gate ───────────────────────
+
+mod component_module_charge {
+    use super::super::admission::{
+        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource,
+    };
+    use super::super::component_charge::ComponentChargeRegistry;
+    use super::super::memory_probe::{MemoryProbe, MemorySnapshot};
+    use super::super::{
+        ComponentChargeKey, GateChargeSource, HeldComponentCharge,
+        acquire_memory_and_component_charge,
+    };
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use std::sync::Arc;
+    use test_r::test;
+    use uuid::Uuid;
+
+    /// Probe reporting a fixed limit and zero resident memory, so the gate's
+    /// reservation is driven entirely by what is charged through it.
+    #[derive(Debug)]
+    struct FixedProbe {
+        limit: u64,
+    }
+
+    impl MemoryProbe for FixedProbe {
+        fn snapshot(&self) -> MemorySnapshot {
+            MemorySnapshot {
+                limit_bytes: self.limit,
+                current_bytes: 0,
+            }
+        }
+    }
+
+    /// An eviction source with nothing to evict: a request that does not fit is
+    /// cleanly rejected rather than making room.
+    struct NoEvictionSource;
+
+    #[async_trait::async_trait]
+    impl EvictionSource for NoEvictionSource {
+        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+            0
+        }
+    }
+
+    fn key() -> ComponentChargeKey {
+        (ComponentId(Uuid::new_v4()), ComponentRevision::INITIAL)
+    }
+
+    /// The first worker of a component reserves the module's bytes with the gate,
+    /// so admissible headroom drops by the module size before it faults into
+    /// memory. A second worker of the same component reserves nothing more, and
+    /// the reservation is released only when the last worker unloads.
+    #[test]
+    async fn module_charge_reserves_with_gate_until_last_worker_unloads() {
+        let limit = 1000u64;
+        let module_bytes = 200u64;
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+        let component = key();
+
+        assert_eq!(controller.headroom_bytes(), limit);
+
+        let first = registry.acquire(component, module_bytes).await;
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module_bytes,
+            "first worker of a component must reserve the module size with the gate"
+        );
+
+        let second = registry.acquire(component, module_bytes).await;
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module_bytes,
+            "a second worker of the same component must not reserve the module again"
+        );
+
+        drop(first);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module_bytes,
+            "the module stays reserved while any worker of the component is resident"
+        );
+
+        drop(second);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "the module reservation is released when the last worker unloads"
+        );
+    }
+
+    /// A `RunningWorker` stores its component charge as
+    /// `Box<dyn HeldComponentCharge>` and releases it by dropping that box when
+    /// the worker unloads. Dropping the box must still release the module
+    /// reservation with the gate, i.e. the concrete charge's release runs through
+    /// the trait object exactly as it would for a live worker.
+    #[test]
+    async fn dropping_boxed_charge_releases_the_reservation() {
+        let limit = 1000u64;
+        let module_bytes = 200u64;
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+
+        let charge = registry.acquire(key(), module_bytes).await;
+        // Store it exactly as RunningWorker does.
+        let boxed: Box<dyn HeldComponentCharge> = Box::new(charge);
+        assert_eq!(controller.headroom_bytes(), limit - module_bytes);
+
+        drop(boxed);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "dropping the boxed charge (as on worker unload) must release the reservation"
+        );
+    }
+
+    /// Starting the first worker of a component must gate its linear memory and
+    /// its shared module *together*: if the pair does not fit under the ceiling,
+    /// the worker is refused and nothing is reserved.
+    ///
+    /// Reproduces the over-commit. The production start sequence acquired the
+    /// per-worker memory through the gate and then reserved the module as a
+    /// committed (ungated) consequence. With memory alone fitting but
+    /// memory + module exceeding the ceiling, that admitted the worker and then
+    /// pushed the granted total past the ceiling with nothing able to refuse it —
+    /// permanently starving later admissions. The combined acquire must instead
+    /// reject the first worker, leaving the gate uncorrupted.
+    #[test]
+    async fn first_worker_memory_and_module_are_gated_together() {
+        let limit = 1000u64;
+        let memory = 900u64;
+        let module = 200u64; // memory + module = 1100 > ceiling
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+        let component = key();
+
+        let outcome = acquire_memory_and_component_charge(
+            &controller,
+            &registry,
+            &NoEvictionSource,
+            memory,
+            component,
+            module,
+        )
+        .await;
+
+        assert!(
+            outcome.is_none(),
+            "first worker whose memory + module exceed the ceiling must be refused"
+        );
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "a refused first-worker start must reserve nothing: not its memory, not its module"
+        );
+    }
+
+    /// When memory + module fit, the combined acquire succeeds, reserves both,
+    /// and dropping the worker's grant releases only its memory while the module
+    /// charge persists until the last worker of the component unloads.
+    #[test]
+    async fn first_worker_combined_acquire_reserves_both_and_releases_correctly() {
+        let limit = 1000u64;
+        let memory = 600u64;
+        let module = 200u64;
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+        let component = key();
+
+        let (grant, charge) = acquire_memory_and_component_charge(
+            &controller,
+            &registry,
+            &NoEvictionSource,
+            memory,
+            component,
+            module,
+        )
+        .await
+        .expect("memory + module fit, so the combined acquire must succeed");
+
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - memory - module,
+            "the combined acquire must reserve both the worker memory and the module"
+        );
+
+        // A second worker of the same component: memory only, module already held.
+        let (grant2, charge2) = acquire_memory_and_component_charge(
+            &controller,
+            &registry,
+            &NoEvictionSource,
+            memory.min(limit - memory - module),
+            component,
+            module,
+        )
+        .await
+        .expect("the second worker only needs to fit its own memory");
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - memory - module - memory.min(limit - memory - module),
+            "the second worker must not reserve the module again"
+        );
+
+        drop(grant);
+        drop(grant2);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module,
+            "dropping the worker grants releases their memory but not the shared module"
+        );
+
+        drop(charge);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module,
+            "the module stays reserved while any worker of the component holds its charge"
+        );
+        drop(charge2);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "the module reservation is released when the last worker's charge drops"
+        );
+    }
+}
+
+// ── Memory eviction planning credits last-of-component module release ────────
+//
+// `evict_at_most_memory` stops resident workers oldest-first until it has freed
+// `needed_bytes`. The bytes a stop frees are the worker's own linear memory
+// *plus*, when it removes the last resident worker of its component, that
+// component's shared compiled module (the module charge is released only when
+// the last worker of the component unloads). Counting only per-worker memory
+// under-counts what a last-of-component stop frees, so the loop keeps scanning
+// and over-evicts.
+//
+// The planner is purely advisory: it decides how many leading candidates the
+// eviction loop should *attempt* to stop. It never releases any bytes itself —
+// the module charge is released only by `ComponentChargeGuard::drop` when the
+// last worker actually unloads, which covers graceful stop, cancel and abort
+// uniformly. So an over- or under-prediction here can only make the loop stop
+// scanning a little early or late; it can never leak or double-release, and the
+// gate re-measures against the probe afterward.
+mod memory_eviction_planning {
+    use super::super::{EvictionCandidateCost, credit_eviction_stop, plan_memory_eviction_stops};
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use std::collections::HashMap;
+    use test_r::test;
+    use uuid::Uuid;
+
+    type Key = (ComponentId, ComponentRevision);
+
+    fn component() -> Key {
+        (ComponentId(Uuid::new_v4()), ComponentRevision::INITIAL)
+    }
+
+    /// A candidate carrying its own memory and its component's module size; the
+    /// resident refcount per component is supplied separately (it counts *all*
+    /// resident workers of the component, not just the eviction candidates).
+    fn candidate(memory: u64, comp: Key, module_bytes: u64) -> EvictionCandidateCost<Key> {
+        EvictionCandidateCost {
+            memory,
+            component: comp,
+            module_bytes,
+        }
+    }
+
+    /// Stopping the sole worker of a component frees its memory *and* its module.
+    /// With several such single-worker components queued oldest-first, crediting
+    /// the module lets the target be met after fewer stops than counting memory
+    /// alone — the over-eviction this fixes.
+    #[test]
+    fn last_worker_stop_credits_the_module() {
+        // Three single-worker components, each memory 100, module 200.
+        let comps = [component(), component(), component()];
+        let refcounts: HashMap<Key, usize> = comps.iter().map(|c| (*c, 1usize)).collect();
+        let candidates: Vec<_> = comps.iter().map(|c| candidate(100, *c, 200)).collect();
+
+        // Need 250. Counting memory + module, the first stop frees 300 >= 250, so
+        // exactly ONE stop is planned. Counting memory alone would free only 100
+        // per stop and plan three stops — evicting two workers more than needed.
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 250);
+        assert_eq!(
+            stops, 1,
+            "stopping the last worker of a component frees memory + module; one stop must meet 250 of 300"
+        );
+    }
+
+    /// The module is credited only to the stop that empties the component. While
+    /// another worker of the same component remains, a stop frees memory only.
+    #[test]
+    fn module_credited_only_to_the_stop_that_empties_the_component() {
+        let shared = component();
+        let solo = component();
+        // Two workers of `shared`, one of `solo`. All three are candidates,
+        // oldest-first: the two shared workers, then the solo one.
+        let refcounts = HashMap::from([(shared, 2usize), (solo, 1usize)]);
+        let candidates = vec![
+            candidate(100, shared, 200),
+            candidate(100, shared, 200),
+            candidate(100, solo, 200),
+        ];
+
+        // Need 350.
+        //   stop 1 (shared): memory only (one shared worker remains) → 100. total 100
+        //   stop 2 (shared): empties shared → memory + module → 300. total 400 >= 350
+        // So TWO stops. Counting memory alone: 100, 200, 300 — never reaches 350
+        // until all three, planning three stops (one too many).
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 350);
+        assert_eq!(
+            stops, 2,
+            "the module is credited only when the component's last worker is stopped, meeting 350 in two stops"
+        );
+    }
+
+    /// A component with a still-resident non-candidate worker never has its
+    /// module credited: stopping every candidate of it leaves it non-empty, so
+    /// only per-worker memory is freed.
+    #[test]
+    fn module_not_credited_while_a_non_candidate_worker_remains() {
+        let comp = component();
+        // Three resident workers, only two are candidates; the third keeps the
+        // component resident, so the module is never released by these stops.
+        let refcounts = HashMap::from([(comp, 3usize)]);
+        let candidates = vec![candidate(100, comp, 200), candidate(100, comp, 200)];
+
+        // Need 250. Each stop frees only 100 of memory; two stops free 200 < 250,
+        // and the module is never credited, so all candidates are planned.
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 250);
+        assert_eq!(
+            stops, 2,
+            "with a non-candidate worker keeping the component resident, the module is not credited"
+        );
+    }
+
+    /// Stops never exceed the number of candidates, even if the target cannot be
+    /// met.
+    #[test]
+    fn stops_capped_at_candidate_count() {
+        let comp = component();
+        let refcounts = HashMap::from([(comp, 1usize)]);
+        let candidates = vec![candidate(10, comp, 5)];
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 1_000_000);
+        assert_eq!(stops, 1);
+    }
+
+    /// A zero target needs no stops.
+    #[test]
+    fn zero_target_plans_no_stops() {
+        let comp = component();
+        let refcounts = HashMap::from([(comp, 1usize)]);
+        let candidates = vec![candidate(100, comp, 200)];
+        assert_eq!(plan_memory_eviction_stops(&candidates, &refcounts, 0), 0);
+    }
+
+    /// Stopping the last resident worker of a component frees its linear memory
+    /// *and* its shared compiled module. This is the byte total the actual stop
+    /// loop must report back to the gate; reporting memory alone here under-counts
+    /// reclaimed headroom and drives unnecessary higher-tier evictions.
+    #[test]
+    fn credit_stop_includes_module_for_last_worker_of_component() {
+        let comp = component();
+        let mut remaining = HashMap::from([(comp, 1usize)]);
+        // Sole resident worker: memory 100, module 200 → frees 300.
+        let freed = credit_eviction_stop(&mut remaining, &comp, 100, 200);
+        assert_eq!(
+            freed, 300,
+            "stopping the last worker frees its memory and the component's module"
+        );
+    }
+
+    /// While another resident worker of the same component remains, a stop frees
+    /// only the worker's own linear memory — the shared module stays resident, so
+    /// its bytes must not be credited.
+    #[test]
+    fn credit_stop_excludes_module_while_component_still_resident() {
+        let comp = component();
+        let mut remaining = HashMap::from([(comp, 2usize)]);
+        // First of two workers: memory only.
+        let first = credit_eviction_stop(&mut remaining, &comp, 100, 200);
+        assert_eq!(
+            first, 100,
+            "module not freed while a sibling worker remains"
+        );
+        // Second worker empties the component: memory + module.
+        let second = credit_eviction_stop(&mut remaining, &comp, 100, 200);
+        assert_eq!(second, 300, "module freed once the last worker is stopped");
+    }
+
+    /// The freed total accumulated by crediting each successful stop (the stop
+    /// loop's accounting) matches what the planner credited for the same stops,
+    /// so the gate sees consistent memory between planning and the value returned
+    /// from eviction.
+    #[test]
+    fn credit_stop_total_matches_plan_accounting() {
+        let shared = component();
+        let solo = component();
+        let refcounts = HashMap::from([(shared, 2usize), (solo, 1usize)]);
+        let candidates = vec![
+            candidate(100, shared, 200),
+            candidate(100, shared, 200),
+            candidate(100, solo, 200),
+        ];
+
+        // Plan enough to stop all three.
+        let planned_stops = plan_memory_eviction_stops(&candidates, &refcounts, 100_000);
+        assert_eq!(planned_stops, 3);
+
+        // Replay the same stops through the stop-loop accounting helper.
+        let mut remaining = refcounts;
+        let mut freed = 0u64;
+        for c in candidates.iter().take(planned_stops) {
+            freed += credit_eviction_stop(&mut remaining, &c.component, c.memory, c.module_bytes);
+        }
+        // 3 * memory(100) + module of shared(200, on the 2nd stop) + module of
+        // solo(200) = 300 + 200 + 200 = 700.
+        assert_eq!(
+            freed, 700,
+            "stop-loop freed total credits each worker's memory plus each component's module once"
+        );
+    }
+}
+
+// ── ConcurrentAgentsScheduler — model-based liveness property ────────────────
+//
+// The scheduler keeps its own `running_count` integer alongside the real tokio
+// semaphore permits. The two must stay in lockstep: every increment of
+// `running_count` must be matched by exactly one decrement, regardless of how a
+// granted slot is disposed of (released by a live worker, or dropped inside a
+// cancelled waiter's oneshot channel). If they drift, the scheduler wedges —
+// `running_count` sticks at the limit while permits are actually free, and
+// every future acquire queues forever. This is the production deadlock the
+// property is designed to catch.
+//
+// The model drives random interleavings of acquire / release / cancel against
+// the real scheduler and, after every step, asserts the *liveness* invariant:
+// whenever fewer permits are genuinely held than the limit allows, a fresh
+// acquire must succeed promptly. A leaked `running_count` violates this.
+mod scheduler_liveness {
+    use super::super::concurrent_agents_scheduler::{
+        ConcurrentAgentPermit, ConcurrentAgentsScheduler,
+    };
+    use super::{account, agent, resource_entry_with_agent_limit};
+    use proptest::prelude::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::task::JoinHandle;
+
+    /// One step in a randomized scheduler workload.
+    #[derive(Debug, Clone)]
+    enum Op {
+        /// Acquire a permit and hold it (resolves immediately if capacity is
+        /// free, otherwise the in-flight acquire is parked in `pending`).
+        Acquire,
+        /// Release a currently-held permit, if any.
+        Release(prop::sample::Index),
+        /// Cancel an in-flight (likely queued) acquire, if any. Exercises both
+        /// "cancelled while queued" and "cancelled just after being granted".
+        CancelPending(prop::sample::Index),
+        /// Release a held permit and, in the same step, cancel an in-flight
+        /// acquire. This is the deadly race: the released slot may be granted
+        /// to the in-flight acquire's oneshot and then the acquire is cancelled
+        /// before it can receive it. The slot must still be released.
+        ReleaseThenCancel(prop::sample::Index, prop::sample::Index),
+    }
+
+    fn arb_ops() -> impl Strategy<Value = Vec<Op>> {
+        prop::collection::vec(
+            prop_oneof![
+                3 => Just(Op::Acquire),
+                2 => any::<prop::sample::Index>().prop_map(Op::Release),
+                2 => any::<prop::sample::Index>().prop_map(Op::CancelPending),
+                3 => (any::<prop::sample::Index>(), any::<prop::sample::Index>())
+                    .prop_map(|(a, b)| Op::ReleaseThenCancel(a, b)),
+            ],
+            1..60,
+        )
+    }
+
+    /// Let any synchronous grant/drain bookkeeping triggered by a release or
+    /// cancellation settle before the next observation.
+    async fn settle() {
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+
+    proptest! {
+        // Cap shrink iterations so a failing (buggy) run cannot spend minutes
+        // re-running wedging inputs against the overall timeout while shrinking.
+        #![proptest_config(ProptestConfig { cases: 128, max_shrink_iters: 64, ..ProptestConfig::default() })]
+
+        /// Liveness: under any interleaving of acquire / release / cancel, the
+        /// scheduler never wedges. After each step, if fewer permits are held
+        /// than the limit, a fresh acquire must succeed within a short timeout.
+        /// At the end, draining all held permits must let the account return to
+        /// full capacity.
+        #[test]
+        fn scheduler_never_wedges_under_churn(
+            limit in 1usize..6,
+            ops in arb_ops(),
+        ) {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_time()
+                .build()
+                .unwrap();
+
+            rt.block_on(async move {
+                // Bound the whole case so a wedge fails fast and deterministically
+                // rather than hanging the test suite. A correct scheduler completes
+                // a 60-op workload in well under a second; the bug deadlocks here,
+                // so a tight bound makes the failure (and any shrinking) quick.
+                let outcome = tokio::time::timeout(Duration::from_secs(3), async move {
+                    run_workload(limit, ops).await
+                })
+                .await;
+
+                match outcome {
+                    Ok(result) => result,
+                    Err(_elapsed) => Err(TestCaseError::fail(
+                        "scheduler workload did not complete within the overall timeout — \
+                         deadlock (running_count leaked above true occupancy)",
+                    )),
+                }
+            })?;
+        }
+    }
+
+    /// Drives one randomized workload against a freshly-registered account and
+    /// returns `Err` if the liveness invariant is ever violated. Factored out of
+    /// the proptest body so the whole run can be wrapped in an overall timeout.
+    async fn run_workload(limit: usize, ops: Vec<Op>) -> Result<(), TestCaseError> {
+        // Short per-acquire timeout: a wedge must surface quickly, but allow
+        // enough slack for genuine multi-thread scheduling jitter.
+        const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+        let sched = Arc::new(ConcurrentAgentsScheduler::new());
+        let acc = account();
+        sched
+            .register_account(acc, resource_entry_with_agent_limit(limit as u64))
+            .await;
+
+        // Permits we are deliberately holding (count against the limit).
+        let mut held: Vec<ConcurrentAgentPermit> = Vec::new();
+        // In-flight acquires not yet resolved (queued or just granted).
+        let mut pending: Vec<JoinHandle<ConcurrentAgentPermit>> = Vec::new();
+        let mut counter = 0usize;
+
+        for op in ops {
+            match op {
+                Op::Acquire => {
+                    counter += 1;
+                    let sched = sched.clone();
+                    let name = format!("W{counter}");
+                    let handle =
+                        tokio::spawn(async move { sched.acquire(acc, agent(&name)).await });
+                    pending.push(handle);
+                }
+                Op::Release(idx) => {
+                    if !held.is_empty() {
+                        let i = idx.index(held.len());
+                        drop(held.remove(i));
+                    }
+                }
+                Op::CancelPending(idx) => {
+                    if !pending.is_empty() {
+                        let i = idx.index(pending.len());
+                        pending.remove(i).abort();
+                    }
+                }
+                Op::ReleaseThenCancel(ri, ci) => {
+                    if !held.is_empty() {
+                        let i = ri.index(held.len());
+                        drop(held.remove(i));
+                    }
+                    if !pending.is_empty() {
+                        let i = ci.index(pending.len());
+                        pending.remove(i).abort();
+                    }
+                }
+            }
+
+            settle().await;
+
+            // Collect any in-flight acquires that have now resolved into
+            // held permits, so `held.len()` reflects true occupancy.
+            let mut still_pending = Vec::new();
+            for h in pending.drain(..) {
+                if h.is_finished() {
+                    if let Ok(permit) = h.await {
+                        held.push(permit);
+                    }
+                    // Cancelled/aborted handles are simply dropped.
+                } else {
+                    still_pending.push(h);
+                }
+            }
+            pending = still_pending;
+
+            // Liveness invariant: if we are below the limit, a fresh
+            // acquire must succeed promptly. A leaked running_count
+            // would make this hang and trip the timeout.
+            if held.len() < limit {
+                let probe =
+                    tokio::time::timeout(PROBE_TIMEOUT, sched.acquire(acc, agent("probe"))).await;
+                prop_assert!(
+                    probe.is_ok(),
+                    "scheduler wedged: held {} < limit {} but acquire timed out",
+                    held.len(),
+                    limit,
+                );
+                // Release the probe immediately.
+                drop(probe.ok());
+                settle().await;
+            }
+        }
+
+        // Abort everything still queued, drop all held permits, and
+        // confirm the account drains back to full capacity: `limit`
+        // fresh acquires must all succeed.
+        for h in pending.drain(..) {
+            h.abort();
+            let _ = h.await;
+        }
+        held.clear();
+        settle().await;
+
+        let mut drained = Vec::new();
+        for _ in 0..limit {
+            let p = tokio::time::timeout(PROBE_TIMEOUT, sched.acquire(acc, agent("drain"))).await;
+            prop_assert!(
+                p.is_ok(),
+                "scheduler did not return to full capacity after churn",
+            );
+            drained.push(p.unwrap());
+        }
+        Ok(())
+    }
+}
+
+// ── Grant-guard liveness under random churn ──────────────────────────────────
+//
+// A worker's memory grant is reserved with the admission gate and then owned by
+// a guard that lives in one of three places over the worker's lifetime: in the
+// in-flight start task (waiting for permits), in the resident worker (started),
+// or dropped (the worker exited or its start was cancelled). The liveness
+// invariant — mirroring `scheduler_liveness` for the concurrent-agents scheduler
+// — is that however the guard travels between those places, the gate's
+// accounting stays symmetric: once every guard is gone, admissible headroom
+// returns to the full ceiling. A reservation released zero times (leak, the
+// cancelled-while-waiting deletion bug) or more than once (double-release) breaks
+// it. With a zero-usage probe, headroom is `ceiling - granted`, so the final
+// headroom reads the granted total directly.
+mod grant_guard_liveness {
+    use super::super::admission::{
+        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource, MemoryGrant,
+    };
+    use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
+    use proptest::prelude::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::task::JoinHandle;
+
+    /// Probe with a fixed limit reporting zero resident usage, so admissible
+    /// headroom equals `ceiling - granted` and reads the granted accounting
+    /// directly — the quantity a leaked or double-released grant corrupts.
+    #[derive(Debug)]
+    struct ZeroUsageProbe {
+        limit: u64,
+    }
+
+    impl MemoryProbe for ZeroUsageProbe {
+        fn snapshot(&self) -> MemorySnapshot {
+            MemorySnapshot {
+                limit_bytes: self.limit,
+                current_bytes: 0,
+            }
+        }
+    }
+
+    /// Nothing to evict: a rejected request stays rejected (the schedule keeps
+    /// total grants within the ceiling so admission only fails transiently, never
+    /// due to a leak the gate could not see).
+    struct NoEvictionSource;
+
+    #[async_trait::async_trait]
+    impl EvictionSource for NoEvictionSource {
+        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+            0
+        }
+    }
+
+    /// One step in a randomized grant-lifecycle workload.
+    #[derive(Debug, Clone)]
+    enum Op {
+        /// Begin a worker start: spawn a task that acquires a grant of this many
+        /// bytes and then parks holding it, as a worker waits for its remaining
+        /// permits before becoming resident.
+        Start(u64),
+        /// A still-in-flight start becomes resident: its task yields the grant
+        /// guard, which we keep (the worker is now running).
+        Resident(prop::sample::Index),
+        /// Cancel a still-in-flight start, as deleting a waiting worker does:
+        /// abort the task, dropping the grant guard it held.
+        CancelStart(prop::sample::Index),
+        /// A resident worker exits: drop its grant guard.
+        Exit(prop::sample::Index),
+    }
+
+    fn arb_ops() -> impl Strategy<Value = Vec<Op>> {
+        prop::collection::vec(
+            prop_oneof![
+                4 => (1u64..50).prop_map(Op::Start),
+                2 => any::<prop::sample::Index>().prop_map(Op::Resident),
+                3 => any::<prop::sample::Index>().prop_map(Op::CancelStart),
+                2 => any::<prop::sample::Index>().prop_map(Op::Exit),
+            ],
+            1..80,
+        )
+    }
+
+    /// An in-flight start: the task runs admission, reports the outcome back over
+    /// `ready` (the grant on admit, `None` if the gate rejected it), then parks
+    /// holding the grant. The driver can take the grant (the worker became
+    /// resident) or abort the task (the start was cancelled, dropping any grant
+    /// inside the task). The outcome is always reported, so the driver never
+    /// blocks waiting on a start that was rejected.
+    struct InFlight {
+        handle: JoinHandle<()>,
+        ready: tokio::sync::oneshot::Receiver<Option<MemoryGrant>>,
+    }
+
+    /// Drive one randomized workload and assert headroom recovers to the ceiling
+    /// once every grant guard is gone.
+    async fn run_workload(limit: u64, ops: Vec<Op>) -> Result<(), TestCaseError> {
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(ZeroUsageProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+
+        let mut in_flight: Vec<InFlight> = Vec::new();
+        let mut resident: Vec<MemoryGrant> = Vec::new();
+
+        for op in ops {
+            match op {
+                Op::Start(bytes) => {
+                    let controller = controller.clone();
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let handle = tokio::spawn(async move {
+                        // Always report the admission outcome so the driver never
+                        // blocks on a start that was rejected. On admit the grant
+                        // travels to the driver (held in the channel until taken
+                        // as resident or dropped on cancel); on reject we report
+                        // `None`.
+                        let outcome = controller.admit(bytes, &NoEvictionSource).await;
+                        let _ = tx.send(outcome);
+                        // Park so the task stays alive until the driver decides
+                        // its fate (become resident, or be aborted on cancel).
+                        std::future::pending::<()>().await;
+                    });
+                    in_flight.push(InFlight { handle, ready: rx });
+                }
+                Op::Resident(idx) => {
+                    if !in_flight.is_empty() {
+                        let i = idx.index(in_flight.len());
+                        let started = in_flight.remove(i);
+                        // Becoming resident requires the start to have been
+                        // admitted. Take the grant if there is one (worker is now
+                        // running); a rejected start cannot become resident and is
+                        // simply discarded. Either way abort the parked task.
+                        if let Ok(Some(grant)) = started.ready.await {
+                            resident.push(grant);
+                        }
+                        started.handle.abort();
+                        let _ = started.handle.await;
+                    }
+                }
+                Op::CancelStart(idx) => {
+                    if !in_flight.is_empty() {
+                        let i = idx.index(in_flight.len());
+                        let started = in_flight.remove(i);
+                        // Delete a waiting worker: abort the task and drop the
+                        // `InFlight`. Any grant the start acquired is held in
+                        // `started.ready`; dropping it returns the reservation,
+                        // exactly as aborting a waiting worker mid-flight does.
+                        started.handle.abort();
+                        let _ = started.handle.await;
+                        drop(started.ready);
+                    }
+                }
+                Op::Exit(idx) => {
+                    if !resident.is_empty() {
+                        let i = idx.index(resident.len());
+                        drop(resident.remove(i));
+                    }
+                }
+            }
+            // Let acquires/aborts settle so the granted accounting is observable.
+            for _ in 0..4 {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        // Tear everything down: abort remaining starts, drop remaining resident
+        // grants. The environment is now empty.
+        for started in in_flight.drain(..) {
+            started.handle.abort();
+            let _ = started.handle.await;
+        }
+        resident.clear();
+        // Let the final drops' releases settle.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let headroom = controller.headroom_bytes();
+        prop_assert_eq!(
+            headroom,
+            limit,
+            "headroom did not recover to ceiling {} after all grants were released (got {}); \
+             a grant leaked or was double-released across the lifecycle",
+            limit,
+            headroom
+        );
+
+        // And the gate must be live again: a fresh full-ceiling admission fits.
+        let readmit = controller.admit(limit, &NoEvictionSource).await;
+        prop_assert!(
+            readmit.is_some(),
+            "gate refused a full-ceiling admission after draining; headroom is wedged"
+        );
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 128, max_shrink_iters: 64, ..ProptestConfig::default() })]
+
+        /// Liveness: under any interleaving of start / become-resident /
+        /// cancel-start / exit, once every grant guard is gone the gate's
+        /// admissible headroom returns to the full ceiling and admits again. A
+        /// grant that leaks on cancellation (or is released twice) breaks this.
+        #[test]
+        fn grants_never_leak_under_random_churn(
+            limit in 200u64..4000,
+            ops in arb_ops(),
+        ) {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_time()
+                .build()
+                .unwrap();
+
+            rt.block_on(async move {
+                tokio::time::timeout(Duration::from_secs(10), run_workload(limit, ops))
+                    .await
+                    .unwrap_or_else(|_| Err(TestCaseError::fail(
+                        "grant workload did not complete within the timeout",
+                    )))
+            })?;
+        }
+    }
+}

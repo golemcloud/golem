@@ -31,7 +31,8 @@ use crate::durable_host::blobstore::classify_blob_store_error;
 use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
 };
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{
     STORAGE_TYPE_BLOB_STORE, record_storage_bytes_written, record_storage_objects_deleted,
     record_storage_objects_written,
@@ -79,10 +80,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
-        let mut durability =
-            Durability::<BlobstoreContainerGetData>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
@@ -90,7 +87,26 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<BlobstoreContainerGetData, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreGetData {
+                container: container_name.clone(),
+                object: name.clone(),
+                begin: start,
+                end,
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
@@ -103,7 +119,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                         end,
                     )
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -111,24 +127,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            let result = HostResponseBlobStoreGetData {
-                result: result.map_err(|err| err.to_string()),
-            };
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreGetData {
-                        container: container_name,
-                        object: name,
-                        begin: start,
-                        end,
+                    HostResponseBlobStoreGetData {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
         match result.result {
             Ok(get_data) => {
                 let incoming_value = self
@@ -147,10 +154,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let mut durability =
-            Durability::<BlobstoreContainerWriteData>::new(self, DurableFunctionType::WriteRemote)
-                .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
@@ -162,9 +165,27 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<OutgoingValueEntry>(&data)
             .map(|outgoing_value_entry| outgoing_value_entry.body.read().unwrap().clone())?;
+        let length = data.len() as u64;
 
-        let result = if durability.is_live() {
-            let length = data.len() as u64;
+        let mut handle = CallHandle::<BlobstoreContainerWriteData, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreWriteData {
+                container: container_name.clone(),
+                object: name.clone(),
+                length,
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
@@ -176,7 +197,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                         data.clone(),
                     )
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -200,23 +221,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     1,
                 );
             }
-            let result = HostResponseBlobStoreUnit {
-                result: result.map_err(|err| err.to_string()),
-            };
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreWriteData {
-                        container: container_name,
-                        object: name,
-                        length,
+                    HostResponseBlobStoreUnit {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
         Ok(result.result)
     }
 
@@ -224,10 +237,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
-        let mut durability =
-            Durability::<BlobstoreContainerListObject>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
@@ -235,14 +244,30 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<BlobstoreContainerListObject, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreContainer {
+                container: container_name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .list_objects(environment_id, container_name.clone())
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -250,21 +275,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            let result = HostResponseBlobStoreListObjects {
-                result: result.map_err(|err| err.to_string()),
-            };
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreContainer {
-                        container: container_name,
+                    HostResponseBlobStoreListObjects {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         match result.result {
             Ok(list_objects) => {
@@ -283,12 +302,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<(), Error>> {
-        let mut durability = Durability::<BlobstoreContainerDeleteObject>::new(
-            self,
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
@@ -296,14 +309,34 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<BlobstoreContainerDeleteObject, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreContainerAndObject {
+                container: container_name.clone(),
+                object: name.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        // Unlike the other sites a durability error here is softened into a guest-visible `Error`
+        // rather than propagated, so `complete`/`replay` are matched instead of `?`-ed.
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await {
+                    Ok(CallReplayOutcome::Replayed(response)) => break 'resp Ok(response),
+                    Ok(CallReplayOutcome::Incomplete(live)) => handle = live,
+                    Err(err) => break 'resp Err(err),
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .delete_object(environment_id, container_name.clone(), name.clone())
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -321,21 +354,14 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     1,
                 );
             }
-            let result = HostResponseBlobStoreUnit {
-                result: result.map_err(|err| err.to_string()),
-            };
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreContainerAndObject {
-                        container: container_name,
-                        object: name,
+                    HostResponseBlobStoreUnit {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
                 .await
-        } else {
-            durability.replay(self).await
         };
 
         match result {
@@ -349,28 +375,39 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let mut durability = Durability::<BlobstoreContainerDeleteObjects>::new(
-            self,
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
+        let count = names.len() as u64;
 
-        let result = if durability.is_live() {
-            let count = names.len() as u64;
+        let mut handle = CallHandle::<BlobstoreContainerDeleteObjects, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreContainerAndObjects {
+                container: container_name.clone(),
+                objects: names.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .delete_objects(environment_id, container_name.clone(), names.clone())
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -388,23 +425,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     count,
                 );
             }
-            let result = HostResponseBlobStoreUnit {
-                result: result.map_err(|err| err.to_string()),
-            };
-
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreContainerAndObjects {
-                        container: container_name,
-                        objects: names,
+                    HostResponseBlobStoreUnit {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         Ok(result.result)
     }
@@ -414,10 +443,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let mut durability =
-            Durability::<BlobstoreContainerHasObject>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
@@ -425,14 +450,31 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<BlobstoreContainerHasObject, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreContainerAndObject {
+                container: container_name.clone(),
+                object: name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .has_object(environment_id, container_name.clone(), name.clone())
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -440,23 +482,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            let result = HostResponseBlobStoreContains {
-                result: result.map_err(|err| err.to_string()),
-            };
-
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreContainerAndObject {
-                        container: container_name,
-                        object: name,
+                    HostResponseBlobStoreContains {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         Ok(result.result)
     }
@@ -466,10 +500,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
-        let mut durability =
-            Durability::<BlobstoreContainerObjectInfo>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
@@ -477,14 +507,31 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<BlobstoreContainerObjectInfo, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreContainerAndObject {
+                container: container_name.clone(),
+                object: name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .object_info(environment_id, container_name.clone(), name.clone())
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -492,24 +539,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-
-            let result = HostResponseBlobStoreObjectMetadata {
-                result: result.map_err(|err| err.to_string()),
-            };
-
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreContainerAndObject {
-                        container: container_name,
-                        object: name,
+                    HostResponseBlobStoreObjectMetadata {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         match result.result {
             Ok(object_info) => {
@@ -526,10 +564,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     }
 
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
-        let mut durability =
-            Durability::<BlobstoreContainerClear>::new(self, DurableFunctionType::WriteRemote)
-                .await?;
-
         let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
@@ -537,14 +571,30 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<BlobstoreContainerClear, NotCancellable>::start(
+            self,
+            HostRequestBlobStoreContainer {
+                container: container_name.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .state
                     .blob_store_service
                     .clear(environment_id, container_name.clone())
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
                 {
@@ -562,22 +612,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     1,
                 );
             }
-            let result = HostResponseBlobStoreUnit {
-                result: result.map_err(|err| err.to_string()),
-            };
-
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestBlobStoreContainer {
-                        container: container_name,
+                    HostResponseBlobStoreUnit {
+                        result: result.map_err(|err| err.to_string()),
                     },
-                    result,
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         Ok(result.result)
     }

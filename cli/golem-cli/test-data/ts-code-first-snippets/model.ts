@@ -49,6 +49,13 @@ export type ListType = Array<string>;
 
 export type ListComplexType = Array<ObjectType>;
 
+// A recursive type: `Tree` references itself through `children`. This exercises the new
+// schema's support for recursive types end-to-end over the real REST path.
+export interface Tree {
+    label: string;
+    children: Tree[];
+}
+
 export type TupleType = [string, number, boolean];
 
 export type TupleComplexType = [string, number, ObjectType];

@@ -76,7 +76,7 @@ pub(all) struct ConstructedAgent {
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@rpcTypes.DataValue, @common.Principal) -> Result[
+  construct : (@types.SchemaValueTree, @common.Principal) -> Result[
     ConstructedAgent,
     @common.AgentError,
   ]
@@ -99,7 +99,7 @@ pub(all) struct AgentInstance {
 /// Shared logic used by both `initialize` and snapshot-based `load`.
 pub fn construct_and_set_instance(
   agent_type : String,
-  input : @rpcTypes.DataValue,
+  input : @types.SchemaValueTree,
   principal : @common.Principal,
 ) -> Result[Unit, @common.AgentError] {
   match get_registered_agent(agent_type) {
@@ -142,7 +142,7 @@ pub(open) trait RawAgent {
   invoke(
     Self,
     method_name : String,
-    input : @rpcTypes.DataValue,
+    input : @types.SchemaValueTree,
     principal : @common.Principal,
-  ) -> Result[@rpcTypes.DataValue, @common.AgentError]
+  ) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }

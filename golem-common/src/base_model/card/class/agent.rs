@@ -21,7 +21,7 @@ use crate::model::card::owner::AgentOwnerPattern;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentResourcePattern {
     Any,
@@ -31,12 +31,12 @@ pub enum AgentResourcePattern {
     PluginName(AgentPluginName),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct AgentMethodName(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct AgentPluginName(pub String);
@@ -47,14 +47,14 @@ impl AgentMethodName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentInvocationIdPattern {
     Uuid(Uuid),
     Identifier(AgentInvocationIdentifier),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct AgentInvocationIdentifier(pub String);
@@ -96,7 +96,7 @@ impl ResourcePattern for AgentResourcePattern {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentVerb {
     Invoke,
@@ -110,6 +110,7 @@ pub enum AgentVerb {
     CancelInvocation,
     ActivatePlugin,
     DeactivatePlugin,
+    Debug,
 }
 impl VerbPattern for AgentVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
@@ -125,12 +126,13 @@ impl VerbPattern for AgentVerb {
             "cancel-invocation" => Some(Self::CancelInvocation),
             "activate-plugin" => Some(Self::ActivatePlugin),
             "deactivate-plugin" => Some(Self::DeactivatePlugin),
+            "debug" => Some(Self::Debug),
             _ => None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct AgentClass;
 

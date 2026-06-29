@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::model::environment_plugin_grant::{
-    EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
-    EnvironmentPluginGrantWithDetailsRecord,
+    EnvironmentPluginGrantAuthWithDetailsRecord, EnvironmentPluginGrantRecord,
+    EnvironmentPluginGrantRepoError, EnvironmentPluginGrantWithDetailsRecord,
 };
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
@@ -46,8 +46,7 @@ pub trait EnvironmentPluginGrantRepo: Send + Sync {
     async fn get_by_id(
         &self,
         environment_plugin_grant_id: Uuid,
-        include_deleted: bool,
-    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
+    ) -> Result<Option<EnvironmentPluginGrantAuthWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 
     async fn list_by_environment(
         &self,
@@ -56,8 +55,8 @@ pub trait EnvironmentPluginGrantRepo: Send + Sync {
 
     async fn get_by_ids(
         &self,
+        environment_id: Uuid,
         environment_plugin_grant_ids: &[Uuid],
-        include_deleted: bool,
     ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 }
 
@@ -108,12 +107,11 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
     async fn get_by_id(
         &self,
         environment_plugin_grant_id: Uuid,
-        include_deleted: bool,
-    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
+    ) -> Result<Option<EnvironmentPluginGrantAuthWithDetailsRecord>, EnvironmentPluginGrantRepoError>
     {
         let span = Self::span_id(environment_plugin_grant_id);
         self.repo
-            .get_by_id(environment_plugin_grant_id, include_deleted)
+            .get_by_id(environment_plugin_grant_id)
             .instrument(span)
             .await
     }
@@ -131,12 +129,12 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
 
     async fn get_by_ids(
         &self,
+        environment_id: Uuid,
         environment_plugin_grant_ids: &[Uuid],
-        include_deleted: bool,
     ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
-        let span = info_span!(SPAN_NAME);
+        let span = Self::span_environment(environment_id);
         self.repo
-            .get_by_ids(environment_plugin_grant_ids, include_deleted)
+            .get_by_ids(environment_id, environment_plugin_grant_ids)
             .instrument(span)
             .await
     }
@@ -228,8 +226,7 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         environment_plugin_grant_id: Uuid,
-        include_deleted: bool,
-    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
+    ) -> Result<Option<EnvironmentPluginGrantAuthWithDetailsRecord>, EnvironmentPluginGrantRepoError>
     {
         let result = self
             .with_ro("get_by_id")
@@ -266,9 +263,22 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                         p.created_at AS plugin_created_at,
                         p.created_by AS plugin_created_by,
                         p.deleted_at AS plugin_deleted_at,
-                        p.deleted_by AS plugin_deleted_by
+                        p.deleted_by AS plugin_deleted_by,
+
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
 
                         FROM environment_plugin_grants epg
+                        INNER JOIN environments e
+                            ON e.environment_id = epg.environment_id
+                        INNER JOIN environment_revisions er
+                            ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                        INNER JOIN applications ap
+                            ON ap.application_id = e.application_id
+                        INNER JOIN accounts a
+                            ON a.account_id = ap.account_id
                         INNER JOIN plugins p
                             ON p.plugin_id = epg.plugin_id
                         INNER JOIN accounts pa
@@ -278,17 +288,14 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                             AND par.revision_id = pa.current_revision_id
                         WHERE
                             epg.environment_plugin_grant_id = $1
-                            AND (
-                                $2
-                                OR (
-                                    epg.deleted_at IS NULL
-                                    AND p.deleted_at IS NULL
-                                    AND pa.deleted_at IS NULL
-                                )
-                            )
+                            AND epg.deleted_at IS NULL
+                            AND p.deleted_at IS NULL
+                            AND pa.deleted_at IS NULL
+                            AND e.deleted_at IS NULL
+                            AND ap.deleted_at IS NULL
+                            AND a.deleted_at IS NULL
                 "#})
-                .bind(environment_plugin_grant_id)
-                .bind(include_deleted),
+                .bind(environment_plugin_grant_id),
             )
             .await?;
 
@@ -359,14 +366,14 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
 
     async fn get_by_ids(
         &self,
+        environment_id: Uuid,
         environment_plugin_grant_ids: &[Uuid],
-        include_deleted: bool,
     ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
         if environment_plugin_grant_ids.is_empty() {
             return Ok(vec![]);
         }
 
-        // $1 = include_deleted; IDs are bound starting at $2
+        // $1 = environment_id; IDs are bound starting at $2
         let mut binding_stack = BindingsStack::new(2);
         let in_clause = environment_plugin_grant_ids
             .iter()
@@ -419,21 +426,18 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                 ON par.account_id = pa.account_id
                 AND par.revision_id = pa.current_revision_id
             WHERE
+                epg.environment_id = $1
+                AND
                 epg.environment_plugin_grant_id IN ({in_clause})
-                AND (
-                    $1
-                    OR (
-                        epg.deleted_at IS NULL
-                        AND p.deleted_at IS NULL
-                        AND pa.deleted_at IS NULL
-                    )
-                )
+                AND epg.deleted_at IS NULL
+                AND p.deleted_at IS NULL
+                AND pa.deleted_at IS NULL
         "# };
 
         let query_as = {
             let binding_stack = binding_stack;
             sqlx::query_as(&query)
-                .bind(include_deleted)
+                .bind(environment_id)
                 .pipe(|q| binding_stack.apply(q))
         };
 

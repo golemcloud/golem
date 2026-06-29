@@ -102,8 +102,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
 - **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`) with awaited, fire-and-forget, and scheduled invocations
-- **Multimodal input** — accept mixed text, binary, and custom modality data via `#derive.multimodal` and `Multimodal[T]`
-- **Unstructured data** — `UnstructuredText` and `UnstructuredBinary` types with optional language/MIME restrictions
+- **Multimodal input** — accept mixed text, binary, and custom modality data via `#derive.multimodal` and `@multimodal.Multimodal[T]`
 - **Logging** — structured logging via `@logging.with_name("my-agent")` with level filtering
 - **Tracing** — span-based tracing via `@context.with_span(...)` with attributes
 - **Host API** - exports Golem's host API
@@ -112,11 +111,12 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 
 | Package | Description |
 |---|---|
-| `agents` | Agent registry, `RawAgent` trait, `register_agent` |
-| `agents/types` | `UnstructuredText`, `UnstructuredBinary`, `Multimodal[T]` types |
-| `schema` | Serialization traits and impls for primitives, `Option`, `Array`, `Result` |
-| `builder` | Fluent API for constructing `WitValue` and `WitType` trees |
-| `extractor` | Trait-based API for reading values from `WitValue` trees |
+| `agents` | Agent registry, `RawAgent` trait, `register_agent`, dispatch runtime |
+| `schema` | `IntoSchema` / `FromSchema` traits and impls for primitives, `Option`, `Array`, `Result`, records/enums/variants |
+| `schema_model` | The recursive `SchemaType` / `SchemaValue` model + `SchemaGraph` / `SchemaBuilder` and WIT (`golem:core/types@2.0.0`) conversions |
+| `multimodal` | `Multimodal[T]` + `MultimodalModality` trait (schema-native `list<variant>` with `role = multimodal`) |
+| `config` | Code-first configuration (`Config[T]`, `Secret[T]`, `#derive.config`) |
+| `errors` | `AgentError` construction/decoding helpers |
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |

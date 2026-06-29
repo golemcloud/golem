@@ -35,6 +35,7 @@ use crate::schema::agent::{
     OutputSchema,
 };
 use crate::schema::graph::SchemaGraph;
+use crate::schema::host_managed::HostManagedKind;
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::SchemaType;
 use std::error::Error;
@@ -66,7 +67,7 @@ pub enum PlacementError {
     /// quota tokens (today: [`SchemaScope::Constructor`]).
     QuotaTokenNotAllowed { scope: SchemaScope },
     /// A field / definition annotated with [`Role::Multimodal`] whose body
-    /// is `list<union<…>>` appeared in [`SchemaScope::Constructor`].
+    /// is `list<variant<…>>` appeared in [`SchemaScope::Constructor`].
     MultimodalListNotAllowedInConstructor,
 }
 
@@ -81,7 +82,7 @@ impl Display for PlacementError {
             }
             PlacementError::MultimodalListNotAllowedInConstructor => write!(
                 f,
-                "a multimodal `list<union<…>>` is not allowed in constructor scope"
+                "a multimodal `list<variant<…>>` is not allowed in constructor scope"
             ),
         }
     }
@@ -92,10 +93,10 @@ impl Error for PlacementError {}
 /// Validate that every node reachable from `graph.root` is allowed to appear
 /// in `scope` according to the placement matrix.
 ///
-/// Multimodal detection: a `list<union<…>>` is treated as multimodal when
+/// Multimodal detection: a `list<variant<…>>` is treated as multimodal when
 /// any of the following carry `metadata.role == Some(Role::Multimodal)`:
 /// the enclosing field/def metadata, the list node's own metadata, the
-/// inner element `Ref`'s metadata, or the inner union node's metadata.
+/// inner element `Ref`'s metadata, or the inner variant node's metadata.
 /// Refs are resolved with cycle detection before the shape is classified.
 pub fn validate_placement(
     graph: &SchemaGraph,
@@ -143,24 +144,32 @@ fn walk_type<'a>(
     errors: &mut Vec<PlacementError>,
     visited: &mut Vec<&'a TypeId>,
 ) {
-    // Constructor-scope check: a list<union<…>> tagged anywhere on its
+    // Constructor-scope check: a list<variant<…>> tagged anywhere on its
     // metadata-carrying nodes (enclosing field/def metadata, list node
-    // metadata, inner element Ref metadata, or inner union metadata) with
+    // metadata, inner element Ref metadata, or inner variant metadata) with
     // role=Multimodal is forbidden. Refs are resolved with cycle detection.
     if scope == SchemaScope::Constructor
-        && is_multimodal_list_of_union(graph, ty, enclosing_metadata)
+        && is_multimodal_list_of_variant(graph, ty, enclosing_metadata)
     {
         errors.push(PlacementError::MultimodalListNotAllowedInConstructor);
     }
 
-    match ty {
-        SchemaType::Secret { .. } if scope == SchemaScope::Constructor => {
-            errors.push(PlacementError::SecretNotAllowed { scope });
+    // Host-managed capability types are rejected in constructor scope. The
+    // case set is classified through `HostManagedKind` rather than matched
+    // inline so new capability kinds are policed automatically.
+    if scope == SchemaScope::Constructor {
+        match HostManagedKind::from_type(ty) {
+            Some(HostManagedKind::Secret) => {
+                errors.push(PlacementError::SecretNotAllowed { scope });
+            }
+            Some(HostManagedKind::QuotaToken) => {
+                errors.push(PlacementError::QuotaTokenNotAllowed { scope });
+            }
+            None => {}
         }
-        SchemaType::QuotaToken { .. } if scope == SchemaScope::Constructor => {
-            errors.push(PlacementError::QuotaTokenNotAllowed { scope });
-        }
+    }
 
+    match ty {
         SchemaType::Ref { id, .. } => {
             if visited.contains(&id) {
                 return;
@@ -295,16 +304,16 @@ fn has_multimodal_role(metadata: &MetadataEnvelope) -> bool {
     matches!(metadata.role, Some(Role::Multimodal))
 }
 
-/// Whether `ty` is a `list<union<…>>` (or `fixed-list<union<…>>`) tagged
+/// Whether `ty` is a `list<variant<…>>` (or `fixed-list<variant<…>>`) tagged
 /// as multimodal somewhere on its metadata-carrying nodes:
 ///
 /// - the enclosing field / def metadata,
 /// - the list (or fixed-list) node's own metadata,
 /// - the inner element `Ref`'s metadata, or
-/// - the inner union node's metadata.
+/// - the inner variant node's metadata.
 ///
 /// Refs are resolved with cycle detection before the shape is classified.
-fn is_multimodal_list_of_union(
+fn is_multimodal_list_of_variant(
     graph: &SchemaGraph,
     ty: &SchemaType,
     enclosing_metadata: &MetadataEnvelope,
@@ -329,7 +338,7 @@ fn is_multimodal_list_of_union(
 
     let mut visited_inner: Vec<TypeId> = Vec::new();
     match resolve_ref_chain(graph, element.as_ref(), &mut visited_inner) {
-        Some(SchemaType::Union { metadata, .. }) => {
+        Some(SchemaType::Variant { metadata, .. }) => {
             list_role || element_ref_role || has_multimodal_role(metadata)
         }
         _ => false,

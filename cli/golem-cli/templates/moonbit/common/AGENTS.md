@@ -30,6 +30,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-agent-moonbit` | Adding a new agent type to a MoonBit Golem component |
 | `golem-stateless-agent-moonbit` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-moonbit` | Adding prompt and description annotations to agent methods |
+| `golem-mark-read-only-moonbit` | Marking agent methods as read-only for a side-effect-free guarantee, result caching, and HTTP cache headers |
 | `golem-configure-durability-moonbit` | Choosing between durable and ephemeral agents |
 | `golem-call-another-agent-moonbit` | Calling another agent and awaiting the result (RPC) |
 | `golem-call-from-external-moonbit` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |

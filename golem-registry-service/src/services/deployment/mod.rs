@@ -16,7 +16,6 @@ mod deploy_validation_error;
 mod deployment_context;
 mod http_parameter_conversion;
 mod mcp;
-mod mirror;
 mod read;
 mod route_compilation;
 mod routes;
@@ -24,11 +23,16 @@ mod write;
 
 pub use self::deploy_validation_error::DeployValidationError;
 pub use self::mcp::{DeployedMcpError, DeployedMcpService};
-pub use self::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
+};
 pub use golem_common::model::deployment::DeployValidationWarning;
+use golem_common::model::environment::Environment;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{
@@ -42,3 +46,19 @@ macro_rules! ok_or_continue {
     }};
 }
 use ok_or_continue;
+
+fn authorize_environment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        resource: EnvironmentResourcePattern::Any,
+    }))
+}

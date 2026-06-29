@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::await_promise;
-use crate::bindings::golem::api::host::PromiseId;
+use crate::{PromiseId, complete_promise, get_promise};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -27,7 +27,7 @@ use serde::de::DeserializeOwned;
 pub fn blocking_await_promise_json<T: DeserializeOwned>(
     promise_id: &PromiseId,
 ) -> Result<T, serde_json::Error> {
-    let promise = crate::bindings::golem::api::host::get_promise(promise_id);
+    let promise = get_promise(promise_id);
     promise.subscribe().block();
     let bytes = promise.get().unwrap();
     serde_json::from_slice(&bytes)
@@ -52,7 +52,5 @@ pub fn complete_promise_json<T: Serialize>(
     value: T,
 ) -> Result<bool, serde_json::Error> {
     let bytes = serde_json::to_vec(&value)?;
-    Ok(crate::bindings::golem::api::host::complete_promise(
-        promise_id, &bytes,
-    ))
+    Ok(complete_promise(promise_id, &bytes))
 }

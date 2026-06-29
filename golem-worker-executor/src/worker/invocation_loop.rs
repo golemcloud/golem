@@ -15,7 +15,7 @@
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
@@ -30,7 +30,7 @@ use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
@@ -45,7 +45,7 @@ use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 
-use golem_common::model::agent::structural_format::format_structural;
+use golem_common::model::agent::structural_format::format_structural_typed;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -104,7 +104,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// - Suspending the worker
     /// - Process the retry decision
     pub async fn run(&mut self) {
-        loop {
+        let mut deferred_wakeups = VecDeque::new();
+
+        'outer: loop {
             debug!("Invocation queue loop creating the instance");
 
             let (instance, store) = if let Some((instance, store)) = self.create_instance().await {
@@ -118,6 +120,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
+            let mut cleanup_ephemeral_worker = false;
 
             if let Some((kind, decision)) = self.pending_interrupt().await {
                 debug!(
@@ -144,34 +147,28 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
                     resume_replay_pending: self.resume_replay_pending.clone(),
+                    deferred_wakeups: &mut deferred_wakeups,
                 };
 
-                final_decision = inner_loop.run().await;
+                let result = inner_loop.run().await;
+                final_decision = result.retry_decision;
+                cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
             self.suspend_worker(&store).await;
 
             if let Some(kind) = final_interrupt {
-                store
-                    .lock()
-                    .await
-                    .data_mut()
-                    .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
-                    .await;
+                self.record_retry_interrupt_failure(&store, kind).await;
             }
 
             match final_decision {
                 None | Some(RetryDecision::None) => {
                     debug!("Invocation queue loop notifying parent about being stopped");
-                    self.parent
-                        .stop_internal(
-                            true,
-                            None,
-                            FinalWorkerState::Unloaded {
-                                startup_failure: None,
-                            },
-                        )
-                        .await;
+                    self.stop_unloaded().await;
+                    if cleanup_ephemeral_worker {
+                        self.parent.remove_from_active_workers().await;
+                        self.archive_ephemeral_oplog();
+                    }
                     break;
                 }
                 Some(RetryDecision::TryStop(ts)) => {
@@ -182,15 +179,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         continue;
                     } else {
                         debug!("Invocation queue loop notifying parent about being stopped");
-                        self.parent
-                            .stop_internal(
-                                true,
-                                None,
-                                FinalWorkerState::Unloaded {
-                                    startup_failure: None,
-                                },
-                            )
-                            .await;
+                        self.stop_unloaded().await;
                         break;
                     }
                 }
@@ -200,64 +189,59 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 Some(RetryDecision::Delayed(delay)) => {
                     debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
-                    tokio::select! {
-                        _ = tokio::time::sleep(delay) => {
-                            debug!("Invocation queue loop restarting after delay");
-                            continue;
-                        }
-                        command = self.receiver.recv() => {
-                            if let Some((kind, decision)) = self.pending_interrupt().await {
-                                debug!(?decision, "Invocation queue loop interrupted during delayed retry");
-                                if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                                    store
-                                        .lock()
-                                        .await
-                                        .data_mut()
-                                        .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
-                                        .await;
-                                }
-                                match decision {
-                                    RetryDecision::Immediate => continue,
-                                    RetryDecision::None => {
-                                        self.parent
-                                            .stop_internal(
-                                                true,
-                                                None,
-                                                FinalWorkerState::Unloaded {
-                                                    startup_failure: None,
-                                                },
-                                            )
-                                            .await;
-                                        break;
-                                    }
-                                    RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
-                                        unreachable!("interrupt decisions are only immediate or none")
-                                    }
-                                }
+                    let sleep = tokio::time::sleep(delay);
+                    tokio::pin!(sleep);
+                    loop {
+                        tokio::select! {
+                            _ = &mut sleep => {
+                                debug!("Invocation queue loop restarting after delay");
+                                continue 'outer;
                             }
+                            command = self.receiver.recv() => {
+                                let command = match command {
+                                    Some(command) => command,
+                                    None => {
+                                        debug!("Invocation queue loop command channel closed during delayed retry");
+                                        self.stop_unloaded().await;
+                                        break 'outer;
+                                    }
+                                };
 
-                            match command {
-                                Some(WorkerCommand::Unblock) => {
-                                    debug!("Invocation queue loop woke up during delayed retry");
-                                    continue;
+                                if let Some((kind, decision)) = self.pending_interrupt().await {
+                                    debug!(?decision, "Invocation queue loop interrupted during delayed retry");
+                                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                                        self.record_retry_interrupt_failure(&store, kind).await;
+                                    }
+                                    match decision {
+                                        RetryDecision::Immediate => {
+                                            Self::defer_wakeup(&mut deferred_wakeups, command);
+                                            continue 'outer;
+                                        }
+                                        RetryDecision::None => {
+                                            self.stop_unloaded().await;
+                                            break 'outer;
+                                        }
+                                        RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
+                                            unreachable!("interrupt decisions are only immediate or none")
+                                        }
+                                    }
                                 }
-                                Some(WorkerCommand::ResumeReplay) => {
-                                    self.resume_replay_pending.store(false, Ordering::Release);
-                                    debug!("Invocation queue loop woke up for resume replay during delayed retry");
-                                    continue;
-                                }
-                                None => {
-                                    debug!("Invocation queue loop command channel closed during delayed retry");
-                                    self.parent
-                                        .stop_internal(
-                                            true,
-                                            None,
-                                            FinalWorkerState::Unloaded {
-                                                startup_failure: None,
-                                            },
-                                        )
-                                        .await;
-                                    break;
+
+                                match command {
+                                    WorkerCommand::InternalStatusChanged => {
+                                        debug!("Invocation queue loop ignored internal status change during delayed retry");
+                                        continue;
+                                    }
+                                    WorkerCommand::WorkAvailable => {
+                                        debug!("Invocation queue loop woke up during delayed retry");
+                                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
+                                        continue 'outer;
+                                    }
+                                    WorkerCommand::ResumeReplay => {
+                                        debug!("Invocation queue loop woke up for resume replay during delayed retry");
+                                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::ResumeReplay);
+                                        continue 'outer;
+                                    }
                                 }
                             }
                         }
@@ -278,6 +262,50 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     break;
                 }
             }
+        }
+    }
+
+    async fn stop_unloaded(&self) {
+        self.parent
+            .stop_internal(
+                true,
+                None,
+                FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+            )
+            .await;
+    }
+
+    fn archive_ephemeral_oplog(&self) {
+        let oplog = self.parent.oplog.clone();
+        tokio::spawn(async move {
+            let _ = EphemeralOplog::try_archive_background(&oplog).await;
+        });
+    }
+
+    async fn record_retry_interrupt_failure(&self, store: &Mutex<Store<Ctx>>, kind: InterruptKind) {
+        store
+            .lock()
+            .await
+            .data_mut()
+            .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
+            .await;
+    }
+
+    fn defer_wakeup(deferred_wakeups: &mut VecDeque<WorkerCommand>, command: WorkerCommand) {
+        let already_deferred = match command {
+            WorkerCommand::WorkAvailable => deferred_wakeups
+                .iter()
+                .any(|command| matches!(command, WorkerCommand::WorkAvailable)),
+            WorkerCommand::ResumeReplay => deferred_wakeups
+                .iter()
+                .any(|command| matches!(command, WorkerCommand::ResumeReplay)),
+            WorkerCommand::InternalStatusChanged => true,
+        };
+
+        if !already_deferred {
+            deferred_wakeups.push_back(command);
         }
     }
 
@@ -402,6 +430,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// permit back to the semaphore pool) and re-acquired on wake.
     concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
     resume_replay_pending: Arc<AtomicBool>,
+    deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -419,22 +448,23 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///   underlying retry logic.
     ///
     /// The outer loop should either break or use the returned retry decision after the inner loop quits.
-    pub async fn run(&mut self) -> Option<RetryDecision> {
+    pub async fn run(&mut self) -> InnerInvocationLoopResult {
         debug!("Invocation queue loop started");
 
         let mut final_decision = None;
+        let mut cleanup_ephemeral_worker = false;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
         self.waiting_for_command.store(true, Ordering::Release);
         self.release_concurrent_agent_permit();
-        while let Some(cmd) = self.next_wakeup().await {
+        while let Some(cmd) = self.next_wakeup_or_initial().await {
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.acquire_concurrent_agent_permit().await;
             self.waiting_for_command.store(false, Ordering::Release);
             let outcome = match cmd {
-                WorkerCommand::Unblock => {
+                WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
                         if let Some(kind) = self.interrupt_signal.lock().await.take() {
                             break self.interrupt(kind).await;
@@ -480,6 +510,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     final_decision = Some(decision);
                     break;
                 }
+                CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
+                    final_decision = Some(decision);
+                    cleanup_ephemeral_worker = true;
+                    break;
+                }
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
             }
 
@@ -492,7 +527,17 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
-        final_decision
+        InnerInvocationLoopResult {
+            retry_decision: final_decision,
+            cleanup_ephemeral_worker,
+        }
+    }
+
+    async fn next_wakeup_or_initial(&mut self) -> Option<WorkerCommand> {
+        match self.deferred_wakeups.pop_front() {
+            Some(command) => Some(command),
+            None => self.next_wakeup().await,
+        }
     }
 
     /// Release the concurrent-agent permit back to the semaphore pool.
@@ -537,7 +582,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
                     match self.receiver.try_recv() {
                         Ok(cmd) => Some(cmd),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Some(WorkerCommand::Unblock),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Some(WorkerCommand::WorkAvailable),
                         Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
                     }
                 }
@@ -985,19 +1030,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .on_agent_invocation_success(&full_function_name, consumed_fuel, &mut output)
             .await
         {
-            Ok(()) => {
-                if self.parent.agent_mode() == AgentMode::Ephemeral {
-                    if self.store.data().component_metadata().metadata.is_agent()
-                        && kind == AgentInvocationKind::AgentInitialization
-                    {
-                        CommandOutcome::Continue
-                    } else {
-                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
-                    }
-                } else {
-                    CommandOutcome::Continue
-                }
-            }
+            Ok(()) => successful_agent_invocation_outcome(
+                self.parent.agent_mode(),
+                self.store.data().component_metadata().metadata.is_agent(),
+                kind,
+            ),
             Err(error) => {
                 self.store
                     .data_mut()
@@ -1010,7 +1047,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         },
                     )
                     .await;
-                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
     }
@@ -1039,7 +1076,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             None => RetryDecision::None,
         };
 
-        CommandOutcome::BreakInnerLoop(decision)
+        failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
@@ -1262,7 +1299,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: &IdempotencyKey,
         invocation: &AgentInvocation,
         agent_id: &AgentId,
-        parsed_agent_id: &Option<LegacyParsedAgentId>,
+        parsed_agent_id: &Option<ParsedAgentId>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
@@ -1293,7 +1330,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),
                 AttributeValue::String(
-                    format_structural(&parsed_agent_id.parameters)
+                    format_structural_typed(&parsed_agent_id.parameters)
                         .unwrap_or_else(|err| format!("Cannot render: {}", err)),
                 ),
             )
@@ -1374,10 +1411,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self.parent.oplog.upload_raw_payload(serialized_bytes).await {
                             Ok(raw_payload) => match raw_payload.into_payload::<Vec<u8>>() {
                                 Ok(payload) => {
+                                    let active_cards = self
+                                        .store
+                                        .data()
+                                        .durable_ctx()
+                                        .agent_wallet_cards_snapshot();
                                     self.parent
                                         .add_and_commit_oplog(OplogEntry::snapshot(
                                             payload,
                                             snapshot.mime_type,
+                                            active_cards,
                                         ))
                                         .await;
                                     debug!("Periodic snapshot saved successfully");
@@ -1430,10 +1473,49 @@ enum CommandOutcome {
     BreakOuterLoop,
     /// Break from the inner loop, setting the retry decision for the outer loop
     BreakInnerLoop(RetryDecision),
+    /// Break from the inner loop and archive the stopped ephemeral worker's oplog.
+    BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision),
     /// Continue processing in the inner loop
     Continue,
     /// Stop draining for now and wait for the next command or idle timer wakeup
     WaitForWakeup,
+}
+
+struct InnerInvocationLoopResult {
+    retry_decision: Option<RetryDecision>,
+    cleanup_ephemeral_worker: bool,
+}
+
+fn successful_agent_invocation_outcome(
+    agent_mode: AgentMode,
+    is_agent_component: bool,
+    kind: AgentInvocationKind,
+) -> CommandOutcome {
+    if should_cleanup_terminal_ephemeral_invocation(agent_mode, is_agent_component, kind) {
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+    } else {
+        CommandOutcome::Continue
+    }
+}
+
+fn failed_agent_invocation_outcome(
+    agent_mode: AgentMode,
+    decision: RetryDecision,
+) -> CommandOutcome {
+    if agent_mode == AgentMode::Ephemeral && decision == RetryDecision::None {
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision)
+    } else {
+        CommandOutcome::BreakInnerLoop(decision)
+    }
+}
+
+fn should_cleanup_terminal_ephemeral_invocation(
+    agent_mode: AgentMode,
+    is_agent_component: bool,
+    kind: AgentInvocationKind,
+) -> bool {
+    agent_mode == AgentMode::Ephemeral
+        && !(is_agent_component && kind == AgentInvocationKind::AgentInitialization)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1484,11 +1566,14 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, PeriodicSnapshotAction, periodic_snapshot_failure_outcome,
-        snapshot_action_at, snapshot_baseline_timestamp,
+        CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
+        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
+        successful_agent_invocation_outcome,
     };
     use crate::worker::RetryDecision;
     use crate::worker::invocation::InvokeResult;
+    use golem_common::model::AgentInvocationKind;
+    use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1549,6 +1634,66 @@ mod tests {
         assert_eq!(
             periodic_snapshot_failure_outcome(&result),
             Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
+        );
+    }
+
+    #[test]
+    fn ephemeral_non_initialization_invocation_requests_archive_drain() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn ephemeral_agent_initialization_does_not_request_active_worker_cleanup() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentInitialization
+            ),
+            CommandOutcome::Continue
+        );
+    }
+
+    #[test]
+    fn durable_invocation_does_not_request_active_worker_cleanup() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Durable,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::Continue
+        );
+    }
+
+    #[test]
+    fn terminal_ephemeral_failure_requests_archive_drain() {
+        assert_eq!(
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::None),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn retryable_ephemeral_failure_does_not_request_archive_drain() {
+        assert_eq!(
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::Immediate),
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+        );
+    }
+
+    #[test]
+    fn terminal_durable_failure_does_not_request_archive_drain() {
+        assert_eq!(
+            failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
         );
     }
 }

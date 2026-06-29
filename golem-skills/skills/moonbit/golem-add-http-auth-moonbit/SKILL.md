@@ -7,7 +7,7 @@ description: "Enabling authentication on HTTP endpoints in MoonBit Golem agents.
 
 ## Overview
 
-Golem supports authentication on HTTP endpoints via OIDC providers. Authentication is enabled in the agent code and configured via security schemes in `golem.yaml`. Load the `golem-configure-api-domain` skill for details on setting up security schemes and domain deployments.
+Golem supports authentication on HTTP endpoints via OIDC providers. Authentication is enabled in the agent code and configured via security schemes in `golem.yaml`. Load the `golem-configure-api-domain` skill for details on setting up security schemes and domain deployments, including when to use `subdomain` versus `domain`.
 
 ## Enabling Auth on All Endpoints (Mount Level)
 
@@ -108,13 +108,13 @@ fn AuthedAgent::new(name : String, principal : Principal) -> AuthedAgent {
 
 ## Deployment Configuration
 
-After enabling auth in code, you must configure a security scheme in `golem.yaml`. Load the `golem-configure-api-domain` skill for the full details. Quick reference:
+After enabling auth in code, you must configure a security scheme in `golem.yaml`. Load the `golem-configure-api-domain` skill for the full details, including when to use `subdomain` versus `domain`. Quick reference:
 
 ```yaml
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
       agents:
         SecureAgent:
           securityScheme: my-oidc            # For production OIDC

@@ -2,11 +2,7 @@ import { Callout, Tabs } from "nextra/components"
 
 # Bridge Libraries
 
-Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates or TypeScript npm packages that implement a fully typed client for specific agents, using Golem's REST API under the hood (`reqwest` for Rust, `fetch` for TypeScript).
-
-<Callout>
-Golem 1.5 only generates bridge libraries for **Rust** and **TypeScript** as target languages, but they can work with agents written in any language — including Scala and MoonBit.
-</Callout>
+Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates or TypeScript npm packages, Scala sbt projects and MoonBit modules that implement a fully typed client for specific agents, using Golem's REST API under the hood (`reqwest` for Rust, `fetch` for TypeScript).
 
 ## Configuring Bridge Generation in golem.yaml
 
@@ -20,15 +16,19 @@ bridge:
       - EscalationAgent
   rust:
     agents: AuditAgent
+  scala:
+    agents: BillingAgent
+  moonbit:
+    agents: ReportAgent
 ```
 
-This will generate a TypeScript package for `InboxAgent` and `EscalationAgent`, and a Rust crate for `AuditAgent`.
+This will generate a TypeScript package for `InboxAgent` and `EscalationAgent`, a Rust crate for `AuditAgent`, a Scala sbt project for `BillingAgent`, and a MoonBit module for `ReportAgent`.
 
 ## Using Bridge Libraries
 
 Once generated, you can use the bridge libraries like any other typed client. First configure the connection, then interact with agents:
 
-<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript">
 <Tabs.Tab>
 ```typescript
 import { CounterAgent, configure } from 'counter-agent-client/counter-agent-client.js'
@@ -53,11 +53,37 @@ let c1 = CounterAgent::get("c1").await?;
 let value = c1.increment().await?;
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.bridge.client.counter_agent.CounterAgentClient
+import golem.bridge.runtime.GolemServer
+
+import scala.concurrent.Await
+import scala.concurrent.duration._
+
+CounterAgentClient.configure(GolemServer.Local, "bridgetest", "local")
+val c1 = Await.result(CounterAgentClient.get("c1"), 30.seconds)
+val value = Await.result(c1.increment(), 30.seconds)
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+// In moon.pkg, import the generated client and the bundled runtime:
+//   "counter-agent-client/client" @client
+//   "counter-agent-client/runtime" @runtime
+async fn main {
+  @client.CounterAgent::configure(@runtime.Local, "bridgetest", "local")
+  let c1 = @client.CounterAgent::get("c1")
+  let value = c1.increment()
+  println(value)
+}
+```
+</Tabs.Tab>
 </Tabs>
 
 ## Configuration Options
 
-Both the TypeScript and Rust bridge libraries require three configuration parameters:
+The TypeScript, Rust, Scala and MoonBit bridge libraries require three configuration parameters:
 
 | Parameter | Description |
 |-----------|-------------|
@@ -70,7 +96,3 @@ Both the TypeScript and Rust bridge libraries require three configuration parame
 The generated libraries define all custom data types used in parameters and return types of agent methods. This means you get full compile-time type checking and IDE autocompletion when interacting with agents from external applications.
 
 Bridge libraries follow the same conventions as agent-to-agent RPC, providing `get`, `getPhantom`, and `newPhantom` constructors for agent instances.
-
-<Callout>
-Scala and MoonBit bridge generators will be added in a future release.
-</Callout>

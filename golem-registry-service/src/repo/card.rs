@@ -34,13 +34,6 @@ pub trait CardRepo: Send + Sync {
 
     async fn get(&self, card_id: CardId) -> Result<Option<CardRecord>, CardRepoError>;
 
-    async fn insert_token_root_card(
-        &self,
-        account_id: Uuid,
-        expected_epoch: i64,
-        card: CardRecord,
-    ) -> Result<CardRecord, CardRepoError>;
-
     // Delete a card including all descendants. Returns ids of all deleted cards.
     async fn delete(
         &self,
@@ -78,20 +71,6 @@ impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
         self.repo
             .get(card_id)
             .instrument(Self::span_card_id(card_id))
-            .await
-    }
-
-    async fn insert_token_root_card(
-        &self,
-        account_id: Uuid,
-        expected_epoch: i64,
-        card: CardRecord,
-    ) -> Result<CardRecord, CardRepoError> {
-        let span = Self::span_card_id(CardId(card.card_id));
-
-        self.repo
-            .insert_token_root_card(account_id, expected_epoch, card)
-            .instrument(span)
             .await
     }
 
@@ -141,16 +120,16 @@ impl DbCardRepo<PostgresPool> {
     async fn insert_parent_links(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         card_id: Uuid,
-        parent_ids: &[Uuid],
+        parent_ids: &[CardId],
     ) -> Result<(), CardRepoError> {
         for parent_id in parent_ids {
             tx.execute(
                 sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
                     .bind(card_id)
-                    .bind(parent_id),
+                    .bind(parent_id.0),
             )
             .await
-            .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(*parent_id))?;
+            .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(parent_id.0))?;
         }
 
         Ok(())
@@ -269,7 +248,7 @@ impl DbCardRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         record: CardRecord,
     ) -> Result<CardRecord, CardRepoError> {
-        Self::lock_parent_cards_for_create(tx, record.data.value().parent_ids.as_slice()).await?;
+        Self::lock_parent_cards_for_create(tx, record.data.value().parent_ids()).await?;
 
         let inserted: CardRecord = tx
             .fetch_one_as(
@@ -288,12 +267,7 @@ impl DbCardRepo<PostgresPool> {
             )
             .await?;
 
-        Self::insert_parent_links(
-            tx,
-            inserted.card_id,
-            inserted.data.value().parent_ids.as_slice(),
-        )
-        .await?;
+        Self::insert_parent_links(tx, inserted.card_id, inserted.data.value().parent_ids()).await?;
 
         Ok(inserted)
     }
@@ -302,18 +276,18 @@ impl DbCardRepo<PostgresPool> {
 impl DbCardRepo<PostgresPool> {
     async fn lock_parent_cards_for_create(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
-        parent_ids: &[Uuid],
+        parent_ids: &[CardId],
     ) -> Result<(), CardRepoError> {
         for parent_id in parent_ids {
             let row = tx
                 .fetch_optional(
                     sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
-                        .bind(*parent_id),
+                        .bind(parent_id.0),
                 )
                 .await?;
 
             if row.is_none() {
-                return Err(CardRepoError::ParentNotFound(*parent_id));
+                return Err(CardRepoError::ParentNotFound(parent_id.0));
             }
         }
 
@@ -324,7 +298,7 @@ impl DbCardRepo<PostgresPool> {
 impl DbCardRepo<SqlitePool> {
     async fn lock_parent_cards_for_create(
         _tx: &mut PoolLabelledTransaction<SqlitePool>,
-        _parent_ids: &[Uuid],
+        _parent_ids: &[CardId],
     ) -> RepoResult<()> {
         // SQLite serializes write transactions, so there is no separate row-locking
         // primitive to use here. Missing parents are rejected by the card_parents FK.
@@ -355,44 +329,6 @@ impl CardRepo for DbCardRepo<PostgresPool> {
             )
             .await
             .map_err(Into::into)
-    }
-
-    async fn insert_token_root_card(
-        &self,
-        account_id: Uuid,
-        expected_epoch: i64,
-        record: CardRecord,
-    ) -> Result<CardRecord, CardRepoError> {
-        self.db_pool
-            .with_tx_err(METRICS_SVC_NAME, "insert_token_root_card", |tx| {
-                Box::pin(async move {
-                    let inserted = Self::create_in_tx(tx, record).await?;
-
-                    let rows_affected = tx
-                        .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE accounts
-                                SET token_root_card_id = $1
-                                WHERE account_id = $2
-                                  AND token_root_card_epoch = $3
-                                  AND token_root_card_id IS NULL
-                                  AND deleted_at IS NULL
-                            "#})
-                            .bind(inserted.card_id)
-                            .bind(account_id)
-                            .bind(expected_epoch),
-                        )
-                        .await?
-                        .rows_affected();
-
-                    if rows_affected == 1 {
-                        Ok::<_, CardRepoError>(inserted)
-                    } else {
-                        Err(CardRepoError::ConcurrentModification)
-                    }
-                })
-            })
-            .await
     }
 
     async fn delete(

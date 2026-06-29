@@ -22,10 +22,52 @@ pub mod sqlite;
 use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
+use golem_common::SafeDisplay;
 use golem_common::model::AgentId;
+use golem_common::model::RetryConfig;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::retries::get_delay;
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
+use std::future::Future;
+use tracing::warn;
+
+/// Runs a key-value storage database operation, retrying connection pool acquisition timeouts
+/// according to `retry_config`. A pool timeout happens before any statement runs, so retrying is
+/// safe even for non-idempotent operations. Any other error, or a pool timeout after the configured
+/// retries are exhausted, is converted to a safe error string and returned to the caller unchanged.
+pub(crate) async fn retry_on_pool_timeout<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &str,
+    mut op: F,
+) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, RepoError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(err) if err.is_pool_timeout() => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    warn!(
+                        op = op_name,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient key-value storage error (connection pool timeout), retrying"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    return Err(err.to_safe_string());
+                }
+            }
+            Err(err) => return Err(err.to_safe_string()),
+        }
+    }
+}
 
 #[async_trait]
 pub trait KeyValueStorage: Debug {
@@ -679,4 +721,67 @@ pub enum KeyValueStorageNamespace {
         environment_id: EnvironmentId,
         bucket: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_on_pool_timeout;
+    use golem_common::model::RetryConfig;
+    use golem_service_base::repo::RepoError;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+    use test_r::test;
+
+    fn fast_retry(max_attempts: u32) -> RetryConfig {
+        RetryConfig {
+            max_attempts,
+            min_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(1),
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        }
+    }
+
+    fn pool_timeout() -> RepoError {
+        RepoError::from(sqlx::Error::PoolTimedOut)
+    }
+
+    #[test]
+    async fn retries_pool_timeout_then_succeeds() {
+        let attempts = AtomicU32::new(0);
+        let result: Result<u32, String> = retry_on_pool_timeout(&fast_retry(5), "test", || {
+            let n = attempts.fetch_add(1, Ordering::SeqCst);
+            async move { if n < 2 { Err(pool_timeout()) } else { Ok(42) } }
+        })
+        .await;
+
+        assert_eq!(result, Ok(42));
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    async fn does_not_retry_non_pool_timeout_error() {
+        let attempts = AtomicU32::new(0);
+        let result: Result<u32, String> = retry_on_pool_timeout(&fast_retry(5), "test", || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async move { Err(RepoError::UniqueViolation("duplicate".to_string())) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn gives_up_after_exhausting_attempts() {
+        let attempts = AtomicU32::new(0);
+        let result: Result<u32, String> = retry_on_pool_timeout(&fast_retry(3), "test", || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async move { Err(pool_timeout()) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
 }

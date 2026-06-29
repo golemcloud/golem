@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_common::model::quota::ResourceDefinition;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionCreateView(pub ResourceDefinition);
+
+impl Masked for ResourceDefinitionCreateView {}
 
 impl MessageWithFields for ResourceDefinitionCreateView {
     fn message(&self) -> String {
@@ -32,8 +36,14 @@ impl MessageWithFields for ResourceDefinitionCreateView {
     }
 }
 
+impl StructuredOutput for ResourceDefinitionCreateView {
+    const KIND: &'static str = "resource.create";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionUpdateView(pub ResourceDefinition);
+
+impl Masked for ResourceDefinitionUpdateView {}
 
 impl MessageWithFields for ResourceDefinitionUpdateView {
     fn message(&self) -> String {
@@ -48,8 +58,14 @@ impl MessageWithFields for ResourceDefinitionUpdateView {
     }
 }
 
+impl StructuredOutput for ResourceDefinitionUpdateView {
+    const KIND: &'static str = "resource.update";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionDeleteView(pub ResourceDefinition);
+
+impl Masked for ResourceDefinitionDeleteView {}
 
 impl MessageWithFields for ResourceDefinitionDeleteView {
     fn message(&self) -> String {
@@ -64,8 +80,14 @@ impl MessageWithFields for ResourceDefinitionDeleteView {
     }
 }
 
+impl StructuredOutput for ResourceDefinitionDeleteView {
+    const KIND: &'static str = "resource.delete";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionGetView(pub ResourceDefinition);
+
+impl Masked for ResourceDefinitionGetView {}
 
 impl MessageWithFields for ResourceDefinitionGetView {
     fn message(&self) -> String {
@@ -78,6 +100,20 @@ impl MessageWithFields for ResourceDefinitionGetView {
     fn fields(&self) -> Vec<(String, String)> {
         resource_definition_fields(&self.0)
     }
+}
+
+impl StructuredOutput for ResourceDefinitionGetView {
+    const KIND: &'static str = "resource.get";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceDefinitionListView {
+    pub resources: Vec<ResourceDefinition>,
+}
+
+impl StructuredOutput for ResourceDefinitionListView {
+    const KIND: &'static str = "resource.list";
 }
 
 fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {
@@ -98,7 +134,7 @@ fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {
     fields.build()
 }
 
-impl TextView for Vec<ResourceDefinition> {
+impl TextOutput for ResourceDefinitionListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
@@ -108,7 +144,7 @@ impl TextView for Vec<ResourceDefinition> {
             Column::new("Unit").fixed_right(),
             Column::new("Units").fixed_right(),
         ]);
-        for row in self {
+        for row in &self.resources {
             table.add_row(vec![
                 row.name.to_string(),
                 row.revision.to_string(),

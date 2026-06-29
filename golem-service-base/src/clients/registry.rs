@@ -15,7 +15,7 @@
 use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
-use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
 use crate::model::{AccountResourceLimits, ResourceLimits};
@@ -23,21 +23,21 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchUpdateResourceUsageRequest, DownloadComponentRequest,
-    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest,
-    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
-    GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
+    AuthenticateTokenRequest, BatchGetCardsRequest, BatchGetExistingCardsRequest,
+    BatchUpdateResourceUsageRequest, DownloadComponentRequest, GetActiveMcpForDomainRequest,
+    GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
+    GetAllDeployedComponentRevisionsRequest, GetComponentMetadataRequest,
     GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     ResolveAgentTypeByNamesRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
-    authenticate_token_response, batch_update_resource_usage_response, download_component_response,
+    authenticate_token_response, batch_get_cards_response, batch_get_existing_cards_response,
+    batch_update_resource_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
-    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_current_environment_state_response,
-    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
-    get_resource_definition_by_name_response, get_resource_limits_response,
-    resolve_agent_type_by_names_response, resolve_component_response,
+    get_all_deployed_component_revisions_response, get_component_metadata_response,
+    get_current_environment_state_response, get_deployed_component_metadata_response,
+    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
+    get_resource_limits_response, resolve_agent_type_by_names_response, resolve_component_response,
     update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
@@ -48,6 +48,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
@@ -87,13 +88,6 @@ pub trait RegistryService: Send + Sync {
         token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError>;
 
-    async fn get_auth_details_for_environment(
-        &self,
-        environment_id: EnvironmentId,
-        include_deleted: bool,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError>;
-
     // limits api
     async fn get_resource_limits(
         &self,
@@ -113,6 +107,20 @@ pub trait RegistryService: Send + Sync {
         &self,
         updates: HashMap<AccountId, ResourceUsageUpdate>,
     ) -> Result<AccountResourceLimits, RegistryServiceError>;
+
+    async fn batch_get_existing_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<CardId>, RegistryServiceError> {
+        Ok(card_ids)
+    }
+
+    async fn batch_get_cards(
+        &self,
+        _card_ids: Vec<CardId>,
+    ) -> Result<Vec<StoredCard>, RegistryServiceError> {
+        Ok(Vec::new())
+    }
 
     // components api
     // will return the component even if it is deleted
@@ -464,40 +472,6 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_auth_details_for_environment(
-        &self,
-        environment_id: EnvironmentId,
-        include_deleted: bool,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
-        let response = self
-            .client
-            .call("get_auth_details_for_environment", move |client| {
-                let request = GetAuthDetailsForEnvironmentRequest {
-                    environment_id: Some(environment_id.into()),
-                    include_deleted,
-                    auth_ctx: Some(auth_ctx.clone().into()),
-                };
-                Box::pin(client.get_auth_details_for_environment(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(get_auth_details_for_environment_response::Result::Success(payload)) => {
-                let auth_details: AuthDetailsForEnvironment = payload
-                    .auth_details_for_environment
-                    .ok_or("missing auth_details_for_environment field")?
-                    .try_into()?;
-                Ok(auth_details)
-            }
-            Some(get_auth_details_for_environment_response::Result::Error(error)) => {
-                Err(error.into())
-            }
-        }
-    }
-
     async fn get_resource_limits(
         &self,
         account_id: AccountId,
@@ -587,6 +561,79 @@ impl RegistryService for GrpcRegistryService {
                 Ok(converted)
             }
             Some(batch_update_resource_usage_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn batch_get_existing_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<CardId>, RegistryServiceError> {
+        let request_card_ids = card_ids
+            .into_iter()
+            .map(|id| id.0.into())
+            .collect::<Vec<_>>();
+
+        let response = self
+            .client
+            .call("batch_get_existing_cards", move |client| {
+                let request = BatchGetExistingCardsRequest {
+                    card_ids: request_card_ids.clone(),
+                };
+
+                Box::pin(client.batch_get_existing_cards(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(batch_get_existing_cards_response::Result::Success(payload)) => Ok(payload
+                .card_ids
+                .into_iter()
+                .map(|id| CardId(id.into()))
+                .collect()),
+            Some(batch_get_existing_cards_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn batch_get_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<StoredCard>, RegistryServiceError> {
+        let request_card_ids = card_ids
+            .into_iter()
+            .map(|id| id.0.into())
+            .collect::<Vec<_>>();
+
+        let response = self
+            .client
+            .call("batch_get_cards", move |client| {
+                let request = BatchGetCardsRequest {
+                    card_ids: request_card_ids.clone(),
+                };
+
+                Box::pin(client.batch_get_cards(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(batch_get_cards_response::Result::Success(payload)) => payload
+                .cards
+                .into_iter()
+                .map(|card| {
+                    golem_common::serialization::deserialize(&card.card).map_err(|err| {
+                        RegistryServiceError::internal_client_error(format!(
+                            "failed to deserialize card {}: {err}",
+                            card.card_id
+                                .map(|id| uuid::Uuid::from(id).to_string())
+                                .unwrap_or_else(|| "<missing>".to_string())
+                        ))
+                    })
+                })
+                .collect(),
+            Some(batch_get_cards_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

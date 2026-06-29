@@ -17,8 +17,6 @@ use super::component_metadata::ComponentMetadata;
 use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::BTreeMap;
 
 impl TypedAgentConfigEntry {
@@ -27,7 +25,13 @@ impl TypedAgentConfigEntry {
     }
 
     pub fn to_flat_pair(&self) -> Option<(String, String)> {
-        self.value.to_json_value().ok().map(|json| {
+        crate::schema::render::to_json_value(
+            self.value.graph(),
+            self.value.root_type(),
+            self.value.value(),
+        )
+        .ok()
+        .map(|json| {
             let rendered_value = match json {
                 serde_json::Value::String(value) => value,
                 other => other.to_string(),
@@ -55,25 +59,37 @@ impl UntypedAgentConfigEntry {
             "cannot enrich local agent config for non-agentic workers".to_string()
         })?;
 
-        let value_type = component_metadata
-            .find_agent_type_by_name(agent_type_name)
+        let agent_type = component_metadata
+            .find_agent_type_by_name_ref(agent_type_name)
             .ok_or_else(|| {
                 format!("did not find expected agent type {agent_type_name} in the metadata")
-            })?
+            })?;
+
+        let declaration = agent_type
             .config
-            .into_iter()
+            .iter()
             .find(|c| c.source == AgentConfigSource::Local && c.path == self.path)
             .ok_or_else(|| {
                 format!(
                     "did not find config key {} in the metadata",
                     self.path.join(".")
                 )
-            })?
-            .value_type;
+            })?;
+
+        // Reattach the agent's native config schema graph (so named/ref
+        // composites are preserved) to the stored schema value. Refs in
+        // `value_type` resolve against the agent's `SchemaGraph`; the resulting
+        // carrier is single-root, so project the defs to exactly those reachable
+        // from `value_type` instead of cloning the whole registry.
+        let value = crate::schema::agent::typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            declaration.value_type.clone(),
+            self.value,
+        );
 
         Ok(TypedAgentConfigEntry {
             path: self.path,
-            value: ValueAndType::new(self.value, value_type),
+            value,
         })
     }
 }

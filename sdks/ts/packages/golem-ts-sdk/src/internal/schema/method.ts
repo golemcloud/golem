@@ -14,20 +14,19 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import { AgentMethod, DataSchema, ReadOnlyConfig } from 'golem:agent/common@1.5.0';
+import { ReadOnlyConfig } from 'golem:agent/common@2.0.0';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
-import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
 import { validateMethodName } from './helpers';
-import { resolveMethodInputSchema } from './methodInput';
-import { resolveMethodReturnDataSchema } from './methodOutput';
+import { resolveMethodInputParams } from './methodInput';
+import { resolveMethodOutput } from './methodOutput';
+import { RuntimeOutput, RuntimeParam } from '../typeInfoInternal';
+import { EnrichedMethod } from './agentType';
 
-export function getAgentMethodSchema(
+export function resolveAgentMethods(
   classMetadata: ClassMetadata,
   agentClassName: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _httpMountDetails?: unknown,
-): AgentMethod[] {
+): EnrichedMethod[] {
   const baseError = `Schema generation failed for agent class ${agentClassName}`;
 
   if (!classMetadata) {
@@ -39,90 +38,63 @@ export function getAgentMethodSchema(
 
     validateMethodNameOrThrow(methodName, baseError);
 
+    const params = resolveInputParamsOrThrow(agentClassName, methodName, methodParams, baseError);
+    const output = resolveOutputOrThrow(methodName, returnType, baseError);
+
+    AgentMethodRegistry.setReturnType(agentClassName, methodName, output);
+
     const baseMeta = AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
-
-    const inputSchema: DataSchema = resolveInputSchemaOrThrow(
-      agentClassName,
-      methodName,
-      methodParams,
-      baseError,
-    );
-
-    const outputSchema = resolveReturnSchemaOrThrow(
-      agentClassName,
-      methodName,
-      returnType,
-      baseError,
-    );
 
     const readOnly: ReadOnlyConfig | undefined =
       baseMeta.readOnly === undefined
         ? undefined
         : {
             cachePolicy: baseMeta.readOnly,
-            usesPrincipal: methodHasPrincipalParameter(agentClassName, methodName),
+            usesPrincipal: params.some((p) => p.type.tag === 'principal'),
           };
 
-    const agentMethod: AgentMethod = {
+    return {
       name: methodName,
       description: baseMeta.description ?? '',
       promptHint: baseMeta.prompt ?? '',
-      inputSchema,
-      outputSchema,
       httpEndpoint: baseMeta.httpEndpoint ?? [],
       readOnly,
+      params,
+      output,
     };
-
-    return agentMethod;
   });
-}
-
-function methodHasPrincipalParameter(agentClassName: string, methodName: string): boolean {
-  const paramTypes = AgentMethodParamRegistry.getParametersAndType(agentClassName, methodName);
-  for (const typeInfo of paramTypes.values()) {
-    if (typeInfo.tag === 'principal') {
-      return true;
-    }
-  }
-  return false;
 }
 
 function validateMethodNameOrThrow(methodName: string, baseError: string) {
   const validation = validateMethodName(methodName);
-
   if (Either.isLeft(validation)) {
     throw new Error(`${baseError}. ${validation.val}`);
   }
 }
 
-function resolveInputSchemaOrThrow(
+function resolveInputParamsOrThrow(
   agentClassName: string,
   methodName: string,
   parameters: MethodParams,
   baseError: string,
-): DataSchema {
-  const inputSchemaEither = resolveMethodInputSchema(agentClassName, methodName, parameters);
-
-  if (Either.isLeft(inputSchemaEither)) {
-    throw new Error(`${baseError}. ${inputSchemaEither.val}`);
+): RuntimeParam[] {
+  const result = resolveMethodInputParams(agentClassName, methodName, parameters);
+  if (Either.isLeft(result)) {
+    throw new Error(`${baseError}. ${result.val}`);
   }
-
-  return inputSchemaEither.val;
+  return result.val;
 }
 
-function resolveReturnSchemaOrThrow(
-  agentClassName: string,
+function resolveOutputOrThrow(
   methodName: string,
   returnType: Type.Type,
   baseError: string,
-): DataSchema {
-  const returnSchemaEither = resolveMethodReturnDataSchema(agentClassName, methodName, returnType);
-
-  if (Either.isLeft(returnSchemaEither)) {
+): RuntimeOutput {
+  const result = resolveMethodOutput(returnType);
+  if (Either.isLeft(result)) {
     throw new Error(
-      `${baseError}. Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${returnSchemaEither.val}`,
+      `${baseError}. Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${result.val}`,
     );
   }
-
-  return returnSchemaEither.val;
+  return result.val;
 }

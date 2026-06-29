@@ -19,7 +19,7 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::domain_registration::DomainRegistrationRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
-    DomainRegistrationRecord, DomainRegistrationRepoError,
+    DomainRegistrationAuthRecord, DomainRegistrationRecord, DomainRegistrationRepoError,
 };
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
@@ -28,12 +28,19 @@ pub use config::{
     AvailableDomainsConfig, DomainRegistrationConfig, RestrictedAvailableDomainsConfig,
 };
 pub use errors::DomainRegistrationError;
+use golem_common::model::account::AccountEmail;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, DomainLabel, DomainNamePattern,
+    EnvironmentDomainRegistrationResourcePattern, EnvironmentDomainRegistrationVerb,
+    PermissionTarget,
+};
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
-use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::auth::EnvironmentAction;
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use regex::Regex;
 use std::sync::Arc;
 
@@ -76,10 +83,11 @@ impl DomainRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateEnvironmentPluginGrant,
+        authorize_domain_registration_permission(
+            auth,
+            &environment,
+            Some(&data.domain),
+            EnvironmentDomainRegistrationVerb::Create,
         )?;
 
         if !self
@@ -124,14 +132,15 @@ impl DomainRegistrationService {
         domain_registration_id: DomainRegistrationId,
         auth: &AuthCtx,
     ) -> Result<DomainRegistration, DomainRegistrationError> {
-        let (_, environment) = self
+        let (domain_registration, owner) = self
             .get_by_id_with_environment(domain_registration_id, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteDomainRegistration,
+        authorize_domain_registration_permission_for_owner(
+            auth,
+            owner,
+            Some(&domain_registration.domain),
+            EnvironmentDomainRegistrationVerb::Delete,
         )?;
 
         let deleted_record = self
@@ -165,10 +174,11 @@ impl DomainRegistrationService {
         domain: &Domain,
         auth: &AuthCtx,
     ) -> Result<DomainRegistration, DomainRegistrationError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDomainRegistration,
+        authorize_domain_registration_permission(
+            auth,
+            environment,
+            Some(domain),
+            EnvironmentDomainRegistrationVerb::View,
         )
         .map_err(|_| DomainRegistrationError::DomainRegistrationByDomainNotFound(domain.clone()))?;
 
@@ -202,12 +212,6 @@ impl DomainRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDomainRegistration,
-        )?;
-
         let domain_registrations: Vec<DomainRegistration> = self
             .domain_registration_repo
             .list_by_environment(environment_id.0)
@@ -216,42 +220,45 @@ impl DomainRegistrationService {
             .map(|r| r.into())
             .collect();
 
-        Ok(domain_registrations)
+        Ok(domain_registrations
+            .into_iter()
+            .filter(|domain_registration| {
+                authorize_domain_registration_permission(
+                    auth,
+                    &environment,
+                    Some(&domain_registration.domain),
+                    EnvironmentDomainRegistrationVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     async fn get_by_id_with_environment(
         &self,
         domain_registration_id: DomainRegistrationId,
         auth: &AuthCtx,
-    ) -> Result<(DomainRegistration, Environment), DomainRegistrationError> {
-        let domain_registration: DomainRegistration = self
+    ) -> Result<(DomainRegistration, EnvironmentOwnerPattern), DomainRegistrationError> {
+        let record = self
             .domain_registration_repo
             .get_by_id(domain_registration_id.0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
                 domain_registration_id,
-            ))?
-            .into();
+            ))?;
 
-        let environment = self
-            .environment_service
-            .get(domain_registration.environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id)
-                }
-                other => other.into(),
-            })?;
+        let owner = environment_owner_from_domain_registration(&record);
+        let domain_registration: DomainRegistration = record.domain_registration.into();
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDomainRegistration,
+        authorize_domain_registration_permission_for_owner(
+            auth,
+            owner.clone(),
+            Some(&domain_registration.domain),
+            EnvironmentDomainRegistrationVerb::View,
         )
         .map_err(|_| DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id))?;
 
-        Ok((domain_registration, environment))
+        Ok((domain_registration, owner))
     }
 
     pub fn validate_domain_for_http_api(
@@ -359,6 +366,59 @@ impl DomainMatcher {
                     || golem_mcps_domain_regex.is_match(&domain.0)
             }
         }
+    }
+}
+
+fn authorize_domain_registration_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentDomainRegistrationVerb,
+) -> Result<(), AuthorizationError> {
+    authorize_domain_registration_permission_for_owner(
+        auth,
+        EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        domain,
+        verb,
+    )
+}
+
+fn authorize_domain_registration_permission_for_owner(
+    auth: &AuthCtx,
+    owner: EnvironmentOwnerPattern,
+    domain: Option<&Domain>,
+    verb: EnvironmentDomainRegistrationVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentDomainRegistration(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner,
+            resource: domain
+                .map(|domain| {
+                    EnvironmentDomainRegistrationResourcePattern::Domain(DomainNamePattern {
+                        labels: domain
+                            .0
+                            .split('.')
+                            .map(|label| DomainLabel(label.to_string()))
+                            .collect(),
+                    })
+                })
+                .unwrap_or(EnvironmentDomainRegistrationResourcePattern::Any),
+        },
+    ))
+}
+
+fn environment_owner_from_domain_registration(
+    domain_registration: &DomainRegistrationAuthRecord,
+) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: AccountEmail::new(domain_registration.owner_account_email.clone()),
+        application: ApplicationName(domain_registration.application_name.clone()),
+        environment: EnvironmentName(domain_registration.environment_name.clone()),
     }
 }
 

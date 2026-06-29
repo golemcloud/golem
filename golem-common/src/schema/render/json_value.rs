@@ -20,6 +20,7 @@
 
 use crate::schema::canonical;
 use crate::schema::graph::SchemaGraph;
+use crate::schema::host_managed::HostManagedKind;
 use crate::schema::metadata::TypeId;
 use crate::schema::render::error::RenderError;
 use crate::schema::render::walker::{SchemaWalker, WalkerError, resolve_ref, walk};
@@ -40,6 +41,35 @@ pub fn to_json_value(
 ) -> Result<Value, RenderError> {
     let mut renderer = ToJsonRenderer {
         path: PathStack::new(),
+        redact: false,
+    };
+    drive(walk(&mut renderer, graph, ty, value))
+}
+
+/// Render a value tree to a `serde_json::Value`, redacting every
+/// host-managed capability node (see [`HostManagedKind`]).
+///
+/// Each `Secret` / `QuotaToken` value — including those nested inside
+/// records, variants, lists, maps, options, results and unions — is
+/// replaced with the JSON string `"<redacted: kind>"`. Non-capability
+/// material is encoded exactly as in [`to_json_value`].
+///
+/// Use this on external-facing surfaces (MCP tool/resource responses,
+/// custom HTTP API responses) that would otherwise forward raw
+/// capability references to clients. Internal, trusted callers that
+/// need the lossless round-trippable form — registry storage,
+/// cross-worker RPC, oplog/grpc, config storage — should keep using
+/// [`to_json_value`]. Unlike [`to_json_value`], the output of this
+/// function is **not** guaranteed to round-trip through
+/// [`from_json_value`]; the redacted placeholder is a one-way sink.
+pub fn to_json_value_redacted(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
+) -> Result<Value, RenderError> {
+    let mut renderer = ToJsonRenderer {
+        path: PathStack::new(),
+        redact: true,
     };
     drive(walk(&mut renderer, graph, ty, value))
 }
@@ -59,6 +89,7 @@ pub fn from_json_value(
 
 struct ToJsonRenderer {
     path: PathStack,
+    redact: bool,
 }
 
 impl SchemaWalker for ToJsonRenderer {
@@ -96,6 +127,16 @@ fn encode(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<Value, RenderError> {
+    if r.redact
+        && let (Some(type_kind), Some(value_kind)) = (
+            HostManagedKind::from_type(ty),
+            HostManagedKind::from_value(value),
+        )
+        && type_kind == value_kind
+    {
+        return Ok(Value::String(type_kind.redacted_placeholder().to_string()));
+    }
+
     match (ty, value) {
         (SchemaType::Ref { .. }, _) => unreachable!("walker resolves refs"),
 
@@ -293,12 +334,8 @@ fn encode(
             encode_result(r, graph, spec, payload)
         }
 
-        (SchemaType::Union { spec, metadata }, SchemaValue::Union(payload)) => {
-            let multimodal = matches!(
-                metadata.role,
-                Some(crate::schema::metadata::Role::Multimodal)
-            );
-            encode_union(r, graph, spec, payload, multimodal)
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(payload)) => {
+            encode_union(r, graph, spec, payload)
         }
 
         (SchemaType::Future { .. }, _) | (SchemaType::Stream { .. }, _) => Err(
@@ -364,7 +401,6 @@ fn encode_union(
     graph: &SchemaGraph,
     spec: &UnionSpec,
     payload: &UnionValuePayload,
-    multimodal: bool,
 ) -> Result<Value, RenderError> {
     let branch = find_branch(spec, &payload.tag)
         .ok_or_else(|| r.mismatch(format!("unknown union branch tag `{}`", payload.tag)))?;
@@ -375,10 +411,7 @@ fn encode_union(
     // Sanity check: the produced JSON should match the branch's
     // discriminator rule. Validation should have caught a tag/body
     // disagreement at construction time; this is the runtime safety net.
-    // Multimodal unions are positionally tagged in their outer envelope
-    // and carry placeholder discriminator rules per branch, so the rule
-    // check does not apply.
-    if !multimodal && !rule_matches(&branch.discriminator, &rendered) {
+    if !rule_matches(&branch.discriminator, &rendered) {
         return Err(RenderError::UnionTagMismatch {
             tag: payload.tag.clone(),
             reason: format!(
@@ -765,7 +798,7 @@ fn from_json_body(
 
         SchemaType::Result { spec, .. } => decode_result(graph, spec, json, path, &mut visited),
 
-        SchemaType::Union { spec, metadata } => decode_union(graph, spec, metadata, json, path),
+        SchemaType::Union { spec, .. } => decode_union(graph, spec, json, path),
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => Err(RenderError::Unsupported(
             "future/stream values have no JSON representation",
@@ -834,26 +867,9 @@ fn decode_result(
 fn decode_union(
     graph: &SchemaGraph,
     spec: &UnionSpec,
-    metadata: &crate::schema::metadata::MetadataEnvelope,
     json: &Value,
     path: &mut PathStack,
 ) -> Result<SchemaValue, RenderError> {
-    // Multimodal unions are positionally tagged in their outer envelope
-    // (a `list<union<…>>` whose element index picks the branch). The bare
-    // union body cannot be decoded by this generic discriminator-based
-    // pipeline because every branch carries a placeholder discriminator
-    // rule. Picking a branch by body shape would silently mis-tag values
-    // whenever two branches accept the same JSON shape, so we refuse
-    // explicitly and let multimodal-aware callers decode through their
-    // own envelope.
-    if matches!(
-        metadata.role,
-        Some(crate::schema::metadata::Role::Multimodal)
-    ) {
-        return Err(RenderError::Unsupported(
-            "multimodal union JSON decoding requires an external multimodal envelope",
-        ));
-    }
     // First: find every branch whose discriminator rule matches the
     // incoming JSON value. Validation rules out multi-match at construction
     // time; a runtime safety net catches the case where the value is bad.

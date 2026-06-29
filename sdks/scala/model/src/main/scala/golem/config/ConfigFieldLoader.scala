@@ -16,10 +16,9 @@
 
 package golem.config
 
-import golem.data.ElementSchema
-import zio.blocks.schema.Schema
+import golem.schema.{FromSchema, IntoSchema}
 
 trait ConfigFieldLoader {
-  def loadLocal[A](path: List[String], elementSchema: ElementSchema)(implicit schema: Schema[A]): A
-  def loadSecret[A](path: List[String], elementSchema: ElementSchema)(implicit schema: Schema[A]): Secret[A]
+  def loadLocal[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A
+  def loadSecret[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): Secret[A]
 }

@@ -26,8 +26,11 @@ describe('withReservation', () => {
    * Loads `quota.ts` with a fresh module registry and a controlled mock for
    * `golem:quota/types@1.5.0`.
    *
-   * `reserveImpl` controls what `RawQuotaToken#reserve()` does.  The default
-   * returns a raw reservation object; pass a custom function to make it throw.
+   * The quota host module now uses the free functions `new-token` / `reserve` /
+   * `split` / `merge` plus the `reservation` resource; the opaque
+   * `quota-token` handle lives in `golem:core/types`. `reserveImpl` controls
+   * what the `reserve(token, amount)` free function does. The default returns a
+   * raw reservation object; pass a custom function to make it throw.
    */
   async function loadQuotaModule(reserveImpl?: (amount: bigint) => unknown): Promise<{
     withReservation: typeof import('../src/host/quota').withReservation;
@@ -49,9 +52,12 @@ describe('withReservation', () => {
 
     vi.doMock('golem:quota/types@1.5.0', () => ({
       Reservation: MockRawReservationClass,
-      QuotaToken: vi.fn().mockImplementation(() => ({
-        reserve: reserveImpl ?? defaultReserveImpl,
-      })),
+      // `new-token` returns the opaque owned `quota-token` handle; an empty
+      // object is a sufficient stand-in for it.
+      newToken: vi.fn().mockImplementation(() => ({})),
+      reserve: (_token: unknown, amount: bigint) => (reserveImpl ?? defaultReserveImpl)(amount),
+      split: vi.fn().mockImplementation(() => ({})),
+      merge: vi.fn(),
     }));
 
     return import('../src/host/quota');
@@ -134,5 +140,23 @@ describe('withReservation', () => {
     expect(result.isErr()).toBe(true);
     expect(result.unwrapErr()).toBe(failedReservation);
     expect(commitMock).not.toHaveBeenCalled();
+  });
+
+  it('toJSON: serializing a quota token throws', async () => {
+    const { acquireQuotaToken } = await loadQuotaModule();
+    const token = acquireQuotaToken('my-resource', 1000n);
+
+    expect(() => JSON.stringify(token)).toThrow(/cannot be serialized/);
+    expect(() => JSON.stringify({ nested: token })).toThrow(/cannot be serialized/);
+  });
+
+  it('merge: merging a token into itself throws without consuming it', async () => {
+    const { acquireQuotaToken } = await loadQuotaModule();
+    const token = acquireQuotaToken('my-resource', 1000n);
+
+    expect(() => token.merge(token)).toThrow(/itself/);
+
+    // The handle must still be usable after the rejected self-merge.
+    expect(token.reserve(1n).isOk()).toBe(true);
   });
 });

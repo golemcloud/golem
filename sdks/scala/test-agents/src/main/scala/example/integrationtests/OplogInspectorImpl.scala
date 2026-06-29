@@ -17,8 +17,9 @@
 package example.integrationtests
 
 import golem.HostApi
-import golem.host.{OplogApi, WitValueTypes}
+import golem.host.OplogApi
 import golem.runtime.annotations.agentImplementation
+import golem.schema.TypedSchemaValue
 
 import scala.annotation.unused
 import scala.concurrent.Future
@@ -73,8 +74,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         s"CREATE @ $ts revision=${p.componentRevision}"
 
       case OplogApi.OplogEntry.HostCall(p) =>
-        val reqSummary = summarizeVat(p.request)
-        val resSummary = summarizeVat(p.response)
+        val reqSummary = summarizeTyped(p.request)
+        val resSummary = summarizeTyped(p.response)
         s"IMPORT @ $ts func=${p.functionName} req=$reqSummary res=$resSummary type=${p.wrappedFunctionType.tag}"
 
       case OplogApi.OplogEntry.AgentInvocationStarted(p) =>
@@ -82,7 +83,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         s"EXPORT @ $ts func=${p.functionName} params=$reqCount idem=${p.idempotencyKey}"
 
       case OplogApi.OplogEntry.AgentInvocationFinished(p) =>
-        val resp = p.response.map(summarizeTdv).getOrElse("void")
+        val resp = p.response.map(summarizeTyped).getOrElse("void")
         s"COMPLETED @ $ts response=$resp fuel=${p.consumedFuel}"
 
       case OplogApi.OplogEntry.Suspend(t)                => s"SUSPEND @ ${t.seconds}s"
@@ -154,38 +155,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
     }
   }
 
-  private def summarizeVat(vat: WitValueTypes.ValueAndType): String = {
-    val nodeCount = vat.value.nodes.size
-    val typeCount = vat.typ.nodes.size
-    val firstNode = vat.value.nodes.headOption.map(describeNode).getOrElse("empty")
-    s"VAT($nodeCount nodes, $typeCount types, first=$firstNode)"
-  }
-
-  private def summarizeTdv(tdv: OplogApi.TypedDataValue): String =
-    s"TDV(value=${tdv.value.take(50)}, schema=${tdv.schema.take(50)})"
-
-  private def describeNode(n: WitValueTypes.WitNode): String = n match {
-    case WitValueTypes.WitNode.RecordValue(f)     => s"record(${f.size})"
-    case WitValueTypes.WitNode.VariantValue(c, _) => s"variant($c)"
-    case WitValueTypes.WitNode.EnumValue(c)       => s"enum($c)"
-    case WitValueTypes.WitNode.FlagsValue(f)      => s"flags(${f.size})"
-    case WitValueTypes.WitNode.TupleValue(e)      => s"tuple(${e.size})"
-    case WitValueTypes.WitNode.ListValue(e)       => s"list(${e.size})"
-    case WitValueTypes.WitNode.OptionValue(v)     => s"option(${v.isDefined})"
-    case WitValueTypes.WitNode.ResultValue(o, e)  => s"result(ok=${o.isDefined},err=${e.isDefined})"
-    case WitValueTypes.WitNode.PrimU8(v)          => s"u8($v)"
-    case WitValueTypes.WitNode.PrimU16(v)         => s"u16($v)"
-    case WitValueTypes.WitNode.PrimU32(v)         => s"u32($v)"
-    case WitValueTypes.WitNode.PrimU64(v)         => s"u64($v)"
-    case WitValueTypes.WitNode.PrimS8(v)          => s"s8($v)"
-    case WitValueTypes.WitNode.PrimS16(v)         => s"s16($v)"
-    case WitValueTypes.WitNode.PrimS32(v)         => s"s32($v)"
-    case WitValueTypes.WitNode.PrimS64(v)         => s"s64($v)"
-    case WitValueTypes.WitNode.PrimFloat32(v)     => s"f32($v)"
-    case WitValueTypes.WitNode.PrimFloat64(v)     => s"f64($v)"
-    case WitValueTypes.WitNode.PrimChar(v)        => s"char($v)"
-    case WitValueTypes.WitNode.PrimBool(v)        => s"bool($v)"
-    case WitValueTypes.WitNode.PrimString(v)      => s"string($v)"
-    case WitValueTypes.WitNode.Handle(u, r)       => s"handle($u,$r)"
+  private def summarizeTyped(tv: TypedSchemaValue): String = {
+    val typeCount = tv.graph.defs.size + 1
+    s"TYPED(${tv.value.productPrefix}, $typeCount types)"
   }
 }

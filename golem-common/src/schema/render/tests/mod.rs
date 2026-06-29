@@ -14,6 +14,7 @@
 
 mod cli_text_tests;
 mod docs_tests;
+mod json_schema_props;
 mod json_schema_tests;
 mod json_value_tests;
 mod openapi_tests;

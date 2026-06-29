@@ -16,20 +16,13 @@
 
 package golem.host
 
-import scala.scalajs.js
-
 package object js {
-  // CoreTypes
-  type JsNodeIndex    = Int
-  type JsResourceId   = js.BigInt
-  type JsResourceMode = String // "owned" | "borrowed"
-
-  // golem:agent/common@1.5.0
+  // golem:agent/common@2.0.0
   type JsAgentMode         = String // "durable" | "ephemeral"
   type JsAgentConfigSource = String // "local" | "secret"
   type JsSystemVariable    = String // "agent-type" | "agent-version"
 
-  // golem:agent/agent-host@1.5.0
+  // golem:api/host@1.5.0
   type JsUpdateMode             = String // "automatic" | "snapshot-based"
   type JsAgentStatus            = String // "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited"
   type JsFilterComparator       = String // "equal" | "not-equal" | "greater-equal" | "greater" | "less-equal" | "less"

@@ -31,6 +31,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-durability-scala` | Choosing between durable and ephemeral agents |
 | `golem-stateless-agent-scala` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-scala` | Adding prompt and description annotations to agent methods |
+| `golem-mark-read-only-scala` | Marking agent methods as read-only for a side-effect-free guarantee, result caching, and HTTP cache headers |
 | `golem-call-another-agent-scala` | Calling another agent and awaiting the result (RPC) |
 | `golem-call-from-external-scala` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |
 | `golem-fire-and-forget-scala` | Triggering an agent invocation without waiting for the result |

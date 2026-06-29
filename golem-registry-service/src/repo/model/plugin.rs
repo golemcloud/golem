@@ -15,7 +15,7 @@
 use super::audit::ImmutableAuditFields;
 use super::hash::SqlBlake3Hash;
 use anyhow::anyhow;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::ComponentId;
 use golem_common::model::plugin_registration::{OplogProcessorPluginSpec, PluginRegistrationId};
 use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
@@ -53,6 +53,19 @@ pub struct PluginRecord {
 
     // for Library and App plugin type
     pub wasm_content_hash: Option<SqlBlake3Hash>,
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct PluginAuthRecord {
+    #[sqlx(flatten)]
+    pub plugin: PluginRecord,
+    pub account_email: String,
+}
+
+impl PluginAuthRecord {
+    pub fn account_email(&self) -> AccountEmail {
+        AccountEmail::new(self.account_email.clone())
+    }
 }
 
 impl PluginRecord {

@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::{AgentError, AgentType};
+use crate::model::agent::AgentError;
 use crate::model::parsed_function_name::ParsedFunctionName;
+use crate::schema::agent::AgentTypeSchema;
+use crate::schema::agent::wit::{decode_agent_error, decode_agent_type, wire};
 use anyhow::anyhow;
+use golem_schema::schema::wit::QuotaTokenHandleRep;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
@@ -26,18 +29,23 @@ use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::cli::StdoutStream;
 use wasmtime_wasi::p2::pipe;
 use wasmtime_wasi::{IoCtx, IoData, IoView, WasiCtx, WasiCtxView, WasiView};
-const INTERFACE_NAME: &str = "golem:agent/guest@1.5.0";
+const INTERFACE_NAME: &str = "golem:agent/guest@2.0.0";
 const FUNCTION_NAME: &str = "discover-agent-types";
 
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
 /// Optionally fails if the component does not implement the agent interfaces, otherwise returns an empty agent type set for such components.
-pub async fn extract_agent_types_with_streams(
+///
+/// Returns the schema-native [`AgentTypeSchema`] model. This is the canonical
+/// extraction path: it does not downgrade to the legacy `AgentType`, so it
+/// preserves capability types (`QuotaToken`, `Secret`) and rich scalars that
+/// the legacy schema model cannot represent.
+pub async fn extract_agent_type_schemas_with_streams(
     wasm_path: &Path,
     stdout: Option<impl StdoutStream + 'static>,
     stderr: Option<impl StdoutStream + 'static>,
     fail_on_missing_discover_method: bool,
     enable_fs_cache: bool,
-) -> anyhow::Result<Vec<AgentType>> {
+) -> anyhow::Result<Vec<AgentTypeSchema>> {
     let mut config = wasmtime::Config::default();
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
@@ -118,12 +126,7 @@ pub async fn extract_agent_types_with_streams(
     };
 
     let typed_func = func
-        .typed::<(), (
-            Result<
-                Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
-                crate::model::agent::bindings::golem::agent::common::AgentError,
-            >,
-        )>(&mut store)
+        .typed::<(), (Result<Vec<wire::AgentType>, wire::AgentError>,)>(&mut store)
         .map_err(|e| {
             anyhow::anyhow!(
         "The component's golem:agent/guest interface does not match the expected type signature. \
@@ -137,30 +140,35 @@ pub async fn extract_agent_types_with_streams(
 
     match results.0 {
         Ok(results) => {
-            let agent_types: Vec<AgentType> = results.into_iter().map(AgentType::from).collect();
-            for agent_type in &agent_types {
-                agent_type.validate().map_err(|e| {
+            let mut agent_types: Vec<AgentTypeSchema> = Vec::with_capacity(results.len());
+            for wire_type in results {
+                let schema = decode_agent_type(&wire_type)
+                    .map_err(|e| anyhow!("Failed to decode discovered agent type: {e:?}"))?;
+                schema.validate().map_err(|e| {
                     anyhow!("Invalid agent type returned by discover-agent-types: {e}")
                 })?;
+                agent_types.push(schema);
             }
             trace!("Discovered agent types: {:#?}", agent_types);
             Ok(agent_types)
         }
         Err(agent_error) => {
-            let agent_error: AgentError = AgentError::from(agent_error);
+            let agent_error: AgentError = decode_agent_error(agent_error)
+                .map_err(|e| anyhow!("Failed to decode discovered agent error: {e:?}"))?;
             error!("Error while discovering agent types: {agent_error}");
             Err(anyhow!(agent_error.to_string()))
         }
     }
 }
 
-/// Same as extract_agent_types_with_streams, but inherits stdout and stderr from the current process
-pub async fn extract_agent_types(
+/// Same as [`extract_agent_type_schemas_with_streams`], but inherits stdout and
+/// stderr from the current process.
+pub async fn extract_agent_type_schemas(
     wasm_path: &Path,
     fail_on_missing_discover_method: bool,
     enable_fs_cache: bool,
-) -> anyhow::Result<Vec<AgentType>> {
-    extract_agent_types_with_streams(
+) -> anyhow::Result<Vec<AgentTypeSchema>> {
+    extract_agent_type_schemas_with_streams(
         wasm_path,
         None::<pipe::MemoryOutputPipe>,
         None::<pipe::MemoryOutputPipe>,
@@ -233,6 +241,19 @@ impl WasiView for Host {
     }
 }
 
+/// Whether the resource `resource_name` imported from interface
+/// `interface_name` is the opaque `golem:core/types.quota-token`. It is matched
+/// both at its defining interface and at the `golem:quota/types` interface that
+/// re-exports (`use`s) it, so every linker instance binds it to the same host
+/// resource type expected by the generated `wire` bindings.
+fn is_quota_token_resource(interface_name: &str, resource_name: &str) -> bool {
+    resource_name == "quota-token"
+        && matches!(
+            interface_name,
+            "golem:core/types@2.0.0" | "golem:quota/types@1.5.0"
+        )
+}
+
 fn dynamic_import(
     name: &str,
     engine: &Engine,
@@ -278,7 +299,24 @@ fn dynamic_import(
                 ComponentItem::ComponentInstance(_) => {}
                 ComponentItem::Type(_) => {}
                 ComponentItem::Resource(_resource) => {
-                    if &inner_name != "pollable"
+                    if is_quota_token_resource(&name, &inner_name) {
+                        // The `quota-token` resource appears transitively in the
+                        // `discover-agent-types` result type (via
+                        // `agent-error` -> `typed-schema-value` ->
+                        // `schema-value-tree` -> `quota-token-handle`). The host
+                        // calls that export through the generated `wire` bindings,
+                        // which map this resource to [`QuotaTokenHandleRep`]. The
+                        // resource type registered here must use the same host
+                        // type or `Func::typed` rejects the signature with a
+                        // resource type mismatch. Agent discovery never produces
+                        // or consumes real quota tokens, so a dummy registration
+                        // with a no-op destructor is sufficient.
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<QuotaTokenHandleRep>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    } else if &inner_name != "pollable"
                         && inner_name != "wasi-io-pollable"
                         && &inner_name != "input-stream"
                         && &inner_name != "output-stream"

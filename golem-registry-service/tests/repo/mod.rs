@@ -22,19 +22,18 @@ use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
-use golem_registry_service::repo::environment_share::EnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::McpDeploymentRepo;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
 };
 use golem_registry_service::repo::model::application::{
-    ApplicationExtRevisionRecord, ApplicationRevisionRecord,
+    ApplicationExtRevisionRecord, ApplicationRevisionRecord, ApplicationScopedExtRevisionRecord,
 };
 use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
 use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::environment::{
-    EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
+    EnvironmentExtRevisionRecord, EnvironmentRevisionRecord, EnvironmentScopedExtRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
@@ -72,7 +71,6 @@ pub struct Deps {
     pub mcp_deployment_repo: Box<dyn McpDeploymentRepo>,
     pub deployment_repo: Box<dyn HttpApiDeploymentRepo>,
     pub full_deployment_repo: Box<dyn DeploymentRepo>,
-    pub environment_share_repo: Box<dyn EnvironmentShareRepo>,
     pub plugin_repo: Box<dyn PluginRepo>,
     pub registry_change_repo: Box<dyn RegistryChangeRepo>,
     pub test_db: TestDb,
@@ -222,7 +220,14 @@ impl Deps {
     pub async fn create_application(&self, owner_account_id: Uuid) -> ApplicationExtRevisionRecord {
         let user = self.create_account().await;
 
-        self.application_repo
+        let owner = self
+            .account_repo
+            .get_by_id(owner_account_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let scoped = self
+            .application_repo
             .create(
                 owner_account_id,
                 ApplicationRevisionRecord {
@@ -233,12 +238,20 @@ impl Deps {
                 },
             )
             .await
-            .unwrap()
+            .unwrap();
+        application_ext(scoped, owner.revision.email)
     }
 
     pub async fn create_env(&self, parent_application_id: Uuid) -> EnvironmentExtRevisionRecord {
         let user = self.create_account().await;
-        self.environment_repo
+        let app = self
+            .application_repo
+            .get_by_id(parent_application_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let scoped = self
+            .environment_repo
             .create(
                 parent_application_id,
                 EnvironmentRevisionRecord {
@@ -253,6 +266,38 @@ impl Deps {
                 },
             )
             .await
-            .unwrap()
+            .unwrap();
+        environment_ext(scoped, app.revision.name, app.account_id, app.account_email)
+    }
+}
+
+fn application_ext(
+    scoped: ApplicationScopedExtRevisionRecord,
+    account_email: String,
+) -> ApplicationExtRevisionRecord {
+    ApplicationExtRevisionRecord {
+        account_id: scoped.account_id,
+        account_email,
+        entity_created_at: scoped.entity_created_at,
+        revision: scoped.revision,
+    }
+}
+
+fn environment_ext(
+    scoped: EnvironmentScopedExtRevisionRecord,
+    application_name: String,
+    owner_account_id: Uuid,
+    owner_account_email: String,
+) -> EnvironmentExtRevisionRecord {
+    EnvironmentExtRevisionRecord {
+        application_id: scoped.application_id,
+        application_name,
+        revision: scoped.revision,
+        owner_account_id,
+        owner_account_email,
+        current_deployment_revision: scoped.current_deployment_revision,
+        current_deployment_deployment_revision: scoped.current_deployment_deployment_revision,
+        current_deployment_deployment_version: scoped.current_deployment_deployment_version,
+        current_deployment_deployment_hash: scoped.current_deployment_deployment_hash,
     }
 }

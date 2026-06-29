@@ -20,7 +20,7 @@ import scala.scalajs.js
 import scala.scalajs.js.annotation.JSName
 
 // ---------------------------------------------------------------------------
-// golem:agent/common@1.5.0  –  JS facade traits
+// golem:agent/common@2.0.0  –  JS facade traits
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -118,68 +118,6 @@ object JsPrincipal {
 
   def anonymous: JsPrincipal =
     JsShape.tagOnly[JsPrincipal]("anonymous")
-}
-
-// ---------------------------------------------------------------------------
-// AgentError  –  tagged union
-// ---------------------------------------------------------------------------
-
-@js.native
-sealed trait JsAgentError extends js.Object {
-  def tag: String = js.native
-}
-
-@js.native
-sealed trait JsAgentErrorString extends JsAgentError {
-  @JSName("val") def value: String = js.native
-}
-
-@js.native
-sealed trait JsAgentErrorCustom extends JsAgentError {
-  @JSName("val") def value: JsValueAndType = js.native
-}
-
-object JsAgentError {
-  def invalidInput(message: String): JsAgentError =
-    JsShape.tagged[JsAgentError]("invalid-input", message.asInstanceOf[js.Any])
-
-  def invalidMethod(message: String): JsAgentError =
-    JsShape.tagged[JsAgentError]("invalid-method", message.asInstanceOf[js.Any])
-
-  def invalidType(message: String): JsAgentError =
-    JsShape.tagged[JsAgentError]("invalid-type", message.asInstanceOf[js.Any])
-
-  def invalidAgentId(message: String): JsAgentError =
-    JsShape.tagged[JsAgentError]("invalid-agent-id", message.asInstanceOf[js.Any])
-
-  def customError(value: JsValueAndType): JsAgentError =
-    JsShape.tagged[JsAgentError]("custom-error", value)
-}
-
-// ---------------------------------------------------------------------------
-// AgentConstructor (named JsAgentConstructorDef to avoid clash)
-// ---------------------------------------------------------------------------
-
-@js.native
-sealed trait JsAgentConstructorDef extends js.Object {
-  def name: js.UndefOr[String]       = js.native
-  def description: String            = js.native
-  def promptHint: js.UndefOr[String] = js.native
-  def inputSchema: JsDataSchema      = js.native
-}
-
-object JsAgentConstructorDef {
-  def apply(
-    description: String,
-    inputSchema: JsDataSchema,
-    name: js.UndefOr[String] = js.undefined,
-    promptHint: js.UndefOr[String] = js.undefined
-  ): JsAgentConstructorDef = {
-    val obj = js.Dynamic.literal("description" -> description, "inputSchema" -> inputSchema)
-    name.foreach(n => obj.updateDynamic("name")(n))
-    promptHint.foreach(p => obj.updateDynamic("promptHint")(p))
-    obj.asInstanceOf[JsAgentConstructorDef]
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -362,44 +300,6 @@ object JsHttpEndpointDetails {
 }
 
 // ---------------------------------------------------------------------------
-// AgentMethod, AgentDependency
-// ---------------------------------------------------------------------------
-
-@js.native
-sealed trait JsAgentMethod extends js.Object {
-  def name: String                                  = js.native
-  def description: String                           = js.native
-  def httpEndpoint: js.Array[JsHttpEndpointDetails] = js.native
-  def promptHint: js.UndefOr[String]                = js.native
-  def inputSchema: JsDataSchema                     = js.native
-  def outputSchema: JsDataSchema                    = js.native
-  def readOnly: js.UndefOr[JsReadOnlyConfig]        = js.native
-}
-
-object JsAgentMethod {
-  def apply(
-    name: String,
-    description: String,
-    httpEndpoint: js.Array[JsHttpEndpointDetails],
-    inputSchema: JsDataSchema,
-    outputSchema: JsDataSchema,
-    promptHint: js.UndefOr[String] = js.undefined,
-    readOnly: js.UndefOr[JsReadOnlyConfig] = js.undefined
-  ): JsAgentMethod = {
-    val obj = js.Dynamic.literal(
-      "name"         -> name,
-      "description"  -> description,
-      "httpEndpoint" -> httpEndpoint,
-      "inputSchema"  -> inputSchema,
-      "outputSchema" -> outputSchema
-    )
-    promptHint.foreach(p => obj.updateDynamic("promptHint")(p))
-    readOnly.foreach(r => obj.updateDynamic("readOnly")(r))
-    obj.asInstanceOf[JsAgentMethod]
-  }
-}
-
-// ---------------------------------------------------------------------------
 // CachePolicy, ReadOnlyConfig
 // ---------------------------------------------------------------------------
 
@@ -435,31 +335,6 @@ object JsReadOnlyConfig {
     js.Dynamic
       .literal("cachePolicy" -> cachePolicy, "usesPrincipal" -> usesPrincipal)
       .asInstanceOf[JsReadOnlyConfig]
-}
-
-@js.native
-sealed trait JsAgentDependency extends js.Object {
-  def typeName: String                   = js.native
-  def description: js.UndefOr[String]    = js.native
-  def constructor: JsAgentConstructorDef = js.native
-  def methods: js.Array[JsAgentMethod]   = js.native
-}
-
-object JsAgentDependency {
-  def apply(
-    typeName: String,
-    constructor: JsAgentConstructorDef,
-    methods: js.Array[JsAgentMethod],
-    description: js.UndefOr[String] = js.undefined
-  ): JsAgentDependency = {
-    val obj = js.Dynamic.literal(
-      "typeName"    -> typeName,
-      "constructor" -> constructor,
-      "methods"     -> methods
-    )
-    description.foreach(d => obj.updateDynamic("description")(d))
-    obj.asInstanceOf[JsAgentDependency]
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -508,91 +383,4 @@ object JsSnapshotting {
 
   def enabled(config: JsSnapshottingConfig): JsSnapshotting =
     JsShape.tagged[JsSnapshotting]("enabled", config)
-}
-
-// ---------------------------------------------------------------------------
-// AgentConfigDeclaration
-// ---------------------------------------------------------------------------
-
-@js.native
-sealed trait JsAgentConfigDeclaration extends js.Object {
-  def source: JsAgentConfigSource = js.native
-  def path: js.Array[String]      = js.native
-  def valueType: JsWitType        = js.native
-}
-
-object JsAgentConfigDeclaration {
-  def apply(source: JsAgentConfigSource, path: js.Array[String], valueType: JsWitType): JsAgentConfigDeclaration =
-    js.Dynamic
-      .literal("source" -> source, "path" -> path, "valueType" -> valueType)
-      .asInstanceOf[JsAgentConfigDeclaration]
-}
-
-// ---------------------------------------------------------------------------
-// AgentType, RegisteredAgentType, TypedAgentConfigValue
-// ---------------------------------------------------------------------------
-
-@js.native
-sealed trait JsAgentType extends js.Object {
-  def typeName: String                           = js.native
-  def description: String                        = js.native
-  def sourceLanguage: String                     = js.native
-  def constructor: JsAgentConstructorDef         = js.native
-  def methods: js.Array[JsAgentMethod]           = js.native
-  def dependencies: js.Array[JsAgentDependency]  = js.native
-  def mode: JsAgentMode                          = js.native
-  def httpMount: js.UndefOr[JsHttpMountDetails]  = js.native
-  def snapshotting: JsSnapshotting               = js.native
-  def config: js.Array[JsAgentConfigDeclaration] = js.native
-}
-
-object JsAgentType {
-  def apply(
-    typeName: String,
-    description: String,
-    sourceLanguage: String,
-    constructor: JsAgentConstructorDef,
-    methods: js.Array[JsAgentMethod],
-    dependencies: js.Array[JsAgentDependency],
-    mode: JsAgentMode,
-    snapshotting: JsSnapshotting,
-    config: js.Array[JsAgentConfigDeclaration],
-    httpMount: js.UndefOr[JsHttpMountDetails] = js.undefined
-  ): JsAgentType = {
-    val obj = js.Dynamic.literal(
-      "typeName"       -> typeName,
-      "description"    -> description,
-      "sourceLanguage" -> sourceLanguage,
-      "constructor"    -> constructor,
-      "methods"        -> methods,
-      "dependencies"   -> dependencies,
-      "mode"           -> mode,
-      "snapshotting"   -> snapshotting,
-      "config"         -> config
-    )
-    httpMount.foreach(h => obj.updateDynamic("httpMount")(h))
-    obj.asInstanceOf[JsAgentType]
-  }
-}
-
-@js.native
-sealed trait JsRegisteredAgentType extends js.Object {
-  def agentType: JsAgentType       = js.native
-  def implementedBy: JsComponentId = js.native
-}
-
-object JsRegisteredAgentType {
-  def apply(agentType: JsAgentType, implementedBy: JsComponentId): JsRegisteredAgentType =
-    js.Dynamic.literal("agentType" -> agentType, "implementedBy" -> implementedBy).asInstanceOf[JsRegisteredAgentType]
-}
-
-@js.native
-sealed trait JsTypedAgentConfigValue extends js.Object {
-  def path: js.Array[String] = js.native
-  def value: JsValueAndType  = js.native
-}
-
-object JsTypedAgentConfigValue {
-  def apply(path: js.Array[String], value: JsValueAndType): JsTypedAgentConfigValue =
-    js.Dynamic.literal("path" -> path, "value" -> value).asInstanceOf[JsTypedAgentConfigValue]
 }

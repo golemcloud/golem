@@ -49,6 +49,12 @@ interface types {
         low-bits: u64,
     }
 
+    /// Parses a UUID from a string
+    parse-uuid: func(uuid: string) -> result<uuid, string>;
+
+    /// Converts a UUID to a string
+    uuid-to-string: func(uuid: uuid) -> string;
+
     record datetime {
         /// Seconds since the Unix epoch (UTC).
         seconds: s64,
@@ -59,6 +65,60 @@ interface types {
     record environment-id {
         uuid: uuid,
     }
+
+    // ============================================================
+    // Platform identifiers
+    // ============================================================
+    //
+    // Platform identifiers used by the schema-native surfaces. Keeping them
+    // here lets migrated interfaces depend on a single core version.
+
+    /// Represents a Golem component
+    record component-id {
+        uuid: uuid,
+    }
+
+    /// Represents a Golem agent
+    record agent-id {
+        /// Identifies the component the agent belongs to
+        component-id: component-id,
+        /// String representation of the agent ID (agent type and constructor parameters)
+        agent-id: string,
+    }
+
+    /// Represents a Golem account
+    record account-id {
+        uuid: uuid,
+    }
+
+    /// Represents a Golem permission card
+    record card-id {
+        uuid: uuid
+    }
+
+    /// An index into the persistent log storing all performed operations of an agent
+    type oplog-index = u64;
+
+    /// A promise ID is a value that can be passed to an external Golem API to
+    /// complete that promise from an arbitrary external source, while Golem
+    /// agents can await for this completion.
+    record promise-id {
+        agent-id: agent-id,
+        oplog-idx: oplog-index,
+    }
+
+    // ============================================================
+    // Capability resources
+    // ============================================================
+
+    /// An unforgeable capability granting the right to consume a named
+    /// resource. The handle is opaque: a guest can only obtain one from the
+    /// host (e.g. via `golem:quota`) and can never inspect or fabricate its
+    /// internal state. When carried in a `schema-value-tree` (see
+    /// `schema-value-node::quota-token-handle`) the handle is transferred by
+    /// ownership; the host converts it to/from its internal trusted
+    /// representation at the boundary.
+    resource quota-token;
 
     // ============================================================
     // Schema graph (self-contained type carrier)
@@ -113,7 +173,13 @@ interface types {
 
     /// Open registry; unknown roles fall back to structural handling.
     variant role {
+        /// `list<variant<…>>` whose elements are interchangeable modalities.
         multimodal,
+        /// `variant { inline: text, url: url }` ergonomic unstructured-text wrapper.
+        unstructured-text,
+        /// `variant { inline: binary, url: url }` ergonomic unstructured-binary wrapper.
+        unstructured-binary,
+        /// Any other producer-defined role, preserved verbatim.
         other(string),
     }
 
@@ -429,7 +495,7 @@ interface types {
 
         // Capability nodes
         secret-value(secret-value-payload),
-        quota-token-value(quota-token-value-payload),
+        quota-token-handle(own<quota-token>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
     }
@@ -487,17 +553,6 @@ interface types {
     record secret-value-payload {
         /// Opaque, authority-resolved reference.
         secret-ref: string,
-    }
-
-    /// Capability value: quota-token transport is **by snapshot**. The receiver
-    /// re-acquires a live lease against `(environment-id, resource-name)` on
-    /// demand.
-    record quota-token-value-payload {
-        environment-id: environment-id,
-        resource-name: string,
-        expected-use: u64,
-        last-credit: s64,
-        last-credit-at: datetime,
     }
 
     // ============================================================

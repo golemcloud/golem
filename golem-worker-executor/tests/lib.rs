@@ -12,16 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::component_introspection::wit_parser::{
-    AnalysedTypeResolve, SharedAnalysedTypeResolve,
-};
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
     test_component,
 };
 use std::fmt::Debug;
-use std::path::Path;
 use test_r::{sequential_suite, tag_suite, test_dep, timeout_suite};
 
 pub mod agent;
@@ -55,6 +51,32 @@ pub mod wasi;
 pub mod websocket;
 
 test_r::enable!();
+
+/// Build the schema-native invocation input carrier from already-encoded
+/// parameter [`SchemaValue`](golem_common::schema::SchemaValue)s.
+///
+/// Used by the few tests that construct parameter values by hand (rather than
+/// from `IntoSchema` Rust values via the `data_value!` macro). The invocation
+/// DSL transmits only the encoded value tree — not the accompanying schema
+/// graph — so a placeholder graph is attached to each element here.
+pub fn raw_params(
+    values: impl IntoIterator<Item = golem_common::schema::SchemaValue>,
+) -> golem_common::schema::TypedSchemaValue {
+    use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue, build_input_record};
+    let elements = values
+        .into_iter()
+        .map(|value| {
+            TypedSchemaValue::new(
+                SchemaGraph {
+                    defs: vec![],
+                    root: SchemaType::bool(),
+                },
+                value,
+            )
+        })
+        .collect();
+    build_input_record(elements).expect("raw_params: build_input_record failed")
+}
 
 tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
@@ -124,13 +146,6 @@ pub async fn test_dependencies() -> WorkerExecutorTestDependencies {
 #[test_dep(scope = HostedRpc, stub = LastUniqueId)]
 pub fn last_unique_id_owner() -> LastUniqueIdOwner {
     LastUniqueIdOwner::new()
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "golem_host")]
-pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
-    SharedAnalysedTypeResolve::new(
-        AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
-    )
 }
 
 // Pre-compiled test components - these warm the analysis cache during

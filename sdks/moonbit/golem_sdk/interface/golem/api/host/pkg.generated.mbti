@@ -4,7 +4,6 @@ package "golemcloud/golem_sdk/interface/golem/api/host"
 import {
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -59,44 +58,44 @@ pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
 // Types and methods
 pub(all) struct AgentAllFilter {
   filters : Array[AgentPropertyFilter]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentAnyFilter {
   filters : Array[AgentAllFilter]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentConfigVarsFilter {
   name : String
   comparator : StringFilterComparator
   value : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentCreatedAtFilter {
   comparator : FilterComparator
   value : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentEnvFilter {
   name : String
   comparator : StringFilterComparator
   value : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentMetadata {
   agent_id : @types.AgentId
   args : Array[String]
   env : Array[(String, String)]
-  config_vars : Array[(String, String)]
+  config : Array[(String, String)]
   status : AgentStatus
   component_revision : UInt64
   retry_count : UInt64
   environment_id : EnvironmentId
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentNameFilter {
   comparator : StringFilterComparator
   value : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum AgentPropertyFilter {
   Name(AgentNameFilter)
@@ -104,8 +103,8 @@ pub(all) enum AgentPropertyFilter {
   Version(AgentVersionFilter)
   CreatedAt(AgentCreatedAtFilter)
   Env(AgentEnvFilter)
-  WasiConfigVars(AgentConfigVarsFilter)
-} derive(Eq, @debug.Debug)
+  Config(AgentConfigVarsFilter)
+} derive(Eq, Show)
 
 pub(all) enum AgentStatus {
   RUNNING
@@ -115,23 +114,23 @@ pub(all) enum AgentStatus {
   RETRYING
   FAILED
   EXITED
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 pub fn AgentStatus::from(Int) -> Self
 pub fn AgentStatus::ordinal(Self) -> Int
 
 pub(all) struct AgentStatusFilter {
   comparator : FilterComparator
   value : AgentStatus
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentVersionFilter {
   comparator : FilterComparator
   value : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct EnvironmentId {
   uuid : @types.Uuid
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum FilterComparator {
   EQUAL
@@ -140,25 +139,25 @@ pub(all) enum FilterComparator {
   GREATER
   LESS_EQUAL
   LESS
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 pub fn FilterComparator::from(Int) -> Self
 pub fn FilterComparator::ordinal(Self) -> Int
 
 pub(all) struct ForkDetails {
   forked_phantom_id : @types.Uuid
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum ForkResult {
   Original(ForkDetails)
   Forked(ForkDetails)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct GetAgents(Int) derive(Eq, @debug.Debug)
+pub(all) struct GetAgents(Int) derive(Eq, Show)
 pub fn GetAgents::drop(Self) -> Unit
 pub fn GetAgents::get_agents(@types.ComponentId, AgentAnyFilter?, Bool) -> Self
 pub fn GetAgents::get_next(Self) -> Array[AgentMetadata]?
 
-pub(all) struct GetPromiseResult(Int) derive(Eq, @debug.Debug)
+pub(all) struct GetPromiseResult(Int) derive(Eq, Show)
 pub fn GetPromiseResult::drop(Self) -> Unit
 pub fn GetPromiseResult::get(Self) -> FixedArray[Byte]?
 pub fn GetPromiseResult::subscribe(Self) -> @poll.Pollable
@@ -167,17 +166,17 @@ pub(all) enum PersistenceLevel {
   PersistNothing
   PersistRemoteSideEffects
   Smart
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum RevertAgentTarget {
   RevertToOplogIndex(UInt64)
   RevertLastInvocations(UInt64)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct Snapshot {
   payload : FixedArray[Byte]
   mime_type : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum StringFilterComparator {
   EQUAL
@@ -185,14 +184,14 @@ pub(all) enum StringFilterComparator {
   LIKE
   NOT_LIKE
   STARTS_WITH
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 pub fn StringFilterComparator::from(Int) -> Self
 pub fn StringFilterComparator::ordinal(Self) -> Int
 
 pub(all) enum UpdateMode {
   AUTOMATIC
   SNAPSHOT_BASED
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 pub fn UpdateMode::from(Int) -> Self
 pub fn UpdateMode::ordinal(Self) -> Int
 

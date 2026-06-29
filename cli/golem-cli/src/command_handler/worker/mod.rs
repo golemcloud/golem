@@ -33,7 +33,8 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::action_result::{
-    AgentDeleteResult, AgentPluginToggleResult, AgentRevertResult,
+    AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
+    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
@@ -41,8 +42,8 @@ use crate::model::text::help::{
     ParameterErrorTableView,
 };
 use crate::model::text::worker::{
-    FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
-    format_timestamp,
+    AgentOplogEntryView, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+    format_agent_name_match, format_timestamp,
 };
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -62,11 +63,8 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest,
 };
-use golem_common::model::agent::{
-    AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, LegacyParsedAgentId, NamedElementSchema,
-    NamedElementSchemas, UntypedJsonDataValue,
-};
+use golem_common::model::agent::typed_constructor_parameters;
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -77,7 +75,9 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
+use golem_common::schema::graph::TypedSchemaValue;
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
@@ -85,7 +85,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -323,10 +323,10 @@ impl WorkerCommandHandler {
         };
 
         logln("");
-        self.ctx.log_handler().log_view(&WorkerCreateView {
+        self.ctx.log_handler().log_output(WorkerCreateView {
             component_name: agent_name_match.component_name,
             agent_name: Some(display_agent_name),
-        });
+        })?;
 
         Ok(())
     }
@@ -513,10 +513,10 @@ impl WorkerCommandHandler {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: UntypedJsonDataValue::from(agent_id.parameters.clone()),
+            parameters: serde_json::to_value(agent_id.parameters.value())?,
             phantom_id: agent_id.phantom_id,
             method_name: method_name.clone(),
-            method_parameters,
+            method_parameters: serde_json::to_value(method_parameters)?,
             mode,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
@@ -539,17 +539,17 @@ impl WorkerCommandHandler {
             log_action("Triggered", "invocation");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_trigger(idempotency_key));
+                .log_output(InvokeResultView::new_trigger(idempotency_key))?;
         } else {
             logln("");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_agent_invoke(
+                .log_output(InvokeResultView::new_agent_invoke(
                     idempotency_key,
                     result,
                     &agent_type,
                     &method_name,
-                ));
+                ))?;
         }
 
         Ok(())
@@ -605,7 +605,7 @@ impl WorkerCommandHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        let parameters: UntypedJsonDataValue = serde_json::from_str(&parameters)
+        let parameters: serde_json::Value = serde_json::from_str(&parameters)
             .with_context(|| "Failed to deserialize agent parameters".to_string())?;
 
         let Some(agent_type) = self
@@ -617,13 +617,10 @@ impl WorkerCommandHandler {
             bail!("Agent type not found: {}", agent_type_name.0);
         };
 
-        let typed_parameters = DataValue::try_from_untyped_json(
-            parameters,
-            agent_type.agent_type.constructor.input_schema.clone(),
-        )
-        .map_err(|err| {
+        let value: SchemaValue = serde_json::from_value(parameters).map_err(|err| {
             anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
+        let typed_parameters = typed_constructor_parameters(&agent_type.agent_type, value);
         let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
 
@@ -662,6 +659,13 @@ impl WorkerCommandHandler {
             "Simulated crash",
             format!("for agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentSimulateCrashResult {
+                simulated: true,
+                agent: agent_name.0.clone(),
+            })?;
 
         Ok(())
     }
@@ -710,7 +714,11 @@ impl WorkerCommandHandler {
 
             if !entries.is_empty() {
                 had_entries = true;
-                self.ctx.log_handler().log_view(&entries);
+                for (index, entry) in entries {
+                    self.ctx
+                        .log_handler()
+                        .log_output(AgentOplogEntryView { index, entry })?;
+                }
             }
 
             if cursor.is_none() {
@@ -718,7 +726,7 @@ impl WorkerCommandHandler {
             }
         }
 
-        if !had_entries {
+        if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 
@@ -781,12 +789,12 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentRevertResult {
+        self.ctx.log_handler().log_output(AgentRevertResult {
             reverted: true,
             agent: agent_name.0.clone(),
             last_oplog_index,
             number_of_invocations,
-        });
+        })?;
 
         Ok(())
     }
@@ -820,12 +828,19 @@ impl WorkerCommandHandler {
             .map(|result| result.canceled)
             .map_service_error()?;
 
-        // TODO: json / yaml response?
         if canceled {
             log_action("Canceled", "");
         } else {
             log_warn_action("Failed", "to cancel, invocation already started");
         }
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentCancelInvocationResult {
+                canceled,
+                agent: agent_name.0,
+                idempotency_key: idempotency_key.value,
+            })?;
 
         Ok(())
     }
@@ -841,6 +856,10 @@ impl WorkerCommandHandler {
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
+        if refresh.is_some() && self.ctx.format().is_structured() {
+            bail!("Refresh mode is only supported with --format text");
+        }
+
         let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
             .resolve_list_components(agent_type_name, component_name, filters)
@@ -867,7 +886,7 @@ impl WorkerCommandHandler {
                     false,
                 )
                 .await?;
-            self.ctx.log_handler().log_view(&view);
+            self.ctx.log_handler().log_output(view)?;
             Ok(())
         }
     }
@@ -890,16 +909,15 @@ impl WorkerCommandHandler {
                     .unwrap_or(usize::MAX);
 
                 // Fetch first — while the previous frame is still visible
-                let output = match self
+                let output = self
                     .list_agents(components, filters, scan_cursor, max_count, precise, true)
                     .await
-                {
-                    Ok(view) => self
-                        .ctx
-                        .log_handler()
-                        .render_view_truncated(&view, term_height),
-                    Err(e) => format!("Error: {e:#}"),
-                };
+                    .and_then(|view| {
+                        self.ctx
+                            .log_handler()
+                            .render_view_truncated(view, term_height)
+                    })
+                    .unwrap_or_else(|e| format!("Error: {e:#}"));
 
                 // Clear and write in one buffered flush — no blank-screen gap
                 queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
@@ -1067,7 +1085,7 @@ impl WorkerCommandHandler {
                     .await?;
 
                 let parsed_agent_type_name =
-                    LegacyParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
+                    ParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
 
                 let defaults = parsed_agent_type_name
                     .as_ref()
@@ -1092,11 +1110,23 @@ impl WorkerCommandHandler {
                     })
                     .unwrap_or_default();
 
-                let mut agent_view = AgentMetadataView::from(worker).with_defaults(defaults);
+                let secret_config_paths = parsed_agent_type_name
+                    .as_ref()
+                    .map(|agent_type_name| {
+                        secret_config_paths_for_agent_type(
+                            worker_component.metadata.agent_types(),
+                            agent_type_name,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let mut agent_view = AgentMetadataView::from(worker)
+                    .with_defaults(defaults)
+                    .with_secret_config_paths(secret_config_paths);
 
                 if source_language.is_known()
                     && let Ok(parsed) =
-                        LegacyParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
+                        ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
                 {
                     agent_view.agent_name =
                         crate::agent_id_display::render_agent_id(&parsed, &source_language).into();
@@ -1160,6 +1190,11 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
+        self.ctx.log_handler().log_output(AgentInterruptResult {
+            interrupted: true,
+            agent: agent_name.0.clone(),
+        })?;
+
         Ok(())
     }
 
@@ -1181,6 +1216,11 @@ impl WorkerCommandHandler {
             "Resumed",
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx.log_handler().log_output(AgentResumeResult {
+            resumed: true,
+            agent: agent_name.0.clone(),
+        })?;
 
         Ok(())
     }
@@ -1233,16 +1273,38 @@ impl WorkerCommandHandler {
             }
         };
 
-        self.update_worker(
-            &component.component_name,
-            &component.id,
-            &agent_name.0,
-            mode,
-            target_revision,
-            await_update,
-            disable_wakeup,
-        )
-        .await?;
+        let mut update_results = TryUpdateAllWorkersResult::default();
+        match self
+            .update_worker(
+                &component.component_name,
+                &component.id,
+                &agent_name.0,
+                mode,
+                target_revision,
+                await_update,
+                disable_wakeup,
+            )
+            .await
+        {
+            Ok(()) => update_results.triggered.push(WorkerUpdateAttempt {
+                component_name: component.component_name.clone(),
+                target_revision,
+                agent_name: agent_name.0.as_str().into(),
+                error: None,
+            }),
+            Err(error) => {
+                update_results.failed.push(WorkerUpdateAttempt {
+                    component_name: component.component_name.clone(),
+                    target_revision,
+                    agent_name: agent_name.0.as_str().into(),
+                    error: Some(error.to_string()),
+                });
+                self.ctx.log_handler().log_output(update_results)?;
+                return Err(error);
+            }
+        }
+
+        self.ctx.log_handler().log_output(update_results)?;
 
         Ok(())
     }
@@ -1273,8 +1335,14 @@ impl WorkerCommandHandler {
             .cloned()
             .unwrap_or_default();
 
+        let secret_config_paths = secret_config_paths_for_agent_type(
+            component.metadata.agent_types(),
+            &agent_name_match.agent_type_name,
+        );
+
         let mut metadata_view = AgentMetadataView::from(metadata)
             .with_defaults(defaults)
+            .with_secret_config_paths(secret_config_paths)
             .with_source_language(agent_name_match.source_language.clone());
         if let Some(parsed) = &agent_name_match.parsed_agent_id
             && agent_name_match.source_language.is_known()
@@ -1286,7 +1354,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from_metadata(metadata_view, true));
+            .log_output(WorkerGetView::from_metadata(metadata_view, true))?;
 
         Ok(())
     }
@@ -1310,10 +1378,10 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentDeleteResult {
+        self.ctx.log_handler().log_output(AgentDeleteResult {
             deleted: true,
             agent: agent_name.0.clone(),
-        });
+        })?;
 
         Ok(())
     }
@@ -1374,7 +1442,7 @@ impl WorkerCommandHandler {
                 .collect(),
         };
 
-        self.ctx.log_handler().log_view(&view);
+        self.ctx.log_handler().log_output(view)?;
 
         log_action(
             "Listed files",
@@ -1447,6 +1515,13 @@ impl WorkerCommandHandler {
                     "File download cancelled",
                     format!("by user for file {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: false,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: 0,
+                })?;
                 return Ok(());
             }
         }
@@ -1457,6 +1532,13 @@ impl WorkerCommandHandler {
                     "File saved",
                     format!("to {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: true,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: file_contents.len(),
+                })?;
                 Ok(())
             }
             Err(e) => {
@@ -1510,12 +1592,12 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: true,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
             priority: plugin_priority,
-        });
+        })?;
 
         Ok(())
     }
@@ -1561,12 +1643,12 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: false,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
             priority: plugin_priority,
-        });
+        })?;
 
         Ok(())
     }
@@ -1578,7 +1660,7 @@ impl WorkerCommandHandler {
         plugin_name: &str,
         explicit_priority: Option<i32>,
     ) -> anyhow::Result<i32> {
-        let agent_type_name = LegacyParsedAgentId::parse_agent_type_name(&agent_name.0)
+        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_name.0)
             .map(|n| n.0)
             .unwrap_or_default();
 
@@ -2197,10 +2279,10 @@ impl WorkerCommandHandler {
 pub(crate) fn try_recanonicalize_agent_name_with_parsed(
     agent_name: &RawAgentId,
     component: &ComponentDto,
-) -> (RawAgentId, Option<LegacyParsedAgentId>) {
+) -> (RawAgentId, Option<ParsedAgentId>) {
     let raw = &agent_name.0;
 
-    // Extract type name and params using LegacyParsedAgentId::parse_agent_type_name
+    // Extract type name and params using ParsedAgentId::parse_agent_type_name
     // and manual splitting for the params portion
     let Some(paren_pos) = raw.find('(') else {
         return (agent_name.clone(), None);
@@ -2249,18 +2331,18 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
     // Derive source language from agent type metadata
     let source_language = SourceLanguage::from(agent_type.source_language.as_str());
 
-    // Try language-aware parse
-    let Ok(data_value) = crate::agent_id_display::parse_agent_id_params(
+    let Ok(value) = crate::agent_id_display::parse_agent_id_params(
         params_str,
+        &agent_type.schema,
         &agent_type.constructor.input_schema,
         &source_language,
     ) else {
         return (agent_name.clone(), None);
     };
+    let typed = typed_constructor_parameters(agent_type, value);
 
-    // Re-canonicalize using structural format
     let Ok(canonical) =
-        golem_common::model::agent::structural_format::format_structural(&data_value)
+        golem_common::model::agent::structural_format::format_structural_typed(&typed)
     else {
         return (agent_name.clone(), None);
     };
@@ -2275,8 +2357,7 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed =
-        LegacyParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
+    let parsed = ParsedAgentId::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
 
     (RawAgentId(new_id), parsed)
 }
@@ -2322,7 +2403,7 @@ impl WorkerCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_name: String,
     ) -> anyhow::Result<AgentNameMatch> {
-        let parsed_agent_type_name = match LegacyParsedAgentId::parse_agent_type_name(&agent_name) {
+        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_name) {
             Ok(agent_type_name) => agent_type_name,
             Err(err) => {
                 logln("");
@@ -2514,12 +2595,12 @@ impl WorkerCommandHandler {
         component: &ComponentDto,
         agent_name: &RawAgentId,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(LegacyParsedAgentId, AgentType)>> {
+    ) -> anyhow::Result<Option<(ParsedAgentId, AgentTypeSchema)>> {
         if !component.metadata.is_agent() {
             return Ok(None);
         }
 
-        match LegacyParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
+        match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
                     let parsed = match ParsedFunctionName::parse(function_name) {
@@ -2575,7 +2656,7 @@ impl WorkerCommandHandler {
             },
             Err(err) => {
                 let parsed_agent_type_name =
-                    LegacyParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
+                    ParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
 
                 logln("");
                 log_error(format!(
@@ -2660,7 +2741,7 @@ impl Drop for AlternateScreenGuard {
 /// returning the matched method name on success.
 fn resolve_agent_method_name(
     provided_method_name: &str,
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
 ) -> crate::fuzzy::Result {
     let mut alias_to_original: HashMap<String, String> = HashMap::new();
     let mut aliases: Vec<String> = Vec::new();
@@ -2685,31 +2766,18 @@ fn resolve_agent_method_name(
 }
 
 fn parse_method_parameters_with_error_table(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     method_name: &str,
     arguments: Vec<AgentFunctionArgument>,
     source_language: &SourceLanguage,
-) -> anyhow::Result<UntypedJsonDataValue> {
+) -> anyhow::Result<SchemaValue> {
     let method = agent_type
         .methods
         .iter()
         .find(|m| m.name == method_name)
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
-    let element_schemas = match &method.input_schema {
-        DataSchema::Tuple(schemas) => &schemas.elements,
-        DataSchema::Multimodal(_) => {
-            let joined_args = arguments.join(",");
-            let method_parameters = crate::agent_id_display::parse_agent_id_params(
-                &joined_args,
-                &method.input_schema,
-                source_language,
-            )
-            .map_err(|e| anyhow!("Failed to parse method parameters: {e}"))?;
-
-            return Ok(UntypedJsonDataValue::from(method_parameters));
-        }
-    };
+    let InputSchema::Parameters(element_schemas) = &method.input_schema;
 
     if element_schemas.len() != arguments.len() {
         logln("");
@@ -2727,16 +2795,21 @@ fn parse_method_parameters_with_error_table(
             .map(|(idx, pair)| match pair {
                 EitherOrBoth::Both(schema, value) => ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: Some(value.clone()),
-                    error: parse_method_argument_element(value, &schema.schema, source_language)
-                        .err()
-                        .map(|err| err.message),
+                    error: parse_method_argument_schema_value(
+                        value,
+                        &agent_type.schema,
+                        &schema.schema,
+                        source_language,
+                    )
+                    .err()
+                    .map(|err| err.message),
                     source_language: source_language.clone(),
                 },
                 EitherOrBoth::Left(schema) => ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: None,
                     error: Some("missing argument".to_string()),
                     source_language: source_language.clone(),
@@ -2761,12 +2834,17 @@ fn parse_method_parameters_with_error_table(
     let mut has_error = false;
 
     for (idx, (schema, value)) in element_schemas.iter().zip(arguments.iter()).enumerate() {
-        match parse_method_argument_element(value, &schema.schema, source_language) {
+        match parse_method_argument_schema_value(
+            value,
+            &agent_type.schema,
+            &schema.schema,
+            source_language,
+        ) {
             Ok(parsed) => {
                 values.push(parsed);
                 rows.push(ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: Some(value.clone()),
                     error: None,
                     source_language: source_language.clone(),
@@ -2776,7 +2854,7 @@ fn parse_method_parameters_with_error_table(
                 has_error = true;
                 rows.push(ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: Some(value.clone()),
                     error: Some(err.message),
                     source_language: source_language.clone(),
@@ -2794,23 +2872,22 @@ fn parse_method_parameters_with_error_table(
         bail!(NonSuccessfulExit);
     }
 
-    Ok(UntypedJsonDataValue::from(DataValue::Tuple(
-        ElementValues { elements: values },
-    )))
+    Ok(SchemaValue::Record { fields: values })
 }
 
-fn parse_method_argument_value(
+fn parse_method_argument_schema_value(
     value: &str,
-    analysed_type: &AnalysedType,
+    graph: &SchemaGraph,
+    schema: &SchemaType,
     source_language: &SourceLanguage,
-) -> Result<golem_wasm::ValueAndType, crate::agent_id_display::ParseError> {
+) -> Result<SchemaValue, crate::agent_id_display::ParseError> {
     let parsed =
-        crate::agent_id_display::parse_value_for_language(value, analysed_type, source_language);
+        crate::agent_id_display::parse_value_for_language(value, graph, schema, source_language);
     if parsed.is_ok() {
         return parsed;
     }
 
-    if matches!(analysed_type, AnalysedType::Str(_)) {
+    if matches!(schema, SchemaType::String { .. }) {
         let quoted =
             serde_json::to_string(value).map_err(|err| crate::agent_id_display::ParseError {
                 position: 0,
@@ -2819,7 +2896,8 @@ fn parse_method_argument_value(
 
         return crate::agent_id_display::parse_value_for_language(
             &quoted,
-            analysed_type,
+            graph,
+            schema,
             source_language,
         );
     }
@@ -2827,49 +2905,26 @@ fn parse_method_argument_value(
     parsed
 }
 
-fn parse_method_argument_element(
-    value: &str,
-    element_schema: &ElementSchema,
-    source_language: &SourceLanguage,
-) -> Result<ElementValue, crate::agent_id_display::ParseError> {
-    match element_schema {
-        ElementSchema::ComponentModel(cm) => {
-            let value = parse_method_argument_value(value, &cm.element_type, source_language)?;
-            Ok(ElementValue::ComponentModel(ComponentModelElementValue {
-                value,
-            }))
-        }
-        ElementSchema::UnstructuredText(_) | ElementSchema::UnstructuredBinary(_) => {
-            let schema = DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "value".to_string(),
-                    schema: element_schema.clone(),
-                }],
-            });
-
-            let parsed =
-                crate::agent_id_display::parse_agent_id_params(value, &schema, source_language)?;
-
-            match parsed {
-                DataValue::Tuple(ElementValues { mut elements }) => {
-                    elements
-                        .pop()
-                        .ok_or_else(|| crate::agent_id_display::ParseError {
-                            position: 0,
-                            message: "expected a single parsed value".to_string(),
-                        })
-                }
-                DataValue::Multimodal(_) => Err(crate::agent_id_display::ParseError {
-                    position: 0,
-                    message: "expected tuple parsed value".to_string(),
-                }),
-            }
-        }
-    }
-}
-
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     format!("{}/{}", cursor.layer, cursor.cursor)
+}
+
+fn secret_config_paths_for_agent_type(
+    agent_types: &[AgentTypeSchema],
+    agent_type_name: &AgentTypeName,
+) -> BTreeSet<String> {
+    agent_types
+        .iter()
+        .find(|agent_type| &agent_type.type_name == agent_type_name)
+        .map(|agent_type| {
+            agent_type
+                .config
+                .iter()
+                .filter(|config| config.source == AgentConfigSource::Secret)
+                .map(|config| config.path.join("."))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Injects a `mode == ...` filter string at the front of `filters` based on
@@ -2967,11 +3022,11 @@ fn split_agent_name(agent_name: &str) -> Vec<&str> {
 }
 
 fn build_repl_agent_id(
-    agent_type: &AgentType,
-    typed_parameters: DataValue,
+    agent_type: &AgentTypeSchema,
+    typed_parameters: TypedSchemaValue,
     phantom_id: Option<Uuid>,
-) -> anyhow::Result<LegacyParsedAgentId> {
-    LegacyParsedAgentId::new_auto_phantom(
+) -> anyhow::Result<ParsedAgentId> {
+    ParsedAgentId::new_auto_phantom(
         agent_type.type_name.clone(),
         typed_parameters,
         phantom_id,
@@ -2981,25 +3036,32 @@ fn build_repl_agent_id(
 }
 
 fn normalize_public_agent_id(
-    agent_id: &LegacyParsedAgentId,
-    agent_type: &AgentType,
-) -> anyhow::Result<LegacyParsedAgentId> {
-    build_repl_agent_id(agent_type, agent_id.parameters.clone(), agent_id.phantom_id)
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentTypeSchema,
+) -> anyhow::Result<ParsedAgentId> {
+    ParsedAgentId::new_auto_phantom(
+        agent_type.type_name.clone(),
+        agent_id.parameters.clone(),
+        agent_id.phantom_id,
+        agent_type.mode,
+    )
+    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_element, split_agent_name,
+        parse_method_argument_schema_value, split_agent_name,
     };
     use crate::agent_id_display::SourceLanguage;
     use golem_common::model::Empty;
-    use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor,
-        DataSchema, ElementSchema, ElementValue, ElementValues, LegacyParsedAgentId,
-        NamedElementSchemas, Snapshotting, TextDescriptor,
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
+    use golem_common::schema::graph::TypedSchemaValue;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
@@ -3050,23 +3112,24 @@ mod tests {
         assert_eq!(result, input);
     }
 
-    fn test_agent_type(mode: AgentMode) -> AgentType {
-        AgentType {
+    fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: AgentTypeName("repl-agent".to_string()),
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            methods: vec![AgentMethod {
+            methods: vec![AgentMethodSchema {
                 name: "run".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![],
                 read_only: None,
             }],
@@ -3078,8 +3141,11 @@ mod tests {
         }
     }
 
-    fn empty_tuple() -> golem_common::model::agent::DataValue {
-        golem_common::model::agent::DataValue::Tuple(ElementValues { elements: vec![] })
+    fn empty_typed_parameters() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![])),
+            SchemaValue::Record { fields: vec![] },
+        )
     }
 
     #[test]
@@ -3099,17 +3165,24 @@ mod tests {
 
     #[test]
     fn repl_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_id =
-            build_repl_agent_id(&test_agent_type(AgentMode::Ephemeral), empty_tuple(), None)
-                .unwrap();
+        let agent_id = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
+            None,
+        )
+        .unwrap();
 
         assert!(agent_id.phantom_id.is_some());
     }
 
     #[test]
     fn repl_agent_id_keeps_durable_agents_non_phantom() {
-        let agent_id =
-            build_repl_agent_id(&test_agent_type(AgentMode::Durable), empty_tuple(), None).unwrap();
+        let agent_id = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Durable),
+            empty_typed_parameters(),
+            None,
+        )
+        .unwrap();
 
         assert!(agent_id.phantom_id.is_none());
     }
@@ -3118,8 +3191,8 @@ mod tests {
     fn repl_agent_id_preserves_explicit_phantom_id() {
         let explicit_phantom_id = Uuid::new_v4();
         let agent_id = build_repl_agent_id(
-            &test_agent_type(AgentMode::Ephemeral),
-            empty_tuple(),
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
             Some(explicit_phantom_id),
         )
         .unwrap();
@@ -3129,36 +3202,45 @@ mod tests {
 
     #[test]
     fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_id =
-            LegacyParsedAgentId::new(AgentTypeName("repl-agent".to_string()), empty_tuple(), None)
-                .unwrap();
-        let normalized =
-            normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();
+        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
+        let agent_id = ParsedAgentId::try_new(
+            AgentTypeName("repl-agent".to_string()),
+            empty_typed_parameters(),
+            None,
+        )
+        .unwrap();
+        let normalized = normalize_public_agent_id(&agent_id, &agent_type).unwrap();
 
         assert!(normalized.phantom_id.is_some());
     }
 
     #[test]
-    fn parse_method_argument_element_parses_unstructured_text() {
-        let parsed = parse_method_argument_element(
-            "UnstructuredText::Url(\"https://example.com\")",
-            &ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+    fn parse_method_argument_schema_value_parses_unstructured_text_inline() {
+        let ty = SchemaType::text(Default::default());
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let parsed = parse_method_argument_schema_value(
+            r#"Text("hello")"#,
+            &graph,
+            &ty,
             &SourceLanguage::Rust,
         )
         .unwrap();
 
-        assert!(matches!(parsed, ElementValue::UnstructuredText(_)));
+        assert!(matches!(parsed, SchemaValue::Text(_)));
     }
 
     #[test]
-    fn parse_method_argument_element_parses_unstructured_binary() {
-        let parsed = parse_method_argument_element(
-            "UnstructuredBinary::from_url(\"https://example.com/file.bin\")",
-            &ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+    fn parse_method_argument_schema_value_parses_unstructured_binary_data_url() {
+        let ty = SchemaType::binary(Default::default());
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let parsed = parse_method_argument_schema_value(
+            r#"Binary("data:application/octet-stream;base64,SGVsbG8")"#,
+            &graph,
+            &ty,
             &SourceLanguage::Rust,
         )
         .unwrap();
 
-        assert!(matches!(parsed, ElementValue::UnstructuredBinary(_)));
+        assert!(matches!(parsed, SchemaValue::Binary(_)));
     }
 }

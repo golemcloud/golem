@@ -45,10 +45,11 @@ async fn create_list_update_and_delete_permission_share(
     let client = deps.registry_service().client(&owner.token).await;
 
     let creation = PermissionShareCreation {
-        target_account_id: target.account_id,
+        target_account_email: target.account_email.clone(),
         name: PermissionShareName("team-access".to_string()),
         data: share_data(&format!(
-            "application(owner) @ {} : view : shop",
+            "application({}/shop) @ {} : view :",
+            owner.account_email.as_str(),
             target.account_email.as_str()
         )),
     };
@@ -93,7 +94,10 @@ async fn create_list_update_and_delete_permission_share(
     let update = PermissionShareUpdate {
         current_revision: share.revision,
         name: PermissionShareName("team-access-renamed".to_string()),
-        data: share_data("application(owner) @ * : create : *"),
+        data: share_data(&format!(
+            "application({}/*) @ * : create : *",
+            owner.account_email.as_str()
+        )),
     };
 
     let updated = client.update_permission_share(&share.id.0, &update).await?;
@@ -135,9 +139,12 @@ async fn permission_share_names_are_unique_per_owner(
     let client = deps.registry_service().client(&owner.token).await;
 
     let creation = PermissionShareCreation {
-        target_account_id: target_1.account_id,
+        target_account_email: target_1.account_email.clone(),
         name: PermissionShareName("shared-name".to_string()),
-        data: share_data("application(owner) @ * : view : shop"),
+        data: share_data(&format!(
+            "application({}/shop) @ * : view :",
+            owner.account_email.as_str()
+        )),
     };
 
     client
@@ -145,9 +152,12 @@ async fn permission_share_names_are_unique_per_owner(
         .await?;
 
     let duplicate = PermissionShareCreation {
-        target_account_id: target_2.account_id,
+        target_account_email: target_2.account_email.clone(),
         name: creation.name.clone(),
-        data: share_data("application(owner) @ * : create : *"),
+        data: share_data(&format!(
+            "application({}/*) @ * : create : *",
+            owner.account_email.as_str()
+        )),
     };
 
     let result = client
@@ -175,10 +185,11 @@ async fn permission_share_rejects_third_party_recipient(
     let client = deps.registry_service().client(&owner.token).await;
 
     let creation = PermissionShareCreation {
-        target_account_id: target.account_id,
+        target_account_email: target.account_email.clone(),
         name: PermissionShareName("bad-recipient".to_string()),
         data: share_data(&format!(
-            "application(owner) @ {} : view : shop",
+            "application({}/shop) @ {} : view :",
+            owner.account_email.as_str(),
             third_party.account_email.as_str()
         )),
     };
@@ -191,6 +202,41 @@ async fn permission_share_rejects_third_party_recipient(
         result,
         Err(golem_client::Error::Item(
             RegistryServiceCreatePermissionShareError::Error400(_)
+        ))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn permission_share_rejects_non_derivable_grant(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let other_owner = deps.user().await?;
+    let target = deps.user().await?;
+
+    let client = deps.registry_service().client(&owner.token).await;
+
+    let creation = PermissionShareCreation {
+        target_account_email: target.account_email.clone(),
+        name: PermissionShareName("bad-owner".to_string()),
+        data: share_data(&format!(
+            "application({}/shop) @ {} : view :",
+            other_owner.account_email.as_str(),
+            target.account_email.as_str()
+        )),
+    };
+
+    let result = client
+        .create_permission_share(&owner.account_id.0, &creation)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceCreatePermissionShareError::Error403(_)
         ))
     ));
 

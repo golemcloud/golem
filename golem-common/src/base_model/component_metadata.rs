@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent::AgentType;
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
+use crate::model::card::PolymorphicCard;
+use crate::schema::AgentTypeSchema;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -131,6 +132,10 @@ impl Debug for ComponentMetadata {
                 "agent_type_provision_configs",
                 &self.data.agent_type_provision_configs,
             )
+            .field(
+                "agent_type_initial_permissions",
+                &self.data.agent_type_initial_permissions,
+            )
             .finish()
     }
 }
@@ -181,13 +186,17 @@ pub struct ComponentMetadataInnerData {
 
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
-    pub agent_types: Vec<AgentType>,
+    pub agent_types: Vec<AgentTypeSchema>,
 
     /// Per-agent-type provisioning configuration: env, config, plugins, files.
     /// Kept separate from agent type declarations so AgentType stays a pure declaration type.
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(skip))]
+    pub agent_type_initial_permissions: BTreeMap<AgentTypeName, PolymorphicCard>,
 }
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations

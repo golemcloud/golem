@@ -13,8 +13,8 @@ The base image `agent_guest.wasm` is a QuickJS-based WASM component that serves 
 sdks/scala/wit/
 ├── main.wit      # Hand-maintained world definition (golem:agent-guest)
 ├── dts/          # Generated TypeScript d.ts (source of truth for JS exports)
-└── deps/         # Synced from wit/deps/ by `cargo make wit` (committed)
-    ├── golem-core/
+└── deps/         # Synced from root wit/deps/ by `cargo make wit` (committed; do not hand-edit)
+    ├── golem-core-v2/
     ├── golem-agent/
     ├── golem-1.x/
     ├── golem-rdbms/

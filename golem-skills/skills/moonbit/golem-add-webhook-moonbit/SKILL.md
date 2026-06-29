@@ -23,7 +23,7 @@ The agent type **must** be deployed via an HTTP API mount (`#derive.mount("/..."
 | Skill | When to Load |
 |---|---|
 | `golem-add-http-endpoint-moonbit` | Setting up the HTTP mount and endpoint annotations required before using webhooks |
-| `golem-configure-api-domain` | Configuring `httpApi` in `golem.yaml` |
+| `golem-configure-api-domain` | Configuring `httpApi` in `golem.yaml`, including `subdomain` versus `domain` |
 | `golem-wait-for-external-input-moonbit` | Lower-level promise API if you need more control than webhooks provide |
 
 ## API
@@ -52,7 +52,7 @@ https://<domain>/<prefix>/<suffix>/<id>
   httpApi:
     deployments:
       local:
-      - domain: my-app.localhost:9006
+      - subdomain: my-app  # resolves to my-app.localhost:9006 by default
         webhookUrl: "/my-custom-webhooks/"
         agents:
           OrderAgent: {}

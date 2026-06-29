@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TypeInfoInternal } from '../typeInfoInternal';
+import { RuntimeTypeInfo } from '../typeInfoInternal';
 
 export interface AgentMethodParamMetadata {
-  typeInfo?: TypeInfoInternal;
+  typeInfo?: RuntimeTypeInfo;
 }
 
 /**
@@ -54,8 +54,8 @@ class AgentMethodParamRegistryImpl {
   getParametersAndType(
     agentClassName: string,
     agentMethodName: string,
-  ): Map<string, TypeInfoInternal> {
-    const result = new Map<string, TypeInfoInternal>();
+  ): Map<string, RuntimeTypeInfo> {
+    const result = new Map<string, RuntimeTypeInfo>();
 
     const classMeta = this.registry.get(agentClassName);
 
@@ -74,7 +74,7 @@ class AgentMethodParamRegistryImpl {
     agentClassName: string,
     agentMethodName: string,
     paramName: string,
-  ): TypeInfoInternal | undefined {
+  ): RuntimeTypeInfo | undefined {
     const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(agentMethodName)?.get(paramName)?.typeInfo;
   }
@@ -83,7 +83,7 @@ class AgentMethodParamRegistryImpl {
     agentClassName: string,
     agentMethodName: string,
     paramName: string,
-    typeInfo: TypeInfoInternal,
+    typeInfo: RuntimeTypeInfo,
   ): void {
     this.ensureMeta(agentClassName, agentMethodName, paramName);
     const classMeta = this.registry.get(agentClassName)!;

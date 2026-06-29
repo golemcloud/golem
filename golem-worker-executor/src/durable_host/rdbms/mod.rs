@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{
-    Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult, RemoteTransactionHandler,
+    DurabilityHost, DurableWorkerCtx, InternalRetryResult, RemoteTransactionHandler,
 };
 use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
 use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService};
@@ -76,6 +77,17 @@ pub trait RdbmsDurabilityPairs {
     type StreamGetColumns: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsColumns>;
     type StreamGetNext: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsResultChunk>;
 }
+
+/// A transaction request prepared up front (before its side effect): the pool key, the open
+/// transaction handle, and the converted parameters, or the error that prevented preparing it.
+type PreparedTransactionRequest<T> = Result<
+    (
+        RdbmsPoolKey,
+        Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>,
+        Vec<<T as RdbmsType>::DbValue>,
+    ),
+    RdbmsError,
+>;
 
 async fn open_db_connection<Ctx, T, E>(
     address: String,
@@ -157,65 +169,80 @@ where
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
-    let mut durability =
-        Durability::<T::ConnExecute>::new(ctx, DurableFunctionType::WriteRemote).await?;
+    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+    let pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsConnection<T>>(entry)
+        .map(|v| v.pool_key.clone());
 
-    let result = if durability.is_live() {
-        let agent_id = ctx.state.owned_agent_id.agent_id.clone();
-        let pool_key = ctx
-            .as_wasi_view()
-            .table()
-            .get::<RdbmsConnection<T>>(entry)
-            .map(|v| v.pool_key.clone());
+    // The recorded request payload (pool key + statement + parameters) is derived from live,
+    // side-effect-free inputs (`to_db_values` only reads the resource table), so it is computed
+    // up front for the eager host-call `Start`. The actual SQL execution happens only on the live
+    // / incomplete-replay completion path below.
+    let prepared: Result<(RdbmsPoolKey, Vec<T::DbValue>), RdbmsError> = match pool_key {
+        Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+            Ok(db_params) => Ok((pool_key, db_params)),
+            Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
+        },
+        Err(error) => Err(RdbmsError::other_response_failure(error)),
+    };
 
-        let (input, result) = match pool_key {
-            Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-                Ok(db_params) => {
-                    let properties = rdbms_retry_properties(ctx, "execute", &pool_key);
-                    let result = loop {
-                        let result = ctx
-                            .state
-                            .rdbms_service
-                            .deref()
-                            .rdbms_type_service()
-                            .execute(&pool_key, &agent_id, &statement, db_params.clone())
-                            .await;
-                        match durability
-                            .try_trigger_retry_or_loop_with_properties(
-                                ctx,
-                                &result,
-                                classify_rdbms_error,
-                                properties.clone(),
-                            )
-                            .await?
-                        {
-                            InternalRetryResult::Persist => break result,
-                            InternalRetryResult::RetryInternally => continue,
-                        }
-                    };
-                    (
-                        Some(RdbmsRequest::<T>::new(pool_key, statement, db_params, None)),
-                        result,
-                    )
+    let request = HostRequestGolemRdbmsRequest {
+        request: prepared.as_ref().ok().map(|(pool_key, db_params)| {
+            RdbmsRequest::<T>::new(pool_key.clone(), statement.clone(), db_params.clone(), None)
+                .into()
+        }),
+    };
+
+    let mut handle = CallHandle::<T::ConnExecute, NotCancellable>::start(
+        ctx,
+        request,
+        DurableFunctionType::WriteRemote,
+    )
+    .await?;
+
+    let result = 'result: {
+        if !handle.is_live() {
+            match handle.replay(ctx).await? {
+                CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                CallReplayOutcome::Incomplete(live) => handle = live,
+            }
+        }
+
+        let result = match &prepared {
+            Ok((pool_key, db_params)) => {
+                let properties = rdbms_retry_properties(ctx, "execute", pool_key);
+                loop {
+                    let result = ctx
+                        .state
+                        .rdbms_service
+                        .deref()
+                        .rdbms_type_service()
+                        .execute(pool_key, &agent_id, &statement, db_params.clone())
+                        .await;
+                    match handle
+                        .try_trigger_retry_or_loop_with_properties(
+                            ctx,
+                            &result,
+                            classify_rdbms_error,
+                            properties.clone(),
+                        )
+                        .await?
+                    {
+                        InternalRetryResult::Persist => break result,
+                        InternalRetryResult::RetryInternally => continue,
+                    }
                 }
-                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
-            },
-            Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
+            }
+            Err(error) => Err(error.clone()),
         };
 
         let result = result.map_err(|e| e.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestGolemRdbmsRequest {
-                    request: input.map(|request| request.into()),
-                },
-                HostResponseGolemRdbmsRowCount { result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsRowCount { result })
+            .await?
+    };
 
     Ok(result.result.map_err(|e| RdbmsError::from(e).into()))
 }
@@ -234,65 +261,79 @@ where
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
     E: From<RdbmsError>,
 {
-    let mut durability =
-        Durability::<T::ConnQuery>::new(ctx, DurableFunctionType::WriteRemote).await?;
+    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+    let pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsConnection<T>>(entry)
+        .map(|v| v.pool_key.clone());
 
-    let result = if durability.is_live() {
-        let agent_id = ctx.state.owned_agent_id.agent_id.clone();
-        let pool_key = ctx
-            .as_wasi_view()
-            .table()
-            .get::<RdbmsConnection<T>>(entry)
-            .map(|v| v.pool_key.clone());
+    // See `db_connection_durable_execute`: the request payload is derived from side-effect-free
+    // live inputs, so it is computed up front for the eager host-call `Start`; the query itself
+    // runs only on the live / incomplete-replay completion path below.
+    let prepared: Result<(RdbmsPoolKey, Vec<T::DbValue>), RdbmsError> = match pool_key {
+        Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+            Ok(db_params) => Ok((pool_key, db_params)),
+            Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
+        },
+        Err(error) => Err(RdbmsError::other_response_failure(error)),
+    };
 
-        let (input, result) = match pool_key {
-            Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-                Ok(db_params) => {
-                    let properties = rdbms_retry_properties(ctx, "query", &pool_key);
-                    let result = loop {
-                        let result = ctx
-                            .state
-                            .rdbms_service
-                            .deref()
-                            .rdbms_type_service()
-                            .query(&pool_key, &agent_id, &statement, db_params.clone())
-                            .await;
-                        match durability
-                            .try_trigger_retry_or_loop_with_properties(
-                                ctx,
-                                &result,
-                                classify_rdbms_error,
-                                properties.clone(),
-                            )
-                            .await?
-                        {
-                            InternalRetryResult::Persist => break result,
-                            InternalRetryResult::RetryInternally => continue,
-                        }
-                    };
-                    (
-                        Some(RdbmsRequest::<T>::new(pool_key, statement, db_params, None)),
-                        result,
-                    )
+    let request = HostRequestGolemRdbmsRequest {
+        request: prepared.as_ref().ok().map(|(pool_key, db_params)| {
+            RdbmsRequest::<T>::new(pool_key.clone(), statement.clone(), db_params.clone(), None)
+                .into()
+        }),
+    };
+
+    let mut handle = CallHandle::<T::ConnQuery, NotCancellable>::start(
+        ctx,
+        request,
+        DurableFunctionType::WriteRemote,
+    )
+    .await?;
+
+    let result = 'result: {
+        if !handle.is_live() {
+            match handle.replay(ctx).await? {
+                CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                CallReplayOutcome::Incomplete(live) => handle = live,
+            }
+        }
+
+        let result = match &prepared {
+            Ok((pool_key, db_params)) => {
+                let properties = rdbms_retry_properties(ctx, "query", pool_key);
+                loop {
+                    let result = ctx
+                        .state
+                        .rdbms_service
+                        .deref()
+                        .rdbms_type_service()
+                        .query(pool_key, &agent_id, &statement, db_params.clone())
+                        .await;
+                    match handle
+                        .try_trigger_retry_or_loop_with_properties(
+                            ctx,
+                            &result,
+                            classify_rdbms_error,
+                            properties.clone(),
+                        )
+                        .await?
+                    {
+                        InternalRetryResult::Persist => break result,
+                        InternalRetryResult::RetryInternally => continue,
+                    }
                 }
-                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
-            },
-            Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
+            }
+            Err(error) => Err(error.clone()),
         };
 
         let result = result.map(|result| result.into()).map_err(|e| e.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestGolemRdbmsRequest {
-                    request: input.map(|request| request.into()),
-                },
-                HostResponseGolemRdbmsResult { result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsResult { result })
+            .await?
+    };
 
     match result.result {
         Ok(result) => {
@@ -325,13 +366,18 @@ where
             "golem::rdbms::db-connection::query-stream",
         )
         .await?;
-    let durability = Durability::<T::ConnQueryStream>::new(
+    let mut handle = CallHandle::<T::ConnQueryStream, NotCancellable>::start(
         ctx,
+        HostRequestNoInput {},
         DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
     )
     .await?;
 
-    let result = if durability.is_live() {
+    let result = 'result: {
+        if !handle.is_live() {
+            break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
         let conn_pool_key = ctx
             .as_wasi_view()
             .table()
@@ -345,26 +391,20 @@ where
             .or_else(|| conn_pool_key.ok());
         if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
-            durability
+            handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
                 .await?;
         } else {
-            durability
+            handle
                 .try_trigger_retry(ctx, &result, classify_rdbms_error)
                 .await?;
         }
 
         let result = result.map(|request| request.into()).map_err(|e| e.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestNoInput {},
-                HostResponseGolemRdbmsRequest { request: result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsRequest { request: result })
+            .await?
+    };
     match result.request {
         Ok(request) => {
             let entry = RdbmsResultStreamEntry::new(
@@ -440,9 +480,18 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let durability = Durability::<T::StreamGetColumns>::new(ctx, durable_function_type).await?;
+    let mut handle = CallHandle::<T::StreamGetColumns, NotCancellable>::start(
+        ctx,
+        HostRequestNoInput {},
+        durable_function_type,
+    )
+    .await?;
 
-    let result = if durability.is_live() {
+    let result = 'result: {
+        if !handle.is_live() {
+            break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
         let pool_key = ctx
             .as_wasi_view()
             .table()
@@ -455,11 +504,11 @@ where
         };
         if let Ok(pool_key) = pool_key.as_ref() {
             let properties = rdbms_retry_properties(ctx, "stream-get-columns", pool_key);
-            durability
+            handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
                 .await?;
         } else {
-            durability
+            handle
                 .try_trigger_retry(ctx, &result, classify_rdbms_error)
                 .await?;
         }
@@ -467,16 +516,10 @@ where
         let result = result
             .map(|columns| columns.into_iter().map(|c| c.into()).collect())
             .map_err(|err| err.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestNoInput {},
-                HostResponseGolemRdbmsColumns { result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsColumns { result })
+            .await?
+    };
 
     match result.result {
         Ok(columns) => {
@@ -514,9 +557,18 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let durability = Durability::<T::StreamGetNext>::new(ctx, durable_function_type).await?;
+    let mut handle = CallHandle::<T::StreamGetNext, NotCancellable>::start(
+        ctx,
+        HostRequestNoInput {},
+        durable_function_type,
+    )
+    .await?;
 
-    let result = if durability.is_live() {
+    let result = 'result: {
+        if !handle.is_live() {
+            break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
         let pool_key = ctx
             .as_wasi_view()
             .table()
@@ -529,11 +581,11 @@ where
         };
         if let Ok(pool_key) = pool_key.as_ref() {
             let properties = rdbms_retry_properties(ctx, "stream-get-next", pool_key);
-            durability
+            handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
                 .await?;
         } else {
-            durability
+            handle
                 .try_trigger_retry(ctx, &result, classify_rdbms_error)
                 .await?;
         }
@@ -547,16 +599,10 @@ where
                 })
             })
             .map_err(|err| err.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestNoInput {},
-                HostResponseGolemRdbmsResultChunk { result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsResultChunk { result })
+            .await?
+    };
 
     match result.result {
         Ok(rows) => {
@@ -627,47 +673,80 @@ where
     E: From<RdbmsError>,
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-    let durability = Durability::<T::TxnQuery>::new(
+
+    let txn_pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|v| v.pool_key.clone())
+        .ok();
+
+    // Build the request payload (pool key + statement + parameters + transaction id) up front,
+    // before the query side effect, mirroring `db_transaction_query`'s request construction. The
+    // transaction id is read from the open transaction handle without executing the query.
+    let prepared: PreparedTransactionRequest<T> =
+        match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+            Ok(db_params) => match get_db_transaction(ctx, entry) {
+                Ok((pool_key, transaction)) => Ok((pool_key, transaction, db_params)),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
+        };
+
+    let request = HostRequestGolemRdbmsRequest {
+        request: prepared
+            .as_ref()
+            .ok()
+            .map(|(pool_key, transaction, db_params)| {
+                RdbmsRequest::<T>::new(
+                    pool_key.clone(),
+                    statement.clone(),
+                    db_params.clone(),
+                    Some(transaction.transaction_id()),
+                )
+                .into()
+            }),
+    };
+
+    let mut handle = CallHandle::<T::TxnQuery, NotCancellable>::start(
         ctx,
+        request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
-    let result = if durability.is_live() {
-        let txn_pool_key = ctx
-            .as_wasi_view()
-            .table()
-            .get::<RdbmsTransactionEntry<T>>(entry)
-            .map(|v| v.pool_key.clone());
-        let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
-        let pool_key_for_props = input
+    let result = 'result: {
+        if !handle.is_live() {
+            break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
+        let result = match &prepared {
+            Ok((_pool_key, transaction, db_params)) => {
+                transaction.query(&statement, db_params.clone()).await
+            }
+            Err(error) => Err(error.clone()),
+        };
+        let pool_key_for_props = prepared
             .as_ref()
-            .map(|r| r.pool_key.clone())
-            .or_else(|| txn_pool_key.ok());
+            .ok()
+            .map(|(pool_key, _, _)| pool_key.clone())
+            .or_else(|| txn_pool_key.clone());
         if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "query", pool_key);
-            durability
+            handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
                 .await?;
         } else {
-            durability
+            handle
                 .try_trigger_retry(ctx, &result, classify_rdbms_error)
                 .await?;
         }
 
         let result = result.map(|result| result.into()).map_err(|err| err.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestGolemRdbmsRequest {
-                    request: input.map(|request| request.into()),
-                },
-                HostResponseGolemRdbmsResult { result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsResult { result })
+            .await?
+    };
 
     match result.result {
         Ok(result) => {
@@ -696,47 +775,79 @@ where
     E: From<RdbmsError>,
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-    let durability = Durability::<T::TxnExecute>::new(
+
+    let txn_pool_key = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|v| v.pool_key.clone())
+        .ok();
+
+    // Build the request payload up front, before the execute side effect, mirroring
+    // `db_transaction_execute`'s request construction (transaction id read without executing).
+    let prepared: PreparedTransactionRequest<T> =
+        match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+            Ok(db_params) => match get_db_transaction(ctx, entry) {
+                Ok((pool_key, transaction)) => Ok((pool_key, transaction, db_params)),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
+        };
+
+    let request = HostRequestGolemRdbmsRequest {
+        request: prepared
+            .as_ref()
+            .ok()
+            .map(|(pool_key, transaction, db_params)| {
+                RdbmsRequest::<T>::new(
+                    pool_key.clone(),
+                    statement.clone(),
+                    db_params.clone(),
+                    Some(transaction.transaction_id()),
+                )
+                .into()
+            }),
+    };
+
+    let mut handle = CallHandle::<T::TxnExecute, NotCancellable>::start(
         ctx,
+        request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
-    let result = if durability.is_live() {
-        let txn_pool_key = ctx
-            .as_wasi_view()
-            .table()
-            .get::<RdbmsTransactionEntry<T>>(entry)
-            .map(|v| v.pool_key.clone());
-        let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
-        let pool_key_for_props = input
+    let result = 'result: {
+        if !handle.is_live() {
+            break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
+        let result = match &prepared {
+            Ok((_pool_key, transaction, db_params)) => {
+                transaction.execute(&statement, db_params.clone()).await
+            }
+            Err(error) => Err(error.clone()),
+        };
+        let pool_key_for_props = prepared
             .as_ref()
-            .map(|r| r.pool_key.clone())
-            .or_else(|| txn_pool_key.ok());
+            .ok()
+            .map(|(pool_key, _, _)| pool_key.clone())
+            .or_else(|| txn_pool_key.clone());
         if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "execute", pool_key);
-            durability
+            handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
                 .await?;
         } else {
-            durability
+            handle
                 .try_trigger_retry(ctx, &result, classify_rdbms_error)
                 .await?;
         }
 
         let result = result.map_err(|e| e.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestGolemRdbmsRequest {
-                    request: input.map(|request| request.into()),
-                },
-                HostResponseGolemRdbmsRowCount { result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsRowCount { result })
+            .await?
+    };
 
     Ok(result.result.map_err(|e| RdbmsError::from(e).into()))
 }
@@ -753,15 +864,20 @@ where
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
-    let handle = entry.rep();
+    let entry_rep = entry.rep();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-    let durability = Durability::<T::TxnQueryStream>::new(
+    let mut handle = CallHandle::<T::TxnQueryStream, NotCancellable>::start(
         ctx,
+        HostRequestNoInput {},
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
-    let result = if durability.is_live() {
+    let result = 'result: {
+        if !handle.is_live() {
+            break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
         let txn_pool_key = ctx
             .as_wasi_view()
             .table()
@@ -775,26 +891,20 @@ where
             .or_else(|| txn_pool_key.ok());
         if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
-            durability
+            handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
                 .await?;
         } else {
-            durability
+            handle
                 .try_trigger_retry(ctx, &result, classify_rdbms_error)
                 .await?;
         }
 
         let result = result.map(|request| request.into()).map_err(|e| e.into());
-        durability
-            .persist(
-                ctx,
-                HostRequestNoInput {},
-                HostResponseGolemRdbmsRequest { request: result },
-            )
-            .await
-    } else {
-        durability.replay(ctx).await
-    }?;
+        handle
+            .complete(ctx, HostResponseGolemRdbmsRequest { request: result })
+            .await?
+    };
     match result.request {
         Ok(request) => {
             let entry = RdbmsResultStreamEntry::new(
@@ -802,7 +912,7 @@ where
                     .try_into()
                     .map_err(|e| anyhow!("Invalid payload: {e}"))?,
                 RdbmsResultStreamState::New,
-                Some(handle),
+                Some(entry_rep),
                 begin_oplog_idx,
             );
             let resource = ctx.as_wasi_view().table().push(entry)?;
@@ -945,26 +1055,45 @@ where
                 .await;
         }
     } else {
-        let _ = ctx
+        let pre_rollback = ctx
             .state
             .replay_state
             .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(entry.begin_index))
             .await?;
 
-        let rolled_back = ctx
-            .state
-            .replay_state
-            .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
-            .await?;
+        if pre_rollback.is_some() {
+            let rolled_back = ctx
+                .state
+                .replay_state
+                .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
+                .await?;
 
-        // Mirror the live drop path, which closes the region via
-        // `rolled_back_transaction_function`: this replay branch consumes the rollback entries
-        // directly, so it must also remove the region opened in `begin_transaction_function` once
-        // the `RolledBackRemoteTransaction` entry is found. Otherwise the begin index would dangle
-        // in `open_rollback_regions` and disable mid-invocation checkpoints for the rest of this
-        // worker incarnation.
-        if rolled_back.is_some() {
-            ctx.state.open_rollback_regions.remove(&entry.begin_index);
+            if rolled_back.is_some() {
+                // The rollback was recorded in a previous incarnation. The marker and its scope
+                // `End` are written atomically, so consume the matching `End` and close the durable
+                // scope opened in `begin_transaction_function`. Otherwise the begin index would
+                // dangle in `active_durable_scopes` and mis-parent later `Start` entries.
+                let end = ctx
+                    .state
+                    .replay_state
+                    .try_get_oplog_entry(|e| e.is_end_remote_write(entry.begin_index))
+                    .await?;
+                if end.is_none() {
+                    return Err(anyhow!(
+                        "Missing transaction scope End for begin index {} during rollback replay",
+                        entry.begin_index
+                    ));
+                }
+                ctx.state.remove_durable_scope(entry.begin_index)?;
+            } else {
+                // Crashed after `PreRollbackRemoteTransaction` but before the rollback was recorded.
+                // `begin_transaction_function` already confirmed the external rollback (otherwise it
+                // would have restarted), and consuming the pre-marker exhausted the replay, so finish
+                // the durable rollback record live now. This writes the marker plus its scope `End`
+                // and closes the durable scope, mirroring the explicit rollback path.
+                ctx.rolled_back_transaction_function(entry.begin_index)
+                    .await?;
+            }
         }
     }
 
@@ -1192,79 +1321,6 @@ where
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
         Ok(params) => Ok(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
-    }
-}
-
-async fn db_transaction_query<Ctx, T, P>(
-    statement: String,
-    params: Vec<P>,
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsTransactionEntry<T>>,
-) -> (
-    Option<RdbmsRequest<T>>,
-    Result<crate::services::rdbms::DbResult<T>, RdbmsError>,
-)
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-    dyn RdbmsService: RdbmsTypeService<T>,
-    T::DbValue: FromRdbmsValue<P>,
-{
-    match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-        Ok(params) => {
-            let transaction = get_db_transaction(ctx, entry);
-            match transaction {
-                Ok((pool_key, transaction)) => {
-                    let result = transaction.query(&statement, params.clone()).await;
-                    (
-                        Some(RdbmsRequest::<T>::new(
-                            pool_key,
-                            statement,
-                            params,
-                            Some(transaction.transaction_id()),
-                        )),
-                        result,
-                    )
-                }
-                Err(error) => (None, Err(error)),
-            }
-        }
-        Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
-    }
-}
-
-async fn db_transaction_execute<Ctx, T, P>(
-    statement: String,
-    params: Vec<P>,
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsTransactionEntry<T>>,
-) -> (Option<RdbmsRequest<T>>, Result<u64, RdbmsError>)
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-    dyn RdbmsService: RdbmsTypeService<T>,
-    T::DbValue: FromRdbmsValue<P>,
-{
-    match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-        Ok(params) => {
-            let transaction = get_db_transaction(ctx, entry);
-            match transaction {
-                Ok((pool_key, transaction)) => {
-                    let result = transaction.execute(&statement, params.clone()).await;
-                    (
-                        Some(RdbmsRequest::<T>::new(
-                            pool_key,
-                            statement,
-                            params,
-                            Some(transaction.transaction_id()),
-                        )),
-                        result,
-                    )
-                }
-                Err(error) => (None, Err(error)),
-            }
-        }
-        Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
     }
 }
 

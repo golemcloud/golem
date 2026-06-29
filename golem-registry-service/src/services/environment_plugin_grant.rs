@@ -16,17 +16,23 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use super::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
 use crate::repo::environment_plugin_grant::EnvironmentPluginGrantRepo;
 use crate::repo::model::environment_plugin_grant::{
-    EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
+    EnvironmentPluginGrantAuthWithDetailsRecord, EnvironmentPluginGrantRecord,
+    EnvironmentPluginGrantRepoError,
 };
-use golem_common::model::account::AccountId;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::application::ApplicationName;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentPluginGrantName, EnvironmentPluginGrantResourcePattern,
+    EnvironmentPluginGrantVerb, PermissionTarget,
+};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
     EnvironmentPluginGrantWithDetails,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -110,8 +116,9 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        self.plugin_registration_service
-            .get_plugin(data.plugin_registration_id, false, auth)
+        let plugin = self
+            .plugin_registration_service
+            .get_plugin(data.plugin_registration_id, auth)
             .await
             .map_err(|err| match err {
                 PluginRegistrationError::PluginRegistrationNotFound(plugin_registration_id) => {
@@ -120,10 +127,11 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            &environment,
+            EnvironmentPluginGrantVerb::Create,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(plugin.name)),
         )?;
 
         let record = EnvironmentPluginGrantRecord::creation(
@@ -152,14 +160,17 @@ impl EnvironmentPluginGrantService {
         environment_plugin_grant_id: EnvironmentPluginGrantId,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentPluginGrantError> {
-        let (grant, environment) = self
-            .get_by_id_with_environment(environment_plugin_grant_id, false, auth)
+        let (grant, owner) = self
+            .get_by_id_with_environment(environment_plugin_grant_id, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission_for_owner(
+            auth,
+            owner,
+            EnvironmentPluginGrantVerb::Delete,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                grant.plugin.name,
+            )),
         )?;
 
         if grant.plugin_account.id == self.builtin_plugin_owner_account_id {
@@ -193,12 +204,6 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
-        )?;
-
         let grants: Vec<EnvironmentPluginGrantWithDetails> = self
             .environment_plugin_grant_repo
             .list_by_environment(environment_id.0)
@@ -207,17 +212,29 @@ impl EnvironmentPluginGrantService {
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(grants)
+        Ok(grants
+            .into_iter()
+            .filter(|grant| {
+                authorize_environment_plugin_grant_permission(
+                    auth,
+                    &environment,
+                    EnvironmentPluginGrantVerb::View,
+                    EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                        grant.plugin.name.clone(),
+                    )),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_by_id(
         &self,
         environment_plugin_grant_id: EnvironmentPluginGrantId,
-        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<EnvironmentPluginGrantWithDetails, EnvironmentPluginGrantError> {
         Ok(self
-            .get_by_id_with_environment(environment_plugin_grant_id, include_deleted, auth)
+            .get_by_id_with_environment(environment_plugin_grant_id, auth)
             .await?
             .0)
     }
@@ -231,11 +248,12 @@ impl EnvironmentPluginGrantService {
     ) -> Result<EnvironmentPluginGrantWithDetails, EnvironmentPluginGrantError> {
         let grant: EnvironmentPluginGrantWithDetails = self
             .environment_plugin_grant_repo
-            .get_by_id(environment_plugin_grant_id.0, false)
+            .get_by_id(environment_plugin_grant_id.0)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
                 environment_plugin_grant_id,
             ))?
+            .grant
             .try_into()?;
 
         if grant.environment_id != environment.id {
@@ -244,10 +262,13 @@ impl EnvironmentPluginGrantService {
             ));
         };
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            environment,
+            EnvironmentPluginGrantVerb::View,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                grant.plugin.name.clone(),
+            )),
         )
         .map_err(|_| {
             EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(environment_plugin_grant_id)
@@ -273,15 +294,16 @@ impl EnvironmentPluginGrantService {
             return Ok(HashMap::new());
         }
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            environment,
+            EnvironmentPluginGrantVerb::View,
+            EnvironmentPluginGrantResourcePattern::Any,
         )?;
 
         let records = self
             .environment_plugin_grant_repo
-            .get_by_ids(&ids, false)
+            .get_by_ids(environment.id.0, &ids)
             .await?;
 
         // Build result map, verifying each grant belongs to this environment
@@ -312,40 +334,77 @@ impl EnvironmentPluginGrantService {
     async fn get_by_id_with_environment(
         &self,
         environment_plugin_grant_id: EnvironmentPluginGrantId,
-        include_deleted: bool,
         auth: &AuthCtx,
-    ) -> Result<(EnvironmentPluginGrantWithDetails, Environment), EnvironmentPluginGrantError> {
-        let grant: EnvironmentPluginGrantWithDetails = self
+    ) -> Result<
+        (EnvironmentPluginGrantWithDetails, EnvironmentOwnerPattern),
+        EnvironmentPluginGrantError,
+    > {
+        let record = self
             .environment_plugin_grant_repo
-            .get_by_id(environment_plugin_grant_id.0, include_deleted)
+            .get_by_id(environment_plugin_grant_id.0)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
                 environment_plugin_grant_id,
-            ))?
-            .try_into()?;
+            ))?;
 
-        let environment = self
-            .environment_service
-            .get(grant.environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                        environment_plugin_grant_id,
-                    )
-                }
-                other => other.into(),
-            })?;
+        let owner = environment_owner_from_plugin_grant(&record);
+        let grant: EnvironmentPluginGrantWithDetails = record.grant.try_into()?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission_for_owner(
+            auth,
+            owner.clone(),
+            EnvironmentPluginGrantVerb::View,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                grant.plugin.name.clone(),
+            )),
         )
         .map_err(|_| {
             EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(environment_plugin_grant_id)
         })?;
 
-        Ok((grant, environment))
+        Ok((grant, owner))
+    }
+}
+
+fn authorize_environment_plugin_grant_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentPluginGrantVerb,
+    resource: EnvironmentPluginGrantResourcePattern,
+) -> Result<(), AuthorizationError> {
+    authorize_environment_plugin_grant_permission_for_owner(
+        auth,
+        EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        verb,
+        resource,
+    )
+}
+
+fn authorize_environment_plugin_grant_permission_for_owner(
+    auth: &AuthCtx,
+    owner: EnvironmentOwnerPattern,
+    verb: EnvironmentPluginGrantVerb,
+    resource: EnvironmentPluginGrantResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentPluginGrant(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner,
+            resource,
+        },
+    ))
+}
+
+fn environment_owner_from_plugin_grant(
+    grant: &EnvironmentPluginGrantAuthWithDetailsRecord,
+) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: AccountEmail::new(grant.owner_account_email.clone()),
+        application: ApplicationName(grant.application_name.clone()),
+        environment: EnvironmentName(grant.environment_name.clone()),
     }
 }

@@ -24,11 +24,10 @@ use golem_common::model::oplog::{
 };
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies,
+    start, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -130,14 +129,8 @@ async fn custom_durability_1(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(
-        result1.into_return_value(),
-        Some(Value::String("0-a".to_string()))
-    );
-    assert_eq!(
-        result2.into_return_value(),
-        Some(Value::String("1-b".to_string()))
-    );
+    assert_eq!(result1.into_typed::<String>()?, "0-a");
+    assert_eq!(result2.into_typed::<String>()?, "1-b");
     Ok(())
 }
 
@@ -264,22 +257,10 @@ async fn lazy_pollable(
     executor.check_oplog_is_queryable(&worker_id).await?;
     http_server.abort();
 
-    assert_eq!(
-        s1.into_return_value(),
-        Some(Value::String("chunk-1-0\n".to_string()))
-    );
-    assert_eq!(
-        s2.into_return_value(),
-        Some(Value::String("chunk-1-1\n".to_string()))
-    );
-    assert_eq!(
-        s3.into_return_value(),
-        Some(Value::String("chunk-1-2\n".to_string()))
-    );
-    assert_eq!(
-        s4.into_return_value(),
-        Some(Value::String("chunk-3-0\n".to_string()))
-    );
+    assert_eq!(s1.into_typed::<String>()?, "chunk-1-0\n");
+    assert_eq!(s2.into_typed::<String>()?, "chunk-1-1\n");
+    assert_eq!(s3.into_typed::<String>()?, "chunk-1-2\n");
+    assert_eq!(s4.into_typed::<String>()?, "chunk-3-0\n");
     Ok(())
 }
 
@@ -499,9 +480,8 @@ async fn snapshot_based_recovery(
         )
         .await?;
 
-    assert_eq!(
-        was_recovered.into_return_value(),
-        Some(Value::Bool(true)),
+    assert!(
+        was_recovered.into_typed::<bool>()?,
         "Worker should have been recovered from snapshot, not replayed from scratch"
     );
 
@@ -510,9 +490,83 @@ async fn snapshot_based_recovery(
         .await?;
 
     assert_eq!(
-        increment_after.into_return_value(),
-        Some(Value::U32(6)),
+        increment_after.into_typed::<u32>()?,
+        6,
         "Counter should continue from 6 after snapshot recovery"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn snapshot_based_recovery_preserves_installed_cards(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCardRecoveryAgent");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let (high_bits, low_bits) = TEST_CARD_ID.0.as_u64_pair();
+    let installed = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "install_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(installed, "test card should install");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshot_count = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    assert!(
+        snapshot_count >= 1,
+        "Expected at least one snapshot before restart, got {snapshot_count}"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let still_usable = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "derive_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_typed::<bool>()?;
+
+    assert!(
+        still_usable,
+        "installed card should remain in the agent wallet after snapshot recovery"
     );
 
     drop(executor);
@@ -578,8 +632,8 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         .await?;
 
     assert_eq!(
-        result.into_return_value(),
-        Some(Value::U32(6)),
+        result.into_typed::<u32>()?,
+        6,
         "Counter should be 6 after two rounds of 3 increments across restarts"
     );
 
@@ -592,9 +646,8 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         )
         .await?;
 
-    assert_eq!(
-        was_recovered.into_return_value(),
-        Some(Value::Bool(true)),
+    assert!(
+        was_recovered.into_typed::<bool>()?,
         "Worker should have been recovered from snapshot after multiple restarts"
     );
 
@@ -633,8 +686,8 @@ async fn ts_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        result_before.clone().into_return_value(),
-        Some(Value::F64(5.0)),
+        result_before.clone().into_typed::<f64>()?,
+        5.0,
         "Counter should be 5 after 5 increments"
     );
 
@@ -696,8 +749,8 @@ async fn ts_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        increment_after.into_return_value(),
-        Some(Value::F64(6.0)),
+        increment_after.into_typed::<f64>()?,
+        6.0,
         "Counter should continue from 6 after snapshot recovery"
     );
 
@@ -805,8 +858,8 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
         .await?;
 
     assert_eq!(
-        result.into_return_value(),
-        Some(Value::F64(6.0)),
+        result.into_typed::<f64>()?,
+        6.0,
         "Counter should be 6 after two rounds of 3 increments across restarts"
     );
 
@@ -850,8 +903,8 @@ async fn rust_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        result_before.clone().into_return_value(),
-        Some(Value::U32(5)),
+        result_before.clone().into_typed::<u32>()?,
+        5,
         "Counter should be 5 after 5 increments"
     );
 
@@ -918,8 +971,8 @@ async fn rust_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        increment_after.into_return_value(),
-        Some(Value::U32(6)),
+        increment_after.into_typed::<u32>()?,
+        6,
         "Counter should continue from 6 after snapshot recovery"
     );
 
@@ -1042,8 +1095,8 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
         .await?;
 
     assert_eq!(
-        result.into_return_value(),
-        Some(Value::U32(6)),
+        result.into_typed::<u32>()?,
+        6,
         "Counter should be 6 after two rounds of 3 increments across restarts (rust)"
     );
 
@@ -1089,10 +1142,7 @@ async fn ts_sqlite_multipart_snapshot_recovery(
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
 
-    let state_before_str = match state_before.clone().into_return_value() {
-        Some(Value::String(s)) => s,
-        other => panic!("Expected string from getState, got {:?}", other),
-    };
+    let state_before_str = state_before.clone().into_typed::<String>()?;
     let state_before_json: serde_json::Value = serde_json::from_str(&state_before_str)?;
     assert_eq!(state_before_json["label"], "after-init");
     assert_eq!(
@@ -1207,10 +1257,7 @@ async fn ts_sqlite_multipart_snapshot_recovery(
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
 
-    let state_after_str = match state_after_more.into_return_value() {
-        Some(Value::String(s)) => s,
-        other => panic!("Expected string from getState, got {:?}", other),
-    };
+    let state_after_str = state_after_more.into_typed::<String>()?;
     let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
     assert_eq!(state_after_json["label"], "after-init");
     assert_eq!(
@@ -1225,5 +1272,56 @@ async fn ts_sqlite_multipart_snapshot_recovery(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn monotonic_clock_now_replay_parity(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("MonotonicClockState", "monotonic-replay-parity-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Live: record a single `monotonic_clock::now()` reading. This goes through the
+    // concurrent-replay path (eager `Start` + resolver-matched `End`) and stores the value in
+    // the agent's state.
+    let recorded_live = executor
+        .invoke_and_await_agent(&component, &agent_id, "record_now", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart the executor so the worker is recovered by replaying its oplog. During replay
+    // `monotonic_clock::now()` must yield the recorded value, so the rebuilt agent state must equal
+    // the live reading.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let recorded_after_replay = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_recorded", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(
+        recorded_live, recorded_after_replay,
+        "monotonic_clock::now() must replay to the same value recorded live"
+    );
     Ok(())
 }

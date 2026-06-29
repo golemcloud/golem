@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use crate::agentic::extended_agent_type::ExtendedAgentType;
-use crate::agentic::{EnrichedElementSchema, ExtendedDataSchema, Principal};
+use crate::agentic::{EnrichedParameterSchema, Principal};
 use crate::{
+    AgentId, ComponentId, Uuid,
     agentic::{ResolvedAgent, agent_initiator::AgentInitiator},
     golem_agentic::exports::golem::agent::guest::AgentType,
 };
-use golem_wasm::golem_core_1_5_x::types::parse_uuid;
-use golem_wasm::{AgentId, ComponentId};
 use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
@@ -173,7 +172,7 @@ pub fn get_agent_id() -> AgentId {
         .expect("Missing GOLEM_COMPONENT_ID environment variable");
     AgentId {
         component_id: ComponentId {
-            uuid: parse_uuid(raw_component_id).expect("Invalid GOLEM_COMPONENT_ID"),
+            uuid: Uuid::parse_str(raw_component_id).expect("Invalid GOLEM_COMPONENT_ID"),
         },
         agent_id: raw_agent_id.clone(),
     }
@@ -186,7 +185,7 @@ pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {
 pub fn get_constructor_parameter_type(
     agent_type_name: &AgentTypeName,
     parameter_index: usize,
-) -> Option<EnrichedElementSchema> {
+) -> Option<EnrichedParameterSchema> {
     let state = get_state();
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
@@ -198,7 +197,7 @@ pub fn get_method_parameter_type(
     agent_type_name: &AgentTypeName,
     method_name: &str,
     parameter_index: usize,
-) -> Option<EnrichedElementSchema> {
+) -> Option<EnrichedParameterSchema> {
     let state = get_state();
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
@@ -210,7 +209,7 @@ pub fn get_method_parameter_type(
 
 pub fn get_constructor_parameter_types(
     agent_type_name: &AgentTypeName,
-) -> Option<Vec<EnrichedElementSchema>> {
+) -> Option<Vec<EnrichedParameterSchema>> {
     let state = get_state();
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
@@ -223,7 +222,7 @@ pub fn get_constructor_parameter_types(
 pub fn get_method_parameter_types(
     agent_type_name: &AgentTypeName,
     method_name: &str,
-) -> Option<Vec<EnrichedElementSchema>> {
+) -> Option<Vec<EnrichedParameterSchema>> {
     let state = get_state();
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
@@ -235,7 +234,7 @@ pub fn get_method_parameter_types(
 pub fn get_method_parameter_types_by_index(
     agent_type_name: &AgentTypeName,
     sorted_method_index: usize,
-) -> Option<Vec<EnrichedElementSchema>> {
+) -> Option<Vec<EnrichedParameterSchema>> {
     let state = get_state();
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
@@ -245,30 +244,19 @@ pub fn get_method_parameter_types_by_index(
     Some(extract_all_parameter_schemas(&method.input_schema))
 }
 
-fn extract_all_parameter_schemas(schema: &ExtendedDataSchema) -> Vec<EnrichedElementSchema> {
-    match schema {
-        ExtendedDataSchema::Tuple(items) => items.iter().map(|(_, s)| s.clone()).collect(),
-        ExtendedDataSchema::Multimodal(items) => items
-            .iter()
-            .map(|(_, s)| EnrichedElementSchema::ElementSchema(s.clone()))
-            .collect(),
-    }
+fn extract_all_parameter_schemas(
+    schema: &[(String, EnrichedParameterSchema)],
+) -> Vec<EnrichedParameterSchema> {
+    schema.iter().map(|(_, s)| s.clone()).collect()
 }
 
 fn extract_parameter_schema(
-    schema: &ExtendedDataSchema,
+    schema: &[(String, EnrichedParameterSchema)],
     parameter_index: usize,
-) -> Option<EnrichedElementSchema> {
-    match schema {
-        ExtendedDataSchema::Tuple(items) => items
-            .get(parameter_index)
-            .map(|(_, element_schema)| element_schema.clone()),
-        ExtendedDataSchema::Multimodal(items) => {
-            items.get(parameter_index).map(|(_, element_schema)| {
-                EnrichedElementSchema::ElementSchema(element_schema.clone())
-            })
-        }
-    }
+) -> Option<EnrichedParameterSchema> {
+    schema
+        .get(parameter_index)
+        .map(|(_, parameter_schema)| parameter_schema.clone())
 }
 
 pub fn with_agent_initiator<F, Fut, R>(f: F, agent_type_name: &AgentTypeName) -> R

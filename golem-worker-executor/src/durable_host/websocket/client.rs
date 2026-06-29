@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::websocket::client::{
     CloseInfo, Error, Host, HostWebsocketConnection, Message,
 };
@@ -112,91 +113,105 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<WebSocketConnectionEntry>, Error>> {
         self.observe_function_call("golem:websocket/client", "connect");
 
-        let durability = Durability::<host_functions::WebsocketClientConnect>::new(
+        let mut call = CallHandle::<host_functions::WebsocketClientConnect, NotCancellable>::start(
             self,
+            HostRequestWebsocketConnect {
+                url: url.clone(),
+                headers: headers.clone(),
+            },
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
-        let req = HostRequestWebsocketConnect {
-            url: url.clone(),
-            headers: headers.clone(),
+        if !call.is_live() {
+            match call.replay(self).await? {
+                CallReplayOutcome::Replayed(resp) => {
+                    let resp: HostResponseWebsocketConnectResponse = resp;
+                    return match resp.result {
+                        Ok(()) => {
+                            let resource = self
+                                .as_wasi_view()
+                                .table()
+                                .push(WebSocketConnectionEntry::Replay)?;
+                            self.register_open_websocket(
+                                resource.rep(),
+                                url.clone(),
+                                headers.clone(),
+                            );
+                            Ok(Ok(resource))
+                        }
+                        Err(e) => Ok(Err(serializable_error_to_error(e))),
+                    };
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
+
+        let request = match build_request(&url, headers.as_deref()) {
+            Ok(req) => req,
+            Err(e) => {
+                let resp = HostResponseWebsocketConnectResponse {
+                    result: Err(SerializableWebsocketError::ConnectionFailure(e.clone())),
+                };
+                call.complete(self, resp).await?;
+                return Ok(Err(Error::ConnectionFailure(e)));
+            }
         };
 
-        if durability.is_live() {
-            let request = match build_request(&url, headers.as_deref()) {
-                Ok(req) => req,
-                Err(e) => {
-                    let resp = HostResponseWebsocketConnectResponse {
-                        result: Err(SerializableWebsocketError::ConnectionFailure(e.clone())),
-                    };
-                    durability
-                        .persist_raw(self, req.into(), resp.into())
-                        .await?;
-                    return Ok(Err(Error::ConnectionFailure(e)));
-                }
-            };
-
-            let permit = self.websocket_connection_pool.acquire().await?;
-
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
-
-            let connect_fut = connect_async(request);
-            pin_mut!(connect_fut);
-            let connect_result = match futures::future::select(connect_fut, interrupt_signal).await
-            {
-                Either::Left((result, _)) => result,
-                Either::Right((interrupt_kind, _)) => {
-                    tracing::info!("Interrupted while waiting for WebSocket connect");
-                    return Err(interrupt_kind.into());
-                }
-            };
-
-            match connect_result {
-                Ok((ws_stream, _response)) => {
-                    let (writer, reader) = ws_stream.split();
-                    let entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection {
-                        writer: Mutex::new(writer),
-                        reader: Mutex::new(ReaderState {
-                            stream: reader,
-                            pending: None,
-                        }),
-                        _permit: permit,
-                    }));
-                    let resource = self.as_wasi_view().table().push(entry)?;
-                    self.register_open_websocket(resource.rep(), url.clone(), headers.clone());
-                    let resp = HostResponseWebsocketConnectResponse { result: Ok(()) };
-                    durability
-                        .persist_raw(self, req.into(), resp.into())
-                        .await?;
-                    Ok(Ok(resource))
-                }
-                Err(e) => {
-                    let resp = HostResponseWebsocketConnectResponse {
-                        result: Err(SerializableWebsocketError::ConnectionFailure(e.to_string())),
-                    };
-                    durability
-                        .persist_raw(self, req.into(), resp.into())
-                        .await?;
-                    Ok(Err(Error::ConnectionFailure(e.to_string())))
-                }
+        let permit = match self.websocket_connection_pool.acquire().await {
+            Ok(permit) => permit,
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err);
             }
-        } else {
-            let resp: HostResponseWebsocketConnectResponse = durability.replay(self).await?;
-            match resp.result {
-                Ok(()) => {
-                    let resource = self
-                        .as_wasi_view()
-                        .table()
-                        .push(WebSocketConnectionEntry::Replay)?;
-                    self.register_open_websocket(resource.rep(), url.clone(), headers.clone());
-                    Ok(Ok(resource))
-                }
-                Err(e) => Ok(Err(serializable_error_to_error(e))),
+        };
+
+        let interrupt_signal = self
+            .execution_status
+            .read()
+            .unwrap()
+            .create_await_interrupt_signal();
+
+        let connect_fut = connect_async(request);
+        pin_mut!(connect_fut);
+        let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
+            Either::Left((result, _)) => result,
+            Either::Right((interrupt_kind, _)) => {
+                tracing::info!("Interrupted while waiting for WebSocket connect");
+                call.abandon_for_trap();
+                return Err(interrupt_kind.into());
+            }
+        };
+
+        match connect_result {
+            Ok((ws_stream, _response)) => {
+                let (writer, reader) = ws_stream.split();
+                let entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection {
+                    writer: Mutex::new(writer),
+                    reader: Mutex::new(ReaderState {
+                        stream: reader,
+                        pending: None,
+                    }),
+                    _permit: permit,
+                }));
+                let resource = match self.as_wasi_view().table().push(entry) {
+                    Ok(resource) => resource,
+                    Err(err) => {
+                        call.abandon_for_trap();
+                        return Err(err.into());
+                    }
+                };
+                self.register_open_websocket(resource.rep(), url.clone(), headers.clone());
+                let resp = HostResponseWebsocketConnectResponse { result: Ok(()) };
+                call.complete(self, resp).await?;
+                Ok(Ok(resource))
+            }
+            Err(e) => {
+                let resp = HostResponseWebsocketConnectResponse {
+                    result: Err(SerializableWebsocketError::ConnectionFailure(e.to_string())),
+                };
+                call.complete(self, resp).await?;
+                Ok(Err(Error::ConnectionFailure(e.to_string())))
             }
         }
     }
@@ -208,88 +223,103 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), Error>> {
         self.observe_function_call("golem:websocket/client", "send");
 
-        let durability = Durability::<host_functions::WebsocketClientSend>::new(
+        let mut call = CallHandle::<host_functions::WebsocketClientSend, NotCancellable>::start(
             self,
+            HostRequestWebsocketSend {
+                message: message_to_serializable(&message),
+            },
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
-        let req = HostRequestWebsocketSend {
-            message: message_to_serializable(&message),
-        };
+        if !call.is_live() {
+            let _ = self.as_wasi_view().table().get(&self_)?;
+            match call.replay(self).await? {
+                CallReplayOutcome::Replayed(resp) => {
+                    let resp: HostResponseWebsocketSendResponse = resp;
+                    return match resp.result {
+                        Ok(()) => Ok(Ok(())),
+                        Err(e) => {
+                            let error = serializable_error_to_error(e);
+                            if let Some(terminal_error) = terminal_websocket_error(&error) {
+                                mark_websocket_terminal(self, &self_, terminal_error)?;
+                            }
+                            Ok(Err(error))
+                        }
+                    };
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
 
-        if durability.is_live() {
-            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+        match ensure_websocket_connection_live(self, &self_).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
                 let resp = HostResponseWebsocketSendResponse {
                     result: Err(error_to_serializable(&error)),
                 };
-                durability
-                    .persist_raw(self, req.into(), resp.into())
-                    .await?;
+                call.complete(self, resp).await?;
                 return Ok(Err(error));
             }
-
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
-
-            let mut view = self.as_wasi_view();
-            let entry = view.table().get(&self_)?;
-            let tungstenite_msg = to_tungstenite_message(message);
-            let live_result = match entry {
-                WebSocketConnectionEntry::Live(live) => {
-                    let mut writer = live.writer.lock().await;
-                    let send_fut = writer.send(tungstenite_msg);
-                    pin_mut!(send_fut);
-                    match futures::future::select(send_fut, interrupt_signal).await {
-                        Either::Left((Ok(()), _)) => Ok(()),
-                        Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
-                        Either::Right((interrupt_kind, _)) => {
-                            tracing::info!("Interrupted while waiting for WebSocket send");
-                            return Err(interrupt_kind.into());
-                        }
-                    }
-                }
-                WebSocketConnectionEntry::Replay => {
-                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                        "websocket connection entry kind mismatch during replay (live send path saw Replay entry)",
-                    )
-                    .into());
-                }
-                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
-            };
-            let ser_result = match &live_result {
-                Ok(()) => Ok(()),
-                Err(e) => Err(error_to_serializable(e)),
-            };
-            let resp = HostResponseWebsocketSendResponse { result: ser_result };
-            durability
-                .persist_raw(self, req.into(), resp.into())
-                .await?;
-            if let Some(terminal_error) = live_result
-                .as_ref()
-                .err()
-                .and_then(terminal_websocket_error)
-            {
-                mark_websocket_terminal(self, &self_, terminal_error)?;
-            }
-            Ok(live_result)
-        } else {
-            let _ = self.as_wasi_view().table().get(&self_)?;
-            let resp: HostResponseWebsocketSendResponse = durability.replay(self).await?;
-            match resp.result {
-                Ok(()) => Ok(Ok(())),
-                Err(e) => {
-                    let error = serializable_error_to_error(e);
-                    if let Some(terminal_error) = terminal_websocket_error(&error) {
-                        mark_websocket_terminal(self, &self_, terminal_error)?;
-                    }
-                    Ok(Err(error))
-                }
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err);
             }
         }
+
+        let interrupt_signal = self
+            .execution_status
+            .read()
+            .unwrap()
+            .create_await_interrupt_signal();
+
+        let mut view = self.as_wasi_view();
+        let entry = match view.table().get(&self_) {
+            Ok(entry) => entry,
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err.into());
+            }
+        };
+        let tungstenite_msg = to_tungstenite_message(message);
+        let live_result = match entry {
+            WebSocketConnectionEntry::Live(live) => {
+                let mut writer = live.writer.lock().await;
+                let send_fut = writer.send(tungstenite_msg);
+                pin_mut!(send_fut);
+                match futures::future::select(send_fut, interrupt_signal).await {
+                    Either::Left((Ok(()), _)) => Ok(()),
+                    Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
+                    Either::Right((interrupt_kind, _)) => {
+                        tracing::info!("Interrupted while waiting for WebSocket send");
+                        call.abandon_for_trap();
+                        return Err(interrupt_kind.into());
+                    }
+                }
+            }
+            WebSocketConnectionEntry::Replay => {
+                call.abandon_for_trap();
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "websocket connection entry kind mismatch during replay (live send path saw Replay entry)",
+                )
+                .into());
+            }
+            WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
+        };
+        let ser_result = match &live_result {
+            Ok(()) => Ok(()),
+            Err(e) => Err(error_to_serializable(e)),
+        };
+        let resp = HostResponseWebsocketSendResponse { result: ser_result };
+        call.complete(self, resp).await?;
+        if let Some(terminal_error) = live_result
+            .as_ref()
+            .err()
+            .and_then(terminal_websocket_error)
+        {
+            mark_websocket_terminal(self, &self_, terminal_error)?;
+        }
+        Ok(live_result)
     }
 
     async fn receive(
@@ -298,88 +328,103 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Message, Error>> {
         self.observe_function_call("golem:websocket/client", "receive");
 
-        let durability = Durability::<host_functions::WebsocketClientReceive>::new(
+        let mut call = CallHandle::<host_functions::WebsocketClientReceive, NotCancellable>::start(
             self,
+            HostRequestWebsocketReceive {},
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
-        let req = HostRequestWebsocketReceive {};
+        if !call.is_live() {
+            let _ = self.as_wasi_view().table().get(&self_)?;
+            match call.replay(self).await? {
+                CallReplayOutcome::Replayed(resp) => {
+                    let resp: HostResponseWebsocketReceiveResponse = resp;
+                    return match resp.result {
+                        Ok(m) => Ok(Ok(serializable_message_to_message(m))),
+                        Err(e) => {
+                            let error = serializable_error_to_error(e);
+                            if let Some(terminal_error) = terminal_websocket_error(&error) {
+                                mark_websocket_terminal(self, &self_, terminal_error)?;
+                            }
+                            Ok(Err(error))
+                        }
+                    };
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
 
-        if durability.is_live() {
-            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+        match ensure_websocket_connection_live(self, &self_).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveResponse {
                     result: Err(error_to_serializable(&error)),
                 };
-                durability
-                    .persist_raw(self, req.into(), resp.into())
-                    .await?;
+                call.complete(self, resp).await?;
                 return Ok(Err(error));
             }
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err);
+            }
+        }
 
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
+        let interrupt_signal = self
+            .execution_status
+            .read()
+            .unwrap()
+            .create_await_interrupt_signal();
 
-            let mut view = self.as_wasi_view();
-            let entry = view.table().get(&self_)?;
-            let live_result = match entry {
-                WebSocketConnectionEntry::Live(live) => {
-                    let mut reader = live.reader.lock().await;
-                    if let Some(pending) = reader.pending.take() {
-                        pending
-                    } else {
-                        let recv_fut = read_next_user_or_close(&mut reader.stream);
-                        pin_mut!(recv_fut);
-                        match futures::future::select(recv_fut, interrupt_signal).await {
-                            Either::Left((result, _)) => result,
-                            Either::Right((interrupt_kind, _)) => {
-                                tracing::info!("Interrupted while waiting for WebSocket receive");
-                                return Err(interrupt_kind.into());
-                            }
+        let mut view = self.as_wasi_view();
+        let entry = match view.table().get(&self_) {
+            Ok(entry) => entry,
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err.into());
+            }
+        };
+        let live_result = match entry {
+            WebSocketConnectionEntry::Live(live) => {
+                let mut reader = live.reader.lock().await;
+                if let Some(pending) = reader.pending.take() {
+                    pending
+                } else {
+                    let recv_fut = read_next_user_or_close(&mut reader.stream);
+                    pin_mut!(recv_fut);
+                    match futures::future::select(recv_fut, interrupt_signal).await {
+                        Either::Left((result, _)) => result,
+                        Either::Right((interrupt_kind, _)) => {
+                            tracing::info!("Interrupted while waiting for WebSocket receive");
+                            call.abandon_for_trap();
+                            return Err(interrupt_kind.into());
                         }
                     }
                 }
-                WebSocketConnectionEntry::Replay => {
-                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                        "websocket connection entry kind mismatch during replay (live receive path saw Replay entry)",
-                    )
-                    .into());
-                }
-                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
-            };
-            let ser_result = match &live_result {
-                Ok(m) => Ok(message_to_serializable(m)),
-                Err(e) => Err(error_to_serializable(e)),
-            };
-            let resp = HostResponseWebsocketReceiveResponse { result: ser_result };
-            durability
-                .persist_raw(self, req.into(), resp.into())
-                .await?;
-            if let Some(terminal_error) = live_result
-                .as_ref()
-                .err()
-                .and_then(terminal_websocket_error)
-            {
-                mark_websocket_terminal(self, &self_, terminal_error)?;
             }
-            Ok(live_result)
-        } else {
-            let _ = self.as_wasi_view().table().get(&self_)?;
-            let resp: HostResponseWebsocketReceiveResponse = durability.replay(self).await?;
-            match resp.result {
-                Ok(m) => Ok(Ok(serializable_message_to_message(m))),
-                Err(e) => {
-                    let error = serializable_error_to_error(e);
-                    if let Some(terminal_error) = terminal_websocket_error(&error) {
-                        mark_websocket_terminal(self, &self_, terminal_error)?;
-                    }
-                    Ok(Err(error))
-                }
+            WebSocketConnectionEntry::Replay => {
+                call.abandon_for_trap();
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "websocket connection entry kind mismatch during replay (live receive path saw Replay entry)",
+                )
+                .into());
             }
+            WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
+        };
+        let ser_result = match &live_result {
+            Ok(m) => Ok(message_to_serializable(m)),
+            Err(e) => Err(error_to_serializable(e)),
+        };
+        let resp = HostResponseWebsocketReceiveResponse { result: ser_result };
+        call.complete(self, resp).await?;
+        if let Some(terminal_error) = live_result
+            .as_ref()
+            .err()
+            .and_then(terminal_websocket_error)
+        {
+            mark_websocket_terminal(self, &self_, terminal_error)?;
         }
+        Ok(live_result)
     }
 
     async fn receive_with_timeout(
@@ -389,120 +434,131 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Option<Message>, Error>> {
         self.observe_function_call("golem:websocket/client", "receive-with-timeout");
 
-        let durability = Durability::<host_functions::WebsocketClientReceiveWithTimeout>::new(
-            self,
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut call =
+            CallHandle::<host_functions::WebsocketClientReceiveWithTimeout, NotCancellable>::start(
+                self,
+                HostRequestWebsocketReceiveWithTimeout { timeout_ms },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
-        let req = HostRequestWebsocketReceiveWithTimeout { timeout_ms };
+        if !call.is_live() {
+            let _ = self.as_wasi_view().table().get(&self_)?;
+            match call.replay(self).await? {
+                CallReplayOutcome::Replayed(resp) => {
+                    let resp: HostResponseWebsocketReceiveWithTimeoutResponse = resp;
+                    return match resp.result {
+                        Ok(Some(m)) => Ok(Ok(Some(serializable_message_to_message(m)))),
+                        Ok(None) => Ok(Ok(None)),
+                        Err(e) => {
+                            let error = serializable_error_to_error(e);
+                            if let Some(terminal_error) = terminal_websocket_error(&error) {
+                                mark_websocket_terminal(self, &self_, terminal_error)?;
+                            }
+                            Ok(Err(error))
+                        }
+                    };
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
 
-        if durability.is_live() {
-            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+        match ensure_websocket_connection_live(self, &self_).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveWithTimeoutResponse {
                     result: Err(error_to_serializable(&error)),
                 };
-                durability
-                    .persist_raw(self, req.into(), resp.into())
-                    .await?;
+                call.complete(self, resp).await?;
                 return Ok(Err(error));
             }
-
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
-
-            let mut view = self.as_wasi_view();
-            let entry = view.table().get(&self_)?;
-            let live_result: Result<Option<Message>, Error> = match entry {
-                WebSocketConnectionEntry::Live(live) => {
-                    let mut reader = live.reader.lock().await;
-                    if let Some(pending) = reader.pending.take() {
-                        match pending {
-                            Ok(message) => Ok(Some(message)),
-                            Err(err) => Err(err),
-                        }
-                    } else {
-                        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-                        pin_mut!(interrupt_signal);
-                        loop {
-                            let remaining = deadline.saturating_duration_since(Instant::now());
-                            if remaining.is_zero() {
-                                break Ok(None);
-                            }
-                            let next_frame = tokio::time::timeout(remaining, reader.stream.next());
-                            pin_mut!(next_frame);
-                            match futures::future::select(next_frame, interrupt_signal.as_mut())
-                                .await
-                            {
-                                Either::Left((Ok(Some(Ok(msg))), _)) => {
-                                    match to_user_message(msg) {
-                                        Ok(Some(message)) => break Ok(Some(message)),
-                                        Ok(None) => continue,
-                                        Err(err) => break Err(err),
-                                    }
-                                }
-                                Either::Left((Ok(Some(Err(e))), _)) => break Err(to_wit_error(e)),
-                                Either::Left((Ok(None), _)) => {
-                                    break Err(Error::Closed(Some(CloseInfo {
-                                        code: 1000,
-                                        reason: "Connection closed".to_string(),
-                                    })));
-                                }
-                                Either::Left((Err(_), _)) => break Ok(None),
-                                Either::Right((interrupt_kind, _)) => {
-                                    tracing::info!(
-                                        "Interrupted while waiting for WebSocket receive with timeout"
-                                    );
-                                    return Err(interrupt_kind.into());
-                                }
-                            }
-                        }
-                    }
-                }
-                WebSocketConnectionEntry::Replay => {
-                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                        "websocket connection entry kind mismatch during replay (live receive_with_timeout path saw Replay entry)",
-                    )
-                    .into());
-                }
-                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
-            };
-            let ser_result = match &live_result {
-                Ok(Some(m)) => Ok(Some(message_to_serializable(m))),
-                Ok(None) => Ok(None),
-                Err(e) => Err(error_to_serializable(e)),
-            };
-            let resp = HostResponseWebsocketReceiveWithTimeoutResponse { result: ser_result };
-            durability
-                .persist_raw(self, req.into(), resp.into())
-                .await?;
-            if let Some(terminal_error) = live_result
-                .as_ref()
-                .err()
-                .and_then(terminal_websocket_error)
-            {
-                mark_websocket_terminal(self, &self_, terminal_error)?;
-            }
-            Ok(live_result)
-        } else {
-            let _ = self.as_wasi_view().table().get(&self_)?;
-            let resp: HostResponseWebsocketReceiveWithTimeoutResponse =
-                durability.replay(self).await?;
-            match resp.result {
-                Ok(Some(m)) => Ok(Ok(Some(serializable_message_to_message(m)))),
-                Ok(None) => Ok(Ok(None)),
-                Err(e) => {
-                    let error = serializable_error_to_error(e);
-                    if let Some(terminal_error) = terminal_websocket_error(&error) {
-                        mark_websocket_terminal(self, &self_, terminal_error)?;
-                    }
-                    Ok(Err(error))
-                }
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err);
             }
         }
+
+        let interrupt_signal = self
+            .execution_status
+            .read()
+            .unwrap()
+            .create_await_interrupt_signal();
+
+        let mut view = self.as_wasi_view();
+        let entry = match view.table().get(&self_) {
+            Ok(entry) => entry,
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err.into());
+            }
+        };
+        let live_result: Result<Option<Message>, Error> = match entry {
+            WebSocketConnectionEntry::Live(live) => {
+                let mut reader = live.reader.lock().await;
+                if let Some(pending) = reader.pending.take() {
+                    match pending {
+                        Ok(message) => Ok(Some(message)),
+                        Err(err) => Err(err),
+                    }
+                } else {
+                    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                    pin_mut!(interrupt_signal);
+                    loop {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            break Ok(None);
+                        }
+                        let next_frame = tokio::time::timeout(remaining, reader.stream.next());
+                        pin_mut!(next_frame);
+                        match futures::future::select(next_frame, interrupt_signal.as_mut()).await {
+                            Either::Left((Ok(Some(Ok(msg))), _)) => match to_user_message(msg) {
+                                Ok(Some(message)) => break Ok(Some(message)),
+                                Ok(None) => continue,
+                                Err(err) => break Err(err),
+                            },
+                            Either::Left((Ok(Some(Err(e))), _)) => break Err(to_wit_error(e)),
+                            Either::Left((Ok(None), _)) => {
+                                break Err(Error::Closed(Some(CloseInfo {
+                                    code: 1000,
+                                    reason: "Connection closed".to_string(),
+                                })));
+                            }
+                            Either::Left((Err(_), _)) => break Ok(None),
+                            Either::Right((interrupt_kind, _)) => {
+                                tracing::info!(
+                                    "Interrupted while waiting for WebSocket receive with timeout"
+                                );
+                                call.abandon_for_trap();
+                                return Err(interrupt_kind.into());
+                            }
+                        }
+                    }
+                }
+            }
+            WebSocketConnectionEntry::Replay => {
+                call.abandon_for_trap();
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "websocket connection entry kind mismatch during replay (live receive_with_timeout path saw Replay entry)",
+                )
+                .into());
+            }
+            WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
+        };
+        let ser_result = match &live_result {
+            Ok(Some(m)) => Ok(Some(message_to_serializable(m))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(error_to_serializable(e)),
+        };
+        let resp = HostResponseWebsocketReceiveWithTimeoutResponse { result: ser_result };
+        call.complete(self, resp).await?;
+        if let Some(terminal_error) = live_result
+            .as_ref()
+            .err()
+            .and_then(terminal_websocket_error)
+        {
+            mark_websocket_terminal(self, &self_, terminal_error)?;
+        }
+        Ok(live_result)
     }
 
     async fn close(
@@ -513,16 +569,15 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), Error>> {
         self.observe_function_call("golem:websocket/client", "close");
 
-        let durability = Durability::<host_functions::WebsocketClientClose>::new(
+        let mut call = CallHandle::<host_functions::WebsocketClientClose, NotCancellable>::start(
             self,
+            HostRequestWebsocketClose {
+                code,
+                reason: reason.clone(),
+            },
             DurableFunctionType::WriteRemote,
         )
         .await?;
-
-        let req = HostRequestWebsocketClose {
-            code,
-            reason: reason.clone(),
-        };
 
         let terminal_close_error =
             TerminalWebSocketError::Closed(Some(SerializableWebsocketCloseInfo {
@@ -532,88 +587,104 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     .unwrap_or_else(|| "Connection closed".to_string()),
             }));
 
-        if durability.is_live() {
-            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+        if !call.is_live() {
+            let _ = self.as_wasi_view().table().get(&self_)?;
+            match call.replay(self).await? {
+                CallReplayOutcome::Replayed(resp) => {
+                    let resp: HostResponseWebsocketCloseResponse = resp;
+                    return match resp.result {
+                        Ok(()) => {
+                            mark_websocket_terminal(self, &self_, terminal_close_error)?;
+                            Ok(Ok(()))
+                        }
+                        Err(e) => {
+                            let error = serializable_error_to_error(e);
+                            if let Some(terminal_error) = terminal_websocket_error(&error) {
+                                mark_websocket_terminal(self, &self_, terminal_error)?;
+                            }
+                            Ok(Err(error))
+                        }
+                    };
+                }
+                CallReplayOutcome::Incomplete(live) => call = live,
+            }
+        }
+
+        match ensure_websocket_connection_live(self, &self_).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
                 let resp = HostResponseWebsocketCloseResponse {
                     result: Err(error_to_serializable(&error)),
                 };
-                durability
-                    .persist_raw(self, req.into(), resp.into())
-                    .await?;
+                call.complete(self, resp).await?;
                 return Ok(Err(error));
             }
-
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
-
-            let mut view = self.as_wasi_view();
-            let entry = view.table().get(&self_)?;
-            let live_result = match entry {
-                WebSocketConnectionEntry::Live(live) => {
-                    let close_frame = tungstenite::protocol::CloseFrame {
-                        code: tungstenite::protocol::frame::coding::CloseCode::from(
-                            code.unwrap_or(1000),
-                        ),
-                        reason: reason.unwrap_or_default().into(),
-                    };
-                    let mut writer = live.writer.lock().await;
-                    let close_fut = writer.send(tungstenite::Message::Close(Some(close_frame)));
-                    pin_mut!(close_fut);
-                    match futures::future::select(close_fut, interrupt_signal).await {
-                        Either::Left((Ok(()), _)) => Ok(()),
-                        Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
-                        Either::Right((interrupt_kind, _)) => {
-                            tracing::info!("Interrupted while waiting for WebSocket close");
-                            return Err(interrupt_kind.into());
-                        }
-                    }
-                }
-                WebSocketConnectionEntry::Replay => {
-                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                        "websocket connection entry kind mismatch during replay (live close path saw Replay entry)",
-                    )
-                    .into());
-                }
-                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
-            };
-            let ser_result = match &live_result {
-                Ok(()) => Ok(()),
-                Err(e) => Err(error_to_serializable(e)),
-            };
-            let resp = HostResponseWebsocketCloseResponse { result: ser_result };
-            durability
-                .persist_raw(self, req.into(), resp.into())
-                .await?;
-            if live_result.is_ok() {
-                mark_websocket_terminal(self, &self_, terminal_close_error.clone())?;
-            } else if let Some(terminal_error) = live_result
-                .as_ref()
-                .err()
-                .and_then(terminal_websocket_error)
-            {
-                mark_websocket_terminal(self, &self_, terminal_error)?;
-            }
-            Ok(live_result)
-        } else {
-            let _ = self.as_wasi_view().table().get(&self_)?;
-            let resp: HostResponseWebsocketCloseResponse = durability.replay(self).await?;
-            match resp.result {
-                Ok(()) => {
-                    mark_websocket_terminal(self, &self_, terminal_close_error)?;
-                    Ok(Ok(()))
-                }
-                Err(e) => {
-                    let error = serializable_error_to_error(e);
-                    if let Some(terminal_error) = terminal_websocket_error(&error) {
-                        mark_websocket_terminal(self, &self_, terminal_error)?;
-                    }
-                    Ok(Err(error))
-                }
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err);
             }
         }
+
+        let interrupt_signal = self
+            .execution_status
+            .read()
+            .unwrap()
+            .create_await_interrupt_signal();
+
+        let mut view = self.as_wasi_view();
+        let entry = match view.table().get(&self_) {
+            Ok(entry) => entry,
+            Err(err) => {
+                call.abandon_for_trap();
+                return Err(err.into());
+            }
+        };
+        let live_result = match entry {
+            WebSocketConnectionEntry::Live(live) => {
+                let close_frame = tungstenite::protocol::CloseFrame {
+                    code: tungstenite::protocol::frame::coding::CloseCode::from(
+                        code.unwrap_or(1000),
+                    ),
+                    reason: reason.unwrap_or_default().into(),
+                };
+                let mut writer = live.writer.lock().await;
+                let close_fut = writer.send(tungstenite::Message::Close(Some(close_frame)));
+                pin_mut!(close_fut);
+                match futures::future::select(close_fut, interrupt_signal).await {
+                    Either::Left((Ok(()), _)) => Ok(()),
+                    Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
+                    Either::Right((interrupt_kind, _)) => {
+                        tracing::info!("Interrupted while waiting for WebSocket close");
+                        call.abandon_for_trap();
+                        return Err(interrupt_kind.into());
+                    }
+                }
+            }
+            WebSocketConnectionEntry::Replay => {
+                call.abandon_for_trap();
+                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "websocket connection entry kind mismatch during replay (live close path saw Replay entry)",
+                )
+                .into());
+            }
+            WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
+        };
+        let ser_result = match &live_result {
+            Ok(()) => Ok(()),
+            Err(e) => Err(error_to_serializable(e)),
+        };
+        let resp = HostResponseWebsocketCloseResponse { result: ser_result };
+        call.complete(self, resp).await?;
+        if live_result.is_ok() {
+            mark_websocket_terminal(self, &self_, terminal_close_error.clone())?;
+        } else if let Some(terminal_error) = live_result
+            .as_ref()
+            .err()
+            .and_then(terminal_websocket_error)
+        {
+            mark_websocket_terminal(self, &self_, terminal_error)?;
+        }
+        Ok(live_result)
     }
 
     async fn subscribe(
@@ -664,7 +735,7 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
 
     // The read-only side-effect trap fires earlier: every caller of this helper
     // (`send` / `receive` / `receive-with-timeout` / `close`) goes through
-    // `Durability::new` with `WriteRemote` first, which routes through
+    // `CallHandle::start` with `WriteRemote` first, which routes through
     // `DurabilityHost::begin_durable_function` — the single central read-only guard.
     let request = match build_request(&info.url, info.headers.as_deref()) {
         Ok(request) => request,

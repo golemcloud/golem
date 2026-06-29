@@ -14,9 +14,9 @@
 
 use crate::Tracing;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -67,8 +67,8 @@ async fn set_retry_policy_is_persisted_to_oplog(
             data_value!("test-policy".to_string()),
         )
         .await?;
-    let has_it = result.into_return_value().unwrap();
-    assert_eq!(has_it, Value::Bool(true));
+    let has_it = result.into_typed::<bool>()?;
+    assert!(has_it);
 
     let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     let has_set = oplog
@@ -84,11 +84,8 @@ async fn set_retry_policy_is_persisted_to_oplog(
             data_value!(),
         )
         .await?;
-    let count = result.into_return_value().unwrap();
-    match &count {
-        Value::U64(n) => assert!(*n >= 1, "Expected at least 1 retry policy, got {n}"),
-        other => panic!("Expected U64 return value, got {other:?}"),
-    }
+    let count = result.into_typed::<u64>()?;
+    assert!(count >= 1, "Expected at least 1 retry policy, got {count}");
 
     executor.check_oplog_is_queryable(&agent_id).await?;
 
@@ -133,7 +130,7 @@ async fn remove_retry_policy_is_persisted_to_oplog(
             data_value!("removable".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(true));
+    assert!(result.into_typed::<bool>()?);
 
     executor
         .invoke_and_await_agent(
@@ -152,7 +149,7 @@ async fn remove_retry_policy_is_persisted_to_oplog(
             data_value!("removable".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(false));
+    assert!(!result.into_typed::<bool>()?);
 
     let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     let has_remove = oplog
@@ -205,7 +202,7 @@ async fn retry_policy_survives_restart(
             data_value!("persistent".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(true));
+    assert!(result.into_typed::<bool>()?);
 
     drop(executor);
 
@@ -220,9 +217,8 @@ async fn retry_policy_survives_restart(
             data_value!("persistent".to_string()),
         )
         .await?;
-    assert_eq!(
-        result.into_return_value().unwrap(),
-        Value::Bool(true),
+    assert!(
+        result.into_typed::<bool>()?,
         "Retry policy should survive restart via oplog replay"
     );
 
@@ -236,11 +232,11 @@ async fn retry_policy_survives_restart(
         .await?;
     let names = result.into_return_value().unwrap();
     match &names {
-        Value::List(items) => {
+        SchemaValue::List { elements: items } => {
             let name_strings: Vec<&str> = items
                 .iter()
                 .filter_map(|v| match v {
-                    Value::String(s) => Some(s.as_str()),
+                    SchemaValue::String(s) => Some(s.as_str()),
                     _ => None,
                 })
                 .collect();
@@ -286,7 +282,7 @@ async fn get_missing_retry_policy_returns_false(
             data_value!("nonexistent".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(false));
+    assert!(!result.into_typed::<bool>()?);
 
     executor.check_oplog_is_queryable(&agent_id).await?;
 
@@ -336,11 +332,11 @@ async fn list_retry_policy_names_returns_all(
         .await?;
     let names = result.into_return_value().unwrap();
     match &names {
-        Value::List(items) => {
+        SchemaValue::List { elements: items } => {
             let name_strings: Vec<&str> = items
                 .iter()
                 .filter_map(|v| match v {
-                    Value::String(s) => Some(s.as_str()),
+                    SchemaValue::String(s) => Some(s.as_str()),
                     _ => None,
                 })
                 .collect();

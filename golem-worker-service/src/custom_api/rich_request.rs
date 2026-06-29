@@ -1,4 +1,4 @@
-use super::{OidcSession, ParsedRequestBody};
+use super::{OidcSession, ParsedRequestBody, RawBinaryBody};
 
 // Copyright 2024-2026 Golem Cloud
 //
@@ -16,15 +16,16 @@ use super::{OidcSession, ParsedRequestBody};
 
 use super::error::RequestHandlerError;
 use anyhow::anyhow;
-use golem_common::model::agent::{BinarySource, BinaryType, TextSource, TextType};
+use golem_common::model::agent::{TextSource, TextType};
 use golem_common::model::invocation_context::{
     InvocationContextSpan, InvocationContextStack, TraceId,
 };
 use golem_common::model::{IdempotencyKey, invocation_context};
+use golem_common::schema::SchemaGraph;
+use golem_common::schema::render::from_json_value;
+use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_service_base::custom_api::RequestBodySchema;
 use golem_service_base::headers::TraceContextHeaders;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use http::HeaderMap;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -137,7 +138,7 @@ impl RichRequest {
         match expected {
             RequestBodySchema::Unused => Ok(ParsedRequestBody::Unused),
 
-            RequestBodySchema::JsonBody { expected_type } => {
+            RequestBodySchema::JsonBody { expected } => {
                 let json_body: serde_json::Value = self
                     .underlying
                     .take_body()
@@ -146,20 +147,24 @@ impl RichRequest {
                     .map_err(|err| RequestHandlerError::BodyIsNotValidJson {
                         error: err.to_string(),
                     })?;
-                let parsed_body = ValueAndType::parse_with_type(&json_body, expected_type)
-                    .map_err(|errors| RequestHandlerError::JsonBodyParsingFailed { errors })?;
-                Ok(ParsedRequestBody::JsonBody(parsed_body.value))
+                let parsed_body =
+                    from_json_value(&expected.graph, &expected.graph.root, &json_body).map_err(
+                        |err| RequestHandlerError::JsonBodyParsingFailed {
+                            errors: vec![err.to_string()],
+                        },
+                    )?;
+                Ok(ParsedRequestBody::JsonBody(parsed_body))
             }
 
-            RequestBodySchema::UnrestrictedBinary => self.parse_binary_body(None).await,
-            RequestBodySchema::RestrictedBinary { allowed_mime_types } => {
-                self.parse_binary_body(Some(allowed_mime_types)).await
+            RequestBodySchema::BinaryBody { expected } => {
+                let mime_types = binary_mime_types(&expected.graph)?;
+                self.parse_binary_body(mime_types.as_ref()).await
             }
 
-            RequestBodySchema::UnrestrictedText => self.parse_text_body(None).await,
-            RequestBodySchema::RestrictedText {
-                allowed_language_codes,
-            } => self.parse_text_body(Some(allowed_language_codes)).await,
+            RequestBodySchema::TextBody { expected } => {
+                let languages = text_languages(&expected.graph)?;
+                self.parse_text_body(languages.as_ref()).await
+            }
         }
     }
 
@@ -262,27 +267,33 @@ impl RichRequest {
 
         let header_name = http::header::CONTENT_TYPE.to_string();
 
-        let mime_type = self
+        // A missing `Content-Type` header carries no MIME type; preserve that
+        // absence rather than defaulting to `application/octet-stream`.
+        let mime_type: Option<String> = self
             .headers()
             .get(header_name.clone())
             .map(|value| value.to_str())
             .transpose()
             .map_err(|_| RequestHandlerError::HeaderIsNotAscii { header_name })?
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "application/octet-stream".to_string());
+            .map(|v| v.to_string());
 
+        // Lenient MIME handling (mirrors `parse_text_body` / the schema
+        // semantics): a missing MIME type is always allowed; only a *present*
+        // MIME type outside a *non-empty* allow-list is rejected.
         if let Some(allowed) = allowed_mime_types
-            && !allowed.iter().any(|allowed| allowed == &mime_type)
+            && !allowed.is_empty()
+            && let Some(mime) = &mime_type
+            && !allowed.iter().any(|allowed| allowed == mime)
         {
             return Err(RequestHandlerError::UnsupportedMimeType {
-                mime_type,
+                mime_type: mime.clone(),
                 allowed_mime_types: allowed.clone(),
             });
         }
 
-        Ok(ParsedRequestBody::UnstructuredBinary(Some(BinarySource {
+        Ok(ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody {
             data,
-            binary_type: BinaryType { mime_type },
+            mime_type,
         })))
     }
 
@@ -392,16 +403,95 @@ fn extract_request_attributes(
     result
 }
 
+/// Resolve a `BinaryBody` compiled-schema graph root to its allowed MIME types
+/// (`None` = unrestricted). The producer guarantees the root is either a
+/// canonical unstructured-binary `variant { inline, url }` wrapper or a bare
+/// [`SchemaType::Binary`] rich scalar; both carry the MIME restrictions on their
+/// (inline) binary type.
+fn binary_mime_types(graph: &SchemaGraph) -> Result<Option<Vec<String>>, RequestHandlerError> {
+    let restrictions = binary_body_restrictions(graph, &graph.root)
+        .map_err(|err| anyhow!("Invalid binary body schema: {err}"))?;
+    Ok(restrictions.mime_types.clone())
+}
+
+/// Resolve a `TextBody` compiled-schema graph root to its allowed language codes
+/// (`None` = unrestricted). The producer guarantees the root is either a
+/// canonical unstructured-text `variant { inline, url }` wrapper or a bare
+/// [`SchemaType::Text`] rich scalar; both carry the language restrictions on
+/// their (inline) text type.
+fn text_languages(graph: &SchemaGraph) -> Result<Option<Vec<String>>, RequestHandlerError> {
+    let restrictions = text_body_restrictions(graph, &graph.root)
+        .map_err(|err| anyhow!("Invalid text body schema: {err}"))?;
+    Ok(restrictions.languages.clone())
+}
+
 #[cfg(test)]
 mod request_body_tests {
     use super::*;
     use assert2::{assert, let_assert};
-    use golem_service_base::custom_api::RequestBodySchema;
-    use golem_wasm::analysis::{NameTypePair, analysed_type};
+    use golem_common::schema::SchemaValue;
+    use golem_common::schema::schema_type::{
+        BinaryRestrictions, NamedFieldType, SchemaType, TextRestrictions,
+    };
+    use golem_service_base::custom_api::{CompiledSchema, RequestBodySchema};
     use http::Method;
     use poem::{Body, Request};
     use serde_json::json;
     use test_r::test;
+
+    fn json_body(root: SchemaType) -> RequestBodySchema {
+        RequestBodySchema::JsonBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(root),
+            },
+        }
+    }
+
+    fn unrestricted_binary() -> RequestBodySchema {
+        RequestBodySchema::BinaryBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions::default())),
+            },
+        }
+    }
+
+    fn restricted_binary(mime_types: Vec<String>) -> RequestBodySchema {
+        RequestBodySchema::BinaryBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions {
+                    mime_types: Some(mime_types),
+                    ..Default::default()
+                })),
+            },
+        }
+    }
+
+    fn unrestricted_text() -> RequestBodySchema {
+        RequestBodySchema::TextBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(SchemaType::text(TextRestrictions::default())),
+            },
+        }
+    }
+
+    fn restricted_text(languages: Vec<String>) -> RequestBodySchema {
+        RequestBodySchema::TextBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+                    languages: Some(languages),
+                    ..Default::default()
+                })),
+            },
+        }
+    }
+
+    fn record_field(name: &str, body: SchemaType) -> NamedFieldType {
+        NamedFieldType {
+            name: name.to_string(),
+            body,
+            metadata: Default::default(),
+        }
+    }
 
     fn raw_request_with_content_type(
         bytes: &'static [u8],
@@ -446,25 +536,21 @@ mod request_body_tests {
             "x": 1
         }));
 
-        let schema = RequestBodySchema::JsonBody {
-            expected_type: analysed_type::record(vec![NameTypePair {
-                name: String::from("x"),
-                typ: analysed_type::s32(),
-            }]),
-        };
+        let schema = json_body(SchemaType::record(vec![record_field(
+            "x",
+            SchemaType::s32(),
+        )]));
 
         let result = request.parse_request_body(&schema).await.unwrap();
 
-        let_assert!(ParsedRequestBody::JsonBody(golem_wasm::Value::Record(_)) = result);
+        let_assert!(ParsedRequestBody::JsonBody(SchemaValue::Record { .. }) = result);
     }
 
     #[test]
     async fn invalid_json_body_returns_error() {
         let mut request = raw_request(b"this is not json");
 
-        let schema = RequestBodySchema::JsonBody {
-            expected_type: analysed_type::u8(),
-        };
+        let schema = json_body(SchemaType::u8());
 
         let err = request.parse_request_body(&schema).await.unwrap_err();
 
@@ -476,12 +562,10 @@ mod request_body_tests {
         // JSON is valid, but shape does not match expected type
         let mut request = json_request(json!("not a record"));
 
-        let schema = RequestBodySchema::JsonBody {
-            expected_type: analysed_type::record(vec![NameTypePair {
-                name: String::from("x"),
-                typ: analysed_type::s32(),
-            }]),
-        };
+        let schema = json_body(SchemaType::record(vec![record_field(
+            "x",
+            SchemaType::s32(),
+        )]));
 
         let err = request.parse_request_body(&schema).await.unwrap_err();
 
@@ -492,28 +576,23 @@ mod request_body_tests {
     async fn restricted_binary_body_accepts_allowed_mime_type() {
         let mut request = raw_request_with_content_type(b"binary-data", "application/octet-stream");
 
-        let schema = RequestBodySchema::RestrictedBinary {
-            allowed_mime_types: vec!["application/octet-stream".to_string()],
-        };
+        let schema = restricted_binary(vec!["application/octet-stream".to_string()]);
 
         let result = request.parse_request_body(&schema).await.unwrap();
 
         let_assert!(
-            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { data, binary_type })) =
-                result
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { data, mime_type })) = result
         );
 
         assert!(data == b"binary-data");
-        assert!(binary_type.mime_type == "application/octet-stream");
+        assert!(mime_type.as_deref() == Some("application/octet-stream"));
     }
 
     #[test]
     async fn restricted_binary_body_rejects_disallowed_mime_type() {
         let mut request = raw_request_with_content_type(b"binary-data", "application/json");
 
-        let schema = RequestBodySchema::RestrictedBinary {
-            allowed_mime_types: vec!["application/octet-stream".to_string()],
-        };
+        let schema = restricted_binary(vec!["application/octet-stream".to_string()]);
 
         let err = request.parse_request_body(&schema).await.unwrap_err();
 
@@ -531,35 +610,54 @@ mod request_body_tests {
     }
 
     #[test]
-    async fn restricted_binary_body_without_content_type_uses_default_and_is_checked() {
+    async fn restricted_binary_body_without_content_type_is_accepted_with_no_mime() {
+        // Lenient MIME handling: a missing `Content-Type` is always allowed,
+        // even under a restrictive schema, and its absence is preserved (not
+        // defaulted to `application/octet-stream`).
         let mut request = raw_request(b"binary-data");
 
-        let schema = RequestBodySchema::RestrictedBinary {
-            allowed_mime_types: vec!["application/octet-stream".to_string()],
-        };
+        let schema = restricted_binary(vec!["application/octet-stream".to_string()]);
 
         let result = request.parse_request_body(&schema).await.unwrap();
 
         let_assert!(
-            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { binary_type, .. })) = result
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { data, mime_type })) = result
         );
 
-        assert!(binary_type.mime_type == "application/octet-stream");
+        assert!(data == b"binary-data");
+        assert!(mime_type.is_none());
+    }
+
+    #[test]
+    async fn binary_body_with_empty_allow_list_accepts_any_mime_type() {
+        // An empty MIME allow-list (`Some(vec![])`) is treated as unrestricted,
+        // consistent with the schema/MCP semantics.
+        let mut request = raw_request_with_content_type(b"binary-data", "application/weird");
+
+        let schema = restricted_binary(vec![]);
+
+        let result = request.parse_request_body(&schema).await.unwrap();
+
+        let_assert!(
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { mime_type, .. })) = result
+        );
+
+        assert!(mime_type.as_deref() == Some("application/weird"));
     }
 
     #[test]
     async fn unrestricted_binary_body_accepts_any_mime_type() {
         let mut request = raw_request_with_content_type(b"binary-data", "application/weird");
 
-        let schema = RequestBodySchema::UnrestrictedBinary;
+        let schema = unrestricted_binary();
 
         let result = request.parse_request_body(&schema).await.unwrap();
 
         let_assert!(
-            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { binary_type, .. })) = result
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { mime_type, .. })) = result
         );
 
-        assert!(binary_type.mime_type == "application/weird");
+        assert!(mime_type.as_deref() == Some("application/weird"));
     }
 
     fn text_request(
@@ -583,7 +681,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello world", Some("text/plain"), &[]);
 
         let result = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap();
 
@@ -597,7 +695,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello world", None, &[]);
 
         let result = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap();
 
@@ -611,7 +709,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello", Some("text/plain; charset=utf-8"), &[]);
 
         let result = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap();
 
@@ -624,7 +722,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello", Some("Text/Plain; Charset=UTF-8"), &[]);
 
         let result = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap();
 
@@ -636,7 +734,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello", Some("application/json"), &[]);
 
         let err = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap_err();
 
@@ -649,7 +747,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello", Some("text/plain; charset=iso-8859-1"), &[]);
 
         let err = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap_err();
 
@@ -662,7 +760,7 @@ mod request_body_tests {
         let mut request = text_request(b"\xff\xfe\xfd", Some("text/plain"), &[]);
 
         let err = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap_err();
 
@@ -674,7 +772,7 @@ mod request_body_tests {
         let mut request = text_request(b"bonjour", Some("text/plain"), &["fr"]);
 
         let result = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap();
 
@@ -688,7 +786,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello", Some("text/plain"), &["en", "fr"]);
 
         let err = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap_err();
 
@@ -700,7 +798,7 @@ mod request_body_tests {
         let mut request = text_request(b"hello", Some("text/plain"), &["en, fr"]);
 
         let err = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .parse_request_body(&unrestricted_text())
             .await
             .unwrap_err();
 
@@ -711,9 +809,7 @@ mod request_body_tests {
     async fn restricted_text_body_accepts_allowed_language() {
         let mut request = text_request(b"hello", Some("text/plain"), &["en"]);
 
-        let schema = RequestBodySchema::RestrictedText {
-            allowed_language_codes: vec!["en".to_string(), "de".to_string()],
-        };
+        let schema = restricted_text(vec!["en".to_string(), "de".to_string()]);
 
         let result = request.parse_request_body(&schema).await.unwrap();
 
@@ -726,9 +822,7 @@ mod request_body_tests {
     async fn restricted_text_body_accepts_allowed_language_case_insensitive() {
         let mut request = text_request(b"hello", Some("text/plain"), &["EN"]);
 
-        let schema = RequestBodySchema::RestrictedText {
-            allowed_language_codes: vec!["en".to_string()],
-        };
+        let schema = restricted_text(vec!["en".to_string()]);
 
         let result = request.parse_request_body(&schema).await.unwrap();
 
@@ -741,9 +835,7 @@ mod request_body_tests {
     async fn restricted_text_body_rejects_disallowed_language() {
         let mut request = text_request(b"hello", Some("text/plain"), &["fr"]);
 
-        let schema = RequestBodySchema::RestrictedText {
-            allowed_language_codes: vec!["en".to_string(), "de".to_string()],
-        };
+        let schema = restricted_text(vec!["en".to_string(), "de".to_string()]);
 
         let err = request.parse_request_body(&schema).await.unwrap_err();
 
@@ -762,9 +854,7 @@ mod request_body_tests {
         // Content-Language is optional even when restrictions exist
         let mut request = text_request(b"hello", Some("text/plain"), &[]);
 
-        let schema = RequestBodySchema::RestrictedText {
-            allowed_language_codes: vec!["en".to_string()],
-        };
+        let schema = restricted_text(vec!["en".to_string()]);
 
         let result = request.parse_request_body(&schema).await.unwrap();
 

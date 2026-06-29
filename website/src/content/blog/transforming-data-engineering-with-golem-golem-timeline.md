@@ -107,7 +107,7 @@ The timeline analytics paper discusses solving one of these problems using PySpa
 
 We are not going to explain this query. With the new ideas from the paper, we never need to write this.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e7_67559f0f16c5f7501359f542_1*6dEddLv7wVjoZoG3AW8PhA.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e7_67559f0f16c5f7501359f542_1_6dEddLv7wVjoZoG3AW8PhA.png)
 
 # What do we need exactly?
 
@@ -138,7 +138,7 @@ We plot 4 timelines based on incoming events:
 2. "Has the user ever performed a seek": We observe this at T2. Similarly, it's a boolean plot that turns true after T2.
 3. There's a third timeline in the diagram identical to the second one, but intentionally set to false after a configurable 5 seconds. This adjustment reflects that users don't seek indefinitely.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e1_67559f0f16c5f7501359f553_1*letL5T9dWjnvGg7NT9gsvg.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e1_67559f0f16c5f7501359f553_1_letL5T9dWjnvGg7NT9gsvg.png)
 
 4. The fourth timeline is quite intriguing. It's a derived timeline based on another timeline that plots all states (such as seek, buffer, play, pause, etc.) as string values over time. We then apply an "EqualTo" operation on this timeline with the string value "Buffer", which produces a plot indicating the time period during which the state was "Buffer".
 
@@ -146,27 +146,27 @@ The technical details of how we precisely plotted this are not relevant at this 
 
 In the above figure, we really don't need the second timeline. Therefore, we removed it from the diagram.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e5_67559f0f16c5f7501359f559_1*feXGuhg2pS8O7iQuB4-l-w.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e5_67559f0f16c5f7501359f559_1_feXGuhg2pS8O7iQuB4-l-w.png)
 
 For simplicity purpose our `TimeLine` is just a collection of `time -> event-value` pair. If that's the case, we can do a `Logical` `And` between timelines. At this point, we are not even talking about any streaming, but simple code that does a logical `And`. In the above diagram if we do a logical `And` of all these three timelines, we get the following:
 
 "The total time period of buffering while the user was seeking"
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e0_67559f0f16c5f7501359f55a_1*StSst7RHctSbuVK1reRabA.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e0_67559f0f16c5f7501359f55a_1_StSst7RHctSbuVK1reRabA.png)
 
 So how do we compute the total buffer time that's not part of the seek event?
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e4_67559f0f16c5f7501359f55b_1*e9y3PodRplGBSzqcBMhttA.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e4_67559f0f16c5f7501359f55b_1_e9y3PodRplGBSzqcBMhttA.png)
 
 We simply flip the second timeline (using not ) and then do a logical and of x, y, and z . Now we get the buffer time that's not because of the seek event!
 
 TimeLine Paper exposes the following DSL to represent various types of operations.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e6_67559f0f16c5f7501359f55c_1*zt9zV2_8O9J7tBX3ngFa4Q.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e6_67559f0f16c5f7501359f55c_1_zt9zV2_8O9J7tBX3ngFa4Q.png)
 
 Here is how you can map the above explanations to the above diagrams.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e3_67559f0f16c5f7501359f55d_1*ouPOwJ-CcVoYTKhTiuBoTQ.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e3_67559f0f16c5f7501359f55d_1_ouPOwJ-CcVoYTKhTiuBoTQ.png)
 
 # How to use Golem Timeline?
 
@@ -232,11 +232,11 @@ Here you can see every node is annotated with the `WorkerDetail` (the worker in 
 
 We then classified the Timeline nodes as either Leaf or Derived. Each node in the timeline DSL has specific semantics. For example, TLHasExisted consumes events directly to plot a timeline that answers "has the user ever started playing, and if so, when?". On the other hand, a node like TlDurationWhere consumes the output from another worker, where the output is typically a timeline of states. Refer to this part of the timeline paper for more details.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055e2_67559f0f16c5f7501359f55e_1*mv16aMJCTR241OI3ih-plw.png)
+![](/blog-images/68d76ba7edec7ec0b5c055e2_67559f0f16c5f7501359f55e_1_mv16aMJCTR241OI3ih-plw.png)
 
 Here the first two nodes can be seen as leaf node and the last one can be seen as derived nodes.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055df_67559f0f16c5f7501359f55f_1*0QSsJadZfY_7Zxfm4idUiw.png)
+![](/blog-images/68d76ba7edec7ec0b5c055df_67559f0f16c5f7501359f55f_1_0QSsJadZfY_7Zxfm4idUiw.png)
 
 **Event Processor (event-processor module)**
 
@@ -345,7 +345,7 @@ At 2 PM, if the result returns None, it suggests that some events related to CDN
 
 In real-world scenarios, computation of a complex query involves running queries for primitives. For example, here is an example from the video distribution domain, where `CompletionRate` is derived from the primitives `Total Number of PlayBack Attempts Count` and `Total Number of Completed Playbacks`
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055de_67559f0f16c5f7501359f560_1*qcDqsJs-kIH1pHYiI-AdSQ.png)
+![](/blog-images/68d76ba7edec7ec0b5c055de_67559f0f16c5f7501359f560_1_qcDqsJs-kIH1pHYiI-AdSQ.png)
 
 Once you start running a golem-timeline `job` to compute the above metrics, each worker will be responsible for computing certain parts of this computation. Note that, Golem-Timeline naturally may tackle this problem more like a map reduce job (it depends on the logic you write using DSL), where we will have some final reducer workers that pulls results from other intermediate workers and aggregate the results.
 

@@ -13,34 +13,38 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::account::AccountEmail;
+use crate::model::application::ApplicationName;
+use crate::model::component::ComponentName;
+use crate::model::environment::EnvironmentName;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ToolOwnerPattern {
     AnyTools,
     AccountTools {
-        account: String,
+        account: AccountEmail,
     },
     ApplicationTools {
-        account: String,
-        application: String,
+        account: AccountEmail,
+        application: ApplicationName,
     },
     EnvironmentTools {
-        account: String,
-        application: String,
-        environment: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
     },
     ComponentTools {
-        account: String,
-        application: String,
-        environment: String,
-        component: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
     },
     Tool {
-        account: String,
-        application: String,
-        environment: String,
-        component: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
         tool: String,
     },
 }
@@ -50,35 +54,35 @@ impl ToolOwnerPattern {
         match parse_segments(value)?.as_slice() {
             ["*", "*", "*", "*", "*"] => Ok(Self::AnyTools),
             [account, "*", "*", "*", "*"] => Ok(Self::AccountTools {
-                account: parse_concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
             }),
             [account, application, "*", "*", "*"] => Ok(Self::ApplicationTools {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
             }),
             [account, application, environment, "*", "*"] => Ok(Self::EnvironmentTools {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
             }),
             [account, application, environment, component, "*"] => Ok(Self::ComponentTools {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
-                component: parse_concrete_segment(component)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
+                component: ComponentName(parse_concrete_segment(component)?.to_string()),
             }),
             [account, application, environment, component, tool] => Ok(Self::Tool {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
-                component: parse_concrete_segment(component)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
+                component: ComponentName(parse_concrete_segment(component)?.to_string()),
                 tool: parse_concrete_segment(tool)?.to_string(),
             }),
             _ => Err(value.to_string()),
         }
     }
 
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
             Self::AnyTools => None,
             Self::AccountTools { account }
@@ -89,7 +93,7 @@ impl ToolOwnerPattern {
         }
     }
 
-    fn application_part(&self) -> Option<(&str, &str)> {
+    fn application_part(&self) -> Option<(&AccountEmail, &ApplicationName)> {
         match self {
             Self::ApplicationTools {
                 account,
@@ -114,7 +118,7 @@ impl ToolOwnerPattern {
         }
     }
 
-    fn environment_part(&self) -> Option<(&str, &str, &str)> {
+    fn environment_part(&self) -> Option<(&AccountEmail, &ApplicationName, &EnvironmentName)> {
         match self {
             Self::EnvironmentTools {
                 account,
@@ -137,7 +141,14 @@ impl ToolOwnerPattern {
         }
     }
 
-    fn component_part(&self) -> Option<(&str, &str, &str, &str)> {
+    fn component_part(
+        &self,
+    ) -> Option<(
+        &AccountEmail,
+        &ApplicationName,
+        &EnvironmentName,
+        &ComponentName,
+    )> {
         match self {
             Self::ComponentTools {
                 account,
@@ -160,13 +171,54 @@ impl ToolOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicToolOwnerPattern {
     Concrete(ToolOwnerPattern),
+    AccountTools,
+    AccountApplicationTools {
+        application: ApplicationName,
+    },
+    AccountEnvironmentTools {
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    AccountComponentTools {
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+    },
+    AccountTool {
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+        tool: String,
+    },
+    ApplicationTools,
+    ApplicationEnvironmentTools {
+        environment: EnvironmentName,
+    },
+    ApplicationComponentTools {
+        environment: EnvironmentName,
+        component: ComponentName,
+    },
+    ApplicationTool {
+        environment: EnvironmentName,
+        component: ComponentName,
+        tool: String,
+    },
     EnvTools,
-    EnvComponentTools { component: String },
-    EnvTool { component: String, tool: String },
+    EnvComponentTools {
+        component: ComponentName,
+    },
+    EnvTool {
+        component: ComponentName,
+        tool: String,
+    },
+    ComponentTools,
+    ComponentTool {
+        tool: String,
+    },
 }
 
 impl OwnerPattern for ToolOwnerPattern {
@@ -178,18 +230,78 @@ impl OwnerPattern for ToolOwnerPattern {
 
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
         match split_leftmost_owner_slot(value)? {
+            Some(("?account", rest)) if rest.as_slice() == ["*", "*", "*", "*"] => {
+                Ok(PolymorphicToolOwnerPattern::AccountTools)
+            }
+            Some(("?account", rest))
+                if rest.len() == 4 && rest[1] == "*" && rest[2] == "*" && rest[3] == "*" =>
+            {
+                Ok(PolymorphicToolOwnerPattern::AccountApplicationTools {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                })
+            }
+            Some(("?account", rest)) if rest.len() == 4 && rest[2] == "*" && rest[3] == "*" => {
+                Ok(PolymorphicToolOwnerPattern::AccountEnvironmentTools {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                })
+            }
+            Some(("?account", rest)) if rest.len() == 4 && rest[3] == "*" => {
+                Ok(PolymorphicToolOwnerPattern::AccountComponentTools {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[2])?.to_string()),
+                })
+            }
+            Some(("?account", rest)) if rest.len() == 4 => {
+                Ok(PolymorphicToolOwnerPattern::AccountTool {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[2])?.to_string()),
+                    tool: parse_concrete_segment(rest[3])?.to_string(),
+                })
+            }
+            Some(("?app", rest)) if rest.as_slice() == ["*", "*", "*"] => {
+                Ok(PolymorphicToolOwnerPattern::ApplicationTools)
+            }
+            Some(("?app", rest)) if rest.len() == 3 && rest[1] == "*" && rest[2] == "*" => {
+                Ok(PolymorphicToolOwnerPattern::ApplicationEnvironmentTools {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                })
+            }
+            Some(("?app", rest)) if rest.len() == 3 && rest[2] == "*" => {
+                Ok(PolymorphicToolOwnerPattern::ApplicationComponentTools {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[1])?.to_string()),
+                })
+            }
+            Some(("?app", rest)) if rest.len() == 3 => {
+                Ok(PolymorphicToolOwnerPattern::ApplicationTool {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[1])?.to_string()),
+                    tool: parse_concrete_segment(rest[2])?.to_string(),
+                })
+            }
             Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => {
                 Ok(PolymorphicToolOwnerPattern::EnvTools)
             }
             Some(("?env", rest)) if rest.len() == 2 && rest[1] == "*" => {
                 Ok(PolymorphicToolOwnerPattern::EnvComponentTools {
-                    component: parse_concrete_segment(rest[0])?.to_string(),
+                    component: ComponentName(parse_concrete_segment(rest[0])?.to_string()),
                 })
             }
             Some(("?env", rest)) if rest.len() == 2 => Ok(PolymorphicToolOwnerPattern::EnvTool {
-                component: parse_concrete_segment(rest[0])?.to_string(),
+                component: ComponentName(parse_concrete_segment(rest[0])?.to_string()),
                 tool: parse_concrete_segment(rest[1])?.to_string(),
             }),
+            Some(("?component", rest)) if rest.as_slice() == ["*"] => {
+                Ok(PolymorphicToolOwnerPattern::ComponentTools)
+            }
+            Some(("?component", rest)) if rest.len() == 1 => {
+                Ok(PolymorphicToolOwnerPattern::ComponentTool {
+                    tool: parse_concrete_segment(rest[0])?.to_string(),
+                })
+            }
             Some(_) => Err(value.to_string()),
             None => Self::parse(value).map(PolymorphicToolOwnerPattern::Concrete),
         }

@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::schema::SchemaValue;
+use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
     start_with_agent_storage_quota, start_with_executor_storage_pool,
@@ -240,7 +241,9 @@ async fn agent_quota_freed_after_file_deletion(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content,
-        Value::Result(Ok(Some(Box::new(Value::String("hi world!!".to_string())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("hi world!!".to_string())))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -830,7 +833,9 @@ async fn agent_quota_pwrite_within_limit_succeeds(
 
     assert_eq!(
         content,
-        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("hello world".to_string())))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1025,9 +1030,11 @@ async fn agent_quota_storage_usage_survives_restart(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content,
-        Value::Result(Ok(Some(Box::new(Value::String(
-            "unique-content-2".to_string()
-        )))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(
+                "unique-content-2".to_string()
+            )))
+        })
     );
 
     executor
@@ -1258,7 +1265,9 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
         .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
     assert_eq!(
         read2,
-        Value::Result(Ok(Some(Box::new(Value::String(content_2kb)))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_2kb)))
+        })
     );
 
     let read3 = executor
@@ -1273,7 +1282,9 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
         .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
     assert_eq!(
         read3,
-        Value::Result(Ok(Some(Box::new(Value::String(content_file3)))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_file3)))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker).await?;
@@ -1361,7 +1372,9 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         read_a,
-        Value::Result(Ok(Some(Box::new(Value::String(content_a.clone())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_a.clone())))
+        })
     );
 
     // Step 4: Re-invoke Worker B. Restarts with filesystem_storage_requirement = 2 KB.
@@ -1380,7 +1393,9 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         read_b,
-        Value::Result(Ok(Some(Box::new(Value::String(content_b.clone())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_b.clone())))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_a).await?;
@@ -1465,7 +1480,9 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content,
-        Value::Result(Ok(Some(Box::new(Value::String(content_b)))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_b)))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_a).await?;
@@ -1596,7 +1613,9 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         read_b,
-        Value::Result(Ok(Some(Box::new(Value::String(content_b)))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_b)))
+        })
     );
 
     // Verify Worker C's first file — confirms prior state survived the eviction/restart.
@@ -1612,7 +1631,9 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         read_c1,
-        Value::Result(Ok(Some(Box::new(Value::String(content_c1)))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_c1)))
+        })
     );
 
     // Verify Worker C's second file — the write that triggered eviction.
@@ -1628,7 +1649,9 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         read_c2,
-        Value::Result(Ok(Some(Box::new(Value::String(content_c2)))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(content_c2)))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_a).await?;
@@ -1744,9 +1767,9 @@ async fn executor_pool_storage_usage_survives_restart(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content_b,
-        Value::Result(Ok(Some(Box::new(Value::String(
-            "content-b-file1".to_string()
-        )))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("content-b-file1".to_string())))
+        })
     );
 
     // Step 6: Re-invoke Worker A. Restart reconstructs current_filesystem_storage_usage = 1 KB.
@@ -1764,9 +1787,9 @@ async fn executor_pool_storage_usage_survives_restart(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content_a,
-        Value::Result(Ok(Some(Box::new(Value::String(
-            "content-a-file2".to_string()
-        )))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("content-a-file2".to_string())))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_a).await?;

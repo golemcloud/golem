@@ -3,7 +3,6 @@ package "golemcloud/golem_sdk/interface/wasi/blobstore/types"
 
 import {
   "golemcloud/golem_sdk/interface/wasi/io/streams",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -14,9 +13,9 @@ import {
 pub(all) struct ContainerMetadata {
   name : String
   created_at : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct IncomingValue(Int) derive(Eq, @debug.Debug)
+pub(all) struct IncomingValue(Int) derive(Eq, Show)
 pub fn IncomingValue::drop(Self) -> Unit
 pub fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, String]
 pub fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], String]
@@ -25,16 +24,16 @@ pub fn IncomingValue::size(Self) -> UInt64
 pub(all) struct ObjectId {
   container : String
   object : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct ObjectMetadata {
   name : String
   container : String
   created_at : UInt64
   size : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct OutgoingValue(Int) derive(Eq, @debug.Debug)
+pub(all) struct OutgoingValue(Int) derive(Eq, Show)
 pub fn OutgoingValue::drop(Self) -> Unit
 pub fn OutgoingValue::new_outgoing_value() -> Self
 pub fn OutgoingValue::outgoing_value_write_body(Self) -> Result[@streams.OutputStream, Unit]

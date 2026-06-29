@@ -31,6 +31,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-durability-ts` | Choosing between durable and ephemeral agents |
 | `golem-stateless-agent-ts` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-ts` | Adding prompt and description annotations to agent methods |
+| `golem-mark-read-only-ts` | Marking agent methods as read-only for a side-effect-free guarantee, result caching, and HTTP cache headers |
 | `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) |
 | `golem-call-from-external-ts` | Calling agents from external TypeScript/Node.js applications using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result |

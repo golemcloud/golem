@@ -55,12 +55,13 @@ struct EphemeralOplogState {
 }
 
 impl EphemeralOplogState {
-    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
+    /// Pushes an entry into the in-memory buffer and advances the oplog index,
+    /// without checking the commit threshold. Callers must run [`maybe_commit`]
+    /// afterwards. Used by `add_pair` to buffer a `Start`/`End` pair before a
+    /// single commit-threshold check, so the pair is never split by a commit.
+    fn push(&mut self, entry: OplogEntry) -> OplogIndex {
         let is_hint = entry.is_hint();
         self.buffer.push_back(entry);
-        if self.buffer.len() > self.max_operations_before_commit as usize {
-            self.commit().await;
-        }
         self.last_oplog_idx = self.last_oplog_idx.next();
         if !is_hint {
             self.last_added_non_hint_entry = Some(self.last_oplog_idx);
@@ -68,8 +69,20 @@ impl EphemeralOplogState {
         self.last_oplog_idx
     }
 
+    async fn maybe_commit(&mut self) {
+        if self.buffer.len() > self.max_operations_before_commit as usize {
+            self.commit().await;
+        }
+    }
+
+    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
+        let idx = self.push(entry);
+        self.maybe_commit().await;
+        idx
+    }
+
     async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
-        let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
+        let entries = std::mem::take(&mut self.buffer);
 
         let mut result = BTreeMap::new();
         let mut pairs = Vec::new();
@@ -120,15 +133,20 @@ impl EphemeralOplog {
 
     pub async fn try_archive(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(false).await)
+        Some(this.archive(false, false).await)
     }
 
     pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(true).await)
+        Some(this.archive(true, false).await)
     }
 
-    async fn archive(self: &Arc<Self>, blocking: bool) -> bool {
+    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> Option<bool> {
+        let this = downcast_oplog::<EphemeralOplog>(this)?;
+        Some(this.archive(false, true).await)
+    }
+
+    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> bool {
         // With only one lower layer there is nowhere to transfer to.
         if self.lower.len().get() <= 1 {
             return false;
@@ -163,6 +181,7 @@ impl EphemeralOplog {
                     last_transferred_idx: last_idx,
                     keep_alive: Some(keep_alive),
                     done: done_tx,
+                    drain,
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
             // Return true if there are more movable layers that could still hold data
@@ -209,6 +228,7 @@ impl EphemeralOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
+                    drain,
                 } => {
                     if source + 1 >= lower.len().get() {
                         warn!(
@@ -244,6 +264,10 @@ impl EphemeralOplog {
                         None => {
                             warn!("No entries to transfer from ephemeral oplog layer {source}");
                         }
+                    }
+
+                    if drain && let Some(oplog) = keep_alive.as_ref() {
+                        let _ = EphemeralOplog::try_archive_background(oplog).await;
                     }
 
                     let _ = keep_alive.take();
@@ -337,6 +361,20 @@ impl Oplog for EphemeralOplog {
         record_oplog_call("add");
         let mut state = self.state.lock().await;
         state.add(entry).await
+    }
+
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        record_oplog_call("add_pair");
+        let mut state = self.state.lock().await;
+        let first_idx = state.push(start);
+        let second = make_second(first_idx);
+        let second_idx = state.push(second);
+        state.maybe_commit().await;
+        (first_idx, second_idx)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

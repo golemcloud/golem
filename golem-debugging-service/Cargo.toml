@@ -21,8 +21,8 @@ harness = false
 golem-worker-executor = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-api-grpc = { workspace = true }
+golem-schema = { workspace = true, features = ["host"] }
 golem-service-base = { workspace = true }
-golem-wasm = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

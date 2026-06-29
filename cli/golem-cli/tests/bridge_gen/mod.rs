@@ -13,7 +13,9 @@
 // limitations under the License.
 
 pub mod fixtures;
+pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;
+pub mod scala;
 pub mod type_naming;
 pub mod typescript;

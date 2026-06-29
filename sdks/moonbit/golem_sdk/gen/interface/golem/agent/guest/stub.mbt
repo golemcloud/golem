@@ -3,7 +3,7 @@
 /// If called a second time, it fails.
 pub fn initialize(
   agent_type : String,
-  input : @types.DataValue,
+  input : @types.SchemaValueTree,
   principal : @common.Principal,
 ) -> Result[Unit, @common.AgentError] {
   if @agents.get_agent_instance() is Some(_) {
@@ -19,14 +19,12 @@ pub fn initialize(
 /// Invokes an agent. If create was not called before, it fails
 pub fn invoke(
   method_name : String,
-  input : @types.DataValue,
+  input : @types.SchemaValueTree,
   principal : @common.Principal,
-) -> Result[@types.DataValue, @common.AgentError] {
+) -> Result[@types.SchemaValueTree?, @common.AgentError] {
   match @agents.get_agent_instance() {
     None =>
-      @agents.panic_with_message(
-        "get_definition", "Agent instance is not initialized",
-      )
+      @agents.panic_with_message("invoke", "Agent instance is not initialized")
     Some(instance) => instance.interface.invoke(method_name, input, principal)
   }
 }

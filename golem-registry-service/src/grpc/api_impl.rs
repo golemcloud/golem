@@ -16,10 +16,10 @@ use super::error::GrpcApiError;
 use crate::repo::registry_change::RegistryChangeRepo;
 use crate::services::account_usage::{AccountUsageService, ResourceUsageUpdate};
 use crate::services::auth::AuthService;
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
-use crate::services::environment::EnvironmentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::resource_definition::ResourceDefinitionService;
@@ -30,16 +30,17 @@ use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
-    BatchUpdateResourceUsageRequest, BatchUpdateResourceUsageResponse,
-    BatchUpdateResourceUsageSuccessResponse, DownloadComponentRequest, DownloadComponentResponse,
-    GetActiveMcpForDomainRequest, GetActiveMcpForDomainResponse,
-    GetActiveMcpForDomainSuccessResponse, GetActiveRoutesForDomainRequest,
-    GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest,
-    GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
-    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
-    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
-    GetAllDeployedComponentRevisionsSuccessResponse, GetAuthDetailsForEnvironmentRequest,
-    GetAuthDetailsForEnvironmentResponse, GetAuthDetailsForEnvironmentSuccessResponse,
+    BatchGetCardsRequest, BatchGetCardsResponse, BatchGetCardsSuccessResponse,
+    BatchGetExistingCardsRequest, BatchGetExistingCardsResponse,
+    BatchGetExistingCardsSuccessResponse, BatchUpdateResourceUsageRequest,
+    BatchUpdateResourceUsageResponse, BatchUpdateResourceUsageSuccessResponse, CardData,
+    DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
+    GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
+    GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
+    GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest, GetAgentTypeResponse,
+    GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
+    GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest,
+    GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse,
     GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
@@ -52,28 +53,28 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, authenticate_token_response,
-    batch_update_resource_usage_response, download_component_response,
-    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_type_response, get_all_agent_types_response,
-    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_current_environment_state_response,
-    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
-    get_resource_definition_by_name_response, get_resource_limits_response, registry_service_error,
-    resolve_agent_type_by_names_response, resolve_component_response,
-    update_worker_connection_limit_response,
+    UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
+    batch_get_existing_cards_response, batch_update_resource_usage_response,
+    download_component_response, get_active_mcp_for_domain_response,
+    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
+    get_all_deployed_component_revisions_response, get_component_metadata_response,
+    get_current_environment_state_response, get_deployed_component_metadata_response,
+    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
+    get_resource_limits_response, registry_service_error, resolve_agent_type_by_names_response,
+    resolve_component_response, update_worker_connection_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -81,8 +82,8 @@ use tracing_futures::Instrument;
 
 pub struct RegistryServiceGrpcApi {
     auth_service: Arc<AuthService>,
-    environment_service: Arc<EnvironmentService>,
     account_usage_service: Arc<AccountUsageService>,
+    card_service: Arc<CardService>,
     component_service: Arc<ComponentService>,
     component_resolver_service: Arc<ComponentResolverService>,
     deployment_service: Arc<DeploymentService>,
@@ -97,8 +98,8 @@ pub struct RegistryServiceGrpcApi {
 impl RegistryServiceGrpcApi {
     pub fn new(
         auth_service: Arc<AuthService>,
-        environment_service: Arc<EnvironmentService>,
         account_usage_service: Arc<AccountUsageService>,
+        card_service: Arc<CardService>,
         component_service: Arc<ComponentService>,
         component_resolver_service: Arc<ComponentResolverService>,
         deployment_service: Arc<DeploymentService>,
@@ -111,8 +112,8 @@ impl RegistryServiceGrpcApi {
     ) -> Self {
         Self {
             auth_service,
-            environment_service,
             account_usage_service,
+            card_service,
             component_service,
             component_resolver_service,
             deployment_service,
@@ -135,35 +136,6 @@ impl RegistryServiceGrpcApi {
             .await?;
         Ok(AuthenticateTokenSuccessResponse {
             auth_ctx: Some(auth_ctx.into()),
-        })
-    }
-
-    async fn get_auth_details_for_environment_internal(
-        &self,
-        request: GetAuthDetailsForEnvironmentRequest,
-    ) -> Result<GetAuthDetailsForEnvironmentSuccessResponse, GrpcApiError> {
-        let environment_id: EnvironmentId = request
-            .environment_id
-            .ok_or("missing environment_id field")?
-            .try_into()?;
-
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
-        let environment = self
-            .environment_service
-            .get(environment_id, request.include_deleted, &auth_ctx)
-            .await?;
-
-        let auth_details_for_environment = AuthDetailsForEnvironment {
-            account_id_owning_environment: environment.owner_account_id,
-            environment_roles_from_shares: environment.roles_from_active_shares,
-        };
-
-        Ok(GetAuthDetailsForEnvironmentSuccessResponse {
-            auth_details_for_environment: Some(auth_details_for_environment.into()),
         })
     }
 
@@ -231,6 +203,47 @@ impl RegistryServiceGrpcApi {
 
         Ok(BatchUpdateResourceUsageSuccessResponse {
             account_resource_limits: Some(account_resource_limits.into()),
+        })
+    }
+
+    async fn batch_get_existing_cards_internal(
+        &self,
+        request: BatchGetExistingCardsRequest,
+    ) -> Result<BatchGetExistingCardsSuccessResponse, GrpcApiError> {
+        let card_ids = request
+            .card_ids
+            .into_iter()
+            .map(|id| CardId(id.into()))
+            .collect::<Vec<_>>();
+        let existing = self.card_service.existing(card_ids).await?;
+
+        Ok(BatchGetExistingCardsSuccessResponse {
+            card_ids: existing.into_iter().map(|id| id.0.into()).collect(),
+        })
+    }
+
+    async fn batch_get_cards_internal(
+        &self,
+        request: BatchGetCardsRequest,
+    ) -> Result<BatchGetCardsSuccessResponse, GrpcApiError> {
+        let card_ids = request
+            .card_ids
+            .into_iter()
+            .map(|id| CardId(id.into()))
+            .collect::<Vec<_>>();
+        let cards = self.card_service.get_cards(card_ids).await?;
+
+        Ok(BatchGetCardsSuccessResponse {
+            cards: cards
+                .into_iter()
+                .map(|card| {
+                    let card_id = card.card_id();
+                    Ok(CardData {
+                        card_id: Some(card_id.0.into()),
+                        card: golem_common::serialization::serialize(&card)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
         })
     }
 
@@ -570,27 +583,6 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         }))
     }
 
-    async fn get_auth_details_for_environment(
-        &self,
-        request: Request<GetAuthDetailsForEnvironmentRequest>,
-    ) -> Result<Response<GetAuthDetailsForEnvironmentResponse>, tonic::Status> {
-        let record = recorded_grpc_api_request!("get_auth_details_for_environment",);
-
-        let response = match self
-            .get_auth_details_for_environment_internal(request.into_inner())
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => get_auth_details_for_environment_response::Result::Success(result),
-            Err(error) => get_auth_details_for_environment_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(GetAuthDetailsForEnvironmentResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn get_resource_limits(
         &self,
         request: Request<GetResourceLimitsRequest>,
@@ -659,6 +651,50 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(BatchUpdateResourceUsageResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn batch_get_existing_cards(
+        &self,
+        request: Request<BatchGetExistingCardsRequest>,
+    ) -> Result<Response<BatchGetExistingCardsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("batch_get_existing_cards",);
+
+        let response = match self
+            .batch_get_existing_cards_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => batch_get_existing_cards_response::Result::Success(result),
+            Err(error) => batch_get_existing_cards_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(BatchGetExistingCardsResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn batch_get_cards(
+        &self,
+        request: Request<BatchGetCardsRequest>,
+    ) -> Result<Response<BatchGetCardsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("batch_get_cards",);
+
+        let response = match self
+            .batch_get_cards_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => batch_get_cards_response::Result::Success(result),
+            Err(error) => batch_get_cards_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(BatchGetCardsResponse {
             result: Some(response),
         }))
     }

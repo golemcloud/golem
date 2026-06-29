@@ -103,14 +103,14 @@ golem agent list --precise
 
 ### Watch Mode (`--refresh`)
 
-Use `--refresh` to continuously refresh the agent list on screen:
+Use `--refresh` to continuously refresh the agent list on screen. Refresh mode is interactive and only supports text output.
 
 ```shell
 golem agent list --refresh           # Default 400ms interval
 golem agent list --refresh=1000      # Custom 1-second interval
 ```
 
-> **Note**: `--refresh` conflicts with `--scan-cursor`.
+> **Note**: `--refresh` conflicts with `--scan-cursor` and cannot be combined with structured formats such as `--format json`, `--format yaml`, or `--format toon`.
 
 ## Examples
 

@@ -14,8 +14,24 @@
 
 use crate::app::edit::text::{TextEdit, apply_edits};
 use anyhow::anyhow;
+use regex::Regex;
 use std::collections::BTreeSet;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser, Tree};
+
+static IDEA_SCHEMA_REF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?P<prefix>\s*#\s*\$schema:\s*https://schema\.golem\.cloud/app/golem/)[^/\s]+(?P<suffix>/golem\.schema\.json\s*)$",
+    )
+    .unwrap()
+});
+
+static YAML_LANGUAGE_SERVER_SCHEMA_REF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?P<prefix>\s*#\s*yaml-language-server:\s*\$schema\s*=\s*https://schema\.golem\.cloud/app/golem/)[^/\s]+(?P<suffix>/golem\.schema\.json\s*)$",
+    )
+    .unwrap()
+});
 
 pub fn split_documents(
     source: &str,
@@ -145,6 +161,55 @@ pub fn set_scalar(source: &str, path: &[&str], value_literal: &str) -> anyhow::R
         value_literal,
     )];
     apply_edits(source, edits)
+}
+
+pub fn update_existing_schema_references(source: &str, schema_version: &str) -> String {
+    let Ok(tree) = parse_yaml(source) else {
+        return source.to_string();
+    };
+    let Ok(root) = root_mapping(&tree, source) else {
+        return source.to_string();
+    };
+
+    let header_end = root.start_byte();
+    let header = &source[..header_end];
+    let body = &source[header_end..];
+
+    let mut result = String::with_capacity(source.len());
+    for part in header.split_inclusive('\n') {
+        let (line, line_end) = part
+            .strip_suffix('\n')
+            .map(|line| (line, "\n"))
+            .unwrap_or((part, ""));
+        let (line, carriage_return) = line
+            .strip_suffix('\r')
+            .map(|line| (line, "\r"))
+            .unwrap_or((line, ""));
+
+        let updated_line =
+            schema_reference_replacement(line, schema_version).unwrap_or_else(|| line.to_string());
+
+        result.push_str(&updated_line);
+        result.push_str(carriage_return);
+        result.push_str(line_end);
+    }
+
+    result.push_str(body);
+
+    result
+}
+
+fn schema_reference_replacement(line: &str, schema_version: &str) -> Option<String> {
+    for regex in [&*IDEA_SCHEMA_REF, &*YAML_LANGUAGE_SERVER_SCHEMA_REF] {
+        if let Some(captures) = regex.captures(line) {
+            return Some(format!(
+                "{}{}{}",
+                &captures["prefix"], schema_version, &captures["suffix"]
+            ));
+        }
+    }
+
+    None
 }
 
 pub fn merge_documents(base: &str, update: &str) -> anyhow::Result<String> {

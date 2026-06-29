@@ -11,10 +11,11 @@ use anyhow::Context;
 use goldenfile::Mint;
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
-use indoc::indoc;
+use golem_cli::versions;
+use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -74,6 +75,226 @@ async fn test_rust_counter() {
     }
 }
 
+/// End-to-end test for the Scala bridge generator: deploys the Rust counter
+/// agent, generates a Scala bridge SDK for it, then compiles and runs a small
+/// Scala program that invokes the live agent through the generated, future-based
+/// client and verifies the returned values.
+///
+/// Requires `sbt` on the PATH (same as the Scala bridge cross-compile tests).
+#[test]
+#[timeout("15 minutes")]
+async fn test_scala_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // Generate the Scala bridge SDK for the counter agent into a known directory.
+    let bridge_root = ctx.cwd_path_join("scala-bridge");
+    let bridge_root_str = bridge_root.to_str().unwrap().to_string();
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "scala",
+            flag::AGENT_TYPE_NAME,
+            "CounterAgent",
+            flag::OUTPUT_DIR,
+            &bridge_root_str,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client_dir = bridge_root.join("counter-agent-client");
+    assert!(
+        client_dir.join("build.sbt").exists(),
+        "generated Scala bridge project is missing at {}",
+        client_dir.display()
+    );
+
+    // Write a small Scala program that drives the generated client against the
+    // live local server, mirroring the TS REPL e2e check above.
+    let server_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    let main_scala = formatdoc! {r#"
+        import golem.bridge.client.counter_agent.CounterAgentClient
+        import golem.bridge.runtime.GolemServer
+
+        import scala.concurrent.Await
+        import scala.concurrent.duration._
+
+        object Main {{
+          def main(args: Array[String]): Unit = {{
+            CounterAgentClient.configure(
+              GolemServer.Custom("{server_url}", "{token}"),
+              "{app_name}",
+              "local"
+            )
+            val timeout = 60.seconds
+            val remote  = Await.result(CounterAgentClient.get("scala-e2e-counter"), timeout)
+            val first   = Await.result(remote.increment(), timeout)
+            val second  = Await.result(remote.increment(), timeout)
+            if (first.value != 1L || second.value != 2L) {{
+              sys.error(s"Unexpected counter values: first=${{first.value}} second=${{second.value}}")
+            }}
+            println("SCALA_BRIDGE_E2E_OK first=" + first.value + " second=" + second.value)
+          }}
+        }}
+        "#
+    };
+    let scala_main_dir = client_dir.join("src").join("main").join("scala");
+    std::fs::create_dir_all(&scala_main_dir).unwrap();
+    std::fs::write(scala_main_dir.join("Main.scala"), main_scala).unwrap();
+
+    // Compile and run the generated client + driver with sbt.
+    let output = std::process::Command::new("sbt")
+        .arg("--batch")
+        .arg("runMain Main")
+        .current_dir(&client_dir)
+        .output()
+        .expect("failed to run sbt; is it installed?");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "sbt run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        client_dir.display()
+    );
+    assert!(
+        stdout.contains("SCALA_BRIDGE_E2E_OK first=1 second=2"),
+        "Scala bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+}
+
+/// End-to-end test for the MoonBit bridge generator: deploys the Rust counter
+/// agent, generates a MoonBit bridge SDK for it, then compiles and runs a small
+/// MoonBit program that invokes the live agent through the generated, async
+/// client and verifies the returned values.
+///
+/// Requires `moon` on the PATH (same as the MoonBit bridge compile tests).
+#[test]
+#[timeout("10 minutes")]
+async fn test_moonbit_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // Generate the MoonBit bridge SDK for the counter agent into a known directory.
+    let bridge_root = ctx.cwd_path_join("moonbit-bridge");
+    let bridge_root_str = bridge_root.to_str().unwrap().to_string();
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "moonbit",
+            flag::AGENT_TYPE_NAME,
+            "CounterAgent",
+            flag::OUTPUT_DIR,
+            &bridge_root_str,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client_dir = bridge_root.join("counter-agent-client");
+    assert!(
+        client_dir.join("moon.mod.json").exists(),
+        "generated MoonBit bridge module is missing at {}",
+        client_dir.display()
+    );
+
+    // Write a small MoonBit program that drives the generated client against the
+    // live local server, mirroring the Scala bridge e2e check.
+    let server_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    let main_mbt = formatdoc! {r#"
+        async fn main {{
+          @client.CounterAgent::configure(
+            @runtime.Custom("{server_url}", "{token}"),
+            "{app_name}",
+            "local",
+          )
+          let remote = @client.CounterAgent::get("moonbit-e2e-counter")
+          let first = remote.increment()
+          let second = remote.increment()
+          if first != 1 || second != 2 {{
+            abort("Unexpected counter values")
+          }}
+          println(
+            "MOONBIT_BRIDGE_E2E_OK first=" + first.to_string() + " second=" + second.to_string(),
+          )
+        }}
+        "#
+    };
+    let module_name = std::fs::read_to_string(client_dir.join("moon.mod.json"))
+        .unwrap()
+        .parse::<serde_json::Value>()
+        .unwrap()
+        .get("name")
+        .and_then(|name| name.as_str())
+        .unwrap()
+        .to_string();
+    let main_moon_pkg = formatdoc! {r#"
+        import {{
+          "moonbitlang/async" @async,
+          "{module_name}/client" @client,
+          "{module_name}/runtime" @runtime,
+        }}
+
+        options(
+          "is-main": true,
+        )
+        "#
+    };
+    let main_dir = client_dir.join("main");
+    std::fs::create_dir_all(&main_dir).unwrap();
+    std::fs::write(main_dir.join("moon.pkg"), main_moon_pkg).unwrap();
+    std::fs::write(main_dir.join("main.mbt"), main_mbt).unwrap();
+
+    // Compile and run the generated client + driver with moon.
+    let output = std::process::Command::new("moon")
+        .arg("run")
+        .arg("--target")
+        .arg("native")
+        .arg("main")
+        .current_dir(&client_dir)
+        .output()
+        .expect("failed to run moon; is it installed?");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "moon run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        client_dir.display()
+    );
+    assert!(
+        stdout.contains("MOONBIT_BRIDGE_E2E_OK first=1 second=2"),
+        "MoonBit bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+}
+
 #[test]
 async fn test_rust_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
@@ -98,8 +319,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     fs::write_str(
         &component_manifest_path,
-        indoc! { r#"
-            manifestVersion: 1.5.0
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: rust-code-first
 
@@ -121,7 +342,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 agents: "*"
               rust:
                 agents: "*"
-        "# },
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
 
@@ -224,7 +445,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     run_and_assert(
         &ctx,
         "fun_map",
-        &[r#"[("foo", 1), ("bar", 2), ("baz", 3)]"#],
+        &[r#"{"foo" => 1, "bar" => 2, "baz" => 3}"#],
     )
     .await;
 
@@ -232,8 +453,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     {
         list_u8: [1, 2, 3, 4, 5],
         list_str: ["foo", "bar", "baz"],
-        map_num: [("pi", 3.14), ("e", 2.71), ("phi", 1.61)],
-        map_text: [(1, "one"), (2, "two"), (3, "three")]
+        map_num: {"pi" => 3.14, "e" => 2.71, "phi" => 1.61},
+        map_text: {1 => "one", 2 => "two", 3 => "three"}
     }
     "#;
 
@@ -273,7 +494,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 symbol: 'm',
             }
         ],
-        map: [("a", 1), ("b", 2)],
+        map: {"a" => 1, "b" => 2},
         option: Some("optional value"),
         result: Ok("result value")
     }
@@ -316,8 +537,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         collections: {
             list_u8: [10, 20, 30],
             list_str: ["x", "y", "z"],
-            map_num: [("a", 1.11), ("b", 2.22), ("c", 3.33)],
-            map_text: [(100, "hundred"), (200, "two hundred"), (300, "three hundred")]
+            map_num: {"a" => 1.11, "b" => 2.22, "c" => 3.33},
+            map_text: {100 => "hundred", 200 => "two hundred", 300 => "three hundred"}
         },
         simple_struct: {
             name: "comp_simple",
@@ -334,7 +555,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 symbol: 'i',
             },
             list: [],
-            map: [],
+            map: {},
             option: None,
             result: Ok("nested result")
         },
@@ -367,7 +588,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             symbol: 'r',
         },
         list: [],
-        map: [],
+        map: {},
         option: None,
         result: Ok("result in nested")
     })
@@ -387,7 +608,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             symbol: 'o',
         },
         list: [],
-        map: [],
+        map: {},
         option: None,
         result: Err("error in nested")
     })
@@ -520,8 +741,8 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
 
     fs::write_str(
         &component_manifest_path,
-        indoc! { r#"
-            manifestVersion: 1.5.0
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: long-agent-id-rejected
 
@@ -536,7 +757,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             components:
               long-agent-id-rejected:ts-main:
                 templates: ts
-        "# },
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
 
@@ -653,8 +874,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     fs::write_str(
         &component_manifest_path,
-        indoc! { r#"
-            manifestVersion: 1.5.0
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: ts-code-first
 
@@ -676,7 +897,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
                 agents: "*"
               rust:
                 agents: "*"
-        "# },
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
 
@@ -739,9 +960,20 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function with a simple object
     run_and_assert(&ctx, "funObjectType", &[r#"{a: "foo", b: 42, c: true}"#]).await;
 
+    // recursive type (a tree referencing itself) — proves recursion is supported end-to-end
+    // over the real REST path (D5)
+    run_and_assert(
+        &ctx,
+        "funRecursive",
+        &[
+            r#"{label: "root", children: [{label: "a", children: []}, {label: "b", children: [{label: "c", children: []}]}]}"#,
+        ],
+    )
+    .await;
+
     // function with a very complex object
     let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}
     "#;
 
     run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
@@ -814,7 +1046,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funBoolean", &["true"]).await;
 
     // A map type
-    run_and_assert(&ctx, "funMap", &[r#"[["foo", 42], ["bar", 42]]"#]).await;
+    run_and_assert(&ctx, "funMap", &[r#"{"foo" => 42, "bar" => 42}"#]).await;
 
     assert!(outputs.success_or_dump());
 
@@ -874,13 +1106,13 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funAll",
         &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}"#,
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}"#,
             r#"{tag: "UnionType2", value: "foo"}"#,
             r#"{tag: "UnionComplexType2", value: "foo"}"#,
             r#"42"#,
             r#""foo""#,
             r#"true"#,
-            r#"[["foo", 42], ["foo", 42], ["foo", 42]]"#,
+            r#"{"foo" => 42, "foo" => 42, "foo" => 42}"#,
             r#"["foo", 42, {a: "foo", b: 42, c: true}]"#,
             r#"["foo", 42, true]"#,
             r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
@@ -936,9 +1168,7 @@ async fn test_component_env_var_substitution() {
     assert!(outputs.success_or_dump());
 
     // But deploying will do so, so it should fail
-    let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
-        .await;
+    let outputs = ctx.cli([flag::SHOW_SECRETS, cmd::DEPLOY, flag::YES]).await;
     assert!(!outputs.success());
 
     assert!(outputs.stdout_contains_ordered([
@@ -957,9 +1187,7 @@ async fn test_component_env_var_substitution() {
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_1", "123");
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_3", "456");
 
-    let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
-        .await;
+    let outputs = ctx.cli([flag::SHOW_SECRETS, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
     assert!(outputs.stdout_contains_ordered([

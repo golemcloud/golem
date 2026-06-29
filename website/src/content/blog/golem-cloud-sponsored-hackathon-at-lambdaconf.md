@@ -8,7 +8,7 @@ originalUrl: "https://golem.cloud/post/golem-cloud-sponsored-hackathon-at-lambda
 
 Join us for the Grand Finale Hackathon at LambdaConf with Golem Cloud on May 8th in Estes Park, Colorado! We're inviting developers skilled in Rust, Go, C/C++, Python, Zig, Swift, JS, Grain, C#, and all languages supported by WebAssembly to participate in this culminating event. Dive deep into WebAssembly (Wasm) and create cutting-edge applications on the Golem platform. Collaborate with a high-profile audience and Speakers from LambdaConf. Compete for great prizes. Let's come together to push the boundaries of technology and make this Grande Finale a memorable one!
 
-![Golem Cloud Sponsored Hackathon at LambdaConf](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055bf_67559f0f16c5f7501359f4fc_1600x900%20-%20Twitter%20(2)%201.png)
+![Golem Cloud Sponsored Hackathon at LambdaConf](/blog-images/golem-lambdaconf-hackathon.png)
 
 ### **Why Participate?**
 

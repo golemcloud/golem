@@ -18,6 +18,7 @@ package golem.runtime.rpc.host
 
 import golem.Uuid
 import golem.host.js._
+import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree, JsTypedSchemaValue}
 
 import scala.annotation.unused
 
@@ -40,7 +41,7 @@ object AgentHostApi {
   type StringFilterComparator = JsStringFilterComparator
   type AgentPropertyFilter    = JsAgentPropertyFilter
   type RevertAgentTarget      = JsRevertAgentTarget
-  type RegisteredAgentType    = JsRegisteredAgentType
+  type RegisteredAgentType    = golem.host.js.schema.JsRegisteredAgentType
   type ComponentIdLiteral     = JsComponentId
   type AgentIdLiteral         = JsAgentId
   type UuidLiteral            = JsUuid
@@ -88,7 +89,7 @@ object AgentHostApi {
     def promise(): js.Promise[Unit] = js.native
   }
 
-  final case class AgentIdParts(agentTypeName: String, payload: JsDataValue, phantom: Option[Uuid])
+  final case class AgentIdParts(agentTypeName: String, payload: JsTypedSchemaValue, phantom: Option[Uuid])
 
   def registeredAgentType(typeName: String): Option[RegisteredAgentType] = {
     val v = AgentRegistryModule.getAgentType(typeName)
@@ -98,7 +99,7 @@ object AgentHostApi {
   def getAllAgentTypes(): List[RegisteredAgentType] =
     AgentRegistryModule.getAllAgentTypes().toList
 
-  def makeAgentId(agentTypeName: String, payload: JsDataValue, phantom: Option[Uuid]): Either[String, String] = {
+  def makeAgentId(agentTypeName: String, payload: JsSchemaValueTree, phantom: Option[Uuid]): Either[String, String] = {
     val phantomArg = phantom.fold[js.Any](js.undefined)(uuid => toUuidLiteral(uuid))
     try Right(AgentRegistryModule.makeAgentId(agentTypeName, payload, phantomArg))
     catch {
@@ -110,7 +111,7 @@ object AgentHostApi {
     try {
       val tuple                 = AgentRegistryModule.parseAgentId(agentId)
       val agentType             = tuple(0).asInstanceOf[String]
-      val dataValue             = tuple(1).asInstanceOf[JsDataValue]
+      val dataValue             = tuple(1).asInstanceOf[JsTypedSchemaValue]
       val phantomValue          = tuple(2)
       val phantom: Option[Uuid] =
         if (phantomValue == null || js.isUndefined(phantomValue)) None
@@ -156,8 +157,8 @@ object AgentHostApi {
   def createWebhook(promiseId: PromiseIdLiteral): String =
     AgentRegistryModule.createWebhook(promiseId)
 
-  def getConfigValue(key: List[String], expectedType: JsWitType): JsWitValue =
-    AgentRegistryModule.getConfigValue(js.Array(key: _*), expectedType)
+  def getConfigValue(key: List[String], expected: JsSchemaGraph): JsSchemaValueTree =
+    AgentRegistryModule.getConfigValue(js.Array(key: _*), expected)
 
   def getOplogIndex(): OplogIndex =
     HostModule.getOplogIndex()
@@ -421,18 +422,18 @@ object AgentHostApi {
   }
 
   @js.native
-  @JSImport("golem:agent/host@1.5.0", JSImport.Namespace)
+  @JSImport("golem:agent/host@2.0.0", JSImport.Namespace)
   private object AgentRegistryModule extends js.Object {
     def getAgentType(typeName: String): RegisteredAgentType = js.native
 
     def getAllAgentTypes(): js.Array[RegisteredAgentType] = js.native
 
-    def makeAgentId(agentTypeName: String, input: JsDataValue, phantom: js.Any): String = js.native
+    def makeAgentId(agentTypeName: String, input: JsSchemaValueTree, phantom: js.Any): String = js.native
 
     def parseAgentId(agentId: String): js.Array[js.Any] = js.native
 
     def createWebhook(promiseId: PromiseIdLiteral): String = js.native
 
-    def getConfigValue(key: js.Array[String], expectedType: JsWitType): JsWitValue = js.native
+    def getConfigValue(key: js.Array[String], expected: JsSchemaGraph): JsSchemaValueTree = js.native
   }
 }

@@ -28,6 +28,7 @@ use crate::app::build::check::requirements::{
     ToolRequirement, ToolRequirementCheck, VersionRange, tool_requirements_for_language,
 };
 use crate::app::context::{BuildContext, validated_to_anyhow};
+use crate::app::edit::golem_yaml;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::GuestLanguage;
@@ -120,14 +121,16 @@ pub(crate) fn plan_dependency_fixes(
     ctx: &BuildContext<'_>,
     claude_skills_ctx: &ClaudeSkillsContext,
 ) -> anyhow::Result<DependencyFixPlan> {
+    let mut plan = DependencyFixPlan::default();
+    plan.steps
+        .extend(plan_manifest_schema_reference_fix_steps(ctx)?);
+
     let selected_languages = selected_component_languages(ctx);
     if selected_languages.is_empty() {
-        return Ok(DependencyFixPlan::default());
+        return Ok(plan);
     }
 
     let overrides = sdk_overrides()?;
-
-    let mut plan = DependencyFixPlan::default();
 
     if selected_languages.contains(&GuestLanguage::TypeScript) {
         let package_step = ts::plan_package_json_fix_step(ctx, overrides, &mut plan.warnings)?;
@@ -155,6 +158,32 @@ pub(crate) fn plan_dependency_fixes(
     )?);
 
     Ok(plan)
+}
+
+fn plan_manifest_schema_reference_fix_steps(
+    ctx: &BuildContext<'_>,
+) -> anyhow::Result<Vec<DependencyFixStep>> {
+    ctx.application()
+        .all_sources()
+        .iter()
+        .map(|path| {
+            let current = fs::read_to_string(path)?;
+            let new = golem_yaml::update_existing_schema_references(
+                &current,
+                crate::manifest_schema_version!(),
+            );
+            Ok((path, current, new))
+        })
+        .filter_map(|result: anyhow::Result<_>| match result {
+            Ok((path, current, new)) if current != new => Some(Ok(DependencyFixStep {
+                path: path.clone(),
+                current,
+                new,
+            })),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
 }
 
 fn selected_component_languages(ctx: &BuildContext<'_>) -> BTreeSet<GuestLanguage> {

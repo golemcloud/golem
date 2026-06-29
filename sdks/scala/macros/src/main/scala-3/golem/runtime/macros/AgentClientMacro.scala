@@ -16,15 +16,24 @@
 
 package golem.runtime.macros
 
-import golem.data.{ElementSchema, GolemSchema, NamedElementSchema, StructuredSchema}
-import golem.runtime.{AgentMethod, AgentType, ConstructorType, MethodInvocation, MethodMetadata}
+import golem.runtime.{
+  AgentMethod,
+  AgentType,
+  ConstructorType,
+  InputRecordCodec,
+  MethodInvocation,
+  MethodMetadata,
+  OutputCodec,
+  ParamCodec
+}
+import golem.schema.{FromSchema, IntoSchema}
 // Macro annotations live in a separate module; do not depend on them here.
 
 import scala.quoted.*
 
 object AgentClientMacro {
   private val schemaHint: String =
-    "\nHint: GolemSchema is derived from zio.blocks.schema.Schema.\n" +
+    "\nHint: IntoSchema/FromSchema are derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
       "Scala 3: `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n" +
       "Scala 2: `implicit val schema: zio.blocks.schema.Schema[T] = zio.blocks.schema.Schema.derived`.\n"
@@ -72,23 +81,23 @@ object AgentClientMacro {
   ): (quotes.reflect.TypeRepr, Expr[ConstructorType[?]]) = {
     import quotes.reflect.*
 
-    val inputType  = agentInputType(traitRepr)
-    val accessMode =
-      if inputType =:= TypeRepr.of[Unit] then MethodParamAccess.NoArgs
-      else MethodParamAccess.SingleArg
-    val parameters =
-      if accessMode == MethodParamAccess.SingleArg then List(("args", inputType)) else Nil
+    val idParams = agentInputParams(traitRepr)
+    val access   = idParams match {
+      case Nil      => MethodParamAccess.NoArgs
+      case _ :: Nil => MethodParamAccess.SingleArg
+      case _        => MethodParamAccess.MultiArgs
+    }
+    val inputType = access match {
+      case MethodParamAccess.NoArgs    => TypeRepr.of[Unit]
+      case MethodParamAccess.SingleArg => idParams.head._2
+      case MethodParamAccess.MultiArgs => TypeRepr.of[Vector[Any]]
+    }
 
     val typeExpr =
       inputType.asType match {
         case '[input] =>
-          val schemaExpr: Expr[GolemSchema[input]] = accessMode match {
-            case MethodParamAccess.MultiArgs =>
-              multiParamSchemaExpr("new", parameters).asExprOf[GolemSchema[input]]
-            case _ =>
-              summonSchema[input]("new", "input")
-          }
-          '{ ConstructorType[input]($schemaExpr) }
+          val codecExpr = inputCodecExpr[input](access, "constructor", idParams)
+          '{ ConstructorType[input]($codecExpr) }
       }
 
     (inputType, typeExpr)
@@ -127,11 +136,15 @@ object AgentClientMacro {
   private def validateTypeName(value: String): String =
     value
 
-  private def agentInputType(using
+  /**
+   * The user-supplied `class Id(...)` parameters (name + type), Principal
+   * params filtered out. These define the constructor input record's shape.
+   */
+  private def agentInputParams(using
     Quotes
   )(
     traitRepr: quotes.reflect.TypeRepr
-  ): quotes.reflect.TypeRepr = {
+  ): List[(String, quotes.reflect.TypeRepr)] = {
     import quotes.reflect.*
     val typeSymbol = traitRepr.typeSymbol
 
@@ -157,21 +170,13 @@ object AgentClientMacro {
           s"Agent trait ${typeSymbol.name} must define a `class Id(...)` to declare its constructor parameters. Use `class Id()` for agents with no constructor parameters."
         )
       case Some(classSym) =>
-        val primaryCtor = classSym.primaryConstructor
-        val params      = primaryCtor.paramSymss.flatten.collect {
+        classSym.primaryConstructor.paramSymss.flatten.collect {
           case sym if sym.isTerm =>
             sym.tree match {
-              case v: ValDef => v.tpt.tpe
-              case _         => TypeRepr.of[Nothing]
+              case v: ValDef => (sym.name, v.tpt.tpe)
+              case other     => report.errorAndAbort(s"Unsupported parameter declaration in Id class: $other")
             }
-        }
-        params match {
-          case Nil      => TypeRepr.of[Unit]
-          case p :: Nil => p
-          case ps       =>
-            val tupleClass = Symbol.requiredClass(s"scala.Tuple${ps.length}")
-            tupleClass.typeRef.appliedTo(ps)
-        }
+        }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
     }
   }
 
@@ -181,8 +186,8 @@ object AgentClientMacro {
     method: quotes.reflect.Symbol
   ): Expr[AgentMethod[Trait, ?, ?]] = {
 
-    val metadataExpr = methodMetadata(method)
-    val functionName = Expr(method.name)
+    val functionName   = Expr(method.name)
+    val methodNameExpr = Expr(method.name)
 
     val parameters                   = extractParameters(method)
     val accessMode                   = methodAccess(parameters)
@@ -195,120 +200,31 @@ object AgentClientMacro {
 
     inputType.asType match {
       case '[input] =>
-        val inputSchemaExpr: Expr[GolemSchema[input]] =
-          accessMode match {
-            case MethodParamAccess.MultiArgs =>
-              multiParamSchemaExpr(method.name, parameters).asExprOf[GolemSchema[input]]
-            case _ =>
-              summonSchema[input](method.name, "input")
-          }
+        val inputCodecExprV = inputCodecExpr[input](accessMode, s"method ${method.name}", parameters)
 
         outputType.asType match {
           case '[output] =>
-            val outputSchemaExpr: Expr[GolemSchema[output]] =
-              invocationKind match {
-                case InvocationKind.Awaitable =>
-                  summonSchema[output](method.name, "output")
-                case InvocationKind.FireAndForget =>
-                  summonSchema[output](method.name, "output")
-              }
+            val outputCodecExprV = outputCodecExpr[output](s"method ${method.name}")
 
             '{
+              val inputCodec  = $inputCodecExprV
+              val outputCodec = $outputCodecExprV
               AgentMethod[Trait, input, output](
-                metadata = $metadataExpr,
+                metadata = MethodMetadata(
+                  name = $methodNameExpr,
+                  description = None,
+                  prompt = None,
+                  mode = None,
+                  input = inputCodec.inputMetadata,
+                  output = outputCodec.metadata
+                ),
                 functionName = $functionName,
-                inputSchema = $inputSchemaExpr,
-                outputSchema = $outputSchemaExpr,
+                inputCodec = inputCodec,
+                outputCodec = outputCodec,
                 invocation = $invocationExpr
               )
             }
         }
-    }
-  }
-
-  private def methodMetadata(using Quotes)(method: quotes.reflect.Symbol): Expr[MethodMetadata] = {
-
-    val methodName   = Expr(method.name)
-    val inputSchema  = methodInputSchema(method)
-    val outputSchema = methodOutputSchema(method)
-
-    '{
-      MethodMetadata(
-        name = $methodName,
-        description = None,
-        prompt = None,
-        mode = None,
-        input = $inputSchema,
-        output = $outputSchema
-      )
-    }
-  }
-
-  private def methodInputSchema(using Quotes)(method: quotes.reflect.Symbol): Expr[StructuredSchema] = {
-
-    val params = extractParameters(method)
-
-    if params.isEmpty then '{ StructuredSchema.Tuple(Nil) }
-    else if params.length == 1 then {
-      val (_, paramType) = params.head
-      structuredSchemaExpr(paramType)
-    } else {
-      val elements = params.map { case (name, tpe) =>
-        val schemaExpr = elementSchemaExpr(name, tpe)
-        '{ NamedElementSchema(${ Expr(name) }, $schemaExpr) }
-      }
-      val listExpr = Expr.ofList(elements)
-      '{ StructuredSchema.Tuple($listExpr) }
-    }
-  }
-
-  private def elementSchemaExpr(using
-    Quotes
-  )(@scala.annotation.unused paramName: String, tpe: quotes.reflect.TypeRepr): Expr[ElementSchema] = {
-    import quotes.reflect.*
-
-    tpe.asType match {
-      case '[t] =>
-        Expr.summon[GolemSchema[t]] match {
-          case Some(schemaExpr) =>
-            '{ $schemaExpr.elementSchema }
-          case None =>
-            report.errorAndAbort(s"No implicit GolemSchema available for type ${Type.show[t]}.$schemaHint")
-        }
-    }
-  }
-
-  private def methodOutputSchema(using Quotes)(method: quotes.reflect.Symbol): Expr[StructuredSchema] = {
-    import quotes.reflect.*
-    method.tree match {
-      case d: DefDef =>
-        val outputType = unwrapAsyncType(d.returnTpt.tpe)
-        structuredSchemaExpr(outputType)
-      case other =>
-        report.errorAndAbort(s"Unable to read return type for ${method.name}: $other")
-    }
-  }
-
-  private def structuredSchemaExpr(using Quotes)(tpe: quotes.reflect.TypeRepr): Expr[StructuredSchema] = {
-    import quotes.reflect.*
-    tpe.asType match {
-      case '[t] =>
-        Expr.summon[GolemSchema[t]] match {
-          case Some(schemaExpr) =>
-            '{ $schemaExpr.schema }
-          case None =>
-            report.errorAndAbort(s"No implicit GolemSchema available for type ${Type.show[t]}.$schemaHint")
-        }
-    }
-  }
-
-  private def unwrapAsyncType(using Quotes)(tpe: quotes.reflect.TypeRepr): quotes.reflect.TypeRepr = {
-    import quotes.reflect.*
-    tpe match {
-      case AppliedType(constructor, args) if isAsyncReturn(constructor) && args.nonEmpty =>
-        args.head
-      case other =>
-        other
     }
   }
 
@@ -374,119 +290,82 @@ object AgentClientMacro {
     }
   }
 
-  private def summonSchema[A: Type](methodName: String, position: String)(using Quotes): Expr[GolemSchema[A]] =
-    Expr.summon[GolemSchema[A]].getOrElse {
+  private def summonInto[A: Type](position: String)(using Quotes): Expr[IntoSchema[A]] =
+    Expr.summon[IntoSchema[A]].getOrElse {
       import quotes.reflect.*
-      report.errorAndAbort(
-        s"Unable to summon GolemSchema for $position of method $methodName with type ${Type.show[A]}.$schemaHint"
-      )
+      report.errorAndAbort(s"Unable to summon IntoSchema for $position with type ${Type.show[A]}.$schemaHint")
     }
 
-  private def multiParamSchemaExpr(using
+  private def summonFrom[A: Type](position: String)(using Quotes): Expr[FromSchema[A]] =
+    Expr.summon[FromSchema[A]].getOrElse {
+      import quotes.reflect.*
+      report.errorAndAbort(s"Unable to summon FromSchema for $position with type ${Type.show[A]}.$schemaHint")
+    }
+
+  /**
+   * Build the `InputRecordCodec[In]` for a constructor/method input from its
+   * user-supplied parameters: `unit` (no args), `single` (one arg), or
+   * `fromParams` (multiple args, encoded positionally as `Vector[Any]`).
+   */
+  private def inputCodecExpr[In: Type](using
     Quotes
   )(
-    methodName: String,
+    access: MethodParamAccess,
+    context: String,
     params: List[(String, quotes.reflect.TypeRepr)]
-  ): Expr[GolemSchema[Vector[Any]]] = {
-
-    val methodNameExpr    = Expr(methodName)
-    val expectedCountExpr = Expr(params.length)
-
-    val paramEntries: Seq[Expr[(String, GolemSchema[Any])]] =
-      params.map { case (name, tpe) =>
+  ): Expr[InputRecordCodec[In]] = {
+    import quotes.reflect.*
+    access match {
+      case MethodParamAccess.NoArgs =>
+        '{ InputRecordCodec.unit }.asExprOf[InputRecordCodec[In]]
+      case MethodParamAccess.SingleArg =>
+        val (name, tpe) = params.head
         tpe.asType match {
-          case '[p] =>
-            val codecExpr = summonSchema[p](methodName, s"parameter '$name'")
-            '{ (${ Expr(name) }, $codecExpr.asInstanceOf[GolemSchema[Any]]) }
+          case '[a] =>
+            val into = summonInto[a](s"input of $context")
+            val from = summonFrom[a](s"input of $context")
+            '{ InputRecordCodec.single[a](${ Expr(name) })($into, $from) }.asExprOf[InputRecordCodec[In]]
         }
-      }
+      case MethodParamAccess.MultiArgs =>
+        val paramCodecs = paramCodecsExpr(context, params)
+        '{ InputRecordCodec.fromParams($paramCodecs) }.asExprOf[InputRecordCodec[In]]
+    }
+  }
 
-    val paramsArrayExpr =
-      '{ Array[(String, GolemSchema[Any])](${ Varargs(paramEntries) }*) }
-
-    '{
-      new GolemSchema[Vector[Any]] {
-        private val params = $paramsArrayExpr
-
-        override val schema: _root_.golem.data.StructuredSchema = {
-          val builder = List.newBuilder[_root_.golem.data.NamedElementSchema]
-          var idx     = 0
-          while (idx < params.length) {
-            val (paramName, codec) = params(idx)
-            builder += _root_.golem.data.NamedElementSchema(paramName, codec.elementSchema)
-            idx += 1
-          }
-          _root_.golem.data.StructuredSchema.Tuple(builder.result())
-        }
-
-        override def encode(value: Vector[Any]): Either[String, _root_.golem.data.StructuredValue] =
-          if (value.length != params.length)
-            Left(
-              s"Parameter count mismatch for method '${$methodNameExpr}'. Expected ${$expectedCountExpr}, found ${value.length}"
+  private def paramCodecsExpr(using
+    Quotes
+  )(
+    context: String,
+    params: List[(String, quotes.reflect.TypeRepr)]
+  ): Expr[List[ParamCodec]] = {
+    val entries = params.map { case (name, tpe) =>
+      tpe.asType match {
+        case '[p] =>
+          val into = summonInto[p](s"parameter '$name' of $context")
+          val from = summonFrom[p](s"parameter '$name' of $context")
+          '{
+            ParamCodec(
+              ${ Expr(name) },
+              $into.asInstanceOf[IntoSchema[Any]],
+              $from.asInstanceOf[FromSchema[Any]]
             )
-          else {
-            val builder = List.newBuilder[_root_.golem.data.NamedElementValue]
-            var idx     = 0
-            while (idx < params.length) {
-              val (paramName, codec) = params(idx)
-              codec.encodeElement(value(idx)) match {
-                case Left(err) =>
-                  return Left(s"Failed to encode parameter '$paramName' in method '${$methodNameExpr}': $err")
-                case Right(elementValue) =>
-                  builder += _root_.golem.data.NamedElementValue(paramName, elementValue)
-              }
-              idx += 1
-            }
-            Right(_root_.golem.data.StructuredValue.Tuple(builder.result()))
           }
-
-        override def decode(
-          value: _root_.golem.data.StructuredValue
-        ): Either[String, Vector[Any]] =
-          value match {
-            case _root_.golem.data.StructuredValue.Tuple(elements) =>
-              if (elements.length != params.length)
-                Left(
-                  s"Structured element count mismatch for method '${$methodNameExpr}'. Expected ${$expectedCountExpr}, found ${elements.length}"
-                )
-              else {
-                var idx     = 0
-                var failure = Option.empty[String]
-                val buffer  = Vector.newBuilder[Any]
-
-                while (idx < params.length && failure.isEmpty) {
-                  val (paramName, codec) = params(idx)
-                  val element            = elements(idx)
-                  if (element.name != paramName)
-                    failure = Some(
-                      s"Structured element name mismatch for method '${$methodNameExpr}'. Expected '$paramName', found '${element.name}'"
-                    )
-                  else {
-                    codec.decodeElement(element.value) match {
-                      case Left(err) =>
-                        failure = Some(s"Failed to decode parameter '$paramName' in method '${$methodNameExpr}': $err")
-                      case Right(decoded) =>
-                        buffer += decoded
-                    }
-                  }
-                  idx += 1
-                }
-
-                failure.fold[Either[String, Vector[Any]]](Right(buffer.result()))(Left(_))
-              }
-            case other =>
-              Left(s"Structured value mismatch for method '${$methodNameExpr}'. Expected tuple payload, found: $other")
-          }
-
-        override def elementSchema: _root_.golem.data.ElementSchema =
-          throw new UnsupportedOperationException("Multi-param schema cannot be used as a single element")
-
-        override def encodeElement(value: Vector[Any]): Either[String, _root_.golem.data.ElementValue] =
-          Left("Multi-param schema cannot be encoded as a single element")
-
-        override def decodeElement(value: _root_.golem.data.ElementValue): Either[String, Vector[Any]] =
-          Left("Multi-param schema cannot be decoded from a single element")
       }
+    }
+    Expr.ofList(entries)
+  }
+
+  /**
+   * Build the `OutputCodec[Out]` for a method's return type: `unit` for `Unit`
+   * (the host returns `none`), otherwise `single` carrying the value codec.
+   */
+  private def outputCodecExpr[Out: Type](using Quotes)(context: String): Expr[OutputCodec[Out]] = {
+    import quotes.reflect.*
+    if (TypeRepr.of[Out] =:= TypeRepr.of[Unit]) '{ OutputCodec.unit[Out] }
+    else {
+      val into = summonInto[Out](s"output of $context")
+      val from = summonFrom[Out](s"output of $context")
+      '{ OutputCodec.single[Out]($into, $from) }
     }
   }
 

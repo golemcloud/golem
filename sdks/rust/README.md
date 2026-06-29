@@ -9,7 +9,10 @@ the [transaction API](https://learn.golem.cloud/docs/transaction-api).
 
 ## golem-rust-macro
 
-The `golem-rust-macro` crate contains Rust derivation macros for working with Golem's `ValueAndType` types.
+The `golem-rust-macro` crate contains Rust macros for agent definitions, agent
+implementations, multimodal schema declarations, and configuration schemas. The
+component-model value conversion derives are re-exported from `golem-schema` as
+`IntoSchema` and `FromSchema`.
 
 ## Agent implementations
 

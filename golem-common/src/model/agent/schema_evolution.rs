@@ -18,11 +18,10 @@
 //! old and new agent type schemas and produces warnings about positionally
 //! incompatible changes that could corrupt existing agent IDs.
 
-use crate::base_model::agent::{
-    AgentType, AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema,
-    NamedElementSchemas,
-};
-use golem_wasm::analysis::AnalysedType;
+use crate::base_model::agent::AgentTypeName;
+use crate::schema::agent::{AgentTypeSchema, InputSchema};
+use crate::schema::graph::SchemaGraph;
+use crate::schema::schema_type::SchemaType;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,8 +44,8 @@ impl fmt::Display for SchemaEvolutionWarning {
 /// Compare old and new agent type lists and produce warnings about
 /// positionally incompatible schema changes.
 pub fn validate_schema_evolution(
-    old_agent_types: &[AgentType],
-    new_agent_types: &[AgentType],
+    old_agent_types: &[AgentTypeSchema],
+    new_agent_types: &[AgentTypeSchema],
 ) -> Vec<SchemaEvolutionWarning> {
     let mut warnings = Vec::new();
 
@@ -63,10 +62,12 @@ pub fn validate_schema_evolution(
                 });
             }
             Some(new) => {
-                validate_data_schema(
+                validate_input_schema(
                     &old.type_name,
                     "constructor",
+                    &old.schema,
                     &old.constructor.input_schema,
+                    &new.schema,
                     &new.constructor.input_schema,
                     &mut warnings,
                 );
@@ -77,161 +78,157 @@ pub fn validate_schema_evolution(
     warnings
 }
 
-fn validate_data_schema(
+#[allow(clippy::too_many_arguments)]
+fn validate_input_schema(
     name: &AgentTypeName,
     path: &str,
-    old: &DataSchema,
-    new: &DataSchema,
+    old_graph: &SchemaGraph,
+    old: &InputSchema,
+    new_graph: &SchemaGraph,
+    new: &InputSchema,
     warnings: &mut Vec<SchemaEvolutionWarning>,
 ) {
-    match (old, new) {
-        (DataSchema::Tuple(old_elems), DataSchema::Tuple(new_elems)) => {
-            validate_element_schemas(name, path, old_elems, new_elems, warnings);
-        }
-        (DataSchema::Multimodal(old_elems), DataSchema::Multimodal(new_elems)) => {
-            validate_element_schemas(name, path, old_elems, new_elems, warnings);
-        }
-        _ => {
-            warnings.push(SchemaEvolutionWarning {
-                agent_type_name: name.clone(),
-                path: path.to_string(),
-                description: "DataSchema kind changed (Tuple <-> Multimodal)".to_string(),
-            });
-        }
-    }
-}
+    let old_fields = old.fields();
+    let new_fields = new.fields();
 
-fn validate_element_schemas(
-    name: &AgentTypeName,
-    path: &str,
-    old: &NamedElementSchemas,
-    new: &NamedElementSchemas,
-    warnings: &mut Vec<SchemaEvolutionWarning>,
-) {
-    if new.elements.len() < old.elements.len() {
+    if new_fields.len() < old_fields.len() {
         warnings.push(SchemaEvolutionWarning {
             agent_type_name: name.clone(),
             path: path.to_string(),
             description: format!(
                 "Elements removed (was {}, now {})",
-                old.elements.len(),
-                new.elements.len()
+                old_fields.len(),
+                new_fields.len()
             ),
         });
         return;
     }
 
-    for (i, (old_elem, new_elem)) in old.elements.iter().zip(new.elements.iter()).enumerate() {
+    for (i, (old_field, new_field)) in old_fields.iter().zip(new_fields.iter()).enumerate() {
         let elem_path = format!("{}.elements[{}]", path, i);
-        validate_element_schema(
+        validate_schema_type(
             name,
             &elem_path,
-            &old_elem.schema,
-            &new_elem.schema,
+            old_graph,
+            &old_field.schema,
+            new_graph,
+            &new_field.schema,
             warnings,
         );
     }
 }
 
-fn validate_element_schema(
-    name: &AgentTypeName,
-    path: &str,
-    old: &ElementSchema,
-    new: &ElementSchema,
-    warnings: &mut Vec<SchemaEvolutionWarning>,
-) {
-    match (old, new) {
-        (
-            ElementSchema::ComponentModel(ComponentModelElementSchema {
-                element_type: old_type,
-            }),
-            ElementSchema::ComponentModel(ComponentModelElementSchema {
-                element_type: new_type,
-            }),
-        ) => {
-            let type_path = format!("{}.type", path);
-            validate_analysed_type(name, &type_path, old_type, new_type, warnings);
-        }
-        (ElementSchema::UnstructuredText(_), ElementSchema::UnstructuredText(_)) => {}
-        (ElementSchema::UnstructuredBinary(_), ElementSchema::UnstructuredBinary(_)) => {}
-        _ => {
-            warnings.push(SchemaEvolutionWarning {
-                agent_type_name: name.clone(),
-                path: path.to_string(),
-                description: "Element schema kind changed".to_string(),
-            });
-        }
-    }
-}
-
-fn discriminant_name(typ: &AnalysedType) -> &'static str {
+fn discriminant_name(typ: &SchemaType) -> &'static str {
     match typ {
-        AnalysedType::Record(_) => "Record",
-        AnalysedType::Variant(_) => "Variant",
-        AnalysedType::Enum(_) => "Enum",
-        AnalysedType::Flags(_) => "Flags",
-        AnalysedType::Tuple(_) => "Tuple",
-        AnalysedType::List(_) => "List",
-        AnalysedType::Option(_) => "Option",
-        AnalysedType::Result(_) => "Result",
-        AnalysedType::Str(_) => "Str",
-        AnalysedType::Chr(_) => "Chr",
-        AnalysedType::F64(_) => "F64",
-        AnalysedType::F32(_) => "F32",
-        AnalysedType::U64(_) => "U64",
-        AnalysedType::S64(_) => "S64",
-        AnalysedType::U32(_) => "U32",
-        AnalysedType::S32(_) => "S32",
-        AnalysedType::U16(_) => "U16",
-        AnalysedType::S16(_) => "S16",
-        AnalysedType::U8(_) => "U8",
-        AnalysedType::S8(_) => "S8",
-        AnalysedType::Bool(_) => "Bool",
-        AnalysedType::Handle(_) => "Handle",
+        SchemaType::Ref { .. } => "Ref",
+        SchemaType::Bool { .. } => "Bool",
+        SchemaType::S8 { .. } => "S8",
+        SchemaType::S16 { .. } => "S16",
+        SchemaType::S32 { .. } => "S32",
+        SchemaType::S64 { .. } => "S64",
+        SchemaType::U8 { .. } => "U8",
+        SchemaType::U16 { .. } => "U16",
+        SchemaType::U32 { .. } => "U32",
+        SchemaType::U64 { .. } => "U64",
+        SchemaType::F32 { .. } => "F32",
+        SchemaType::F64 { .. } => "F64",
+        SchemaType::Char { .. } => "Char",
+        SchemaType::String { .. } => "String",
+        SchemaType::Record { .. } => "Record",
+        SchemaType::Variant { .. } => "Variant",
+        SchemaType::Enum { .. } => "Enum",
+        SchemaType::Flags { .. } => "Flags",
+        SchemaType::Tuple { .. } => "Tuple",
+        SchemaType::List { .. } => "List",
+        SchemaType::FixedList { .. } => "FixedList",
+        SchemaType::Map { .. } => "Map",
+        SchemaType::Option { .. } => "Option",
+        SchemaType::Result { .. } => "Result",
+        SchemaType::Text { .. } => "Text",
+        SchemaType::Binary { .. } => "Binary",
+        SchemaType::Path { .. } => "Path",
+        SchemaType::Url { .. } => "Url",
+        SchemaType::Datetime { .. } => "Datetime",
+        SchemaType::Duration { .. } => "Duration",
+        SchemaType::Quantity { .. } => "Quantity",
+        SchemaType::Union { .. } => "Union",
+        SchemaType::Secret { .. } => "Secret",
+        SchemaType::QuotaToken { .. } => "QuotaToken",
+        SchemaType::Future { .. } => "Future",
+        SchemaType::Stream { .. } => "Stream",
     }
 }
 
-fn validate_analysed_type(
+/// Resolve any [`SchemaType::Ref`] chain against the owning graph, returning
+/// the original (possibly ref) type if resolution fails so that downstream
+/// comparison still produces a stable result.
+fn resolve<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> &'a SchemaType {
+    graph.resolve_ref(ty).unwrap_or(ty)
+}
+
+fn is_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    matches!(resolve(graph, ty), SchemaType::Option { .. })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_schema_type(
     name: &AgentTypeName,
     path: &str,
-    old: &AnalysedType,
-    new: &AnalysedType,
+    old_graph: &SchemaGraph,
+    old: &SchemaType,
+    new_graph: &SchemaGraph,
+    new: &SchemaType,
     warnings: &mut Vec<SchemaEvolutionWarning>,
 ) {
-    if std::mem::discriminant(old) != std::mem::discriminant(new) {
+    let old = resolve(old_graph, old);
+    let new = resolve(new_graph, new);
+
+    let old_disc = discriminant_name(old);
+    let new_disc = discriminant_name(new);
+    if old_disc != new_disc {
         warnings.push(SchemaEvolutionWarning {
             agent_type_name: name.clone(),
             path: path.to_string(),
-            description: format!(
-                "Type changed from {} to {}",
-                discriminant_name(old),
-                discriminant_name(new)
-            ),
+            description: format!("Type changed from {} to {}", old_disc, new_disc),
         });
         return;
     }
 
     match (old, new) {
-        (AnalysedType::Record(old_rec), AnalysedType::Record(new_rec)) => {
-            if new_rec.fields.len() < old_rec.fields.len() {
+        (
+            SchemaType::Record {
+                fields: old_fields, ..
+            },
+            SchemaType::Record {
+                fields: new_fields, ..
+            },
+        ) => {
+            if new_fields.len() < old_fields.len() {
                 warnings.push(SchemaEvolutionWarning {
                     agent_type_name: name.clone(),
                     path: path.to_string(),
                     description: format!(
                         "Record fields removed (was {}, now {})",
-                        old_rec.fields.len(),
-                        new_rec.fields.len()
+                        old_fields.len(),
+                        new_fields.len()
                     ),
                 });
                 return;
             }
-            for (i, (old_f, new_f)) in old_rec.fields.iter().zip(new_rec.fields.iter()).enumerate()
-            {
+            for (i, (old_f, new_f)) in old_fields.iter().zip(new_fields.iter()).enumerate() {
                 let field_path = format!("{}.fields[{}]", path, i);
-                validate_analysed_type(name, &field_path, &old_f.typ, &new_f.typ, warnings);
+                validate_schema_type(
+                    name,
+                    &field_path,
+                    old_graph,
+                    &old_f.body,
+                    new_graph,
+                    &new_f.body,
+                    warnings,
+                );
             }
-            for (i, new_f) in new_rec.fields.iter().enumerate().skip(old_rec.fields.len()) {
-                if !matches!(new_f.typ, AnalysedType::Option(_)) {
+            for (i, new_f) in new_fields.iter().enumerate().skip(old_fields.len()) {
+                if !is_option(new_graph, &new_f.body) {
                     let field_path = format!("{}.fields[{}]", path, i);
                     warnings.push(SchemaEvolutionWarning {
                         agent_type_name: name.clone(),
@@ -241,27 +238,36 @@ fn validate_analysed_type(
                 }
             }
         }
-        (AnalysedType::Tuple(old_tup), AnalysedType::Tuple(new_tup)) => {
-            if new_tup.items.len() < old_tup.items.len() {
+        (
+            SchemaType::Tuple {
+                elements: old_items,
+                ..
+            },
+            SchemaType::Tuple {
+                elements: new_items,
+                ..
+            },
+        ) => {
+            if new_items.len() < old_items.len() {
                 warnings.push(SchemaEvolutionWarning {
                     agent_type_name: name.clone(),
                     path: path.to_string(),
                     description: format!(
                         "Tuple items removed (was {}, now {})",
-                        old_tup.items.len(),
-                        new_tup.items.len()
+                        old_items.len(),
+                        new_items.len()
                     ),
                 });
                 return;
             }
-            for (i, (old_item, new_item)) in
-                old_tup.items.iter().zip(new_tup.items.iter()).enumerate()
-            {
+            for (i, (old_item, new_item)) in old_items.iter().zip(new_items.iter()).enumerate() {
                 let item_path = format!("{}.items[{}]", path, i);
-                validate_analysed_type(name, &item_path, old_item, new_item, warnings);
+                validate_schema_type(
+                    name, &item_path, old_graph, old_item, new_graph, new_item, warnings,
+                );
             }
-            for (i, new_item) in new_tup.items.iter().enumerate().skip(old_tup.items.len()) {
-                if !matches!(new_item, AnalysedType::Option(_)) {
+            for (i, new_item) in new_items.iter().enumerate().skip(old_items.len()) {
+                if !is_option(new_graph, new_item) {
                     let item_path = format!("{}.items[{}]", path, i);
                     warnings.push(SchemaEvolutionWarning {
                         agent_type_name: name.clone(),
@@ -271,24 +277,29 @@ fn validate_analysed_type(
                 }
             }
         }
-        (AnalysedType::Variant(old_var), AnalysedType::Variant(new_var)) => {
-            if new_var.cases.len() < old_var.cases.len() {
+        (
+            SchemaType::Variant {
+                cases: old_cases, ..
+            },
+            SchemaType::Variant {
+                cases: new_cases, ..
+            },
+        ) => {
+            if new_cases.len() < old_cases.len() {
                 warnings.push(SchemaEvolutionWarning {
                     agent_type_name: name.clone(),
                     path: path.to_string(),
                     description: format!(
                         "Variant cases removed (was {}, now {})",
-                        old_var.cases.len(),
-                        new_var.cases.len()
+                        old_cases.len(),
+                        new_cases.len()
                     ),
                 });
                 return;
             }
-            for (i, (old_case, new_case)) in
-                old_var.cases.iter().zip(new_var.cases.iter()).enumerate()
-            {
+            for (i, (old_case, new_case)) in old_cases.iter().zip(new_cases.iter()).enumerate() {
                 let case_path = format!("{}.cases[{}]", path, i);
-                match (&old_case.typ, &new_case.typ) {
+                match (&old_case.payload, &new_case.payload) {
                     (None, Some(_)) => {
                         warnings.push(SchemaEvolutionWarning {
                             agent_type_name: name.clone(),
@@ -304,46 +315,119 @@ fn validate_analysed_type(
                         });
                     }
                     (Some(old_t), Some(new_t)) => {
-                        validate_analysed_type(name, &case_path, old_t, new_t, warnings);
+                        validate_schema_type(
+                            name, &case_path, old_graph, old_t, new_graph, new_t, warnings,
+                        );
                     }
                     (None, None) => {}
                 }
             }
         }
-        (AnalysedType::Enum(old_enum), AnalysedType::Enum(new_enum))
-            if new_enum.cases.len() < old_enum.cases.len() =>
-        {
+        (
+            SchemaType::Enum {
+                cases: old_cases, ..
+            },
+            SchemaType::Enum {
+                cases: new_cases, ..
+            },
+        ) if new_cases.len() < old_cases.len() => {
             warnings.push(SchemaEvolutionWarning {
                 agent_type_name: name.clone(),
                 path: path.to_string(),
                 description: format!(
                     "Enum cases removed (was {}, now {})",
-                    old_enum.cases.len(),
-                    new_enum.cases.len()
+                    old_cases.len(),
+                    new_cases.len()
                 ),
             });
         }
-        (AnalysedType::Flags(old_flags), AnalysedType::Flags(new_flags))
-            if new_flags.names.len() < old_flags.names.len() =>
-        {
+        (
+            SchemaType::Flags {
+                flags: old_flags, ..
+            },
+            SchemaType::Flags {
+                flags: new_flags, ..
+            },
+        ) if new_flags.len() < old_flags.len() => {
             warnings.push(SchemaEvolutionWarning {
                 agent_type_name: name.clone(),
                 path: path.to_string(),
                 description: format!(
                     "Flags removed (was {}, now {})",
-                    old_flags.names.len(),
-                    new_flags.names.len()
+                    old_flags.len(),
+                    new_flags.len()
                 ),
             });
         }
-        (AnalysedType::List(old_list), AnalysedType::List(new_list)) => {
-            validate_analysed_type(name, path, &old_list.inner, &new_list.inner, warnings);
+        (
+            SchemaType::List {
+                element: old_inner, ..
+            },
+            SchemaType::List {
+                element: new_inner, ..
+            },
+        ) => {
+            validate_schema_type(
+                name, path, old_graph, old_inner, new_graph, new_inner, warnings,
+            );
         }
-        (AnalysedType::Option(old_opt), AnalysedType::Option(new_opt)) => {
-            validate_analysed_type(name, path, &old_opt.inner, &new_opt.inner, warnings);
+        (
+            SchemaType::FixedList {
+                element: old_inner, ..
+            },
+            SchemaType::FixedList {
+                element: new_inner, ..
+            },
+        ) => {
+            validate_schema_type(
+                name, path, old_graph, old_inner, new_graph, new_inner, warnings,
+            );
         }
-        (AnalysedType::Result(old_res), AnalysedType::Result(new_res)) => {
-            match (&old_res.ok, &new_res.ok) {
+        (
+            SchemaType::Map {
+                key: old_key,
+                value: old_value,
+                ..
+            },
+            SchemaType::Map {
+                key: new_key,
+                value: new_value,
+                ..
+            },
+        ) => {
+            validate_schema_type(
+                name,
+                &format!("{}.key", path),
+                old_graph,
+                old_key,
+                new_graph,
+                new_key,
+                warnings,
+            );
+            validate_schema_type(
+                name,
+                &format!("{}.value", path),
+                old_graph,
+                old_value,
+                new_graph,
+                new_value,
+                warnings,
+            );
+        }
+        (
+            SchemaType::Option {
+                inner: old_inner, ..
+            },
+            SchemaType::Option {
+                inner: new_inner, ..
+            },
+        ) => {
+            validate_schema_type(
+                name, path, old_graph, old_inner, new_graph, new_inner, warnings,
+            );
+        }
+        (SchemaType::Result { spec: old_spec, .. }, SchemaType::Result { spec: new_spec, .. }) => {
+            match (&old_spec.ok, &new_spec.ok) {
                 (None, Some(_)) | (Some(_), None) => {
                     warnings.push(SchemaEvolutionWarning {
                         agent_type_name: name.clone(),
@@ -352,11 +436,19 @@ fn validate_analysed_type(
                     });
                 }
                 (Some(old_ok), Some(new_ok)) => {
-                    validate_analysed_type(name, &format!("{}.ok", path), old_ok, new_ok, warnings);
+                    validate_schema_type(
+                        name,
+                        &format!("{}.ok", path),
+                        old_graph,
+                        old_ok,
+                        new_graph,
+                        new_ok,
+                        warnings,
+                    );
                 }
                 (None, None) => {}
             }
-            match (&old_res.err, &new_res.err) {
+            match (&old_spec.err, &new_spec.err) {
                 (None, Some(_)) | (Some(_), None) => {
                     warnings.push(SchemaEvolutionWarning {
                         agent_type_name: name.clone(),
@@ -365,10 +457,12 @@ fn validate_analysed_type(
                     });
                 }
                 (Some(old_err), Some(new_err)) => {
-                    validate_analysed_type(
+                    validate_schema_type(
                         name,
                         &format!("{}.err", path),
+                        old_graph,
                         old_err,
+                        new_graph,
                         new_err,
                         warnings,
                     );
@@ -376,7 +470,8 @@ fn validate_analysed_type(
                 (None, None) => {}
             }
         }
-        // Primitives with same discriminant: compatible
+        // Same-discriminant primitives, rich scalars, capabilities, unions and
+        // P3 stubs are treated as compatible (no positional drift).
         _ => {}
     }
 }
@@ -384,43 +479,78 @@ fn validate_analysed_type(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base_model::agent::{
-        AgentConstructor, AgentMode, AgentTypeName, DataSchema, NamedElementSchema,
-        NamedElementSchemas, Snapshotting,
-    };
+    use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use crate::model::Empty;
-    use golem_wasm::analysis::analysed_type::{
-        bool, case, r#enum, field, flags, list, option, record, result, result_ok, str, tuple, u8,
-        u32, unit_case, variant,
-    };
+    use crate::schema::agent::{AgentConstructorSchema, NamedField};
+    use crate::schema::graph::SchemaGraph;
+    use crate::schema::schema_type::{ResultSpec, SchemaType, VariantCaseType};
     use test_r::test;
 
-    fn cm_schema(typ: AnalysedType) -> ElementSchema {
-        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type: typ })
+    fn field(name: &str, schema: SchemaType) -> NamedField {
+        NamedField {
+            name: name.to_string(),
+            source: Default::default(),
+            schema,
+            metadata: Default::default(),
+        }
     }
 
-    fn tuple_data_schema(elements: Vec<(&str, ElementSchema)>) -> DataSchema {
-        DataSchema::Tuple(NamedElementSchemas {
-            elements: elements
+    fn rec(fields: Vec<(&str, SchemaType)>) -> SchemaType {
+        SchemaType::record(
+            fields
                 .into_iter()
-                .map(|(name, schema)| NamedElementSchema {
-                    name: name.to_string(),
-                    schema,
+                .map(|(n, t)| crate::schema::schema_type::NamedFieldType {
+                    name: n.to_string(),
+                    body: t,
+                    metadata: Default::default(),
                 })
                 .collect(),
+        )
+    }
+
+    fn unit_case(name: &str) -> VariantCaseType {
+        VariantCaseType {
+            name: name.to_string(),
+            payload: None,
+            metadata: Default::default(),
+        }
+    }
+
+    fn case(name: &str, payload: SchemaType) -> VariantCaseType {
+        VariantCaseType {
+            name: name.to_string(),
+            payload: Some(payload),
+            metadata: Default::default(),
+        }
+    }
+
+    fn result_ok(ok: SchemaType) -> SchemaType {
+        SchemaType::result(ResultSpec {
+            ok: Some(Box::new(ok)),
+            err: None,
         })
     }
 
-    fn make_agent_type(name: &str, schema: DataSchema) -> AgentType {
-        AgentType {
+    fn result(ok: SchemaType, err: SchemaType) -> SchemaType {
+        SchemaType::result(ResultSpec {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(err)),
+        })
+    }
+
+    fn make_agent_type(name: &str, fields: Vec<(&str, SchemaType)>) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: AgentTypeName(name.to_string()),
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: schema,
+                input_schema: InputSchema::Parameters(
+                    fields.into_iter().map(|(n, t)| field(n, t)).collect(),
+                ),
             },
             methods: Vec::new(),
             dependencies: Vec::new(),
@@ -433,16 +563,14 @@ mod tests {
 
     #[test]
     fn no_changes_no_warnings() {
-        let schema = tuple_data_schema(vec![("x", cm_schema(u32()))]);
-        let old = vec![make_agent_type("A", schema.clone())];
-        let new = vec![make_agent_type("A", schema)];
+        let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
+        let new = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
         assert!(validate_schema_evolution(&old, &new).is_empty());
     }
 
     #[test]
     fn agent_type_removed() {
-        let schema = tuple_data_schema(vec![("x", cm_schema(u32()))]);
-        let old = vec![make_agent_type("A", schema)];
+        let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
         let new = vec![];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
@@ -451,58 +579,45 @@ mod tests {
 
     #[test]
     fn agent_type_added_no_warning() {
-        let schema = tuple_data_schema(vec![("x", cm_schema(u32()))]);
         let old = vec![];
-        let new = vec![make_agent_type("A", schema)];
+        let new = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
         assert!(validate_schema_evolution(&old, &new).is_empty());
     }
 
     #[test]
-    fn data_schema_kind_changed() {
-        let old_schema = DataSchema::Tuple(NamedElementSchemas { elements: vec![] });
-        let new_schema = DataSchema::Multimodal(NamedElementSchemas { elements: vec![] });
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
-        let w = validate_schema_evolution(&old, &new);
-        assert_eq!(w.len(), 1);
-        assert!(w[0].description.contains("kind changed"));
-    }
-
-    #[test]
     fn element_removed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(u32())), ("y", cm_schema(str()))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(u32()))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::u32()), ("y", SchemaType::string())],
+        )];
+        let new = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("removed"));
     }
 
     #[test]
-    fn element_schema_kind_changed() {
-        use crate::base_model::agent::TextDescriptor;
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(u32()))]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-        )]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+    fn element_type_changed() {
+        let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
+        let new = vec![make_agent_type("A", vec![("x", SchemaType::string())])];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
-        assert!(w[0].description.contains("kind changed"));
+        assert!(w[0].description.contains("Type changed"));
     }
 
     #[test]
     fn record_field_removed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", u32()), field("b", str())])),
-        )]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                rec(vec![("a", SchemaType::u32()), ("b", SchemaType::string())]),
+            )],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", rec(vec![("a", SchemaType::u32())]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("fields removed"));
@@ -510,10 +625,14 @@ mod tests {
 
     #[test]
     fn record_field_type_changed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", str())])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", rec(vec![("a", SchemaType::u32())]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", rec(vec![("a", SchemaType::string())]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Type changed"));
@@ -521,25 +640,36 @@ mod tests {
 
     #[test]
     fn record_append_option_field_compatible() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", u32()), field("b", option(str()))])),
-        )]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", rec(vec![("a", SchemaType::u32())]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                rec(vec![
+                    ("a", SchemaType::u32()),
+                    ("b", SchemaType::option(SchemaType::string())),
+                ]),
+            )],
+        )];
         assert!(validate_schema_evolution(&old, &new).is_empty());
     }
 
     #[test]
     fn record_append_non_option_field_warns() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", u32()), field("b", str())])),
-        )]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", rec(vec![("a", SchemaType::u32())]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                rec(vec![("a", SchemaType::u32()), ("b", SchemaType::string())]),
+            )],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("non-Option"));
@@ -547,13 +677,17 @@ mod tests {
 
     #[test]
     fn variant_case_removed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![unit_case("A"), unit_case("B")])),
-        )]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::variant(vec![unit_case("A"), unit_case("B")]),
+            )],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::variant(vec![unit_case("A")]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("cases removed"));
@@ -561,10 +695,14 @@ mod tests {
 
     #[test]
     fn variant_payload_added() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", u32())])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::variant(vec![unit_case("A")]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::variant(vec![case("A", SchemaType::u32())]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("gained a payload"));
@@ -572,10 +710,14 @@ mod tests {
 
     #[test]
     fn variant_payload_removed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", u32())])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::variant(vec![case("A", SchemaType::u32())]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::variant(vec![unit_case("A")]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("lost its payload"));
@@ -583,10 +725,17 @@ mod tests {
 
     #[test]
     fn variant_payload_type_changed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", u32())])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", str())])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::variant(vec![case("A", SchemaType::u32())]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::variant(vec![case("A", SchemaType::string())]),
+            )],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Type changed"));
@@ -594,22 +743,33 @@ mod tests {
 
     #[test]
     fn variant_case_appended_compatible() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![unit_case("A"), unit_case("B")])),
-        )]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::variant(vec![unit_case("A")]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::variant(vec![unit_case("A"), unit_case("B")]),
+            )],
+        )];
         assert!(validate_schema_evolution(&old, &new).is_empty());
     }
 
     #[test]
     fn enum_cases_removed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B", "C"])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B"])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::r#enum(vec!["A".into(), "B".into(), "C".into()]),
+            )],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::r#enum(vec!["A".into(), "B".into()]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Enum cases removed"));
@@ -617,19 +777,33 @@ mod tests {
 
     #[test]
     fn enum_cases_appended_compatible() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B"])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B", "C"])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::r#enum(vec!["A".into(), "B".into()]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::r#enum(vec!["A".into(), "B".into(), "C".into()]),
+            )],
+        )];
         assert!(validate_schema_evolution(&old, &new).is_empty());
     }
 
     #[test]
     fn flags_removed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b", "c"])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b"])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::flags(vec!["a".into(), "b".into(), "c".into()]),
+            )],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::flags(vec!["a".into(), "b".into()]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Flags removed"));
@@ -637,19 +811,33 @@ mod tests {
 
     #[test]
     fn flags_appended_compatible() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b"])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b", "c"])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::flags(vec!["a".into(), "b".into()]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::flags(vec!["a".into(), "b".into(), "c".into()]),
+            )],
+        )];
         assert!(validate_schema_evolution(&old, &new).is_empty());
     }
 
     #[test]
     fn tuple_item_removed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32(), str()])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32()])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::tuple(vec![SchemaType::u32(), SchemaType::string()]),
+            )],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::tuple(vec![SchemaType::u32()]))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("items removed"));
@@ -657,20 +845,36 @@ mod tests {
 
     #[test]
     fn tuple_append_option_compatible() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32()])))]);
-        let new_schema =
-            tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32(), option(str())])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::tuple(vec![SchemaType::u32()]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::tuple(vec![
+                    SchemaType::u32(),
+                    SchemaType::option(SchemaType::string()),
+                ]),
+            )],
+        )];
         assert!(validate_schema_evolution(&old, &new).is_empty());
     }
 
     #[test]
     fn tuple_append_non_option_warns() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32()])))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32(), str()])))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::tuple(vec![SchemaType::u32()]))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![(
+                "x",
+                SchemaType::tuple(vec![SchemaType::u32(), SchemaType::string()]),
+            )],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("non-Option"));
@@ -678,10 +882,14 @@ mod tests {
 
     #[test]
     fn list_inner_type_changed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(list(u32())))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(list(str())))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::list(SchemaType::u32()))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::list(SchemaType::string()))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Type changed"));
@@ -689,10 +897,14 @@ mod tests {
 
     #[test]
     fn option_inner_type_changed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(option(u32())))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(option(str())))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::option(SchemaType::u32()))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", SchemaType::option(SchemaType::string()))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Type changed"));
@@ -700,10 +912,14 @@ mod tests {
 
     #[test]
     fn result_ok_type_changed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(result_ok(u32())))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(result_ok(str())))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", result_ok(SchemaType::u32()))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", result_ok(SchemaType::string()))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Type changed"));
@@ -711,10 +927,14 @@ mod tests {
 
     #[test]
     fn result_err_presence_changed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(result_ok(u32())))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(result(u32(), str())))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![("x", result_ok(SchemaType::u32()))],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![("x", result(SchemaType::u32(), SchemaType::string()))],
+        )];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("err payload presence"));
@@ -722,10 +942,8 @@ mod tests {
 
     #[test]
     fn primitive_type_changed() {
-        let old_schema = tuple_data_schema(vec![("x", cm_schema(u32()))]);
-        let new_schema = tuple_data_schema(vec![("x", cm_schema(str()))]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
+        let new = vec![make_agent_type("A", vec![("x", SchemaType::string())])];
         let w = validate_schema_evolution(&old, &new);
         assert_eq!(w.len(), 1);
         assert!(w[0].description.contains("Type changed"));
@@ -733,19 +951,23 @@ mod tests {
 
     #[test]
     fn multiple_warnings() {
-        let old_schema = tuple_data_schema(vec![
-            ("x", cm_schema(u32())),
-            (
-                "y",
-                cm_schema(record(vec![field("a", str()), field("b", bool())])),
-            ),
-        ]);
-        let new_schema = tuple_data_schema(vec![
-            ("x", cm_schema(str())),
-            ("y", cm_schema(record(vec![field("a", u8())]))),
-        ]);
-        let old = vec![make_agent_type("A", old_schema)];
-        let new = vec![make_agent_type("A", new_schema)];
+        let old = vec![make_agent_type(
+            "A",
+            vec![
+                ("x", SchemaType::u32()),
+                (
+                    "y",
+                    rec(vec![("a", SchemaType::string()), ("b", SchemaType::bool())]),
+                ),
+            ],
+        )];
+        let new = vec![make_agent_type(
+            "A",
+            vec![
+                ("x", SchemaType::string()),
+                ("y", rec(vec![("a", SchemaType::u8())])),
+            ],
+        )];
         let w = validate_schema_evolution(&old, &new);
         // x: type changed (u32 -> str)
         // y: record fields removed (2 -> 1)

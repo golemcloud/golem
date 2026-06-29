@@ -16,7 +16,7 @@ use golem_client::api::{RegistryServiceClient, RegistryServiceCreateAccountError
 use golem_client::model::AccountUpdate;
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountRevision};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use pretty_assertions::assert_eq;
+use pretty_assertions::{assert_eq, assert_matches};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -40,7 +40,7 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     // get account plan
     {
         let result = client.get_account_plan(&user.account_id.0).await;
-        assert!(result.is_ok())
+        assert_matches!(result, Ok(_))
     }
 
     // get account tokens

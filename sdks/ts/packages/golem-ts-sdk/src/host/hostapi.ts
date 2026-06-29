@@ -26,7 +26,7 @@ import {
   GetAgents as RawGetAgents,
   AgentAnyFilter,
 } from 'golem:api/host@1.5.0';
-import { ComponentId as RawComponentId } from 'golem:core/types@1.5.0';
+import { ComponentId as RawComponentId } from 'golem:core/types@2.0.0';
 import { ParsedAgentId } from '../agentId';
 import { awaitPollable } from '../internal/pollableUtils';
 import * as wasiEnv from 'wasi:cli/environment@0.2.3';
@@ -60,7 +60,6 @@ export { GetPromiseResult } from 'golem:api/host@1.5.0';
 
 // Re-export types (excluding those we shadow with rich classes or redefine)
 export type {
-  ValueAndType,
   PromiseId,
   OplogIndex,
   Pollable,

@@ -26,7 +26,7 @@ use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployP
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
     AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, ArchiveFilePath, PluginInstallation, PluginInstallationAction,
@@ -34,6 +34,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::diff::{self, AgentFileDiff, AgentTypeProvisionConfigDiff};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::schema::agent::AgentTypeSchema;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
@@ -393,11 +394,11 @@ impl<'a> ComponentStager<'a> {
         })
     }
 
-    pub fn agent_types(&self) -> &Vec<AgentType> {
+    pub fn agent_types(&self) -> &Vec<AgentTypeSchema> {
         &self.component_deploy_properties.agent_types
     }
 
-    pub fn agent_types_if_changed(&self) -> Option<&Vec<AgentType>> {
+    pub fn agent_types_if_changed(&self) -> Option<&Vec<AgentTypeSchema>> {
         if self.diff.agent_types_changed() {
             Some(self.agent_types())
         } else {

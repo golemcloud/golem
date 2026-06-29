@@ -22,7 +22,6 @@ use crate::services::deployment::{DeployValidationError, DeploymentError, Deploy
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
-use crate::services::environment_share::EnvironmentShareError;
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
@@ -523,6 +522,10 @@ impl From<ComponentError> for ApiError {
             ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
+            ComponentError::MissingAgentInitialPermissionCard(_)
+            | ComponentError::UndeclaredAgentTypeInInitialPermissionCard(_) => {
+                Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
+            }
             ComponentError::Unauthorized(inner) => inner.into(),
 
             ComponentError::LimitExceeded(inner) => inner.into(),
@@ -581,35 +584,6 @@ impl From<OAuth2Error> for ApiError {
     }
 }
 
-impl From<EnvironmentShareError> for ApiError {
-    fn from(value: EnvironmentShareError) -> Self {
-        let error: String = value.to_safe_string();
-        match value {
-            EnvironmentShareError::ConcurrentModification => {
-                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
-            }
-            EnvironmentShareError::ShareForAccountAlreadyExists => {
-                Self::conflict(api::error_code::ENVIRONMENT_SHARE_ALREADY_EXISTS, error)
-            }
-            EnvironmentShareError::EnvironmentShareNotFound(_) => {
-                Self::not_found(api::error_code::RESOURCE_NOT_FOUND, error)
-            }
-            EnvironmentShareError::EnvironmentShareForGranteeNotFound(_) => {
-                Self::not_found(api::error_code::RESOURCE_NOT_FOUND, error)
-            }
-            EnvironmentShareError::ParentEnvironmentNotFound(_) => {
-                Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
-            }
-            EnvironmentShareError::Unauthorized(inner) => inner.into(),
-            EnvironmentShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error,
-                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
-                cause: Some(value.into_anyhow()),
-            })),
-        }
-    }
-}
-
 impl From<PermissionShareError> for ApiError {
     fn from(value: PermissionShareError) -> Self {
         let error: String = value.to_safe_string();
@@ -632,6 +606,9 @@ impl From<PermissionShareError> for ApiError {
             PermissionShareError::InvalidGrant { .. }
             | PermissionShareError::InvalidRecipient { .. } => {
                 Self::bad_request(api::error_code::INVALID_PERMISSION_SHARE_GRANT, error)
+            }
+            PermissionShareError::GrantNotDelegable(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
             PermissionShareError::Unauthorized(inner) => inner.into(),
             PermissionShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {
