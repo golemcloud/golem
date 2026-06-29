@@ -12,43 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
-use std::io::{Cursor, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll};
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, run_read_access, wasi_filesystem_view,
 };
 use crate::workerctx::WorkerCtx;
-use bytes::BytesMut;
 use cap_std::fs::FileExt;
 use golem_common::model::oplog::host_functions::{
-    P3FilesystemTypesDescriptorAppendViaStream, P3FilesystemTypesDescriptorReadDirectory,
-    P3FilesystemTypesDescriptorReadViaStream, P3FilesystemTypesDescriptorStat,
-    P3FilesystemTypesDescriptorStatAt, P3FilesystemTypesDescriptorWriteViaStream,
+    P3FilesystemTypesDescriptorStat, P3FilesystemTypesDescriptorStatAt,
 };
-use golem_common::model::oplog::types::{
-    SerializableFileTimes, SerializableP3DirectoryEntry, SerializableP3FileSystemError,
-    SerializableP3FsErrorCode,
-};
+use golem_common::model::oplog::types::{SerializableFileTimes, SerializableP3FileSystemError};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestFileSystemPath,
-    HostRequestFileSystemPathAndOffset, HostResponseP3FileSystemByteStream,
-    HostResponseP3FileSystemDirectoryEntryStream, HostResponseP3FileSystemStat, OplogEntry,
+    DurableFunctionType, HostRequestFileSystemPath, HostResponseP3FileSystemStat, OplogEntry,
 };
-use tokio::task::JoinHandle;
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, FutureReader, Resource, Source, StreamConsumer,
-    StreamProducer, StreamReader, StreamResult,
+    Access, Accessor, AccessorTask, FutureReader, Resource, Source, StreamConsumer, StreamReader,
+    StreamResult,
 };
 use wasmtime_wasi::filesystem::{Descriptor, Dir, File, WasiFilesystem, WasiFilesystemView};
 use wasmtime_wasi::p3::bindings::filesystem::{preopens, types};
@@ -56,296 +45,7 @@ use wasmtime_wasi::p3::filesystem::{FilesystemError, FilesystemResult};
 use wasmtime_wasi::runtime::spawn_blocking;
 use wasmtime_wasi::{DirPerms, FilePerms};
 
-const FILESYSTEM_STREAM_BUFFER_CAPACITY: usize = 8192;
 static FILESYSTEM_APPEND_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-#[derive(Clone)]
-struct CapturedByteStream {
-    contents: Vec<u8>,
-    result: Result<(), types::ErrorCode>,
-}
-
-enum DeferredByteStreamMode {
-    Stream(CapturedByteStream),
-    Live,
-    Error(String),
-}
-
-struct FileReadStreamProducer {
-    file: File,
-    offset: types::Filesize,
-    contents: Vec<u8>,
-    result_tx: Option<tokio::sync::oneshot::Sender<CapturedByteStream>>,
-}
-
-impl FileReadStreamProducer {
-    fn new(
-        file: File,
-        offset: types::Filesize,
-        result_tx: tokio::sync::oneshot::Sender<CapturedByteStream>,
-    ) -> Self {
-        Self {
-            file,
-            offset,
-            contents: Vec::new(),
-            result_tx: Some(result_tx),
-        }
-    }
-
-    fn close(&mut self, result: Result<(), types::ErrorCode>) {
-        if let Some(result_tx) = self.result_tx.take() {
-            let _ = result_tx.send(CapturedByteStream {
-                contents: std::mem::take(&mut self.contents),
-                result,
-            });
-        }
-    }
-}
-
-impl<D> StreamProducer<D> for FileReadStreamProducer {
-    type Item = u8;
-    type Buffer = Cursor<BytesMut>;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, D>,
-        dst: Destination<'a, Self::Item, Self::Buffer>,
-        _finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        if dst.remaining(store.as_context_mut()) == Some(0) {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
-
-        let this = &mut *self;
-        if !this.file.perms.contains(FilePerms::READ) {
-            this.close(Err(types::ErrorCode::NotPermitted));
-            return Poll::Ready(Ok(StreamResult::Dropped));
-        }
-
-        let mut dst = dst.as_direct(store, FILESYSTEM_STREAM_BUFFER_CAPACITY);
-        let buffer = dst.remaining();
-        if buffer.is_empty() {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
-
-        match this.file.file.read_at(buffer, this.offset) {
-            Ok(0) => {
-                this.close(Ok(()));
-                Poll::Ready(Ok(StreamResult::Dropped))
-            }
-            Ok(read) => {
-                let Ok(read_u64) = u64::try_from(read) else {
-                    this.close(Err(types::ErrorCode::Overflow));
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                };
-                let Some(offset) = this.offset.checked_add(read_u64) else {
-                    this.close(Err(types::ErrorCode::Overflow));
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                };
-                this.contents.extend_from_slice(&buffer[..read]);
-                dst.mark_written(read);
-                this.offset = offset;
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            Err(error) => {
-                this.close(Err(error.into()));
-                Poll::Ready(Ok(StreamResult::Dropped))
-            }
-        }
-    }
-}
-
-impl Drop for FileReadStreamProducer {
-    fn drop(&mut self) {
-        self.close(Ok(()));
-    }
-}
-
-struct ByteStreamProducer {
-    contents: Cursor<BytesMut>,
-    result: Result<(), types::ErrorCode>,
-    result_tx: Option<tokio::sync::oneshot::Sender<CapturedByteStream>>,
-}
-
-impl ByteStreamProducer {
-    fn new(
-        contents: Vec<u8>,
-        result: Result<(), types::ErrorCode>,
-        result_tx: tokio::sync::oneshot::Sender<CapturedByteStream>,
-    ) -> Self {
-        Self {
-            contents: Cursor::new(BytesMut::from(contents.as_slice())),
-            result,
-            result_tx: Some(result_tx),
-        }
-    }
-
-    fn close(&mut self) {
-        if let Some(result_tx) = self.result_tx.take() {
-            let bytes = self.contents.get_ref();
-            let position = self.contents.position() as usize;
-            let result = if position >= bytes.len() {
-                self.result.clone()
-            } else {
-                Ok(())
-            };
-            let _ = result_tx.send(CapturedByteStream {
-                contents: bytes[..position.min(bytes.len())].to_vec(),
-                result,
-            });
-        }
-    }
-}
-
-impl<D> StreamProducer<D> for ByteStreamProducer {
-    type Item = u8;
-    type Buffer = Cursor<BytesMut>;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, D>,
-        dst: Destination<'a, Self::Item, Self::Buffer>,
-        _finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        if dst.remaining(store.as_context_mut()) == Some(0) {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
-
-        let bytes = self.contents.get_ref();
-        let position = self.contents.position() as usize;
-        if position >= bytes.len() {
-            self.close();
-            return Poll::Ready(Ok(StreamResult::Dropped));
-        }
-
-        let mut dst = dst.as_direct(store, FILESYSTEM_STREAM_BUFFER_CAPACITY);
-        let remaining = &bytes[position..];
-        let n = remaining.len().min(dst.remaining().len());
-        dst.remaining()[..n].copy_from_slice(&remaining[..n]);
-        dst.mark_written(n);
-        self.contents.set_position((position + n) as u64);
-        Poll::Ready(Ok(StreamResult::Completed))
-    }
-}
-
-impl Drop for ByteStreamProducer {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
-
-enum DeferredByteStreamProducerState {
-    Awaiting {
-        rx: tokio::sync::oneshot::Receiver<DeferredByteStreamMode>,
-        file: Option<File>,
-        offset: types::Filesize,
-        result_tx: Option<tokio::sync::oneshot::Sender<CapturedByteStream>>,
-    },
-    Streaming(ByteStreamProducer),
-    Live(FileReadStreamProducer),
-    Done,
-}
-
-struct DeferredByteStreamProducer {
-    state: DeferredByteStreamProducerState,
-}
-
-impl DeferredByteStreamProducer {
-    fn new(
-        file: File,
-        offset: types::Filesize,
-        rx: tokio::sync::oneshot::Receiver<DeferredByteStreamMode>,
-        result_tx: tokio::sync::oneshot::Sender<CapturedByteStream>,
-    ) -> Self {
-        Self {
-            state: DeferredByteStreamProducerState::Awaiting {
-                rx,
-                file: Some(file),
-                offset,
-                result_tx: Some(result_tx),
-            },
-        }
-    }
-}
-
-impl<D> StreamProducer<D> for DeferredByteStreamProducer {
-    type Item = u8;
-    type Buffer = Cursor<BytesMut>;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        store: StoreContextMut<'a, D>,
-        dst: Destination<'a, Self::Item, Self::Buffer>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        loop {
-            match &mut self.state {
-                DeferredByteStreamProducerState::Awaiting {
-                    rx,
-                    file,
-                    offset,
-                    result_tx,
-                } => match Pin::new(rx).poll(cx) {
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Ok(DeferredByteStreamMode::Stream(captured))) => {
-                        let result_tx = result_tx
-                            .take()
-                            .expect("filesystem result sender available for replay");
-                        self.state = DeferredByteStreamProducerState::Streaming(
-                            ByteStreamProducer::new(captured.contents, captured.result, result_tx),
-                        );
-                    }
-                    Poll::Ready(Ok(DeferredByteStreamMode::Live)) => {
-                        let file = file
-                            .take()
-                            .expect("live filesystem file available for incomplete replay");
-                        let result_tx = result_tx
-                            .take()
-                            .expect("filesystem result sender available for incomplete replay");
-                        self.state = DeferredByteStreamProducerState::Live(
-                            FileReadStreamProducer::new(file, *offset, result_tx),
-                        );
-                    }
-                    Poll::Ready(Ok(DeferredByteStreamMode::Error(error))) => {
-                        self.state = DeferredByteStreamProducerState::Done;
-                        return Poll::Ready(Err(wasmtime::Error::msg(error)));
-                    }
-                    Poll::Ready(Err(_)) => {
-                        self.state = DeferredByteStreamProducerState::Done;
-                        return Poll::Ready(Err(wasmtime::Error::msg(
-                            "filesystem replay task dropped",
-                        )));
-                    }
-                },
-                DeferredByteStreamProducerState::Streaming(producer) => {
-                    return Pin::new(producer).poll_produce(cx, store, dst, finish);
-                }
-                DeferredByteStreamProducerState::Live(producer) => {
-                    return Pin::new(producer).poll_produce(cx, store, dst, finish);
-                }
-                DeferredByteStreamProducerState::Done => {
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                }
-            }
-        }
-    }
-}
-
-impl Drop for DeferredByteStreamProducer {
-    fn drop(&mut self) {
-        if let DeferredByteStreamProducerState::Awaiting { result_tx, .. } = &mut self.state
-            && let Some(result_tx) = result_tx.take()
-        {
-            let _ = result_tx.send(CapturedByteStream {
-                contents: Vec::new(),
-                result: Ok(()),
-            });
-        }
-    }
-}
 
 struct FilesystemWriteChunk {
     contents: Vec<u8>,
@@ -381,45 +81,51 @@ impl<D> StreamConsumer<D> for FilesystemWriteConsumer {
     ) -> Poll<wasmtime::Result<StreamResult>> {
         let mut src = src.as_direct(store);
 
-        if let Some((len, result_rx)) = &mut self.pending_chunk {
-            match Pin::new(result_rx).poll(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(Ok(()))) => {
-                    let len = *len;
-                    self.pending_chunk = None;
-                    src.mark_read(len);
-                    return Poll::Ready(Ok(StreamResult::Completed));
-                }
-                Poll::Ready(Ok(Err(_))) | Poll::Ready(Err(_)) => {
-                    let len = *len;
-                    self.pending_chunk = None;
-                    self.chunks_tx.take();
-                    src.mark_read(len);
-                    return Poll::Ready(Ok(StreamResult::Dropped));
+        loop {
+            // Wait for the in-flight chunk to be persisted before reading more.
+            // The receiver must be polled here (not just stored) so its waker is
+            // registered; otherwise the write task's completion notification
+            // could be missed, hanging the stream.
+            if let Some((len, result_rx)) = &mut self.pending_chunk {
+                match Pin::new(result_rx).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Ok(Ok(()))) => {
+                        let len = *len;
+                        self.pending_chunk = None;
+                        src.mark_read(len);
+                        return Poll::Ready(Ok(StreamResult::Completed));
+                    }
+                    Poll::Ready(Ok(Err(_))) | Poll::Ready(Err(_)) => {
+                        let len = *len;
+                        self.pending_chunk = None;
+                        self.chunks_tx.take();
+                        src.mark_read(len);
+                        return Poll::Ready(Ok(StreamResult::Dropped));
+                    }
                 }
             }
+
+            let bytes = src.remaining();
+            if bytes.is_empty() {
+                return Poll::Ready(Ok(StreamResult::Completed));
+            }
+
+            let len = bytes.len();
+            let Some(chunks_tx) = &self.chunks_tx else {
+                src.mark_read(len);
+                return Poll::Ready(Ok(StreamResult::Dropped));
+            };
+
+            let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+            chunks_tx
+                .send(FilesystemWriteChunk {
+                    contents: bytes.to_vec(),
+                    result_tx,
+                })
+                .map_err(|_| wasmtime::Error::msg("filesystem write task dropped"))?;
+            self.pending_chunk = Some((len, result_rx));
+            // Loop back to poll the freshly created receiver and register its waker.
         }
-
-        let bytes = src.remaining();
-        if bytes.is_empty() {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
-
-        let len = bytes.len();
-        let Some(chunks_tx) = &self.chunks_tx else {
-            src.mark_read(len);
-            return Poll::Ready(Ok(StreamResult::Dropped));
-        };
-
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        chunks_tx
-            .send(FilesystemWriteChunk {
-                contents: bytes.to_vec(),
-                result_tx,
-            })
-            .map_err(|_| wasmtime::Error::msg("filesystem write task dropped"))?;
-        self.pending_chunk = Some((len, result_rx));
-        Poll::Pending
     }
 }
 
@@ -429,351 +135,30 @@ impl Drop for FilesystemWriteConsumer {
     }
 }
 
-struct DirectoryEntryStreamProducer {
-    entries: VecDeque<types::DirectoryEntry>,
-    consumed: Vec<types::DirectoryEntry>,
-    result: Result<(), types::ErrorCode>,
-    result_tx: Option<tokio::sync::oneshot::Sender<CapturedDirectoryEntryStream>>,
-}
-
-struct CapturedDirectoryEntryStream {
-    entries: Vec<types::DirectoryEntry>,
-    result: Result<(), types::ErrorCode>,
-}
-
-enum DeferredDirectoryEntryStreamMode {
-    Stream(CapturedDirectoryEntryStream),
-    Live,
-    Error(String),
-}
-
-struct RecordingDirectoryEntryStreamProducer {
-    rx: tokio::sync::mpsc::Receiver<types::DirectoryEntry>,
-    task: JoinHandle<Result<(), types::ErrorCode>>,
-    consumed: Vec<types::DirectoryEntry>,
-    result_tx: Option<tokio::sync::oneshot::Sender<CapturedDirectoryEntryStream>>,
-}
-
-impl RecordingDirectoryEntryStreamProducer {
-    fn new(
-        dir: Dir,
-        result_tx: tokio::sync::oneshot::Sender<CapturedDirectoryEntryStream>,
-    ) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let dir = Arc::clone(&dir.dir);
-        Self {
-            rx,
-            task: tokio::task::spawn_blocking(move || {
-                let entries = dir.entries()?;
-                let mut sorted_entries = Vec::new();
-                for entry in entries {
-                    let Some(entry) = map_directory_entry(entry)? else {
-                        continue;
-                    };
-                    sorted_entries.push(entry);
-                }
-                sorted_entries.sort_by_key(|entry| entry.name.clone());
-                for entry in sorted_entries {
-                    if tx.blocking_send(entry).is_err() {
-                        break;
-                    }
-                }
-                Ok(())
-            }),
-            consumed: Vec::new(),
-            result_tx: Some(result_tx),
-        }
-    }
-
-    fn close(&mut self, result: Result<(), types::ErrorCode>) {
-        self.rx.close();
-        self.task.abort();
-        if let Some(result_tx) = self.result_tx.take() {
-            let _ = result_tx.send(CapturedDirectoryEntryStream {
-                entries: std::mem::take(&mut self.consumed),
-                result,
-            });
-        }
-    }
-}
-
-impl<D> StreamProducer<D> for RecordingDirectoryEntryStreamProducer {
-    type Item = types::DirectoryEntry;
-    type Buffer = Option<types::DirectoryEntry>;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, D>,
-        mut dst: Destination<'a, Self::Item, Self::Buffer>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        if dst.remaining(&mut store) == Some(0) {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
-
-        match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(entry)) => {
-                self.consumed.push(entry.clone());
-                dst.set_buffer(Some(entry));
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            Poll::Ready(None) => {
-                let result = match ready!(Pin::new(&mut self.task).poll(cx)) {
-                    Ok(result) => result,
-                    Err(error) if error.is_cancelled() => {
-                        return Poll::Ready(Ok(StreamResult::Cancelled));
-                    }
-                    Err(error) => return Poll::Ready(Err(wasmtime::Error::msg(error.to_string()))),
-                };
-                self.close(result);
-                Poll::Ready(Ok(StreamResult::Dropped))
-            }
-            Poll::Pending if finish => Poll::Ready(Ok(StreamResult::Cancelled)),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl Drop for RecordingDirectoryEntryStreamProducer {
-    fn drop(&mut self) {
-        if self.result_tx.is_some() {
-            self.close(Ok(()));
-        }
-    }
-}
-
-impl DirectoryEntryStreamProducer {
-    fn new(
-        entries: Vec<types::DirectoryEntry>,
-        result: Result<(), types::ErrorCode>,
-        result_tx: tokio::sync::oneshot::Sender<CapturedDirectoryEntryStream>,
-    ) -> Self {
-        Self {
-            entries: entries.into(),
-            consumed: Vec::new(),
-            result,
-            result_tx: Some(result_tx),
-        }
-    }
-
-    fn close(&mut self) {
-        if let Some(result_tx) = self.result_tx.take() {
-            let result = if self.entries.is_empty() {
-                self.result.clone()
-            } else {
-                Ok(())
-            };
-            let _ = result_tx.send(CapturedDirectoryEntryStream {
-                entries: std::mem::take(&mut self.consumed),
-                result,
-            });
-        }
-    }
-}
-
-impl<D> StreamProducer<D> for DirectoryEntryStreamProducer {
-    type Item = types::DirectoryEntry;
-    type Buffer = Option<types::DirectoryEntry>;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, D>,
-        mut dst: Destination<'a, Self::Item, Self::Buffer>,
-        _finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        if dst.remaining(&mut store) == Some(0) {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
-
-        match self.entries.pop_front() {
-            Some(entry) => {
-                self.consumed.push(entry.clone());
-                dst.set_buffer(Some(entry));
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            None => {
-                self.close();
-                Poll::Ready(Ok(StreamResult::Dropped))
-            }
-        }
-    }
-}
-
-impl Drop for DirectoryEntryStreamProducer {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
-
-enum DeferredDirectoryEntryStreamProducerState {
-    Awaiting {
-        rx: tokio::sync::oneshot::Receiver<DeferredDirectoryEntryStreamMode>,
-        dir: Option<Dir>,
-        result_tx: Option<tokio::sync::oneshot::Sender<CapturedDirectoryEntryStream>>,
-    },
-    Streaming(DirectoryEntryStreamProducer),
-    Live(RecordingDirectoryEntryStreamProducer),
-    Done,
-}
-
-struct DeferredDirectoryEntryStreamProducer {
-    state: DeferredDirectoryEntryStreamProducerState,
-}
-
-impl DeferredDirectoryEntryStreamProducer {
-    fn new(
-        dir: Dir,
-        rx: tokio::sync::oneshot::Receiver<DeferredDirectoryEntryStreamMode>,
-        result_tx: tokio::sync::oneshot::Sender<CapturedDirectoryEntryStream>,
-    ) -> Self {
-        Self {
-            state: DeferredDirectoryEntryStreamProducerState::Awaiting {
-                rx,
-                dir: Some(dir),
-                result_tx: Some(result_tx),
-            },
-        }
-    }
-}
-
-impl<D> StreamProducer<D> for DeferredDirectoryEntryStreamProducer {
-    type Item = types::DirectoryEntry;
-    type Buffer = Option<types::DirectoryEntry>;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        store: StoreContextMut<'a, D>,
-        dst: Destination<'a, Self::Item, Self::Buffer>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        loop {
-            match &mut self.state {
-                DeferredDirectoryEntryStreamProducerState::Awaiting { rx, dir, result_tx } => {
-                    match Pin::new(rx).poll(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(Ok(DeferredDirectoryEntryStreamMode::Stream(captured))) => {
-                            let result_tx = result_tx
-                                .take()
-                                .expect("filesystem directory result sender available for replay");
-                            self.state = DeferredDirectoryEntryStreamProducerState::Streaming(
-                                DirectoryEntryStreamProducer::new(
-                                    captured.entries,
-                                    captured.result,
-                                    result_tx,
-                                ),
-                            );
-                        }
-                        Poll::Ready(Ok(DeferredDirectoryEntryStreamMode::Live)) => {
-                            let dir = dir.take().expect(
-                                "live filesystem directory available for incomplete replay",
-                            );
-                            let result_tx = result_tx
-                                .take()
-                                .expect("filesystem directory result sender available for incomplete replay");
-                            self.state = if dir.perms.contains(DirPerms::READ) {
-                                DeferredDirectoryEntryStreamProducerState::Live(
-                                    RecordingDirectoryEntryStreamProducer::new(dir, result_tx),
-                                )
-                            } else {
-                                DeferredDirectoryEntryStreamProducerState::Streaming(
-                                    DirectoryEntryStreamProducer::new(
-                                        Vec::new(),
-                                        Err(types::ErrorCode::NotPermitted),
-                                        result_tx,
-                                    ),
-                                )
-                            };
-                        }
-                        Poll::Ready(Ok(DeferredDirectoryEntryStreamMode::Error(error))) => {
-                            self.state = DeferredDirectoryEntryStreamProducerState::Done;
-                            return Poll::Ready(Err(wasmtime::Error::msg(error)));
-                        }
-                        Poll::Ready(Err(_)) => {
-                            self.state = DeferredDirectoryEntryStreamProducerState::Done;
-                            return Poll::Ready(Err(wasmtime::Error::msg(
-                                "filesystem directory replay task dropped",
-                            )));
-                        }
-                    }
-                }
-                DeferredDirectoryEntryStreamProducerState::Streaming(producer) => {
-                    return Pin::new(producer).poll_produce(cx, store, dst, finish);
-                }
-                DeferredDirectoryEntryStreamProducerState::Live(producer) => {
-                    return Pin::new(producer).poll_produce(cx, store, dst, finish);
-                }
-                DeferredDirectoryEntryStreamProducerState::Done => {
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                }
-            }
-        }
-    }
-}
-
-impl Drop for DeferredDirectoryEntryStreamProducer {
-    fn drop(&mut self) {
-        if let DeferredDirectoryEntryStreamProducerState::Awaiting { result_tx, .. } =
-            &mut self.state
-            && let Some(result_tx) = result_tx.take()
-        {
-            let _ = result_tx.send(CapturedDirectoryEntryStream {
-                entries: Vec::new(),
-                result: Ok(()),
-            });
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 enum FilesystemWriteMode {
     At(types::Filesize),
     Append,
 }
 
-struct FilesystemWriteTask<Ctx, Pair>
-where
-    Pair: HostPayloadPair,
-{
+struct FilesystemWriteTask<Ctx> {
     file: File,
     mode: FilesystemWriteMode,
-    call: CallHandle<Pair, Cancellable>,
     chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    _phantom: PhantomData<fn() -> (Ctx, Pair)>,
-}
-
-struct FilesystemByteReadTask<Ctx> {
-    call: CallHandle<P3FilesystemTypesDescriptorReadViaStream, Cancellable>,
-    stream_rx: tokio::sync::oneshot::Receiver<CapturedByteStream>,
-    result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
-struct FilesystemDirectoryReadTask<Ctx> {
-    call: CallHandle<P3FilesystemTypesDescriptorReadDirectory, Cancellable>,
-    stream_rx: tokio::sync::oneshot::Receiver<CapturedDirectoryEntryStream>,
-    result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    _phantom: PhantomData<fn() -> Ctx>,
-}
-
-impl<Ctx, Pair> FilesystemWriteTask<Ctx, Pair>
-where
-    Pair: HostPayloadPair,
-{
+impl<Ctx> FilesystemWriteTask<Ctx> {
     fn new(
         file: File,
         mode: FilesystemWriteMode,
-        call: CallHandle<Pair, Cancellable>,
         chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
     ) -> Self {
         Self {
             file,
             mode,
-            call,
             chunks_rx,
             result_tx,
             _phantom: PhantomData,
@@ -781,289 +166,26 @@ where
     }
 }
 
-impl<Ctx> FilesystemByteReadTask<Ctx> {
-    fn new(
-        call: CallHandle<P3FilesystemTypesDescriptorReadViaStream, Cancellable>,
-        stream_rx: tokio::sync::oneshot::Receiver<CapturedByteStream>,
-        result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    ) -> Self {
-        Self {
-            call,
-            stream_rx,
-            result_tx,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<Ctx> FilesystemDirectoryReadTask<Ctx> {
-    fn new(
-        call: CallHandle<P3FilesystemTypesDescriptorReadDirectory, Cancellable>,
-        stream_rx: tokio::sync::oneshot::Receiver<CapturedDirectoryEntryStream>,
-        result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    ) -> Self {
-        Self {
-            call,
-            stream_rx,
-            result_tx,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for FilesystemByteReadTask<Ctx>
+impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for FilesystemWriteTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: 'static,
-{
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        let result = complete_filesystem_read::<Ctx, U>(
-            accessor,
-            self.call,
-            self.stream_rx,
-            &self.result_tx,
-        )
-        .await;
-        if !self.result_tx.is_closed() {
-            let _ = self.result_tx.send(result);
-        }
-        Ok(())
-    }
-}
-
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for FilesystemDirectoryReadTask<Ctx>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        let result = complete_filesystem_directory_read::<Ctx, U>(
-            accessor,
-            self.call,
-            self.stream_rx,
-            &self.result_tx,
-        )
-        .await;
-        if !self.result_tx.is_closed() {
-            let _ = self.result_tx.send(result);
-        }
-        Ok(())
-    }
-}
-
-impl<Ctx, Pair, U> AccessorTask<U, DurableP3<Ctx>> for FilesystemWriteTask<Ctx, Pair>
-where
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair<Resp = HostResponseP3FileSystemByteStream> + Send + 'static,
-    Pair::Req: Send + 'static,
     U: 'static,
 {
     async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let FilesystemWriteTask {
             file,
             mode,
-            call,
-            chunks_rx,
-            mut result_tx,
+            mut chunks_rx,
+            result_tx,
             _phantom,
         } = self;
-
-        match complete_filesystem_write::<Ctx, U, Pair>(
-            accessor,
-            file,
-            mode,
-            call,
-            chunks_rx,
-            &mut result_tx,
-        )
-        .await
-        {
-            Ok(result) => {
-                if !result_tx.is_closed() {
-                    let _ = result_tx.send(Ok(result));
-                }
-                Ok(())
-            }
-            Err(error) => {
-                if !result_tx.is_closed() {
-                    let _ = result_tx.send(Err(error));
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-struct FilesystemByteReadReplayTask<Ctx> {
-    call: CallHandle<P3FilesystemTypesDescriptorReadViaStream, Cancellable>,
-    stream_mode_tx: tokio::sync::oneshot::Sender<DeferredByteStreamMode>,
-    stream_rx: tokio::sync::oneshot::Receiver<CapturedByteStream>,
-    result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    _phantom: PhantomData<fn() -> Ctx>,
-}
-
-impl<Ctx> FilesystemByteReadReplayTask<Ctx> {
-    fn new(
-        call: CallHandle<P3FilesystemTypesDescriptorReadViaStream, Cancellable>,
-        stream_mode_tx: tokio::sync::oneshot::Sender<DeferredByteStreamMode>,
-        stream_rx: tokio::sync::oneshot::Receiver<CapturedByteStream>,
-        result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    ) -> Self {
-        Self {
-            call,
-            stream_mode_tx,
-            stream_rx,
-            result_tx,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for FilesystemByteReadReplayTask<Ctx>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        match self
-            .call
-            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-            .await
-            .map_err(wasmtime::Error::from)
-        {
-            Ok(CallReplayOutcome::Replayed(response)) => {
-                let captured = CapturedByteStream {
-                    contents: response.contents,
-                    result: deserialize_stream_result(response.result),
-                };
-                let _ = self
-                    .stream_mode_tx
-                    .send(DeferredByteStreamMode::Stream(captured));
-                let result = match self.stream_rx.await {
-                    Ok(result) => Ok(result.result),
-                    Err(_) => Err(wasmtime::Error::msg("filesystem replay stream dropped")),
-                };
-                let _ = self.result_tx.send(result);
-            }
-            Ok(CallReplayOutcome::Incomplete(call)) => {
-                let _ = self.stream_mode_tx.send(DeferredByteStreamMode::Live);
-                let result = complete_filesystem_read::<Ctx, U>(
-                    accessor,
-                    call,
-                    self.stream_rx,
-                    &self.result_tx,
-                )
-                .await;
-                if !self.result_tx.is_closed() {
-                    let _ = self.result_tx.send(result);
-                }
-            }
-            Err(error) => {
-                let error = error.to_string();
-                let _ = self
-                    .stream_mode_tx
-                    .send(DeferredByteStreamMode::Error(error.clone()));
-                let _ = self.result_tx.send(Err(wasmtime::Error::msg(error)));
-            }
+        let result =
+            run_streaming_filesystem_write::<Ctx, U>(accessor, &file, mode, &mut chunks_rx).await;
+        if !result_tx.is_closed() {
+            let _ = result_tx.send(result);
         }
         Ok(())
     }
-}
-
-struct FilesystemDirectoryReadReplayTask<Ctx> {
-    call: CallHandle<P3FilesystemTypesDescriptorReadDirectory, Cancellable>,
-    stream_mode_tx: tokio::sync::oneshot::Sender<DeferredDirectoryEntryStreamMode>,
-    stream_rx: tokio::sync::oneshot::Receiver<CapturedDirectoryEntryStream>,
-    result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    _phantom: PhantomData<fn() -> Ctx>,
-}
-
-impl<Ctx> FilesystemDirectoryReadReplayTask<Ctx> {
-    fn new(
-        call: CallHandle<P3FilesystemTypesDescriptorReadDirectory, Cancellable>,
-        stream_mode_tx: tokio::sync::oneshot::Sender<DeferredDirectoryEntryStreamMode>,
-        stream_rx: tokio::sync::oneshot::Receiver<CapturedDirectoryEntryStream>,
-        result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-    ) -> Self {
-        Self {
-            call,
-            stream_mode_tx,
-            stream_rx,
-            result_tx,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for FilesystemDirectoryReadReplayTask<Ctx>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        match self
-            .call
-            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-            .await
-            .map_err(wasmtime::Error::from)
-        {
-            Ok(CallReplayOutcome::Replayed(response)) => {
-                let captured = CapturedDirectoryEntryStream {
-                    entries: response.entries.into_iter().map(Into::into).collect(),
-                    result: deserialize_stream_result(response.result),
-                };
-                let _ = self
-                    .stream_mode_tx
-                    .send(DeferredDirectoryEntryStreamMode::Stream(captured));
-                let result = match self.stream_rx.await {
-                    Ok(result) => Ok(result.result),
-                    Err(_) => Err(wasmtime::Error::msg(
-                        "filesystem directory replay stream dropped",
-                    )),
-                };
-                let _ = self.result_tx.send(result);
-            }
-            Ok(CallReplayOutcome::Incomplete(call)) => {
-                let _ = self
-                    .stream_mode_tx
-                    .send(DeferredDirectoryEntryStreamMode::Live);
-                let result = complete_filesystem_directory_read::<Ctx, U>(
-                    accessor,
-                    call,
-                    self.stream_rx,
-                    &self.result_tx,
-                )
-                .await;
-                if !self.result_tx.is_closed() {
-                    let _ = self.result_tx.send(result);
-                }
-            }
-            Err(error) => {
-                let error = error.to_string();
-                let _ = self
-                    .stream_mode_tx
-                    .send(DeferredDirectoryEntryStreamMode::Error(error.clone()));
-                let _ = self.result_tx.send(Err(wasmtime::Error::msg(error)));
-            }
-        }
-        Ok(())
-    }
-}
-
-fn descriptor_path_from_access<Ctx: WorkerCtx, U>(
-    store: &mut Access<'_, U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-) -> wasmtime::Result<PathBuf>
-where
-    U: 'static,
-{
-    let mut filesystem =
-        Access::<U, WasiFilesystem>::new(store.as_context_mut(), wasi_filesystem_view::<Ctx, U>);
-    let descriptor = filesystem.get().table.get(fd)?;
-    Ok(match descriptor {
-        Descriptor::File(file) => file.path.clone(),
-        Descriptor::Dir(dir) => dir.path.clone(),
-    })
 }
 
 fn descriptor_path_from_accessor<Ctx: WorkerCtx, U>(
@@ -1173,20 +295,24 @@ fn map_directory_entry(
                 name,
             }))
         }
-        Err(error) => Err(error.into()),
+        Err(error) => {
+            // On Windows, filter out files like `C:\DumpStack.log.tmp` which we
+            // can't get full metadata for, matching the upstream wasmtime-wasi
+            // behavior instead of failing the entire directory listing.
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::Foundation::{
+                    ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION,
+                };
+                if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
+                    || error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
+                {
+                    return Ok(None);
+                }
+            }
+            Err(error.into())
+        }
     }
-}
-
-fn serialize_stream_result(
-    result: Result<(), types::ErrorCode>,
-) -> Result<(), SerializableP3FsErrorCode> {
-    result.map_err(Into::into)
-}
-
-fn deserialize_stream_result(
-    result: Result<(), SerializableP3FsErrorCode>,
-) -> Result<(), types::ErrorCode> {
-    result.map_err(Into::into)
 }
 
 fn serialize_stat_error(error: &FilesystemError) -> SerializableP3FileSystemError {
@@ -1263,6 +389,53 @@ where
     }
 }
 
+/// Returns the size of the file referenced by `fd`, or `0` if it cannot be
+/// stat-ed. Uses the underlying (non-durable) host stat so it produces no oplog
+/// side effects; it is only used to compute storage-quota deltas, mirroring the
+/// WASI P2 implementation.
+async fn descriptor_size<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    fd: Resource<Descriptor>,
+) -> u64
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    let filesystem = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+    match <WasiFilesystem as types::HostDescriptorWithStore>::stat(&filesystem, fd).await {
+        Ok(stat) => stat.size,
+        Err(_) => 0,
+    }
+}
+
+/// Returns the size of the file at `path` relative to `fd`, or `0` if it cannot
+/// be stat-ed. Uses the underlying (non-durable) host stat so it produces no
+/// oplog side effects; it is only used to compute storage-quota deltas,
+/// mirroring the WASI P2 implementation.
+async fn descriptor_size_at<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    fd: Resource<Descriptor>,
+    path_flags: types::PathFlags,
+    path: String,
+) -> u64
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    let filesystem = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+    match <WasiFilesystem as types::HostDescriptorWithStore>::stat_at(
+        &filesystem,
+        fd,
+        path_flags,
+        path,
+    )
+    .await
+    {
+        Ok(stat) => stat.size,
+        Err(_) => 0,
+    }
+}
+
 async fn apply_stat_response(
     stat: Result<types::DescriptorStat, SerializableP3FileSystemError>,
     response: HostResponseP3FileSystemStat,
@@ -1276,234 +449,6 @@ async fn apply_stat_response(
         }
         Err(error) => Err(deserialize_stat_error(error)),
     }
-}
-
-async fn complete_directory_response<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<P3FilesystemTypesDescriptorReadDirectory, Cancellable>,
-    entries: Vec<types::DirectoryEntry>,
-    result: Result<(), types::ErrorCode>,
-) -> wasmtime::Result<HostResponseP3FileSystemDirectoryEntryStream>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let response = HostResponseP3FileSystemDirectoryEntryStream {
-        entries: entries
-            .into_iter()
-            .map(SerializableP3DirectoryEntry::from)
-            .collect(),
-        result: serialize_stream_result(result),
-    };
-    call.complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
-        .await
-        .map_err(wasmtime::Error::from)
-}
-
-async fn complete_filesystem_read<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<P3FilesystemTypesDescriptorReadViaStream, Cancellable>,
-    stream_rx: tokio::sync::oneshot::Receiver<CapturedByteStream>,
-    result_tx: &tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let captured = stream_rx.await.unwrap_or_else(|_| CapturedByteStream {
-        contents: Vec::new(),
-        result: Err(types::ErrorCode::Io),
-    });
-    let response = HostResponseP3FileSystemByteStream {
-        contents: captured.contents,
-        result: serialize_stream_result(captured.result),
-    };
-
-    if result_tx.is_closed() {
-        let result = deserialize_stream_result(response.result.clone());
-        call.cancel_access(accessor, durable_worker_ctx::<Ctx, U>, Some(response))
-            .await
-            .map_err(wasmtime::Error::from)?;
-        return Ok(result);
-    }
-
-    let response = call
-        .complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
-        .await
-        .map_err(wasmtime::Error::from)?;
-
-    Ok(deserialize_stream_result(response.result))
-}
-
-async fn complete_filesystem_directory_read<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<P3FilesystemTypesDescriptorReadDirectory, Cancellable>,
-    stream_rx: tokio::sync::oneshot::Receiver<CapturedDirectoryEntryStream>,
-    result_tx: &tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let captured = stream_rx
-        .await
-        .unwrap_or_else(|_| CapturedDirectoryEntryStream {
-            entries: Vec::new(),
-            result: Err(types::ErrorCode::Io),
-        });
-    let response = HostResponseP3FileSystemDirectoryEntryStream {
-        entries: captured
-            .entries
-            .into_iter()
-            .map(SerializableP3DirectoryEntry::from)
-            .collect(),
-        result: serialize_stream_result(captured.result),
-    };
-
-    if result_tx.is_closed() {
-        let result = deserialize_stream_result(response.result.clone());
-        call.cancel_access(accessor, durable_worker_ctx::<Ctx, U>, Some(response))
-            .await
-            .map_err(wasmtime::Error::from)?;
-        return Ok(result);
-    }
-
-    let response = call
-        .complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
-        .await
-        .map_err(wasmtime::Error::from)?;
-
-    Ok(deserialize_stream_result(response.result))
-}
-
-async fn complete_immediate_write_response<Ctx, U, Pair>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<Pair, Cancellable>,
-    result: Result<(), types::ErrorCode>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
-where
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair<Resp = HostResponseP3FileSystemByteStream>,
-    U: 'static,
-{
-    if !call.is_live() {
-        return match call
-            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-            .await
-            .map_err(wasmtime::Error::from)?
-        {
-            CallReplayOutcome::Replayed(response) => Ok(deserialize_stream_result(response.result)),
-            CallReplayOutcome::Incomplete(call) => {
-                let response = call
-                    .complete_access(
-                        accessor,
-                        durable_worker_ctx::<Ctx, U>,
-                        HostResponseP3FileSystemByteStream {
-                            contents: Vec::new(),
-                            result: serialize_stream_result(result),
-                        },
-                    )
-                    .await
-                    .map_err(wasmtime::Error::from)?;
-                Ok(deserialize_stream_result(response.result))
-            }
-        };
-    }
-
-    let response = call
-        .complete_access(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            HostResponseP3FileSystemByteStream {
-                contents: Vec::new(),
-                result: serialize_stream_result(result),
-            },
-        )
-        .await
-        .map_err(wasmtime::Error::from)?;
-    Ok(deserialize_stream_result(response.result))
-}
-
-async fn complete_immediate_byte_response<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<P3FilesystemTypesDescriptorReadViaStream, Cancellable>,
-    contents: Vec<u8>,
-    result: Result<(), types::ErrorCode>,
-) -> wasmtime::Result<HostResponseP3FileSystemByteStream>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let response = HostResponseP3FileSystemByteStream {
-        contents,
-        result: serialize_stream_result(result),
-    };
-    call.complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
-        .await
-        .map_err(wasmtime::Error::from)
-}
-
-async fn complete_immediate_directory_response<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<P3FilesystemTypesDescriptorReadDirectory, Cancellable>,
-    result: Result<(), types::ErrorCode>,
-) -> wasmtime::Result<HostResponseP3FileSystemDirectoryEntryStream>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    if !call.is_live() {
-        return match call
-            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-            .await
-            .map_err(wasmtime::Error::from)?
-        {
-            CallReplayOutcome::Replayed(response) => Ok(response),
-            CallReplayOutcome::Incomplete(call) => {
-                complete_directory_response::<Ctx, U>(accessor, call, Vec::new(), result).await
-            }
-        };
-    }
-
-    complete_directory_response::<Ctx, U>(accessor, call, Vec::new(), result).await
-}
-
-async fn start_call<Ctx, U, Pair>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    request: Pair::Req,
-) -> wasmtime::Result<CallHandle<Pair, Cancellable>>
-where
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair,
-    U: Send + 'static,
-{
-    CallHandle::<Pair, Cancellable>::start_access(
-        accessor,
-        durable_worker_ctx::<Ctx, U>,
-        request,
-        DurableFunctionType::ReadLocal,
-    )
-    .await
-    .map_err(wasmtime::Error::from)
-}
-
-async fn start_cancellable_call<Ctx, U, Pair>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    request: Pair::Req,
-) -> wasmtime::Result<CallHandle<Pair, Cancellable>>
-where
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair,
-    U: Send + 'static,
-{
-    CallHandle::<Pair, Cancellable>::start_access(
-        accessor,
-        durable_worker_ctx::<Ctx, U>,
-        request,
-        DurableFunctionType::ReadLocal,
-    )
-    .await
-    .map_err(wasmtime::Error::from)
 }
 
 async fn wait_filesystem_task_result(
@@ -1546,39 +491,54 @@ where
         (None, _) => write_len,
     };
 
-    if reserved_growth > 0
-        && let Some(worker) = accessor
-            .with(|mut access| {
-                durable_worker_ctx::<Ctx, U>(access.data_mut())
-                    .prepare_filesystem_storage_reservation(reserved_growth)
-            })
-            .map_err(wasmtime::Error::from_anyhow)?
-    {
-        if let Err(error) = worker
-            .acquire_filesystem_storage_space(reserved_growth)
-            .await
-        {
-            accessor.with(|mut access| {
-                durable_worker_ctx::<Ctx, U>(access.data_mut())
-                    .rollback_filesystem_storage_reservation(reserved_growth);
-            });
-            return Err(wasmtime::Error::from_anyhow(error));
-        }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                reserved_growth as i64,
-            ))
-            .await;
-        accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .finish_filesystem_storage_reservation(reserved_growth);
-        });
-    }
+    reserve_filesystem_storage_bytes::<Ctx, U>(accessor, reserved_growth).await?;
 
     Ok(FilesystemStorageReservation {
         base_size,
         reserved_growth,
     })
+}
+
+/// Reserve `bytes` of filesystem storage quota: check the per-agent limit,
+/// acquire executor-wide permits, and record the growth in the oplog. No-op for
+/// `bytes == 0` and during replay (the helpers short-circuit). On acquisition
+/// failure the optimistic reservation is rolled back and the error is returned.
+async fn reserve_filesystem_storage_bytes<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    bytes: u64,
+) -> wasmtime::Result<()>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    if bytes == 0 {
+        return Ok(());
+    }
+
+    if let Some(worker) = accessor
+        .with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .prepare_filesystem_storage_reservation(bytes)
+        })
+        .map_err(wasmtime::Error::from_anyhow)?
+    {
+        if let Err(error) = worker.acquire_filesystem_storage_space(bytes).await {
+            accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .rollback_filesystem_storage_reservation(bytes);
+            });
+            return Err(wasmtime::Error::from_anyhow(error));
+        }
+        worker
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(bytes as i64))
+            .await;
+        accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .finish_filesystem_storage_reservation(bytes);
+        });
+    }
+
+    Ok(())
 }
 
 async fn release_filesystem_write_storage<Ctx, U>(
@@ -1640,221 +600,30 @@ where
     release_filesystem_write_storage::<Ctx, U>(accessor, over_reserved).await
 }
 
-fn no_side_effect_write_response() -> HostResponseP3FileSystemByteStream {
-    HostResponseP3FileSystemByteStream {
-        contents: Vec::new(),
-        result: serialize_stream_result(Err(types::ErrorCode::Interrupted)),
-    }
-}
-
-async fn complete_filesystem_write<Ctx, U, Pair>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    file: File,
-    mode: FilesystemWriteMode,
-    mut call: CallHandle<Pair, Cancellable>,
-    mut chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
-    result_tx: &mut tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
-where
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair<Resp = HostResponseP3FileSystemByteStream> + Send + 'static,
-    Pair::Req: Send + 'static,
-    U: 'static,
-{
-    if !call.is_live() {
-        let captured = capture_replayed_write_input(&mut chunks_rx, result_tx).await?;
-
-        match call
-            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-            .await
-            .map_err(wasmtime::Error::from)?
-        {
-            CallReplayOutcome::Replayed(response) => {
-                return apply_replayed_filesystem_write_response(file, mode, response).await;
-            }
-            CallReplayOutcome::Incomplete(mut live_call) => {
-                if matches!(mode, FilesystemWriteMode::Append) {
-                    return Err(wasmtime::Error::from_anyhow(live_call.trap(
-                        wasmtime::Error::msg(
-                            "incomplete append-via-stream cannot be replayed safely",
-                        ),
-                    )));
-                }
-                call = live_call;
-            }
-        }
-
-        let response = HostResponseP3FileSystemByteStream {
-            contents: captured.contents,
-            result: serialize_stream_result(captured.result),
-        };
-
-        return complete_buffered_filesystem_write(accessor, file, mode, call, response, result_tx)
-            .await;
-    }
-
-    let captured =
-        run_streaming_filesystem_write(accessor, &file, mode, &mut chunks_rx, result_tx).await?;
-    let response = HostResponseP3FileSystemByteStream {
-        contents: captured.contents,
-        result: serialize_stream_result(captured.result),
-    };
-
-    if result_tx.is_closed() {
-        call.cancel_access(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            Some(response.clone()),
-        )
-        .await
-        .map_err(wasmtime::Error::from)?;
-        return Ok(deserialize_stream_result(response.result));
-    }
-
-    let response = call
-        .complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
-        .await
-        .map_err(wasmtime::Error::from)?;
-
-    Ok(deserialize_stream_result(response.result))
-}
-
-async fn capture_replayed_write_input(
-    chunks_rx: &mut tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
-    result_tx: &mut tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-) -> wasmtime::Result<CapturedByteStream> {
-    let mut contents = Vec::new();
-    loop {
-        let chunk = tokio::select! {
-            chunk = chunks_rx.recv() => chunk,
-            _ = result_tx.closed() => {
-                return Ok(CapturedByteStream {
-                    contents,
-                    result: Err(types::ErrorCode::Interrupted),
-                });
-            },
-        };
-        let Some(chunk) = chunk else {
-            return Ok(CapturedByteStream {
-                contents,
-                result: Ok(()),
-            });
-        };
-        contents.extend_from_slice(&chunk.contents);
-        let _ = chunk.result_tx.send(Ok(()));
-    }
-}
-
-async fn complete_buffered_filesystem_write<Ctx, U, Pair>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    file: File,
-    mode: FilesystemWriteMode,
-    mut call: CallHandle<Pair, Cancellable>,
-    response: HostResponseP3FileSystemByteStream,
-    result_tx: &mut tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
-where
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair<Resp = HostResponseP3FileSystemByteStream> + Send + 'static,
-    Pair::Req: Send + 'static,
-    U: 'static,
-{
-    if result_tx.is_closed() {
-        call.cancel_access(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            Some(no_side_effect_write_response()),
-        )
-        .await
-        .map_err(wasmtime::Error::from)?;
-        return Ok(Err(types::ErrorCode::Interrupted));
-    }
-
-    let reservation = match reserve_filesystem_write_storage::<Ctx, U>(
-        accessor,
-        &file,
-        mode,
-        response.contents.len() as u64,
-    )
-    .await
-    {
-        Ok(reservation) => reservation,
-        Err(error) => {
-            return Err(wasmtime::Error::from_anyhow(call.trap(error)));
-        }
-    };
-
-    if result_tx.is_closed() {
-        release_filesystem_write_storage::<Ctx, U>(accessor, reservation.reserved_growth).await?;
-        call.cancel_access(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            Some(no_side_effect_write_response()),
-        )
-        .await
-        .map_err(wasmtime::Error::from)?;
-        return Ok(Err(types::ErrorCode::Interrupted));
-    }
-
-    let captured = run_live_filesystem_write_captured(file.clone(), mode, response.contents).await;
-    if let Err(error) =
-        reconcile_filesystem_write_storage::<Ctx, U>(accessor, &file, reservation, &captured.result)
-            .await
-    {
-        return Err(wasmtime::Error::from_anyhow(call.trap(error)));
-    }
-    let response = HostResponseP3FileSystemByteStream {
-        contents: captured.contents,
-        result: serialize_stream_result(captured.result.clone()),
-    };
-    if result_tx.is_closed() {
-        call.cancel_access(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            Some(response.clone()),
-        )
-        .await
-        .map_err(wasmtime::Error::from)?;
-        return Ok(deserialize_stream_result(response.result));
-    }
-    let response = call
-        .complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
-        .await
-        .map_err(wasmtime::Error::from)?;
-
-    Ok(deserialize_stream_result(response.result))
-}
-
+// Drains and writes the guest's data stream to the worker filesystem chunk by
+// chunk, mirroring the WASI P2 behavior: the file effect is driven entirely by
+// the input stream finishing or erroring, never by the liveness of the returned
+// result future. The bytes themselves are not recorded in the oplog; on replay
+// the guest re-issues the same writes which deterministically rebuild the
+// transient worker filesystem. Storage-quota deltas are reserved and reconciled
+// per chunk (no-ops during replay).
 async fn run_streaming_filesystem_write<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     file: &File,
     mode: FilesystemWriteMode,
     chunks_rx: &mut tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
-    result_tx: &mut tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
-) -> wasmtime::Result<CapturedByteStream>
+) -> wasmtime::Result<Result<(), types::ErrorCode>>
 where
     Ctx: WorkerCtx,
     U: 'static,
 {
-    let mut contents = Vec::new();
     let mut result = Ok(());
     let mut position = match mode {
         FilesystemWriteMode::At(offset) => Some(offset),
         FilesystemWriteMode::Append => None,
     };
 
-    loop {
-        let chunk = tokio::select! {
-            chunk = chunks_rx.recv() => chunk,
-            _ = result_tx.closed() => {
-                result = Err(types::ErrorCode::Interrupted);
-                break;
-            },
-        };
-        let Some(chunk) = chunk else {
-            break;
-        };
-
+    while let Some(chunk) = chunks_rx.recv().await {
         if result.is_ok() {
             let chunk_mode = match position {
                 Some(offset) => FilesystemWriteMode::At(offset),
@@ -1865,58 +634,32 @@ where
                 reserve_filesystem_write_storage::<Ctx, U>(accessor, file, chunk_mode, write_len)
                     .await?;
 
-            let captured =
-                run_live_filesystem_write_captured(file.clone(), chunk_mode, chunk.contents).await;
+            let (written_len, write_result) =
+                run_live_filesystem_write_chunk(file.clone(), chunk_mode, chunk.contents).await;
             reconcile_filesystem_write_storage::<Ctx, U>(
                 accessor,
                 file,
                 reservation,
-                &captured.result,
+                &write_result,
             )
             .await?;
-            let written_len = captured.contents.len() as u64;
             if let Some(offset) = &mut position {
                 *offset = offset.saturating_add(written_len);
             }
-            contents.extend_from_slice(&captured.contents);
-            result = captured.result;
+            result = write_result;
         }
 
         let _ = chunk.result_tx.send(result.clone());
-
-        if result.is_err() || result_tx.is_closed() {
-            break;
-        }
     }
 
-    if result_tx.is_closed() && result.is_ok() {
-        result = Err(types::ErrorCode::Interrupted);
-    }
-
-    Ok(CapturedByteStream { contents, result })
+    Ok(result)
 }
 
-async fn apply_replayed_filesystem_write_response(
-    file: File,
-    mode: FilesystemWriteMode,
-    response: HostResponseP3FileSystemByteStream,
-) -> wasmtime::Result<Result<(), types::ErrorCode>> {
-    let recorded_result = deserialize_stream_result(response.result);
-    if !response.contents.is_empty()
-        && let Err(error) = run_live_filesystem_write(file, mode, response.contents).await
-    {
-        return Err(wasmtime::Error::msg(format!(
-            "failed to reconstruct filesystem stream write from oplog: {error:?}"
-        )));
-    }
-    Ok(recorded_result)
-}
-
-async fn run_live_filesystem_write_captured(
+async fn run_live_filesystem_write_chunk(
     file: File,
     mode: FilesystemWriteMode,
     contents: Vec<u8>,
-) -> CapturedByteStream {
+) -> (u64, Result<(), types::ErrorCode>) {
     let _append_guard = if matches!(mode, FilesystemWriteMode::Append) {
         Some(
             FILESYSTEM_APPEND_LOCK
@@ -1995,53 +738,10 @@ async fn run_live_filesystem_write_captured(
     .await;
 
     let written = written.min(contents.len());
-    CapturedByteStream {
-        contents: contents[..written].to_vec(),
-        result: result.map_err(Into::into),
-    }
-}
-
-async fn run_live_filesystem_write(
-    file: File,
-    mode: FilesystemWriteMode,
-    contents: Vec<u8>,
-) -> Result<(), types::ErrorCode> {
-    let _append_guard = if matches!(mode, FilesystemWriteMode::Append) {
-        Some(
-            FILESYSTEM_APPEND_LOCK
-                .get_or_init(|| tokio::sync::Mutex::new(()))
-                .lock()
-                .await,
-        )
-    } else {
-        None
-    };
-    let file = Arc::clone(&file.file);
-    spawn_blocking(move || match mode {
-        FilesystemWriteMode::At(mut offset) => {
-            let mut written = 0;
-            while written < contents.len() {
-                let n = file.write_at(&contents[written..], offset)?;
-                if n == 0 {
-                    return Err(std::io::Error::from(std::io::ErrorKind::WriteZero));
-                }
-                written += n;
-                let n = u64::try_from(n)
-                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
-                offset = offset
-                    .checked_add(n)
-                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
-            }
-            Ok(())
-        }
-        FilesystemWriteMode::Append => {
-            let mut file = file.as_ref();
-            file.seek(SeekFrom::End(0))?;
-            file.write_all(&contents)
-        }
-    })
-    .await
-    .map_err(Into::into)
+    (
+        written as u64,
+        result.map_err(|error: std::io::Error| error.into()),
+    )
 }
 
 impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {
@@ -2068,72 +768,12 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
         fd: Resource<Descriptor>,
         offset: types::Filesize,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
-        let (path, file) = accessor.with(|mut store| {
-            Ok::<_, wasmtime::Error>((
-                descriptor_path_from_access::<Ctx, U>(&mut store, &fd)?,
-                file_from_access::<Ctx, U>(&mut store, &fd)?,
-            ))
-        })?;
-        let call = start_call::<Ctx, U, P3FilesystemTypesDescriptorReadViaStream>(
-            accessor,
-            HostRequestFileSystemPathAndOffset {
-                path: path.to_string_lossy().to_string(),
-                offset,
-            },
-        )
-        .await?;
-
-        let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let (stream, future) = if call.is_live() {
-            if !file.perms.contains(FilePerms::READ) {
-                let response = complete_immediate_byte_response::<Ctx, U>(
-                    accessor,
-                    call,
-                    Vec::new(),
-                    Err(types::ErrorCode::NotPermitted),
-                )
-                .await?;
-                let result = deserialize_stream_result(response.result);
-                accessor.with(|mut store| {
-                    let stream = StreamReader::new(&mut store, std::iter::empty())?;
-                    let future = FutureReader::new(&mut store, async move {
-                        Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(result)
-                    })?;
-                    Ok::<_, wasmtime::Error>((stream, future))
-                })?
-            } else {
-                accessor.with(|mut store| {
-                    store.spawn(FilesystemByteReadTask::<Ctx>::new(
-                        call, stream_rx, result_tx,
-                    ));
-                    let stream = StreamReader::new(
-                        &mut store,
-                        FileReadStreamProducer::new(file, offset, stream_tx),
-                    )?;
-                    let future =
-                        FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))?;
-                    Ok::<_, wasmtime::Error>((stream, future))
-                })?
-            }
-        } else {
-            let (stream_mode_tx, stream_mode_rx) = tokio::sync::oneshot::channel();
-            accessor.with(|mut store| {
-                store.spawn(FilesystemByteReadReplayTask::<Ctx>::new(
-                    call,
-                    stream_mode_tx,
-                    stream_rx,
-                    result_tx,
-                ));
-                let stream = StreamReader::new(
-                    &mut store,
-                    DeferredByteStreamProducer::new(file, offset, stream_mode_rx, stream_tx),
-                )?;
-                let future = FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))?;
-                Ok::<_, wasmtime::Error>((stream, future))
-            })?
-        };
-        Ok((stream, future))
+        // Reads are not recorded in the oplog. On replay the guest re-reads the
+        // reconstructed worker filesystem, so we simply delegate to the
+        // underlying host stream, matching WASI P2.
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        <WasiFilesystem as types::HostDescriptorWithStore>::read_via_stream(&store, fd, offset)
+            .await
     }
 
     async fn write_via_stream<U: Send + 'static>(
@@ -2142,61 +782,28 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
         data: StreamReader<u8>,
         offset: types::Filesize,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
-        let path =
-            accessor.with(|mut store| descriptor_path_from_access::<Ctx, U>(&mut store, &fd))?;
-        let request = HostRequestFileSystemPathAndOffset {
-            path: path.to_string_lossy().to_string(),
-            offset,
-        };
-        let mut call = start_cancellable_call::<Ctx, U, P3FilesystemTypesDescriptorWriteViaStream>(
-            accessor, request,
-        )
-        .await?;
-
-        let write_error = match accessor
-            .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))
-        {
-            Ok(write_error) => write_error,
-            Err(error) => return Err(wasmtime::Error::from_anyhow(call.trap(error))),
-        };
+        let write_error = accessor
+            .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))?;
         if let Some(error) = write_error {
             let mut data = data;
-            if let Err(error) = accessor.with(|mut store| data.close(&mut store)) {
-                return Err(wasmtime::Error::from_anyhow(call.trap(error)));
-            }
-            let result = complete_immediate_write_response::<
-                Ctx,
-                U,
-                P3FilesystemTypesDescriptorWriteViaStream,
-            >(accessor, call, Err(error))
-            .await?;
+            accessor.with(|mut store| data.close(&mut store))?;
             return accessor.with(|mut store| {
                 FutureReader::new(&mut store, async move {
-                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(result)
+                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
                 })
             });
         }
 
-        let file = match accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd)) {
-            Ok(file) => file,
-            Err(error) => return Err(wasmtime::Error::from_anyhow(call.trap(error))),
-        };
+        let file = accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd))?;
         let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
-        if let Err(error) = accessor
-            .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))
-        {
-            return Err(wasmtime::Error::from_anyhow(call.trap(error)));
-        }
+        accessor
+            .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         accessor.with(|mut store| {
-            store.spawn(FilesystemWriteTask::<
-                Ctx,
-                P3FilesystemTypesDescriptorWriteViaStream,
-            >::new(
+            store.spawn(FilesystemWriteTask::<Ctx>::new(
                 file,
                 FilesystemWriteMode::At(offset),
-                call,
                 chunks_rx,
                 result_tx,
             ));
@@ -2210,61 +817,28 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
         fd: Resource<Descriptor>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
-        let path =
-            accessor.with(|mut store| descriptor_path_from_access::<Ctx, U>(&mut store, &fd))?;
-        let request = HostRequestFileSystemPath {
-            path: path.to_string_lossy().to_string(),
-        };
-        let mut call =
-            start_cancellable_call::<Ctx, U, P3FilesystemTypesDescriptorAppendViaStream>(
-                accessor, request,
-            )
-            .await?;
-
-        let write_error = match accessor
-            .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))
-        {
-            Ok(write_error) => write_error,
-            Err(error) => return Err(wasmtime::Error::from_anyhow(call.trap(error))),
-        };
+        let write_error = accessor
+            .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))?;
         if let Some(error) = write_error {
             let mut data = data;
-            if let Err(error) = accessor.with(|mut store| data.close(&mut store)) {
-                return Err(wasmtime::Error::from_anyhow(call.trap(error)));
-            }
-            let result = complete_immediate_write_response::<
-                Ctx,
-                U,
-                P3FilesystemTypesDescriptorAppendViaStream,
-            >(accessor, call, Err(error))
-            .await?;
+            accessor.with(|mut store| data.close(&mut store))?;
             return accessor.with(|mut store| {
                 FutureReader::new(&mut store, async move {
-                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(result)
+                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
                 })
             });
         }
 
-        let file = match accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd)) {
-            Ok(file) => file,
-            Err(error) => return Err(wasmtime::Error::from_anyhow(call.trap(error))),
-        };
+        let file = accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd))?;
         let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
-        if let Err(error) = accessor
-            .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))
-        {
-            return Err(wasmtime::Error::from_anyhow(call.trap(error)));
-        }
+        accessor
+            .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         accessor.with(|mut store| {
-            store.spawn(FilesystemWriteTask::<
-                Ctx,
-                P3FilesystemTypesDescriptorAppendViaStream,
-            >::new(
+            store.spawn(FilesystemWriteTask::<Ctx>::new(
                 file,
                 FilesystemWriteMode::Append,
-                call,
                 chunks_rx,
                 result_tx,
             ));
@@ -2311,13 +885,41 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
         <WasiFilesystem as types::HostDescriptorWithStore>::get_type(&store, fd).await
     }
 
-    async fn set_size<U: Send>(
-        store: &Accessor<U, Self>,
+    async fn set_size<U: Send + 'static>(
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         size: types::Filesize,
     ) -> FilesystemResult<()> {
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-        <WasiFilesystem as types::HostDescriptorWithStore>::set_size(&store, fd, size).await
+        // Charge growth before resizing and credit shrink afterwards, matching
+        // the WASI P2 storage-quota accounting. The quota helpers are no-ops
+        // during replay, so the storage usage is rebuilt purely from the oplog.
+        let current_size =
+            descriptor_size::<Ctx, U>(accessor, Resource::new_borrow(fd.rep())).await;
+        let growth = size.saturating_sub(current_size);
+        if growth > 0 {
+            reserve_filesystem_storage_bytes::<Ctx, U>(accessor, growth)
+                .await
+                .map_err(FilesystemError::trap)?;
+        }
+
+        let result = {
+            let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+            <WasiFilesystem as types::HostDescriptorWithStore>::set_size(&store, fd, size).await
+        };
+
+        if growth > 0 {
+            if result.is_err() {
+                release_filesystem_write_storage::<Ctx, U>(accessor, growth)
+                    .await
+                    .map_err(FilesystemError::trap)?;
+            }
+        } else if result.is_ok() && size < current_size {
+            release_filesystem_write_storage::<Ctx, U>(accessor, current_size - size)
+                .await
+                .map_err(FilesystemError::trap)?;
+        }
+
+        result
     }
 
     async fn set_times<U: Send>(
@@ -2343,93 +945,48 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
         StreamReader<types::DirectoryEntry>,
         FutureReader<Result<(), types::ErrorCode>>,
     )> {
-        let path =
-            accessor.with(|mut store| descriptor_path_from_access::<Ctx, U>(&mut store, &fd))?;
-        let call = start_call::<Ctx, U, P3FilesystemTypesDescriptorReadDirectory>(
-            accessor,
-            HostRequestFileSystemPath {
-                path: path.to_string_lossy().to_string(),
-            },
-        )
-        .await?;
-
-        let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        // The directory listing is snapshotted and sorted by name before the
+        // stream is returned. This matches WASI P2 and guarantees deterministic
+        // ordering across live execution and replay, regardless of OS iteration
+        // order or concurrent directory mutations after this call returns. The
+        // entries are not recorded in the oplog: on replay the guest re-lists
+        // the reconstructed worker filesystem.
         let dir_result =
             accessor.with(|mut store| dir_result_from_access::<Ctx, U>(&mut store, &fd))?;
-        let (stream, future) = match dir_result {
+        let (entries, result) = match dir_result {
             Ok(dir) => {
-                if call.is_live() {
-                    if !dir.perms.contains(DirPerms::READ) {
-                        let response = complete_directory_response::<Ctx, U>(
-                            accessor,
-                            call,
-                            Vec::new(),
-                            Err(types::ErrorCode::NotPermitted),
-                        )
-                        .await?;
-                        let result = deserialize_stream_result(response.result);
-                        accessor.with(|mut store| {
-                            let stream = StreamReader::new(&mut store, std::iter::empty())?;
-                            let future = FutureReader::new(&mut store, async move {
-                                Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(result)
-                            })?;
-                            Ok::<_, wasmtime::Error>((stream, future))
-                        })?
-                    } else {
-                        accessor.with(|mut store| {
-                            store.spawn(FilesystemDirectoryReadTask::<Ctx>::new(
-                                call, stream_rx, result_tx,
-                            ));
-                            let stream = StreamReader::new(
-                                &mut store,
-                                RecordingDirectoryEntryStreamProducer::new(dir, stream_tx),
-                            )?;
-                            let future = FutureReader::new(
-                                &mut store,
-                                wait_filesystem_task_result(result_rx),
-                            )?;
-                            Ok::<_, wasmtime::Error>((stream, future))
-                        })?
-                    }
+                if !dir.perms.contains(DirPerms::READ) {
+                    (Vec::new(), Err(types::ErrorCode::NotPermitted))
                 } else {
-                    let (stream_mode_tx, stream_mode_rx) = tokio::sync::oneshot::channel();
-                    accessor.with(|mut store| {
-                        store.spawn(FilesystemDirectoryReadReplayTask::<Ctx>::new(
-                            call,
-                            stream_mode_tx,
-                            stream_rx,
-                            result_tx,
-                        ));
-                        let stream = StreamReader::new(
-                            &mut store,
-                            DeferredDirectoryEntryStreamProducer::new(
-                                dir,
-                                stream_mode_rx,
-                                stream_tx,
-                            ),
-                        )?;
-                        let future =
-                            FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))?;
-                        Ok::<_, wasmtime::Error>((stream, future))
-                    })?
+                    let dir = Arc::clone(&dir.dir);
+                    let collected = spawn_blocking(move || {
+                        let entries = dir.entries()?;
+                        let mut sorted = Vec::new();
+                        for entry in entries {
+                            if let Some(entry) = map_directory_entry(entry)? {
+                                sorted.push(entry);
+                            }
+                        }
+                        sorted.sort_by_key(|entry| entry.name.clone());
+                        Ok::<Vec<types::DirectoryEntry>, types::ErrorCode>(sorted)
+                    })
+                    .await;
+                    match collected {
+                        Ok(entries) => (entries, Ok(())),
+                        Err(error) => (Vec::new(), Err(error)),
+                    }
                 }
             }
-            Err(error) => {
-                let response =
-                    complete_immediate_directory_response::<Ctx, U>(accessor, call, Err(error))
-                        .await?;
-                let result = deserialize_stream_result(response.result);
-                accessor.with(|mut store| {
-                    let stream = StreamReader::new(&mut store, std::iter::empty())?;
-                    let future = FutureReader::new(&mut store, async move {
-                        Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(result)
-                    })?;
-                    Ok::<_, wasmtime::Error>((stream, future))
-                })?
-            }
+            Err(error) => (Vec::new(), Err(error)),
         };
-        Ok((stream, future))
+
+        accessor.with(|mut store| {
+            let stream = StreamReader::new(&mut store, entries)?;
+            let future = FutureReader::new(&mut store, async move {
+                Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(result)
+            })?;
+            Ok::<_, wasmtime::Error>((stream, future))
+        })
     }
 
     async fn sync<U: Send>(
@@ -2571,19 +1128,44 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
         .await
     }
 
-    async fn open_at<U: Send>(
-        store: &Accessor<U, Self>,
+    async fn open_at<U: Send + 'static>(
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         path_flags: types::PathFlags,
         path: String,
         open_flags: types::OpenFlags,
         flags: types::DescriptorFlags,
     ) -> FilesystemResult<Resource<Descriptor>> {
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-        <WasiFilesystem as types::HostDescriptorWithStore>::open_at(
-            &store, fd, path_flags, path, open_flags, flags,
-        )
-        .await
+        // Opening with TRUNCATE discards the existing file contents, so credit
+        // the freed bytes back to the storage quota on success, matching WASI
+        // P2. The release helper is a no-op during replay.
+        let truncated_size = if open_flags.contains(types::OpenFlags::TRUNCATE) {
+            descriptor_size_at::<Ctx, U>(
+                accessor,
+                Resource::new_borrow(fd.rep()),
+                path_flags,
+                path.clone(),
+            )
+            .await
+        } else {
+            0
+        };
+
+        let result = {
+            let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+            <WasiFilesystem as types::HostDescriptorWithStore>::open_at(
+                &store, fd, path_flags, path, open_flags, flags,
+            )
+            .await
+        };
+
+        if result.is_ok() && truncated_size > 0 {
+            release_filesystem_write_storage::<Ctx, U>(accessor, truncated_size)
+                .await
+                .map_err(FilesystemError::trap)?;
+        }
+
+        result
     }
 
     async fn readlink_at<U: Send>(
@@ -2632,13 +1214,35 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
         .await
     }
 
-    async fn unlink_file_at<U: Send>(
-        store: &Accessor<U, Self>,
+    async fn unlink_file_at<U: Send + 'static>(
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-        <WasiFilesystem as types::HostDescriptorWithStore>::unlink_file_at(&store, fd, path).await
+        // Stat the file before unlinking so the freed bytes can be credited back
+        // to the storage quota on success, matching WASI P2. The release helper
+        // is a no-op during replay.
+        let file_size = descriptor_size_at::<Ctx, U>(
+            accessor,
+            Resource::new_borrow(fd.rep()),
+            types::PathFlags::empty(),
+            path.clone(),
+        )
+        .await;
+
+        let result = {
+            let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+            <WasiFilesystem as types::HostDescriptorWithStore>::unlink_file_at(&store, fd, path)
+                .await
+        };
+
+        if result.is_ok() && file_size > 0 {
+            release_filesystem_write_storage::<Ctx, U>(accessor, file_size)
+                .await
+                .map_err(FilesystemError::trap)?;
+        }
+
+        result
     }
 
     async fn is_same_object<U: Send>(
@@ -2676,66 +1280,60 @@ impl<Ctx: WorkerCtx> types::HostDescriptorWithStore for DurableP3<Ctx> {
 mod tests {
     use super::*;
     use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
-    use golem_common::model::oplog::types::{SerializableDateTime, SerializableP3DescriptorType};
-    use golem_common::model::oplog::{HostRequest, HostResponse, host_functions};
+    use golem_common::model::oplog::types::SerializableDateTime;
     use std::time::{Duration, SystemTime};
     use test_r::test;
 
-    #[test]
-    async fn p3_fs_live_write_future_drop_returns_interrupted() {
-        let mut config = wasmtime::Config::default();
-        config.wasm_component_model(true);
-        config.wasm_component_model_async(true);
-        let engine = wasmtime::Engine::new(&config).unwrap();
-        let mut store = wasmtime::Store::new(&engine, ());
-
-        let tempdir = tempfile::TempDir::new().unwrap();
-        let path = tempdir.path().join("out");
-        let file = File::new(
+    fn test_file(path: std::path::PathBuf) -> File {
+        File::new(
             cap_std::fs::File::from_std(std::fs::File::create(&path).unwrap()),
             FilePerms::WRITE,
             wasmtime_wasi::filesystem::OpenMode::WRITE,
             false,
             path,
-        );
-
-        let result = store
-            .run_concurrent(async |accessor| {
-                let accessor = accessor
-                    .with_getter::<DurableP3<crate::workerctx::default::Context>>(
-                        unused_durable_p3_view,
-                    );
-                let (_chunks_tx, mut chunks_rx) = tokio::sync::mpsc::unbounded_channel();
-                let (mut result_tx, result_rx) = tokio::sync::oneshot::channel();
-                drop(result_rx);
-
-                tokio::time::timeout(
-                    Duration::from_millis(100),
-                    run_streaming_filesystem_write::<crate::workerctx::default::Context, ()>(
-                        &accessor,
-                        &file,
-                        FilesystemWriteMode::At(0),
-                        &mut chunks_rx,
-                        &mut result_tx,
-                    ),
-                )
-                .await
-            })
-            .await
-            .unwrap();
-
-        let captured = result
-            .expect("write task should observe dropped result future")
-            .unwrap();
-        assert_eq!(captured.contents, Vec::<u8>::new());
-        assert!(matches!(
-            captured.result,
-            Err(types::ErrorCode::Interrupted)
-        ));
+        )
     }
 
-    fn unused_durable_p3_view(_: &mut ()) -> DurableP3View<'_, crate::workerctx::default::Context> {
-        panic!("test does not access the worker context")
+    #[test]
+    async fn p3_fs_live_write_chunk_at_offset_writes_bytes() {
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let path = tempdir.path().join("out");
+        let file = test_file(path.clone());
+
+        let (written, result) = run_live_filesystem_write_chunk(
+            file.clone(),
+            FilesystemWriteMode::At(0),
+            b"hello".to_vec(),
+        )
+        .await;
+        assert_eq!(written, 5);
+        assert!(result.is_ok());
+
+        let (written, result) =
+            run_live_filesystem_write_chunk(file, FilesystemWriteMode::At(5), b" world".to_vec())
+                .await;
+        assert_eq!(written, 6);
+        assert!(result.is_ok());
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello world");
+    }
+
+    #[test]
+    async fn p3_fs_live_write_chunk_append_writes_bytes() {
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let path = tempdir.path().join("out");
+        let file = test_file(path.clone());
+
+        for chunk in [b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()] {
+            let len = chunk.len() as u64;
+            let (written, result) =
+                run_live_filesystem_write_chunk(file.clone(), FilesystemWriteMode::Append, chunk)
+                    .await;
+            assert_eq!(written, len);
+            assert!(result.is_ok());
+        }
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"foobarbaz");
     }
 
     #[cfg(unix)]
@@ -2834,73 +1432,5 @@ mod tests {
             after, before,
             "stat-at with symlink-follow is a read-only operation and must not rewrite the target"
         );
-    }
-
-    #[test]
-    fn p3_filesystem_stream_host_payload_pairs_roundtrip() {
-        assert_host_payload_pair_roundtrip::<P3FilesystemTypesDescriptorReadViaStream>(
-            HostRequestFileSystemPathAndOffset {
-                path: "/tmp/file.txt".to_string(),
-                offset: 12,
-            },
-            HostResponseP3FileSystemByteStream {
-                contents: b"file bytes".to_vec(),
-                result: Ok(()),
-            },
-        );
-        assert_host_payload_pair_roundtrip::<P3FilesystemTypesDescriptorWriteViaStream>(
-            HostRequestFileSystemPathAndOffset {
-                path: "/tmp/file.txt".to_string(),
-                offset: 5,
-            },
-            HostResponseP3FileSystemByteStream {
-                contents: b"written".to_vec(),
-                result: Err(SerializableP3FsErrorCode::NoEntry),
-            },
-        );
-        assert_host_payload_pair_roundtrip::<P3FilesystemTypesDescriptorAppendViaStream>(
-            HostRequestFileSystemPath {
-                path: "/tmp/file.txt".to_string(),
-            },
-            HostResponseP3FileSystemByteStream {
-                contents: b"appended".to_vec(),
-                result: Ok(()),
-            },
-        );
-        assert_host_payload_pair_roundtrip::<P3FilesystemTypesDescriptorReadDirectory>(
-            HostRequestFileSystemPath {
-                path: "/tmp".to_string(),
-            },
-            HostResponseP3FileSystemDirectoryEntryStream {
-                entries: vec![SerializableP3DirectoryEntry {
-                    type_: SerializableP3DescriptorType::RegularFile,
-                    name: "file.txt".to_string(),
-                }],
-                result: Ok(()),
-            },
-        );
-    }
-
-    fn assert_host_payload_pair_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
-    where
-        Pair: HostPayloadPair,
-        Pair::Req: Clone + std::fmt::Debug + PartialEq + TryFrom<HostRequest, Error = String>,
-        Pair::Resp: Clone + std::fmt::Debug + PartialEq,
-    {
-        let request_payload: HostRequest = request.clone().into();
-        let request_bytes = desert_rust::serialize_to_byte_vec(&request_payload).unwrap();
-        let request_roundtrip: HostRequest = desert_rust::deserialize(&request_bytes).unwrap();
-        assert_eq!(Pair::Req::try_from(request_roundtrip).unwrap(), request);
-
-        let response_payload: HostResponse = response.clone().into();
-        let response_bytes = desert_rust::serialize_to_byte_vec(&response_payload).unwrap();
-        let response_roundtrip: HostResponse = desert_rust::deserialize(&response_bytes).unwrap();
-        assert_eq!(Pair::Resp::try_from(response_roundtrip).unwrap(), response);
-
-        let function_name_bytes =
-            desert_rust::serialize_to_byte_vec(&Pair::HOST_FUNCTION_NAME).unwrap();
-        let function_name_roundtrip: host_functions::HostFunctionName =
-            desert_rust::deserialize(&function_name_bytes).unwrap();
-        assert_eq!(function_name_roundtrip, Pair::HOST_FUNCTION_NAME);
     }
 }

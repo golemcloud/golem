@@ -701,6 +701,44 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// Returns whether the given direction of a TCP socket's one-shot stream has
+    /// already been acquired (taken). Used by the durable P3 socket wrappers to
+    /// gate `send`/`receive` so a second call returns `InvalidState`.
+    pub(crate) fn is_tcp_stream_taken(
+        &self,
+        socket_rep: u32,
+        direction: TcpSocketStreamDirection,
+    ) -> bool {
+        self.state
+            .tcp_taken_streams
+            .get(&socket_rep)
+            .map(|taken| match direction {
+                TcpSocketStreamDirection::Send => taken.send,
+                TcpSocketStreamDirection::Receive => taken.receive,
+            })
+            .unwrap_or(false)
+    }
+
+    /// Marks the given direction of a TCP socket's one-shot stream as acquired.
+    pub(crate) fn mark_tcp_stream_taken(
+        &mut self,
+        socket_rep: u32,
+        direction: TcpSocketStreamDirection,
+    ) {
+        let taken = self.state.tcp_taken_streams.entry(socket_rep).or_default();
+        match direction {
+            TcpSocketStreamDirection::Send => taken.send = true,
+            TcpSocketStreamDirection::Receive => taken.receive = true,
+        }
+    }
+
+    /// Drops the shadow taken-state for a TCP socket resource. Called from the
+    /// socket `drop` so a later resource-table rep reuse cannot inherit stale
+    /// taken flags.
+    pub(crate) fn forget_tcp_taken_streams(&mut self, socket_rep: u32) {
+        self.state.tcp_taken_streams.remove(&socket_rep);
+    }
+
     fn io_ctx(&mut self) -> &mut IoCtx {
         Arc::get_mut(&mut self.io_ctx)
             .expect("WasiCtx is shared and cannot be borrowed mutably")
@@ -4806,6 +4844,22 @@ pub(crate) struct PendingFilesystemReservation {
     pub reserved_growth: u64,
 }
 
+/// Direction of a P3 TCP one-shot stream acquisition (`send` vs `receive`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TcpSocketStreamDirection {
+    Send,
+    Receive,
+}
+
+/// Tracks which of a TCP socket's one-shot `send`/`receive` streams have been
+/// acquired by the durable wrappers. Mirrors the wasmtime native per-socket
+/// taken flags so replay can rehydrate them deterministically.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TcpTakenStreams {
+    send: bool,
+    receive: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
@@ -4862,6 +4916,15 @@ struct PrivateDurableWorkerState {
     /// Tracks file-backed wasi output streams so quota charging can be based on
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
+
+    /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
+    /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
+    /// from the oplog instead of invoking the native host call, so the native
+    /// "taken" state is not advanced on replay. This map records which directions
+    /// were acquired so a post-replay second call returns `InvalidState` exactly as
+    /// uninterrupted execution would. Reconstructed on replay from the durable
+    /// acquire calls and cleared when the socket resource is dropped.
+    tcp_taken_streams: HashMap<u32, TcpTakenStreams>,
 
     /// Maps outgoing body rep → output stream rep, set during outgoing_body::write()
     /// before outgoing_handler::handle() is called. Used by handle() to populate
@@ -5104,6 +5167,7 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
+            tcp_taken_streams: HashMap::new(),
             snapshotting_mode: None,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,

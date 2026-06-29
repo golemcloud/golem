@@ -52,7 +52,6 @@ use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 use wasmtime_wasi::p2::{FsError, SocketError};
-use wasmtime_wasi::p3::bindings::cli::types as p3_cli_types;
 use wasmtime_wasi::p3::bindings::filesystem as p3_filesystem;
 use wasmtime_wasi::p3::bindings::sockets::{
     ip_name_lookup as p3_ip_name_lookup, types as p3_socket_types,
@@ -245,42 +244,6 @@ impl SerializableP3FileSystemError {
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
-pub enum SerializableP3CliErrorCode {
-    Io,
-    IllegalByteSequence,
-    Pipe,
-}
-
-impl From<p3_cli_types::ErrorCode> for SerializableP3CliErrorCode {
-    fn from(value: p3_cli_types::ErrorCode) -> Self {
-        match value {
-            p3_cli_types::ErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
-            p3_cli_types::ErrorCode::Pipe => Self::Pipe,
-            _ => Self::Io,
-        }
-    }
-}
-
-impl From<SerializableP3CliErrorCode> for p3_cli_types::ErrorCode {
-    fn from(value: SerializableP3CliErrorCode) -> Self {
-        match value {
-            SerializableP3CliErrorCode::Io => Self::Io,
-            SerializableP3CliErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
-            SerializableP3CliErrorCode::Pipe => Self::Pipe,
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
 pub enum SerializableP3FsErrorCode {
     Access,
     Already,
@@ -405,90 +368,6 @@ impl From<SerializableP3FsErrorCode> for p3_filesystem::types::ErrorCode {
             SerializableP3FsErrorCode::TextFileBusy => Self::TextFileBusy,
             SerializableP3FsErrorCode::CrossDevice => Self::CrossDevice,
             SerializableP3FsErrorCode::Other(error) => Self::Other(error),
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub enum SerializableP3DescriptorType {
-    BlockDevice,
-    CharacterDevice,
-    Directory,
-    Fifo,
-    SymbolicLink,
-    RegularFile,
-    Socket,
-    Other(Option<String>),
-}
-
-impl From<p3_filesystem::types::DescriptorType> for SerializableP3DescriptorType {
-    fn from(value: p3_filesystem::types::DescriptorType) -> Self {
-        match value {
-            p3_filesystem::types::DescriptorType::BlockDevice => Self::BlockDevice,
-            p3_filesystem::types::DescriptorType::CharacterDevice => Self::CharacterDevice,
-            p3_filesystem::types::DescriptorType::Directory => Self::Directory,
-            p3_filesystem::types::DescriptorType::Fifo => Self::Fifo,
-            p3_filesystem::types::DescriptorType::SymbolicLink => Self::SymbolicLink,
-            p3_filesystem::types::DescriptorType::RegularFile => Self::RegularFile,
-            p3_filesystem::types::DescriptorType::Socket => Self::Socket,
-            p3_filesystem::types::DescriptorType::Other(other) => Self::Other(other),
-        }
-    }
-}
-
-impl From<SerializableP3DescriptorType> for p3_filesystem::types::DescriptorType {
-    fn from(value: SerializableP3DescriptorType) -> Self {
-        match value {
-            SerializableP3DescriptorType::BlockDevice => Self::BlockDevice,
-            SerializableP3DescriptorType::CharacterDevice => Self::CharacterDevice,
-            SerializableP3DescriptorType::Directory => Self::Directory,
-            SerializableP3DescriptorType::Fifo => Self::Fifo,
-            SerializableP3DescriptorType::SymbolicLink => Self::SymbolicLink,
-            SerializableP3DescriptorType::RegularFile => Self::RegularFile,
-            SerializableP3DescriptorType::Socket => Self::Socket,
-            SerializableP3DescriptorType::Other(other) => Self::Other(other),
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub struct SerializableP3DirectoryEntry {
-    pub type_: SerializableP3DescriptorType,
-    pub name: String,
-}
-
-impl From<p3_filesystem::types::DirectoryEntry> for SerializableP3DirectoryEntry {
-    fn from(value: p3_filesystem::types::DirectoryEntry) -> Self {
-        Self {
-            type_: value.type_.into(),
-            name: value.name,
-        }
-    }
-}
-
-impl From<SerializableP3DirectoryEntry> for p3_filesystem::types::DirectoryEntry {
-    fn from(value: SerializableP3DirectoryEntry) -> Self {
-        Self {
-            type_: value.type_.into(),
-            name: value.name,
         }
     }
 }
@@ -1616,6 +1495,29 @@ pub enum SerializableP3HttpConsumeBodyResult {
 )]
 #[desert(evolution())]
 pub enum SerializableP3HttpBodyChunk {
+    Data(Vec<u8>),
+    End,
+}
+
+/// One persisted unit of a P3 TCP socket receive stream.
+///
+/// Incoming socket bytes are recorded chunk-by-chunk as child durable calls
+/// under the `receive` batched scope (mirroring the chunk-by-chunk durability
+/// of the P3 HTTP response body stream): every non-empty upstream chunk becomes
+/// a `Data` chunk, persisted before its bytes are delivered to the guest, and a
+/// single `End` chunk terminates the recorded stream so replay knows when to
+/// stop reading children. The terminal `Result<(), error-code>` is carried by
+/// the parent `receive` call's response payload.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3TcpChunk {
     Data(Vec<u8>),
     End,
 }

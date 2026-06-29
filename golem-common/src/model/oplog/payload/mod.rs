@@ -23,8 +23,7 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
-    SerializableP3CliErrorCode, SerializableP3DirectoryEntry, SerializableP3FileSystemError,
-    SerializableP3FsErrorCode, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
+    SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
     SerializableP3UdpDatagram, SerializableSocketError, SerializableWebsocketError,
     SerializableWebsocketMessage,
 };
@@ -32,10 +31,10 @@ use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
     SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpBodyChunk,
-    SerializableP3HttpClientSend,
-    SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult, SerializableP3IpAddresses,
-    SerializableP3IpNameLookupError,
-    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
+    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
+    SerializableP3HttpConsumeBodyResult, SerializableP3IpAddresses,
+    SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
+    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError,
 };
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
@@ -235,10 +234,6 @@ oplog_payload! {
         },
         GolemRpcCreate {
             remote_agent_id: AgentId
-        },
-        FileSystemPathAndOffset {
-            path: String,
-            offset: u64
         },
         KVCacheKey {
             key: String
@@ -485,27 +480,11 @@ oplog_payload! {
         P3BlobstoreIncomingValueStream {
             contents: Vec<u8>
         },
-        P3CliStream {
-            contents: Vec<u8>,
-            result: Result<(), SerializableP3CliErrorCode>
-        },
-        P3SocketsTcpStream {
-            contents: Vec<u8>,
-            result: Result<(), SerializableP3SocketErrorCode>
-        },
         P3SocketsUdpSend {
             result: Result<(), SerializableP3SocketErrorCode>
         },
         P3SocketsUdpReceive {
             result: Result<SerializableP3UdpDatagram, SerializableP3SocketErrorCode>
-        },
-        P3FileSystemByteStream {
-            contents: Vec<u8>,
-            result: Result<(), SerializableP3FsErrorCode>
-        },
-        P3FileSystemDirectoryEntryStream {
-            entries: Vec<SerializableP3DirectoryEntry>,
-            result: Result<(), SerializableP3FsErrorCode>
         },
         P3FileSystemStat {
             result: Result<SerializableFileTimes, SerializableP3FileSystemError>,
@@ -518,6 +497,18 @@ oplog_payload! {
         },
         P3HttpClientConsumeBodyChunk {
             chunk: SerializableP3HttpBodyChunk
+        },
+        P3SocketsTcpSend {
+            result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3SocketsTcpReceive {
+            result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3SocketsTcpReceiveChunk {
+            chunk: SerializableP3TcpChunk
+        },
+        P3SocketsTcpAcquire {
+            result: Result<(), SerializableP3SocketErrorCode>
         }
     }
 }
@@ -666,17 +657,13 @@ pub mod host_functions {
         (P3RandomInsecureGetInsecureRandomBytes => "random::insecure", "get-insecure-random-bytes", RandomBytes, RandomBytes),
         (P3RandomInsecureGetInsecureRandomU64 => "random::insecure", "get-insecure-random-u64", NoInput, RandomU64),
         (P3RandomInsecureSeedGetInsecureSeed => "random::insecure-seed", "get-insecure-seed", NoInput, RandomSeed),
-        (P3CliStdinReadViaStream => "cli::stdin", "read-via-stream", NoInput, P3CliStream),
-        (P3CliStdoutWriteViaStream => "cli::stdout", "write-via-stream", NoInput, P3CliStream),
-        (P3CliStderrWriteViaStream => "cli::stderr", "write-via-stream", NoInput, P3CliStream),
-        (P3FilesystemTypesDescriptorReadViaStream => "filesystem::types::descriptor", "read-via-stream", FileSystemPathAndOffset, P3FileSystemByteStream),
-        (P3FilesystemTypesDescriptorWriteViaStream => "filesystem::types::descriptor", "write-via-stream", FileSystemPathAndOffset, P3FileSystemByteStream),
-        (P3FilesystemTypesDescriptorAppendViaStream => "filesystem::types::descriptor", "append-via-stream", FileSystemPath, P3FileSystemByteStream),
-        (P3FilesystemTypesDescriptorReadDirectory => "filesystem::types::descriptor", "read-directory", FileSystemPath, P3FileSystemDirectoryEntryStream),
         (P3FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat-async", FileSystemPath, P3FileSystemStat),
         (P3FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat-at", FileSystemPath, P3FileSystemStat),
-        (P3SocketsTypesTcpSocketSend => "sockets::types::tcp-socket", "send", NoInput, P3SocketsTcpStream),
-        (P3SocketsTypesTcpSocketReceive => "sockets::types::tcp-socket", "receive", NoInput, P3SocketsTcpStream),
+        (P3SocketsTypesTcpSocketSend => "sockets::types::tcp-socket", "send", NoInput, P3SocketsTcpSend),
+        (P3SocketsTypesTcpSocketReceive => "sockets::types::tcp-socket", "receive", NoInput, P3SocketsTcpReceive),
+        (P3SocketsTypesTcpSocketReceiveChunk => "sockets::types::tcp-socket", "receive-chunk", NoInput, P3SocketsTcpReceiveChunk),
+        (P3SocketsTypesTcpSocketSendAcquire => "sockets::types::tcp-socket", "send-acquire", NoInput, P3SocketsTcpAcquire),
+        (P3SocketsTypesTcpSocketReceiveAcquire => "sockets::types::tcp-socket", "receive-acquire", NoInput, P3SocketsTcpAcquire),
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),

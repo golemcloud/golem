@@ -20,27 +20,25 @@ use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
     SerializableDateTime, SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
     SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
-    SerializableP3CliErrorCode, SerializableP3DescriptorType, SerializableP3DirectoryEntry,
     SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
-    SerializableP3HttpClientSend,
-    SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult,
-    SerializableP3HttpRequestOptions, SerializableP3HttpScheme,
-    SerializableP3IpAddress, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
-    SerializableP3UdpDatagram, SerializableResponseHeaders, SerializableStreamError,
+    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
+    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestOptions,
+    SerializableP3HttpScheme, SerializableP3IpAddress, SerializableP3IpSocketAddress,
+    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
+    SerializableResponseHeaders, SerializableStreamError,
 };
 use crate::model::oplog::{
-    HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestFileSystemPathAndOffset,
-    HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
+    HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestKVCacheKey,
+    HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientSend, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
     HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
     HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3CliStream, HostResponseP3FileSystemByteStream,
-    HostResponseP3FileSystemDirectoryEntryStream, HostResponseP3FileSystemStat,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientSendResult,
-    HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsTcpStream,
+    HostResponseP3FileSystemStat, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
 };
@@ -227,44 +225,37 @@ fn p3_random_host_payload_pairs_roundtrip() {
 }
 
 #[test]
-fn p3_cli_host_payload_pairs_roundtrip() {
-    assert_host_payload_pair_roundtrip::<host_functions::P3CliStdinReadViaStream>(
-        HostRequestNoInput {},
-        HostResponseP3CliStream {
-            contents: b"stdin prefix".to_vec(),
-            result: Err(SerializableP3CliErrorCode::Io),
-        },
-    );
-    assert_host_payload_pair_roundtrip::<host_functions::P3CliStdoutWriteViaStream>(
-        HostRequestNoInput {},
-        HostResponseP3CliStream {
-            contents: b"stdout bytes".to_vec(),
-            result: Ok(()),
-        },
-    );
-    assert_host_payload_pair_roundtrip::<host_functions::P3CliStderrWriteViaStream>(
-        HostRequestNoInput {},
-        HostResponseP3CliStream {
-            contents: b"stderr prefix".to_vec(),
-            result: Err(SerializableP3CliErrorCode::Pipe),
-        },
-    );
-}
-
-#[test]
 fn p3_tcp_socket_host_payload_pairs_roundtrip() {
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSend>(
         HostRequestNoInput {},
-        HostResponseP3SocketsTcpStream {
-            contents: b"outgoing tcp bytes".to_vec(),
-            result: Ok(()),
-        },
+        HostResponseP3SocketsTcpSend { result: Ok(()) },
     );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceive>(
         HostRequestNoInput {},
-        HostResponseP3SocketsTcpStream {
-            contents: b"incoming tcp bytes".to_vec(),
+        HostResponseP3SocketsTcpReceive {
             result: Err(SerializableP3SocketErrorCode::ConnectionReset),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceiveChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpReceiveChunk {
+            chunk: SerializableP3TcpChunk::Data(b"incoming tcp bytes".to_vec()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceiveChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpReceiveChunk {
+            chunk: SerializableP3TcpChunk::End,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendAcquire>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpAcquire { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceiveAcquire>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpAcquire {
+            result: Err(SerializableP3SocketErrorCode::InvalidState),
         },
     );
 }
@@ -495,47 +486,6 @@ fn p3_keyvalue_cache_host_payload_pairs_roundtrip() {
 
 #[test]
 fn p3_filesystem_host_payload_pairs_roundtrip() {
-    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorReadViaStream>(
-        HostRequestFileSystemPathAndOffset {
-            path: "/tmp/file.txt".to_string(),
-            offset: 12,
-        },
-        HostResponseP3FileSystemByteStream {
-            contents: b"file bytes".to_vec(),
-            result: Ok(()),
-        },
-    );
-    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorWriteViaStream>(
-        HostRequestFileSystemPathAndOffset {
-            path: "/tmp/file.txt".to_string(),
-            offset: 5,
-        },
-        HostResponseP3FileSystemByteStream {
-            contents: b"written".to_vec(),
-            result: Err(SerializableP3FsErrorCode::NoEntry),
-        },
-    );
-    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorAppendViaStream>(
-        HostRequestFileSystemPath {
-            path: "/tmp/file.txt".to_string(),
-        },
-        HostResponseP3FileSystemByteStream {
-            contents: b"appended".to_vec(),
-            result: Ok(()),
-        },
-    );
-    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorReadDirectory>(
-        HostRequestFileSystemPath {
-            path: "/tmp".to_string(),
-        },
-        HostResponseP3FileSystemDirectoryEntryStream {
-            entries: vec![SerializableP3DirectoryEntry {
-                type_: SerializableP3DescriptorType::RegularFile,
-                name: "file.txt".to_string(),
-            }],
-            result: Ok(()),
-        },
-    );
     assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorStat>(
         HostRequestFileSystemPath {
             path: "/tmp/file.txt".to_string(),
