@@ -23,8 +23,9 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::CardInstallFailure;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
-    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
+    FileSystemError, ObjectMetadata, SecretRevealAudit, SecretRevealError, SerializableDateTime,
+    SerializableFileTimes, SerializableSocketError, SerializableWebsocketError,
+    SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -125,6 +126,10 @@ oplog_payload! {
         },
         GolemAgentGetConfigValue {
             path: Vec<String>,
+            expected_type: SchemaGraph
+        },
+        SecretReveal {
+            secret_id: Uuid,
             expected_type: SchemaGraph
         },
         GolemAgentGetAgentType {
@@ -268,6 +273,13 @@ oplog_payload! {
         },
         GolemAgentGetConfigValue {
             result: SchemaValue,
+        },
+        SecretRevealed {
+            secret_id: Uuid,
+            pinned_revision: u64,
+            resolved_at: SerializableDateTime,
+            result: Result<(), SecretRevealError>,
+            audit: SecretRevealAudit,
         },
         GolemAgentWebhookUrl {
             result: Result<String, String>
@@ -552,6 +564,7 @@ pub mod host_functions {
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
         (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
+        (GolemSecretsReveal => "golem::secrets::reveal", "reveal", SecretReveal, SecretRevealed),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),

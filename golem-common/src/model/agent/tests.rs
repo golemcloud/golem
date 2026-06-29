@@ -928,7 +928,11 @@ mod agent_error_tests {
                     language: None,
                 }),
                 SchemaValue::Secret(SecretValuePayload {
-                    secret_ref: "shhh".to_string(),
+                    secret_id: uuid::Uuid::nil(),
+                    config_key: None,
+                    version: 0,
+                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    category: None,
                 }),
             ],
         };

@@ -41,6 +41,7 @@ import type {
   Uuid,
   EnvironmentId,
 } from 'golem:core/types@2.0.0';
+import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
 
 export type {
@@ -114,7 +115,7 @@ export type SchemaTypeBody =
   // Discriminated union (closed, inferred-tag)
   | { tag: 'union'; branches: UnionBranch[] }
   // Capability nodes
-  | { tag: 'secret'; spec: SecretSpec }
+  | { tag: 'secret'; spec: Omit<SecretSpec, 'inner'>; inner: SchemaType }
   | { tag: 'quota-token'; spec: QuotaTokenSpec }
   // WASI P3 stubs (parseable only; no semantics yet)
   | { tag: 'future'; element?: SchemaType }
@@ -200,7 +201,7 @@ export type SchemaValue =
   // Discriminated union
   | { tag: 'union'; unionTag: string; body: SchemaValue }
   // Capability nodes
-  | { tag: 'secret'; secretRef: string }
+  | { tag: 'secret'; handle: GuestSecretHandle }
   // An opaque, affine owned `quota-token` handle. Carried by ownership; never
   // inspectable or forgeable from a guest. See `GuestQuotaTokenHandle`.
   | { tag: 'quota-token'; handle: GuestQuotaTokenHandle };
@@ -269,6 +270,8 @@ export const t = {
   datetime: (): SchemaType => schemaType({ tag: 'datetime' }),
   duration: (): SchemaType => schemaType({ tag: 'duration' }),
   quantity: (spec: QuantitySpec): SchemaType => schemaType({ tag: 'quantity', spec }),
+  secret: (inner: SchemaType, spec: Omit<SecretSpec, 'inner'> = {}): SchemaType =>
+    schemaType({ tag: 'secret', spec, inner }),
   quotaToken: (spec: QuotaTokenSpec): SchemaType => schemaType({ tag: 'quota-token', spec }),
 };
 
@@ -324,6 +327,7 @@ export const v = {
   datetime: (value: Datetime): SchemaValue => ({ tag: 'datetime', value }),
   duration: (nanoseconds: bigint): SchemaValue => ({ tag: 'duration', nanoseconds }),
   quantity: (value: QuantityValue): SchemaValue => ({ tag: 'quantity', value }),
+  secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
 };
 
@@ -349,6 +353,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   // Quota-token handles are affine capabilities, not structural data: equality
   // is identity only (mirrors the Rust shared-cell `PartialEq`). Without this,
   // two distinct handles would compare equal (both expose no enumerable state).
+  if (a instanceof GuestSecretHandle || b instanceof GuestSecretHandle) return false;
   if (a instanceof GuestQuotaTokenHandle || b instanceof GuestQuotaTokenHandle) return false;
 
   if (typeof a === 'bigint' || typeof b === 'bigint') return a === b;

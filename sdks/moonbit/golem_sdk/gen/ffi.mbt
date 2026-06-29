@@ -2,129 +2,154 @@
 
 ///|
 pub fn mbt_ffi_cabi_realloc(
-src_offset : Int,
-src_size : Int,
-_dst_alignment : Int,
-dst_size : Int,
+  src_offset : Int,
+  src_size : Int,
+  _dst_alignment : Int,
+  dst_size : Int,
 ) -> Int {
-      // malloc
-      if src_offset == 0 && src_size == 0 {
-            return mbt_ffi_malloc(dst_size)
-      }
-      // free
-      if dst_size == 0 {
-            mbt_ffi_free(src_offset)
-            return 0
-      }
-      // realloc
-      let dst = mbt_ffi_malloc(dst_size)
-      mbt_ffi_copy(dst, src_offset, if src_size < dst_size { src_size } else { dst_size })
-      mbt_ffi_free(src_offset)
-      dst
+  // malloc
+  if src_offset == 0 && src_size == 0 {
+    return mbt_ffi_malloc(dst_size)
+  }
+  // free
+  if dst_size == 0 {
+    mbt_ffi_free(src_offset)
+    return 0
+  }
+  // realloc
+  let dst = mbt_ffi_malloc(dst_size)
+  mbt_ffi_copy(
+    dst,
+    src_offset,
+    if src_size < dst_size {
+      src_size
+    } else {
+      dst_size
+    },
+  )
+  mbt_ffi_free(src_offset)
+  dst
 }
 
 ///|
 extern "wasm" fn mbt_ffi_copy(dest : Int, src : Int, len : Int) =
-#|(func (param i32) (param i32) (param i32) local.get 0 local.get 1 local.get 2 memory.copy)
+  #|(func (param i32) (param i32) (param i32) local.get 0 local.get 1 local.get 2 memory.copy)
 
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
-#|(func (param i32) (result i32) (local i32)
-#| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-#| local.tee 1 i32.const 0 call $moonbit.init_array8
-#| local.get 1)
+  #|(func (param i32) (result i32) (local i32)
+  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
+  #| local.tee 1 i32.const 0 call $moonbit.init_array8
+  #| local.get 1)
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
-#|(func (param i32) local.get 0 call $moonbit.decref)
+  #|(func (param i32) local.get 0 call $moonbit.decref)
 
-#doc(hidden)
-pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
-      @guest.wasmExportDiscoverToolsPostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
-      @guest0.wasmExportGetDefinitionPostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
-      @guest.wasmExportInvokeGolemToolGuest(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportInvokeGolemAgentGuestPostReturn(p0 : Int) -> Unit {
-      @guest0.wasmExportInvokeGolemAgentGuestPostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportSave() -> Int {
-      @saveSnapshot.wasmExportSave()
-}
-
-#doc(hidden)
-pub fn wasmExportSavePostReturn(p0 : Int) -> Unit {
-      @saveSnapshot.wasmExportSavePostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportInitializePostReturn(p0 : Int) -> Unit {
-      @guest0.wasmExportInitializePostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportLoadPostReturn(p0 : Int) -> Unit {
-      @loadSnapshot.wasmExportLoadPostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportDiscoverTools() -> Int {
-      @guest.wasmExportDiscoverTools()
-}
-
-#doc(hidden)
-pub fn wasmExportGetDefinition() -> Int {
-      @guest0.wasmExportGetDefinition()
-}
-
+///|
 #doc(hidden)
 pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
-      @guest.wasmExportGetToolPostReturn(p0)
+  @guest.wasmExportGetToolPostReturn(p0)
 }
 
+///|
 #doc(hidden)
-pub fn wasmExportDiscoverAgentTypes() -> Int {
-      @guest0.wasmExportDiscoverAgentTypes()
+pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
+  @guest.wasmExportDiscoverToolsPostReturn(p0)
 }
 
+///|
 #doc(hidden)
-pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
-      @guest.wasmExportInvokeGolemToolGuestPostReturn(p0)
+pub fn wasmExportLoadPostReturn(p0 : Int) -> Unit {
+  @loadSnapshot.wasmExportLoadPostReturn(p0)
 }
 
-#doc(hidden)
-pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
-      @guest.wasmExportGetTool(p0, p1)
-}
-
-#doc(hidden)
-pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
-      @guest0.wasmExportDiscoverAgentTypesPostReturn(p0)
-}
-
+///|
 #doc(hidden)
 pub fn wasmExportInitialize(p0 : Int) -> Int {
-      @guest0.wasmExportInitialize(p0)
+  @guest0.wasmExportInitialize(p0)
 }
 
-#doc(hidden)
-pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
-      @loadSnapshot.wasmExportLoad(p0, p1, p2, p3)
-}
-
+///|
 #doc(hidden)
 pub fn wasmExportInvokeGolemAgentGuest(p0 : Int) -> Int {
-      @guest0.wasmExportInvokeGolemAgentGuest(p0)
+  @guest0.wasmExportInvokeGolemAgentGuest(p0)
 }
 
+///|
+#doc(hidden)
+pub fn wasmExportDiscoverAgentTypes() -> Int {
+  @guest0.wasmExportDiscoverAgentTypes()
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportDiscoverTools() -> Int {
+  @guest.wasmExportDiscoverTools()
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
+  @guest.wasmExportInvokeGolemToolGuestPostReturn(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
+  @guest.wasmExportGetTool(p0, p1)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
+  @loadSnapshot.wasmExportLoad(p0, p1, p2, p3)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
+  @guest0.wasmExportDiscoverAgentTypesPostReturn(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportSave() -> Int {
+  @saveSnapshot.wasmExportSave()
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportSavePostReturn(p0 : Int) -> Unit {
+  @saveSnapshot.wasmExportSavePostReturn(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportInitializePostReturn(p0 : Int) -> Unit {
+  @guest0.wasmExportInitializePostReturn(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportInvokeGolemAgentGuestPostReturn(p0 : Int) -> Unit {
+  @guest0.wasmExportInvokeGolemAgentGuestPostReturn(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
+  @guest.wasmExportInvokeGolemToolGuest(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportGetDefinition() -> Int {
+  @guest0.wasmExportGetDefinition()
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
+  @guest0.wasmExportGetDefinitionPostReturn(p0)
+}

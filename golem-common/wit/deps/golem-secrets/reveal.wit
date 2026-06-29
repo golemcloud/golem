@@ -20,14 +20,12 @@ package golem:secrets@0.1.0;
 /// fallback for genuinely custom protocols the host doesn't
 /// natively support; its use is loud by design.
 interface reveal {
-  use types.{secret, secret-error};
+  use types.{secret-error};
+  use golem:core/types@2.0.0.{secret, schema-graph, schema-value-tree};
 
-  /// Reveal as a string. For secrets whose `category` is binary
-  /// (e.g., `private-key`), prefer `reveal-bytes`.
-  reveal-as-string: func(s: borrow<secret>)
-    -> result<string, secret-error>;
-
-  /// Reveal as raw bytes. For inherently-byte secrets.
-  reveal-as-bytes: func(s: borrow<secret>)
-    -> result<list<u8>, secret-error>;
+  /// Unpack a secret resource to its inner typed value. `expected` is the
+  /// guest's inner-type graph; the host validates it against the secret's
+  /// pinned inner type and returns the stored value as a schema-value-tree.
+  reveal: func(s: borrow<secret>, expected: schema-graph)
+    -> result<schema-value-tree, secret-error>;
 }

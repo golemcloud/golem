@@ -30,9 +30,9 @@ pub fn Duration::new(nanoseconds : Int64) -> Duration {
 
 ///|
 pub(open) trait QuantityUnit {
-  type_id() -> String
-  base_unit() -> String
-  allowed_suffixes() -> Array[String]
+  fn type_id() -> String
+  fn base_unit() -> String
+  fn allowed_suffixes() -> Array[String]
 }
 
 ///|
@@ -89,22 +89,22 @@ fn default_url_restrictions() -> @types.UrlRestrictions {
 }
 
 ///|
-pub impl IntoSchema for Path with type_id() {
+pub impl IntoSchema for Path with fn type_id() {
   "golem.core.Path"
 }
 
 ///|
-pub impl IntoSchema for Path with register_in(_b) {
+pub impl IntoSchema for Path with fn register_in(_b) {
   @model.schema_type(Path(default_path_spec()))
 }
 
 ///|
-pub impl IntoSchema for Path with to_value(self) {
+pub impl IntoSchema for Path with fn to_value(self) {
   Path(self.value)
 }
 
 ///|
-pub impl FromSchema for Path with from_value(v) {
+pub impl FromSchema for Path with fn from_value(v) {
   match v {
     Path(value) => { value, }
     other =>
@@ -113,22 +113,22 @@ pub impl FromSchema for Path with from_value(v) {
 }
 
 ///|
-pub impl IntoSchema for Url with type_id() {
+pub impl IntoSchema for Url with fn type_id() {
   "golem.core.Url"
 }
 
 ///|
-pub impl IntoSchema for Url with register_in(_b) {
+pub impl IntoSchema for Url with fn register_in(_b) {
   @model.schema_type(Url(default_url_restrictions()))
 }
 
 ///|
-pub impl IntoSchema for Url with to_value(self) {
+pub impl IntoSchema for Url with fn to_value(self) {
   Url(self.value)
 }
 
 ///|
-pub impl FromSchema for Url with from_value(v) {
+pub impl FromSchema for Url with fn from_value(v) {
   match v {
     Url(value) => { value, }
     other =>
@@ -137,22 +137,22 @@ pub impl FromSchema for Url with from_value(v) {
 }
 
 ///|
-pub impl IntoSchema for @types.Datetime with type_id() {
+pub impl IntoSchema for @types.Datetime with fn type_id() {
   "golem.core.Datetime"
 }
 
 ///|
-pub impl IntoSchema for @types.Datetime with register_in(_b) {
+pub impl IntoSchema for @types.Datetime with fn register_in(_b) {
   @model.schema_type(Datetime)
 }
 
 ///|
-pub impl IntoSchema for @types.Datetime with to_value(self) {
+pub impl IntoSchema for @types.Datetime with fn to_value(self) {
   Datetime(self)
 }
 
 ///|
-pub impl FromSchema for @types.Datetime with from_value(v) {
+pub impl FromSchema for @types.Datetime with fn from_value(v) {
   match v {
     Datetime(value) => value
     other =>
@@ -165,22 +165,22 @@ pub impl FromSchema for @types.Datetime with from_value(v) {
 }
 
 ///|
-pub impl IntoSchema for Duration with type_id() {
+pub impl IntoSchema for Duration with fn type_id() {
   "golem.core.Duration"
 }
 
 ///|
-pub impl IntoSchema for Duration with register_in(_b) {
+pub impl IntoSchema for Duration with fn register_in(_b) {
   @model.schema_type(Duration)
 }
 
 ///|
-pub impl IntoSchema for Duration with to_value(self) {
+pub impl IntoSchema for Duration with fn to_value(self) {
   Duration(self.nanoseconds)
 }
 
 ///|
-pub impl FromSchema for Duration with from_value(v) {
+pub impl FromSchema for Duration with fn from_value(v) {
   match v {
     Duration(nanoseconds) => { nanoseconds, }
     other =>
@@ -193,12 +193,12 @@ pub impl FromSchema for Duration with from_value(v) {
 }
 
 ///|
-pub impl[U : QuantityUnit] IntoSchema for Quantity[U] with type_id() {
+pub impl[U : QuantityUnit] IntoSchema for Quantity[U] with fn type_id() {
   type_id_with_args("golem.core.Quantity", [U::type_id()])
 }
 
 ///|
-pub impl[U : QuantityUnit] IntoSchema for Quantity[U] with register_in(_b) {
+pub impl[U : QuantityUnit] IntoSchema for Quantity[U] with fn register_in(_b) {
   @model.schema_type(
     Quantity({
       base_unit: U::base_unit(),
@@ -210,12 +210,12 @@ pub impl[U : QuantityUnit] IntoSchema for Quantity[U] with register_in(_b) {
 }
 
 ///|
-pub impl[U : QuantityUnit] IntoSchema for Quantity[U] with to_value(self) {
+pub impl[U : QuantityUnit] IntoSchema for Quantity[U] with fn to_value(self) {
   Quantity(self.value())
 }
 
 ///|
-pub impl[U : QuantityUnit] FromSchema for Quantity[U] with from_value(v) {
+pub impl[U : QuantityUnit] FromSchema for Quantity[U] with fn from_value(v) {
   match v {
     Quantity(value) => {
       let tag : TypeTag[U] = type_tag()

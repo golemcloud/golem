@@ -20,7 +20,9 @@ use crate::schema::schema_type::{
     QuantitySpec, QuantityValue, SchemaType, TextRestrictions, UnionBranch, UrlRestrictions,
     VariantCaseType,
 };
-use crate::schema::schema_value::{QuotaTokenVariantValue, ResultValuePayload, SchemaValue};
+use crate::schema::schema_value::{
+    QuotaTokenVariantValue, ResultValuePayload, SchemaValue, SecretVariantValue,
+};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
@@ -38,17 +40,30 @@ pub enum EncodeError {
     /// WASM boundary only as owned handles, which requires the host-side
     /// [`encode_value_with`] entry point and a `QuotaTokenResolver`.
     QuotaTokenNotTransportable,
+    /// A [`SchemaValue::Secret`] snapshot was encountered while encoding a
+    /// value tree through the pure (resolver-less) path. Secrets cross the
+    /// WASM boundary only as owned handles.
+    SecretNotTransportable,
     /// The host `QuotaTokenResolver` failed to materialize an owned handle from
     /// a snapshot.
     QuotaResolver(String),
+    /// The host `SecretResolver` failed to materialize an owned handle from a
+    /// snapshot.
+    SecretResolver(String),
     /// (Guest) A quota-token value was encoded after its owned handle had
     /// already been transferred out by an earlier encode. An owned
     /// `quota-token` can only be lowered once.
     QuotaTokenAlreadyConsumed,
+    /// (Guest) A secret value was encoded after its owned handle had already
+    /// been transferred out by an earlier encode.
+    SecretAlreadyConsumed,
     /// (Guest) The same owned quota-token handle appeared more than once in a
     /// single value tree. An owned `quota-token` cannot be lowered twice; split
     /// the token first if two independent capabilities are required.
     AliasedQuotaTokenHandle,
+    /// (Guest) The same owned secret handle appeared more than once in a single
+    /// value tree.
+    AliasedSecretHandle,
 }
 
 impl Display for EncodeError {
@@ -60,17 +75,34 @@ impl Display for EncodeError {
                 f,
                 "quota-token values can only be encoded through the host resolver-aware path"
             ),
+            EncodeError::SecretNotTransportable => write!(
+                f,
+                "secret values can only be encoded through a secret resolver-aware path"
+            ),
             EncodeError::QuotaResolver(msg) => {
                 write!(f, "quota-token handle could not be created: {msg}")
+            }
+            EncodeError::SecretResolver(msg) => {
+                write!(f, "secret handle could not be created: {msg}")
             }
             EncodeError::QuotaTokenAlreadyConsumed => write!(
                 f,
                 "quota-token handle was already transferred; an owned quota-token can only be sent once"
             ),
+            EncodeError::SecretAlreadyConsumed => write!(
+                f,
+                "secret handle was already transferred; an owned secret can only be sent once"
+            ),
             EncodeError::AliasedQuotaTokenHandle => write!(
                 f,
                 "the same quota-token handle appeared more than once in one value tree"
             ),
+            EncodeError::AliasedSecretHandle => {
+                write!(
+                    f,
+                    "the same secret handle appeared more than once in one value tree"
+                )
+            }
         }
     }
 }
@@ -142,9 +174,11 @@ impl GraphEncoder {
 /// the host-side [`encode_value_with`] when quota tokens may be present.
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
 pub fn encode_value(value: &SchemaValue) -> Result<wire::SchemaValueTree, EncodeError> {
-    encode_value_inner(value, &mut |_snapshot| {
-        Err(EncodeError::QuotaTokenNotTransportable)
-    })
+    encode_value_inner(
+        value,
+        &mut |_snapshot| Err(EncodeError::QuotaTokenNotTransportable),
+        &mut |_snapshot| Err(EncodeError::SecretNotTransportable),
+    )
 }
 
 /// Encode a value tree on a guest, transferring each [`SchemaValue::QuotaToken`]
@@ -162,37 +196,54 @@ pub fn encode_value(value: &SchemaValue) -> Result<wire::SchemaValueTree, Encode
 /// token.
 #[cfg(all(feature = "guest", not(feature = "host")))]
 pub fn encode_value(value: &SchemaValue) -> Result<wire::SchemaValueTree, EncodeError> {
-    preflight_quota_handles(value)?;
-    encode_value_inner(value, &mut |handle| {
-        let owned = handle
-            .take()
-            .ok_or(EncodeError::QuotaTokenAlreadyConsumed)?;
-        Ok(wire::SchemaValueNode::QuotaTokenHandle(owned))
-    })
+    preflight_guest_handles(value)?;
+    encode_value_inner(
+        value,
+        &mut |handle| {
+            let owned = handle
+                .take()
+                .ok_or(EncodeError::QuotaTokenAlreadyConsumed)?;
+            Ok(wire::SchemaValueNode::QuotaTokenHandle(owned))
+        },
+        &mut |handle| {
+            let owned = handle.take().ok_or(EncodeError::SecretAlreadyConsumed)?;
+            Ok(wire::SchemaValueNode::SecretValue(owned))
+        },
+    )
 }
 
 /// Walk a value tree and verify that every quota-token handle is still present
 /// and unique, without taking any handle. Returns an error if a handle was
 /// already consumed or the same handle appears more than once.
 #[cfg(all(feature = "guest", not(feature = "host")))]
-fn preflight_quota_handles(value: &SchemaValue) -> Result<(), EncodeError> {
+fn preflight_guest_handles(value: &SchemaValue) -> Result<(), EncodeError> {
     fn walk(
         value: &SchemaValue,
-        seen: &mut std::collections::HashSet<*const ()>,
+        seen_quota: &mut std::collections::HashSet<*const ()>,
+        seen_secret: &mut std::collections::HashSet<*const ()>,
     ) -> Result<(), EncodeError> {
         match value {
             SchemaValue::QuotaToken(handle) => {
                 if !handle.is_present() {
                     return Err(EncodeError::QuotaTokenAlreadyConsumed);
                 }
-                if !seen.insert(handle.cell_id()) {
+                if !seen_quota.insert(handle.cell_id()) {
                     return Err(EncodeError::AliasedQuotaTokenHandle);
+                }
+                Ok(())
+            }
+            SchemaValue::Secret(handle) => {
+                if !handle.is_present() {
+                    return Err(EncodeError::SecretAlreadyConsumed);
+                }
+                if !seen_secret.insert(handle.cell_id()) {
+                    return Err(EncodeError::AliasedSecretHandle);
                 }
                 Ok(())
             }
             SchemaValue::Record { fields } => {
                 for f in fields {
-                    walk(f, seen)?;
+                    walk(f, seen_quota, seen_secret)?;
                 }
                 Ok(())
             }
@@ -200,26 +251,26 @@ fn preflight_quota_handles(value: &SchemaValue) -> Result<(), EncodeError> {
             | SchemaValue::List { elements }
             | SchemaValue::FixedList { elements } => {
                 for e in elements {
-                    walk(e, seen)?;
+                    walk(e, seen_quota, seen_secret)?;
                 }
                 Ok(())
             }
             SchemaValue::Variant(p) => {
                 if let Some(payload) = &p.payload {
-                    walk(payload, seen)?;
+                    walk(payload, seen_quota, seen_secret)?;
                 }
                 Ok(())
             }
             SchemaValue::Map { entries } => {
                 for (k, v) in entries {
-                    walk(k, seen)?;
-                    walk(v, seen)?;
+                    walk(k, seen_quota, seen_secret)?;
+                    walk(v, seen_quota, seen_secret)?;
                 }
                 Ok(())
             }
             SchemaValue::Option { inner } => {
                 if let Some(inner) = inner {
-                    walk(inner, seen)?;
+                    walk(inner, seen_quota, seen_secret)?;
                 }
                 Ok(())
             }
@@ -228,17 +279,18 @@ fn preflight_quota_handles(value: &SchemaValue) -> Result<(), EncodeError> {
                     ResultValuePayload::Ok { value } | ResultValuePayload::Err { value } => value,
                 };
                 if let Some(inner) = inner {
-                    walk(inner, seen)?;
+                    walk(inner, seen_quota, seen_secret)?;
                 }
                 Ok(())
             }
-            SchemaValue::Union(p) => walk(&p.body, seen),
+            SchemaValue::Union(p) => walk(&p.body, seen_quota, seen_secret),
             _ => Ok(()),
         }
     }
 
-    let mut seen = std::collections::HashSet::new();
-    walk(value, &mut seen)
+    let mut seen_quota = std::collections::HashSet::new();
+    let mut seen_secret = std::collections::HashSet::new();
+    walk(value, &mut seen_quota, &mut seen_secret)
 }
 
 /// Encode a value tree, turning each [`SchemaValue::QuotaToken`] snapshot into a
@@ -254,26 +306,43 @@ fn preflight_quota_handles(value: &SchemaValue) -> Result<(), EncodeError> {
 /// [`super::QuotaTokenResolver::drop_handle`] so none leak from the resource
 /// table.
 #[cfg(all(feature = "host", not(feature = "guest")))]
-pub fn encode_value_with<R: super::QuotaTokenResolver>(
+pub fn encode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
     value: &SchemaValue,
     resolver: &mut R,
 ) -> Result<wire::SchemaValueTree, EncodeError> {
+    let resolver = std::cell::RefCell::new(resolver);
     let mut ctx = ValueCtx::default();
-    let root = ctx.encode(value, &mut |snapshot| {
-        let handle = resolver
-            .handle_from_snapshot(snapshot)
-            .map_err(|e| EncodeError::QuotaResolver(e.to_string()))?;
-        Ok(wire::SchemaValueNode::QuotaTokenHandle(handle))
-    });
+    let root = ctx.encode(
+        value,
+        &mut |snapshot| {
+            let mut resolver = resolver.borrow_mut();
+            let handle = resolver
+                .handle_from_snapshot(snapshot)
+                .map_err(|e| EncodeError::QuotaResolver(e.to_string()))?;
+            Ok(wire::SchemaValueNode::QuotaTokenHandle(handle))
+        },
+        &mut |snapshot| {
+            let mut resolver = resolver.borrow_mut();
+            let handle = resolver
+                .secret_handle_from_snapshot(snapshot)
+                .map_err(|e| EncodeError::SecretResolver(e.to_string()))?;
+            Ok(wire::SchemaValueNode::SecretValue(handle))
+        },
+    );
     match root {
         Ok(root) => Ok(wire::SchemaValueTree {
             value_nodes: ctx.value_nodes,
             root,
         }),
         Err(err) => {
+            let mut resolver = resolver.borrow_mut();
             for node in ctx.value_nodes {
-                if let wire::SchemaValueNode::QuotaTokenHandle(handle) = node {
-                    resolver.drop_handle(handle);
+                match node {
+                    wire::SchemaValueNode::QuotaTokenHandle(handle) => resolver.drop_handle(handle),
+                    wire::SchemaValueNode::SecretValue(handle) => {
+                        super::SecretResolver::drop_secret_handle(&mut **resolver, handle)
+                    }
+                    _ => {}
                 }
             }
             Err(err)
@@ -284,9 +353,10 @@ pub fn encode_value_with<R: super::QuotaTokenResolver>(
 fn encode_value_inner(
     value: &SchemaValue,
     quota: &mut dyn FnMut(&QuotaTokenVariantValue) -> Result<wire::SchemaValueNode, EncodeError>,
+    secret: &mut dyn FnMut(&SecretVariantValue) -> Result<wire::SchemaValueNode, EncodeError>,
 ) -> Result<wire::SchemaValueTree, EncodeError> {
     let mut ctx = ValueCtx::default();
-    let root = ctx.encode(value, quota)?;
+    let root = ctx.encode(value, quota, secret)?;
     Ok(wire::SchemaValueTree {
         value_nodes: ctx.value_nodes,
         root,
@@ -451,9 +521,13 @@ impl GraphCtx {
                     .collect::<Result<Vec<_>, _>>()?;
                 wire::SchemaTypeBody::UnionType(wire::UnionSpec { branches })
             }
-            SchemaType::Secret { spec, .. } => wire::SchemaTypeBody::SecretType(wire::SecretSpec {
-                category: spec.category.clone(),
-            }),
+            SchemaType::Secret { spec, .. } => {
+                let inner = self.encode_type(&spec.inner)?;
+                wire::SchemaTypeBody::SecretType(wire::SecretSpec {
+                    inner,
+                    category: spec.category.clone(),
+                })
+            }
             SchemaType::QuotaToken { spec, .. } => {
                 wire::SchemaTypeBody::QuotaTokenType(wire::QuotaTokenSpec {
                     resource_name: spec.resource_name.clone(),
@@ -626,6 +700,7 @@ impl ValueCtx {
         quota: &mut dyn FnMut(
             &QuotaTokenVariantValue,
         ) -> Result<wire::SchemaValueNode, EncodeError>,
+        secret: &mut dyn FnMut(&SecretVariantValue) -> Result<wire::SchemaValueNode, EncodeError>,
     ) -> Result<wire::ValueNodeIndex, EncodeError> {
         let node = match value {
             SchemaValue::Bool(b) => wire::SchemaValueNode::BoolValue(*b),
@@ -644,13 +719,13 @@ impl ValueCtx {
             SchemaValue::Record { fields } => {
                 let mut indices = Vec::with_capacity(fields.len());
                 for v in fields {
-                    indices.push(self.encode(v, quota)?);
+                    indices.push(self.encode(v, quota, secret)?);
                 }
                 wire::SchemaValueNode::RecordValue(indices)
             }
             SchemaValue::Variant(p) => {
                 let payload = match &p.payload {
-                    Some(v) => Some(self.encode(v, quota)?),
+                    Some(v) => Some(self.encode(v, quota, secret)?),
                     None => None,
                 };
                 wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
@@ -663,21 +738,21 @@ impl ValueCtx {
             SchemaValue::Tuple { elements } => {
                 let mut indices = Vec::with_capacity(elements.len());
                 for v in elements {
-                    indices.push(self.encode(v, quota)?);
+                    indices.push(self.encode(v, quota, secret)?);
                 }
                 wire::SchemaValueNode::TupleValue(indices)
             }
             SchemaValue::List { elements } => {
                 let mut indices = Vec::with_capacity(elements.len());
                 for v in elements {
-                    indices.push(self.encode(v, quota)?);
+                    indices.push(self.encode(v, quota, secret)?);
                 }
                 wire::SchemaValueNode::ListValue(indices)
             }
             SchemaValue::FixedList { elements } => {
                 let mut indices = Vec::with_capacity(elements.len());
                 for v in elements {
-                    indices.push(self.encode(v, quota)?);
+                    indices.push(self.encode(v, quota, secret)?);
                 }
                 wire::SchemaValueNode::FixedListValue(indices)
             }
@@ -685,15 +760,15 @@ impl ValueCtx {
                 let mut encoded = Vec::with_capacity(entries.len());
                 for (k, v) in entries {
                     encoded.push(wire::MapEntry {
-                        key: self.encode(k, quota)?,
-                        value: self.encode(v, quota)?,
+                        key: self.encode(k, quota, secret)?,
+                        value: self.encode(v, quota, secret)?,
                     });
                 }
                 wire::SchemaValueNode::MapValue(encoded)
             }
             SchemaValue::Option { inner } => {
                 let inner = match inner {
-                    Some(v) => Some(self.encode(v, quota)?),
+                    Some(v) => Some(self.encode(v, quota, secret)?),
                     None => None,
                 };
                 wire::SchemaValueNode::OptionValue(inner)
@@ -702,14 +777,14 @@ impl ValueCtx {
                 let payload = match p {
                     ResultValuePayload::Ok { value } => {
                         let v = match value {
-                            Some(v) => Some(self.encode(v, quota)?),
+                            Some(v) => Some(self.encode(v, quota, secret)?),
                             None => None,
                         };
                         wire::ResultValuePayload::OkValue(v)
                     }
                     ResultValuePayload::Err { value } => {
                         let v = match value {
-                            Some(v) => Some(self.encode(v, quota)?),
+                            Some(v) => Some(self.encode(v, quota, secret)?),
                             None => None,
                         };
                         wire::ResultValuePayload::ErrValue(v)
@@ -750,17 +825,13 @@ impl ValueCtx {
                 })
             }
             SchemaValue::Union(p) => {
-                let body = self.encode(&p.body, quota)?;
+                let body = self.encode(&p.body, quota, secret)?;
                 wire::SchemaValueNode::UnionValue(wire::UnionValuePayload {
                     tag: p.tag.clone(),
                     body,
                 })
             }
-            SchemaValue::Secret(s) => {
-                wire::SchemaValueNode::SecretValue(wire::SecretValuePayload {
-                    secret_ref: s.secret_ref.clone(),
-                })
-            }
+            SchemaValue::Secret(s) => secret(s)?,
             SchemaValue::QuotaToken(q) => quota(q)?,
         };
         Ok(self.push(node))
