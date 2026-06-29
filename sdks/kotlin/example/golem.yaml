@@ -1,0 +1,23 @@
+manifestVersion: 1.5.0
+app: kotlin-counter
+
+includes:
+- ../kotlin-template.yaml
+
+components:
+  example:counter:
+    templates: kotlin
+
+# Expose the counter agent over HTTP. Routes are driven by the agent's @Agent(mount) /
+# @Endpoint metadata; the manifest only declares the deployment domain + agent types.
+httpApi:
+  deployments:
+    local:
+    - domain: localhost
+      agents:
+        CounterAgent: {}
+
+environments:
+  local:
+    default: true
+    server: local

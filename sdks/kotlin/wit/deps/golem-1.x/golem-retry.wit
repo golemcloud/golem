@@ -1,0 +1,165 @@
+package golem:api@1.5.0;
+
+interface retry {
+    use wasi:clocks/monotonic-clock@0.2.3.{duration};
+
+    // ── Predicate value ──────────────────────────────────────────────
+
+    /// Dynamic value for property comparisons in retry predicates
+    variant predicate-value {
+        text(string),
+        integer(s64),
+        boolean(bool),
+    }
+
+    // ── Predicate tree (flattened) ───────────────────────────────────
+
+    /// Index into a retry-predicate's node list
+    type predicate-node-index = s32;
+
+    /// A composable predicate tree for matching retry contexts.
+    /// Root is nodes[0]. Children referenced by predicate-node-index.
+    record retry-predicate {
+        nodes: list<predicate-node>,
+    }
+
+    variant predicate-node {
+        prop-eq(property-comparison),
+        prop-neq(property-comparison),
+        prop-gt(property-comparison),
+        prop-gte(property-comparison),
+        prop-lt(property-comparison),
+        prop-lte(property-comparison),
+        prop-exists(string),
+        prop-in(property-set-check),
+        prop-matches(property-pattern),
+        prop-starts-with(property-pattern),
+        prop-contains(property-pattern),
+        pred-and(tuple<predicate-node-index, predicate-node-index>),
+        pred-or(tuple<predicate-node-index, predicate-node-index>),
+        pred-not(predicate-node-index),
+        pred-true,
+        pred-false,
+    }
+
+    record property-comparison {
+        property-name: string,
+        value: predicate-value,
+    }
+
+    record property-set-check {
+        property-name: string,
+        values: list<predicate-value>,
+    }
+
+    record property-pattern {
+        property-name: string,
+        pattern: string,
+    }
+
+    // ── Policy tree (flattened) ──────────────────────────────────────
+
+    /// Index into a retry-policy's node list
+    type policy-node-index = s32;
+
+    /// A composable retry policy tree.
+    /// Root is nodes[0]. Children referenced by policy-node-index.
+    record retry-policy {
+        nodes: list<policy-node>,
+    }
+
+    variant policy-node {
+        periodic(duration),
+        exponential(exponential-config),
+        fibonacci(fibonacci-config),
+        immediate,
+        never,
+        count-box(count-box-config),
+        time-box(time-box-config),
+        clamp-delay(clamp-config),
+        add-delay(add-delay-config),
+        jitter(jitter-config),
+        filtered-on(filtered-config),
+        and-then(tuple<policy-node-index, policy-node-index>),
+        policy-union(tuple<policy-node-index, policy-node-index>),
+        policy-intersect(tuple<policy-node-index, policy-node-index>),
+    }
+
+    record exponential-config {
+        base-delay: duration,
+        factor: f64,
+    }
+
+    record fibonacci-config {
+        first: duration,
+        second: duration,
+    }
+
+    record count-box-config {
+        max-retries: u32,
+        inner: policy-node-index,
+    }
+
+    record time-box-config {
+        limit: duration,
+        inner: policy-node-index,
+    }
+
+    record clamp-config {
+        min-delay: duration,
+        max-delay: duration,
+        inner: policy-node-index,
+    }
+
+    record add-delay-config {
+        delay: duration,
+        inner: policy-node-index,
+    }
+
+    record jitter-config {
+        factor: f64,
+        inner: policy-node-index,
+    }
+
+    /// filtered-config embeds a full retry-predicate inline (self-contained)
+    record filtered-config {
+        predicate: retry-predicate,
+        inner: policy-node-index,
+    }
+
+    // ── Named policy rule ────────────────────────────────────────────
+
+    /// A named retry policy rule: predicate selects when it applies,
+    /// policy defines the retry strategy, priority controls evaluation order
+    /// (higher = checked first).
+    record named-retry-policy {
+        name: string,
+        priority: u32,
+        predicate: retry-predicate,
+        policy: retry-policy,
+    }
+
+    // ── Host functions ───────────────────────────────────────────────
+
+    /// Get all retry policies active for this agent
+    get-retry-policies: func() -> list<named-retry-policy>;
+
+    /// Get a specific retry policy by name
+    get-retry-policy-by-name: func(name: string) -> option<named-retry-policy>;
+
+    /// Resolve the matching retry policy for a given operation context.
+    /// Evaluates named policies in descending priority order; returns the
+    /// policy from the first rule whose predicate matches, or none.
+    resolve-retry-policy: func(
+        verb: string,
+        noun-uri: string,
+        properties: list<tuple<string, predicate-value>>,
+    ) -> option<retry-policy>;
+
+    /// Add or overwrite a named retry policy (persisted to oplog).
+    /// If a policy with the same name exists, it is replaced.
+    set-retry-policy: func(policy: named-retry-policy);
+
+    /// Remove a named retry policy by name (persisted to oplog).
+    remove-retry-policy: func(name: string);
+}

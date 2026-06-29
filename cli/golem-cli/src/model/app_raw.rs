@@ -897,6 +897,7 @@ impl BridgeSdks {
             GuestLanguage::Rust => self.rust.as_ref(),
             GuestLanguage::TypeScript => self.ts.as_ref(),
             GuestLanguage::Scala => self.scala.as_ref(),
+            GuestLanguage::Kotlin => None,
             GuestLanguage::MoonBit => self.moonbit.as_ref(),
         }
     }

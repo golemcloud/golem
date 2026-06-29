@@ -1,0 +1,6 @@
+/golem-temp
+/.golem
+/.generated
+/build
+/.gradle
+/kotlin-js-store

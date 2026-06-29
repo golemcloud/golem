@@ -1,0 +1,17 @@
+# Build artifacts and regenerable outputs for the Kotlin SDK toolchain.
+# The embedded guest runtime is committed at
+# gradle-plugin/src/main/resources/golem/wasm/agent_guest.wasm — NOT under .generated.
+
+# Regenerable via scripts/generate-agent-guest-wasm.sh
+.generated/
+
+# Gradle / Kotlin-JS build outputs
+build/
+.gradle/
+.kotlin/
+kotlin-js-store/
+node_modules/
+
+# Golem build/run scratch
+golem-temp/
+.golem/
