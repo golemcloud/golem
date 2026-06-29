@@ -37,6 +37,30 @@ use camino::Utf8Path;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::schema::AgentTypeSchema;
 use heck::ToKebabCase;
+use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BridgeMode {
+    External,
+    Guest,
+}
+
+impl BridgeMode {
+    pub fn id(&self) -> &'static str {
+        match self {
+            BridgeMode::External => "external",
+            BridgeMode::Guest => "guest",
+        }
+    }
+}
+
+impl Display for BridgeMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id())
+    }
+}
 
 pub trait BridgeGenerator {
     fn new(
@@ -51,4 +75,14 @@ pub trait BridgeGenerator {
 
 pub fn bridge_client_directory_name(agent_type_name: &AgentTypeName) -> String {
     format!("{}-client", agent_type_name.as_str().to_kebab_case())
+}
+
+pub fn bridge_client_directory_name_for_mode(
+    agent_type_name: &AgentTypeName,
+    mode: BridgeMode,
+) -> String {
+    match mode {
+        BridgeMode::External => bridge_client_directory_name(agent_type_name),
+        BridgeMode::Guest => format!("{}-guest-client", agent_type_name.as_str().to_kebab_case()),
+    }
 }

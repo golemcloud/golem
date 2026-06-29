@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
-use crate::bridge_gen::bridge_client_directory_name;
+use crate::bridge_gen::{
+    BridgeMode, bridge_client_directory_name, bridge_client_directory_name_for_mode,
+};
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
@@ -277,6 +279,7 @@ pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
     pub agent_type: AgentTypeSchema,
     pub target_language: GuestLanguage,
+    pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
 }
 
@@ -836,19 +839,41 @@ impl Application {
         &self,
         agent_type_name: &AgentTypeName,
         language: GuestLanguage,
+        mode: BridgeMode,
     ) -> PathBuf {
-        match self
-            .bridge_sdks
-            .value
-            .for_language(language)
-            .and_then(|sdk| sdk.output_dir.as_ref())
-        {
-            Some(output_dir) => self.bridge_sdks.source.join(output_dir),
-            None => self
-                .temp_dir()
-                .join("bridge-sdk")
-                .join(language.id())
-                .join(bridge_client_directory_name(agent_type_name)),
+        let output_dir = match mode {
+            BridgeMode::External => self
+                .bridge_sdks
+                .value
+                .for_language(language)
+                .and_then(|sdk| sdk.output_dir.as_ref()),
+            BridgeMode::Guest => self
+                .bridge_sdks
+                .value
+                .for_language(language)
+                .and_then(|sdk| sdk.guest.as_ref())
+                .and_then(|sdk| sdk.output_dir.as_ref()),
+        };
+
+        match output_dir {
+            Some(output_dir) => self
+                .bridge_sdks
+                .source
+                .join(output_dir)
+                .join(bridge_client_directory_name_for_mode(agent_type_name, mode)),
+            None => match mode {
+                BridgeMode::External => self
+                    .temp_dir()
+                    .join("bridge-sdk")
+                    .join(language.id())
+                    .join(bridge_client_directory_name(agent_type_name)),
+                BridgeMode::Guest => self
+                    .temp_dir()
+                    .join("bridge-sdk")
+                    .join(language.id())
+                    .join(mode.id())
+                    .join(bridge_client_directory_name_for_mode(agent_type_name, mode)),
+            },
         }
     }
 
@@ -2983,13 +3008,10 @@ mod app_builder {
                             self.bridge_sdks =
                                 WithSource::new(app_source_dir.to_path_buf(), bridge);
 
-                            for (target_language, sdk_targets) in
-                                self.bridge_sdks.value.for_all_used_languages()
+                            for (target_language, bridge_mode, sdk_targets) in
+                                self.bridge_sdks.value.for_all_used_modes()
                             {
-                                let sdk_targets = sdk_targets
-                                    .agents
-                                    .clone()
-                                    .into_vec();
+                                let sdk_targets = sdk_targets.agents.clone().into_vec();
                                 let non_unique_targets = sdk_targets.iter()
                                     .counts()
                                     .into_iter()
@@ -2997,7 +3019,10 @@ mod app_builder {
                                     .collect::<Vec<_>>();
 
                                 validation.with_context(
-                                    vec![("bridge SDK language", target_language.to_string())],
+                                    vec![
+                                        ("bridge SDK language", target_language.to_string()),
+                                        ("bridge SDK mode", bridge_mode.to_string()),
+                                    ],
                                     |validation| {
                                         if !non_unique_targets.is_empty() {
                                             validation.add_error(format!(
@@ -3021,6 +3046,26 @@ mod app_builder {
                                         }
                                     },
                                 );
+                            }
+
+                            for (target_language, sdk_targets) in
+                                self.bridge_sdks.value.for_all_languages()
+                            {
+                                if target_language != crate::model::GuestLanguage::Rust
+                                    && sdk_targets
+                                        .and_then(|targets| targets.guest.as_ref())
+                                        .is_some_and(|guest| !guest.agents.is_empty())
+                                {
+                                    validation.with_context(
+                                        vec![("bridge SDK language", target_language.to_string())],
+                                        |validation| {
+                                            validation.add_error(format!(
+                                                "guest bridge mode is not supported for {} yet",
+                                                target_language.to_string().log_color_error_highlight()
+                                            ));
+                                        },
+                                    );
+                                }
                             }
                         }
                 });
@@ -3565,6 +3610,7 @@ mod app_builder {
 
 #[cfg(test)]
 mod test {
+    use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
     use crate::fs;
     use crate::model::app::{
         Application, ApplicationPreload, ComponentPresetSelector, includes_from_yaml_file,
@@ -3900,6 +3946,161 @@ mod test {
 
         let result = app_raw::Application::from_yaml_str(source);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_is_base_for_per_agent_external_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                agents:
+                  - AlphaAgent
+                  - BetaAgent
+                outputDir: bridge-sdk/rust
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+        let beta_agent = parse_agent_type_name("BetaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust")
+                .join(bridge_client_directory_name(&alpha_agent))
+        );
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &beta_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust")
+                .join(bridge_client_directory_name(&beta_agent))
+        );
+    }
+
+    #[test]
+    fn non_rust_guest_bridge_mode_is_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              ts:
+                guest:
+                  agents: SomeAgent
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps =
+            vec![app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap()];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+        }) = preload
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, _warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("guest bridge mode is not supported for TypeScript yet"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn non_rust_guest_bridge_config_without_agents_is_ignored() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              ts:
+                agents: ExternalAgent
+                outputDir: bridge/ts
+                guest:
+                  outputDir: bridge/ts-guest
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps =
+            vec![app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap()];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+        }) = preload
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
     }
 
     #[test]

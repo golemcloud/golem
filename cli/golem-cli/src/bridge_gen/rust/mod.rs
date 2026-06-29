@@ -54,6 +54,12 @@ mod type_name;
 
 pub use type_name::RustTypeName;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RustBridgeMode {
+    ExternalRest,
+    GuestWasmRpc,
+}
+
 /// User-supplied input shape for a constructor or method.
 enum RustInput {
     /// Ordinary positional parameters: `(param_name, schema)` in order.
@@ -97,19 +103,12 @@ impl BridgeGenerator for RustBridgeGenerator {
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
-        let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
-        let type_naming = TypeNaming::new(&agent_type, same_language)?;
-
-        Ok(Self {
-            target_path: target_path.to_path_buf(),
+        Self::new_with_mode(
             agent_type,
+            target_path,
             testing,
-            same_language,
-            type_naming,
-            generated_language_enums: Vec::new(),
-            generated_mimetypes_enums: Vec::new(),
-            known_multimodals: Vec::new(),
-        })
+            RustBridgeMode::ExternalRest,
+        )
     }
 
     fn generate(&mut self) -> anyhow::Result<()> {
@@ -132,6 +131,31 @@ impl BridgeGenerator for RustBridgeGenerator {
 }
 
 impl RustBridgeGenerator {
+    pub fn new_with_mode(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: RustBridgeMode,
+    ) -> anyhow::Result<Self> {
+        if mode == RustBridgeMode::GuestWasmRpc {
+            bail!("guest Rust bridge generation is not implemented yet");
+        }
+
+        let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
+        let type_naming = TypeNaming::new(&agent_type, same_language)?;
+
+        Ok(Self {
+            target_path: target_path.to_path_buf(),
+            agent_type,
+            testing,
+            same_language,
+            type_naming,
+            generated_language_enums: Vec::new(),
+            generated_mimetypes_enums: Vec::new(),
+            known_multimodals: Vec::new(),
+        })
+    }
+
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let golem_source = if self.testing {

@@ -319,6 +319,7 @@ pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub component_name: &'a ComponentName,
     pub agent_type_name: &'a AgentTypeName,
     pub language: &'a GuestLanguage,
+    pub bridge_mode: crate::bridge_gen::BridgeMode,
 }
 
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
@@ -332,8 +333,8 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
         Ok(HashFromString(format!(
-            "{}-{}-{}",
-            self.component_name, self.agent_type_name, self.language
+            "{}-{}-{}-{}",
+            self.component_name, self.agent_type_name, self.language, self.bridge_mode
         )))
     }
 }

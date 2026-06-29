@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::BridgeMode;
 use crate::log::LogColorize;
 use crate::model::GuestLanguage;
 use crate::model::cascade::property::map::MapMergeMode;
@@ -914,6 +915,39 @@ impl BridgeSdks {
             targets.and_then(|targets| (!targets.agents.is_empty()).then_some((lang, targets)))
         })
     }
+
+    pub fn for_all_used_modes(
+        &self,
+    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkModeTargetsRef<'_>)> {
+        let mut result = Vec::new();
+        for (language, targets) in self.for_all_languages() {
+            if let Some(targets) = targets {
+                if !targets.agents.is_empty() {
+                    result.push((
+                        language,
+                        BridgeMode::External,
+                        BridgeSdkModeTargetsRef {
+                            agents: &targets.agents,
+                            output_dir: targets.output_dir.as_ref(),
+                        },
+                    ));
+                }
+                if let Some(guest) = &targets.guest
+                    && !guest.agents.is_empty()
+                {
+                    result.push((
+                        language,
+                        BridgeMode::Guest,
+                        BridgeSdkModeTargetsRef {
+                            agents: &guest.agents,
+                            output_dir: guest.output_dir.as_ref(),
+                        },
+                    ));
+                }
+            }
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -923,6 +957,23 @@ pub struct BridgeSdkLanguageTargets {
     pub agents: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest: Option<BridgeSdkModeTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkModeTargets {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub agents: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeSdkModeTargetsRef<'a> {
+    pub agents: &'a LenientTokenList,
+    pub output_dir: Option<&'a String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1663,8 +1714,22 @@ mod test {
     }
 
     fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
+        (
+            arb_token_list_model(),
+            arb_opt(arb_ident()),
+            arb_opt(arb_bridge_sdk_mode_targets()),
+        )
+            .prop_map(|(agents, output_dir, guest)| BridgeSdkLanguageTargets {
+                agents,
+                output_dir,
+                guest,
+            })
+            .boxed()
+    }
+
+    fn arb_bridge_sdk_mode_targets() -> BoxedStrategy<BridgeSdkModeTargets> {
         (arb_token_list_model(), arb_opt(arb_ident()))
-            .prop_map(|(agents, output_dir)| BridgeSdkLanguageTargets { agents, output_dir })
+            .prop_map(|(agents, output_dir)| BridgeSdkModeTargets { agents, output_dir })
             .boxed()
     }
 
@@ -2032,6 +2097,50 @@ mod test {
         };
 
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+    }
+
+    #[test]
+    fn bridge_rust_agents_keeps_parsing_as_external_bridge_targets() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                agents: CounterAgent
+                outputDir: bridge/rust
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let rust = app.bridge.unwrap().rust.unwrap();
+
+        assert_eq!(rust.agents.into_vec(), vec!["CounterAgent".to_string()]);
+        assert_eq!(rust.output_dir.as_deref(), Some("bridge/rust"));
+        assert!(rust.guest.is_none());
+    }
+
+    #[test]
+    fn bridge_rust_guest_parses_as_guest_bridge_targets() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                agents: ExternalAgent
+                outputDir: bridge/rust
+                guest:
+                  agents:
+                    - GuestAgent
+                  outputDir: bridge/rust-guest
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let rust = app.bridge.unwrap().rust.unwrap();
+        let guest = rust.guest.unwrap();
+
+        assert_eq!(rust.agents.into_vec(), vec!["ExternalAgent".to_string()]);
+        assert_eq!(rust.output_dir.as_deref(), Some("bridge/rust"));
+        assert_eq!(guest.agents.into_vec(), vec!["GuestAgent".to_string()]);
+        assert_eq!(guest.output_dir.as_deref(), Some("bridge/rust-guest"));
     }
 
     #[test]
