@@ -343,10 +343,7 @@ describe('fused codec quota-token atomicity (reproduces review comment)', () => 
     try {
       encodeInputRecordToWit(
         [secret, 2n ** 63n],
-        [
-          secretParam('secret'),
-          schemaParam('count', { defs: new Map(), root: r.s64() }),
-        ],
+        [secretParam('secret'), schemaParam('count', { defs: new Map(), root: r.s64() })],
       );
     } catch (e) {
       error = e;
@@ -437,11 +434,9 @@ describe('fused codec quota-token atomicity (reproduces review comment)', () => 
     };
 
     expect(() =>
-      decodeInputRecordFromWit(
-        wit,
-        [secretParam('secret'), unstructuredTextParam('text')],
-        { tag: 'anonymous' },
-      ),
+      decodeInputRecordFromWit(wit, [secretParam('secret'), unstructuredTextParam('text')], {
+        tag: 'anonymous',
+      }),
     ).toThrow(/Expected variant value/);
 
     expect((wit.valueNodes[1] as { val: unknown }).val).toBe(raw);

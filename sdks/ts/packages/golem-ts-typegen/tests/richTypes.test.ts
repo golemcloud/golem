@@ -251,8 +251,6 @@ describe('rich semantic author types', () => {
     expect(configType.kind).toBe('config');
     if (configType.kind !== 'config') return;
 
-    expect(configType.requiredMembers).toEqual([
-      { path: ['group'], requiredKeys: ['endpoint'] },
-    ]);
+    expect(configType.requiredMembers).toEqual([{ path: ['group'], requiredKeys: ['endpoint'] }]);
   });
 });

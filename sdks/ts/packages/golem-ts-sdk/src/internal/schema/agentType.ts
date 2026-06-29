@@ -116,11 +116,7 @@ export function resolveAgentConfig(
           : prop.secret
             ? prop.type.optional && !handleOptional
             : prop.type.optional;
-      const scope = TypeScope.object(
-        param.name,
-        prop.path.at(-1)!,
-        payloadOptional,
-      );
+      const scope = TypeScope.object(param.name, prop.path.at(-1)!, payloadOptional);
       const graphEither = mapTsTypeToResolvedGraph(prop.type, scope);
       if (Either.isLeft(graphEither)) {
         return Either.left(

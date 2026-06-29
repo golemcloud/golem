@@ -687,9 +687,7 @@ describe('optional secret config runtime loading', () => {
     vi.doMock('golem:secrets/reveal@0.1.0', () => ({ reveal: vi.fn() }));
 
     const { Secret } = await import('../src/agentConfig');
-    const { encodeInputRecordToWit } = await import(
-      '../src/internal/mapping/values/boundaryValue'
-    );
+    const { encodeInputRecordToWit } = await import('../src/internal/mapping/values/boundaryValue');
     const { r } = await import('../src/internal/mapping/types/resolvedType');
 
     const secretParam = {

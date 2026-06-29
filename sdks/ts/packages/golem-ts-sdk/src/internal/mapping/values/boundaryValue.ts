@@ -613,7 +613,10 @@ export function decodeOutputFromWit(
   return result;
 }
 
-function preflightBoundaryDecode(valueNodes: SchemaValueTree['valueNodes'], root: SchemaValueTree['root']): void {
+function preflightBoundaryDecode(
+  valueNodes: SchemaValueTree['valueNodes'],
+  root: SchemaValueTree['root'],
+): void {
   try {
     preflightWitValueTree(valueNodes, root);
   } catch (e) {
@@ -629,7 +632,10 @@ export function cloneWitValueTree(value: SchemaValueTree): SchemaValueTree {
   };
 }
 
-export function consumeOwnedHandlesFromClone(original: SchemaValueTree, clone: SchemaValueTree): void {
+export function consumeOwnedHandlesFromClone(
+  original: SchemaValueTree,
+  clone: SchemaValueTree,
+): void {
   for (let i = 0; i < clone.valueNodes.length; i++) {
     const cloned = clone.valueNodes[i] as { tag: string; val?: unknown };
     if (

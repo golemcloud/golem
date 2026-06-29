@@ -422,9 +422,7 @@ impl AgentSecretService {
                 // The raw validation errors can embed the secret plaintext, so
                 // we surface a generic message instead of the per-error detail.
                 |_errors| AgentSecretError::AgentSecretValueDoesNotMatchType {
-                    errors: vec![
-                        "value does not conform to the declared secret type".to_string(),
-                    ],
+                    errors: vec!["value does not conform to the declared secret type".to_string()],
                 },
             )?;
         }

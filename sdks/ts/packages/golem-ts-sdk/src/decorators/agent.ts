@@ -409,12 +409,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
         return {
           tag: 'ok',
-          val: new ResolvedAgent(
-            instance,
-            agentClassName,
-            agentId,
-            constructorValue,
-          ),
+          val: new ResolvedAgent(instance, agentClassName, agentId, constructorValue),
         };
       },
       initiate: (constructorInput: SchemaValue, principal: Principal) => {

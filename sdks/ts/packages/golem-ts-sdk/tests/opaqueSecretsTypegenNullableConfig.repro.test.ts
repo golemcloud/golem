@@ -183,7 +183,9 @@ describe('opaque secret typegen config adversarial repros', () => {
     expect(Either.isRight(resolved)).toBe(true);
     if (!Either.isRight(resolved)) return;
 
-    expect(normalizeSchema(resolved.val[0].valueGraph.root, resolved.val[0].valueGraph.defs)).toEqual({
+    expect(
+      normalizeSchema(resolved.val[0].valueGraph.root, resolved.val[0].valueGraph.defs),
+    ).toEqual({
       option: { secret: 'string' },
     });
   });
@@ -412,7 +414,9 @@ describe('opaque secret typegen config adversarial repros', () => {
     expect(Either.isRight(resolved)).toBe(true);
     if (!Either.isRight(resolved)) return;
 
-    expect(normalizeSchema(resolved.val[0].valueGraph.root, resolved.val[0].valueGraph.defs)).toEqual({
+    expect(
+      normalizeSchema(resolved.val[0].valueGraph.root, resolved.val[0].valueGraph.defs),
+    ).toEqual({
       option: { secret: 'string' },
     });
   });

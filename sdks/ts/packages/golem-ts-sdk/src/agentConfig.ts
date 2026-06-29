@@ -145,9 +145,7 @@ export class Config<T> {
   private loadConfig(): T {
     const root: Record<string, any> = {};
     const propertyPaths = new Set(
-      this.properties
-        .filter((prop) => !prop.secret)
-        .map((prop) => configPathKey(prop.path)),
+      this.properties.filter((prop) => !prop.secret).map((prop) => configPathKey(prop.path)),
     );
 
     for (const prop of this.properties) {
@@ -284,13 +282,7 @@ function loadSecretConfigKey(
     preservePayloadOptional,
   );
 
-  const handle = loadSecretConfigHandle(
-    path,
-    type,
-    handleOptional,
-    false,
-    preservePayloadOptional,
-  );
+  const handle = loadSecretConfigHandle(path, type, handleOptional, false, preservePayloadOptional);
   if (!handle) {
     if (handleOptional) return undefined;
     throw new Error(`Secret config value at path '${path.join('.')}' is absent`);
@@ -406,7 +398,10 @@ function readSecretConfigHandle(
   });
 }
 
-function throwSecretConfigReadError(value: ReturnType<typeof getConfigValue>, message: string): never {
+function throwSecretConfigReadError(
+  value: ReturnType<typeof getConfigValue>,
+  message: string,
+): never {
   drainUnconsumedQuotaHandles(value.valueNodes);
   throw new Error(message);
 }

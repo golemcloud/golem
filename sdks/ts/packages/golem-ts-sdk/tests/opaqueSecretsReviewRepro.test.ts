@@ -133,9 +133,7 @@ describe('opaque secrets review repros', () => {
       take: () => rawSecret,
     };
 
-    expect(() =>
-      schemaValueToWit({ tag: 'secret', handle: forgedHandle as never }),
-    ).toThrow();
+    expect(() => schemaValueToWit({ tag: 'secret', handle: forgedHandle as never })).toThrow();
   });
 
   it('review repro: schema-value secret decode rejects forged handle-like objects', () => {
@@ -280,7 +278,9 @@ describe('opaque secrets review repros', () => {
         { tag: 'string-value', val: 'not-a-number' },
       ],
       root: 0,
-    } as Parameters<NonNullable<ReturnType<typeof AgentInitiatorRegistry.lookup>['initiateFromWit']>>[0];
+    } as Parameters<
+      NonNullable<ReturnType<typeof AgentInitiatorRegistry.lookup>['initiateFromWit']>
+    >[0];
 
     const initiator = AgentInitiatorRegistry.lookup(agentName)!;
     expect(initiator.initiateFromWit).toBeDefined();
@@ -340,7 +340,9 @@ describe('opaque secrets review repros', () => {
         { tag: 'secret-value', val: rawSecret },
       ],
       root: 0,
-    } as Parameters<NonNullable<ReturnType<typeof AgentInitiatorRegistry.lookup>['initiateFromWit']>>[0];
+    } as Parameters<
+      NonNullable<ReturnType<typeof AgentInitiatorRegistry.lookup>['initiateFromWit']>
+    >[0];
 
     const previousAgentId = (globalThis as any).currentAgentId;
     (globalThis as any).currentAgentId = 'DifferentAgent(secret-constructor)';
@@ -353,7 +355,8 @@ describe('opaque secrets review repros', () => {
 
     expect({
       resultTag: result.tag,
-      secretStillOwnedByCaller: (constructorInput.valueNodes[1] as { val: unknown }).val === rawSecret,
+      secretStillOwnedByCaller:
+        (constructorInput.valueNodes[1] as { val: unknown }).val === rawSecret,
     }).toEqual({
       resultTag: 'err',
       secretStillOwnedByCaller: true,

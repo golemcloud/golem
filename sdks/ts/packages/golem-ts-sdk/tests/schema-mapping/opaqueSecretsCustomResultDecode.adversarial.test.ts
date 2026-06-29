@@ -33,7 +33,9 @@ describe('adversarial opaque secret custom result decode', () => {
     }),
   };
 
-  function decodeOutcome(decode: () => unknown): { tag: 'accepted'; value: unknown } | { tag: 'rejected' } {
+  function decodeOutcome(
+    decode: () => unknown,
+  ): { tag: 'accepted'; value: unknown } | { tag: 'rejected' } {
     try {
       return { tag: 'accepted', value: decode() };
     } catch {

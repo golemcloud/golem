@@ -29,10 +29,7 @@ function getPath(root: unknown, path: readonly string[]): unknown {
 
 describe('agent template export wiring', () => {
   it('SDK entrypoint exports the JS paths the generated WIT wrapper invokes', () => {
-    const wrapper = readFileSync(
-      new URL('../agent-template/src/lib.rs', import.meta.url),
-      'utf8',
-    );
+    const wrapper = readFileSync(new URL('../agent-template/src/lib.rs', import.meta.url), 'utf8');
 
     const invokedPaths = [
       ['guest', 'initialize'],
@@ -57,10 +54,7 @@ describe('agent template export wiring', () => {
   });
 
   it('review repro: exported JS functions satisfy the template arity check', () => {
-    const wrapper = readFileSync(
-      new URL('../agent-template/src/lib.rs', import.meta.url),
-      'utf8',
-    );
+    const wrapper = readFileSync(new URL('../agent-template/src/lib.rs', import.meta.url), 'utf8');
 
     const invokedPaths = [
       { path: ['guest', 'initialize'], argCount: 3 },

@@ -2400,7 +2400,9 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       const nv = ctx.fresh();
       out.push(`const ${nv} = nodes[${iv}];`);
       out.push(`if (${nv}.tag !== 'enum-value') throw wireMismatch(${nv}, 'enum');`);
-      out.push(`if (!Number.isInteger(${nv}.val) || ${nv}.val < 0 || ${nv}.val >= C[${k}].length) throw wireMismatch(${nv}, 'enum');`);
+      out.push(
+        `if (!Number.isInteger(${nv}.val) || ${nv}.val < 0 || ${nv}.val >= C[${k}].length) throw wireMismatch(${nv}, 'enum');`,
+      );
       return `C[${k}][${nv}.val]`;
     }
     case 'option': {

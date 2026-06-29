@@ -531,7 +531,10 @@ function pathStartsWith(path: readonly string[], prefix: readonly string[]): boo
   return prefix.length < path.length && prefix.every((part, i) => path[i] === part);
 }
 
-function getOwnPathValue(value: unknown, path: readonly string[]): { exists: boolean; value: unknown } {
+function getOwnPathValue(
+  value: unknown,
+  path: readonly string[],
+): { exists: boolean; value: unknown } {
   let current = value;
   for (const key of path) {
     if (current === null || typeof current !== 'object') return { exists: false, value: undefined };
@@ -568,7 +571,10 @@ function configTypeContainsSecret(
       return configTypeContainsSecret(key, seen) || configTypeContainsSecret(value, seen);
     }
     case 'tuple':
-      return shaped.elements?.some((element: Type.Type) => configTypeContainsSecret(element, seen)) ?? false;
+      return (
+        shaped.elements?.some((element: Type.Type) => configTypeContainsSecret(element, seen)) ??
+        false
+      );
     case 'object':
     case 'interface':
       return (
