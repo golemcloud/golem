@@ -418,27 +418,50 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
         revision: AgentSecretRevision,
         include_deleted: bool,
     ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
-        let result: Option<AgentSecretExtRevisionRecord> = self.with_ro("get_revision")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! {r#"
-                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
-                    FROM agent_secrets sec
-                    JOIN environments e ON e.environment_id = sec.environment_id
-                    JOIN applications ap ON ap.application_id = e.application_id
-                    JOIN accounts a ON a.account_id = ap.account_id
-                    JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
-                    WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
-                        AND ($5 OR (sec.deleted_at IS NULL AND e.deleted_at IS NULL AND ap.deleted_at IS NULL AND a.deleted_at IS NULL))
-                "#})
-                    .bind(environment_id)
-                    .bind(agent_secret_id.0)
-                    .bind(sqlx::types::Json(path))
-                    .bind(i64::try_from(revision.get()).map_err(|err| {
-                        AgentSecretRepoError::InternalError(anyhow::anyhow!(err))
-                    })?)
-                    .bind(include_deleted),
-            )
-            .await?;
+        let revision_id = i64::try_from(revision.get())
+            .map_err(|err| AgentSecretRepoError::InternalError(anyhow::anyhow!(err)))?;
+
+        let result: Option<AgentSecretExtRevisionRecord> = if include_deleted {
+            self.with_ro("get_revision")
+                .fetch_optional_as(
+                    sqlx::query_as(indoc! {r#"
+                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                        FROM agent_secrets sec
+                        JOIN environments e ON e.environment_id = sec.environment_id
+                        JOIN applications ap ON ap.application_id = e.application_id
+                        JOIN accounts a ON a.account_id = ap.account_id
+                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
+                        WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
+                    "#})
+                        .bind(environment_id)
+                        .bind(agent_secret_id.0)
+                        .bind(sqlx::types::Json(path))
+                        .bind(revision_id),
+                )
+                .await?
+        } else {
+            self.with_ro("get_revision")
+                .fetch_optional_as(
+                    sqlx::query_as(indoc! {r#"
+                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                        FROM agent_secrets sec
+                        JOIN environments e ON e.environment_id = sec.environment_id
+                        JOIN applications ap ON ap.application_id = e.application_id
+                        JOIN accounts a ON a.account_id = ap.account_id
+                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
+                        WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
+                            AND sec.deleted_at IS NULL
+                            AND e.deleted_at IS NULL
+                            AND ap.deleted_at IS NULL
+                            AND a.deleted_at IS NULL
+                    "#})
+                        .bind(environment_id)
+                        .bind(agent_secret_id.0)
+                        .bind(sqlx::types::Json(path))
+                        .bind(revision_id),
+                )
+                .await?
+        };
 
         Ok(result)
     }
