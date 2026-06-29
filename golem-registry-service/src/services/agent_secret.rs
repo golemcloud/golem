@@ -619,7 +619,9 @@ impl AgentSecretService {
         revision: AgentSecretRevision,
     ) -> Result<Option<AgentSecret>, AgentSecretError> {
         self.agent_secret_repo
-            .get_revision(environment_id.0, agent_secret_id, path.0, revision)
+            // Secret values are not stored in the oplog, so replay must be able to
+            // resolve historical secret revisions after the owning entities are deleted.
+            .get_revision(environment_id.0, agent_secret_id, path.0, revision, true)
             .await?
             .map(TryInto::try_into)
             .transpose()

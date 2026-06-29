@@ -15,8 +15,9 @@
 pub mod types;
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::types::SecretEntry;
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::secrets::reveal;
 use crate::preview2::golem::secrets::types as secret_types;
 use crate::preview2::golem::secrets::types::{
@@ -138,6 +139,26 @@ fn canonical_config_key(
         })
 }
 
+fn classify_secret_revision_error(error: &WorkerExecutorError) -> HostFailureKind {
+    match error {
+        WorkerExecutorError::InvalidRequest { .. }
+        | WorkerExecutorError::AgentAlreadyExists { .. }
+        | WorkerExecutorError::AgentNotFound { .. }
+        | WorkerExecutorError::PromiseNotFound { .. }
+        | WorkerExecutorError::PromiseDropped { .. }
+        | WorkerExecutorError::PromiseAlreadyCompleted { .. }
+        | WorkerExecutorError::ParamTypeMismatch { .. }
+        | WorkerExecutorError::NoValueInMessage
+        | WorkerExecutorError::ValueMismatch { .. }
+        | WorkerExecutorError::UnexpectedOplogEntry { .. }
+        | WorkerExecutorError::InvalidAccount
+        | WorkerExecutorError::PreviousInvocationFailed { .. }
+        | WorkerExecutorError::PreviousInvocationExited
+        | WorkerExecutorError::ComponentNotFound { .. } => HostFailureKind::Permanent,
+        _ => HostFailureKind::Transient,
+    }
+}
+
 fn reveal_error_to_wit(error: SecretRevealError) -> SecretError {
     match error {
         SecretRevealError::Unavailable(message) => SecretError::Unavailable(message),
@@ -240,37 +261,49 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = match self
-                .state
-                .environment_state_service
-                .get_agent_secret_revision(
-                    self.state.component_metadata.environment_id,
-                    entry.secret_id,
-                    match canonical_config_key(&entry) {
-                        Ok(path) => path,
-                        Err(error) => {
-                            break 'reveal handle
-                                .complete(
-                                    self,
-                                    HostResponseSecretRevealed {
-                                        secret_id: entry.secret_id.0,
-                                        pinned_revision: entry.pinned_revision.get(),
-                                        resolved_at: entry.resolved_at.into(),
-                                        result: Err(error),
-                                        audit: SecretRevealAudit {
-                                            calling_agent: self.owned_agent_id.agent_id.clone(),
-                                            config_key: entry.config_key.clone(),
-                                            timestamp: Utc::now().into(),
-                                        },
-                                    },
-                                )
-                                .await?;
-                        }
-                    },
-                    entry.pinned_revision,
-                )
-                .await
-            {
+            let config_key = match canonical_config_key(&entry) {
+                Ok(path) => path,
+                Err(error) => {
+                    break 'reveal handle
+                        .complete(
+                            self,
+                            HostResponseSecretRevealed {
+                                secret_id: entry.secret_id.0,
+                                pinned_revision: entry.pinned_revision.get(),
+                                resolved_at: entry.resolved_at.into(),
+                                result: Err(error),
+                                audit: SecretRevealAudit {
+                                    calling_agent: self.owned_agent_id.agent_id.clone(),
+                                    config_key: entry.config_key.clone(),
+                                    timestamp: Utc::now().into(),
+                                },
+                            },
+                        )
+                        .await?;
+                }
+            };
+
+            let secret = loop {
+                let result = self
+                    .state
+                    .environment_state_service
+                    .get_agent_secret_revision(
+                        self.state.component_metadata.environment_id,
+                        entry.secret_id,
+                        config_key.clone(),
+                        entry.pinned_revision,
+                    )
+                    .await;
+                match handle
+                    .try_trigger_retry_or_loop(self, &result, classify_secret_revision_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+
+            let result = match secret {
                 Ok(Some(secret)) => {
                     let result = validate_expected_type(&secret, &expected_graph).and_then(|()| {
                         let value = secret.secret_value.as_ref().ok_or_else(|| {
