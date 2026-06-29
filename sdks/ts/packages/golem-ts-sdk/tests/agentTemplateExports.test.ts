@@ -32,13 +32,13 @@ describe('agent template export wiring', () => {
     const wrapper = readFileSync(new URL('../agent-template/src/lib.rs', import.meta.url), 'utf8');
 
     const invokedPaths = [
-      ['guest', 'initialize'],
-      ['guest', 'invoke'],
-      ['guest', 'getDefinition'],
-      ['guest', 'discoverAgentTypes'],
-      ['guest', 'discoverTools'],
-      ['guest', 'getTool'],
-      ['guest', 'invokeTool'],
+      ['golemAgent200Guest', 'initialize'],
+      ['golemAgent200Guest', 'invoke'],
+      ['golemAgent200Guest', 'getDefinition'],
+      ['golemAgent200Guest', 'discoverAgentTypes'],
+      ['golemTool010Guest', 'discoverTools'],
+      ['golemTool010Guest', 'getTool'],
+      ['golemTool010Guest', 'invoke'],
     ] as const;
 
     for (const path of invokedPaths) {
@@ -47,23 +47,17 @@ describe('agent template export wiring', () => {
     }
   });
 
-  it('review repro: packaged agent_guest.wasm uses split guest.invokeTool wiring', () => {
-    const wasm = readFileSync(new URL('../wasm/agent_guest.wasm', import.meta.url));
-
-    expect(wasm.includes(Buffer.from('invokeTool'))).toBe(true);
-  });
-
   it('review repro: exported JS functions satisfy the template arity check', () => {
     const wrapper = readFileSync(new URL('../agent-template/src/lib.rs', import.meta.url), 'utf8');
 
     const invokedPaths = [
-      { path: ['guest', 'initialize'], argCount: 3 },
-      { path: ['guest', 'invoke'], argCount: 3 },
-      { path: ['guest', 'getDefinition'], argCount: 0 },
-      { path: ['guest', 'discoverAgentTypes'], argCount: 0 },
-      { path: ['guest', 'discoverTools'], argCount: 0 },
-      { path: ['guest', 'getTool'], argCount: 1 },
-      { path: ['guest', 'invokeTool'], argCount: 5 },
+      { path: ['golemAgent200Guest', 'initialize'], argCount: 3 },
+      { path: ['golemAgent200Guest', 'invoke'], argCount: 3 },
+      { path: ['golemAgent200Guest', 'getDefinition'], argCount: 0 },
+      { path: ['golemAgent200Guest', 'discoverAgentTypes'], argCount: 0 },
+      { path: ['golemTool010Guest', 'discoverTools'], argCount: 0 },
+      { path: ['golemTool010Guest', 'getTool'], argCount: 1 },
+      { path: ['golemTool010Guest', 'invoke'], argCount: 5 },
     ] as const;
 
     for (const { path, argCount } of invokedPaths) {
@@ -76,7 +70,7 @@ describe('agent template export wiring', () => {
     }
   });
 
-  it('agent-guest declaration alias type-checks as a single merged guest namespace', () => {
+  it('agent-guest declaration exposes split named guest namespaces', () => {
     const packageRoot = fileURLToPath(new URL('..', import.meta.url));
     const typeFiles = [
       'exports.d.ts',
@@ -91,74 +85,19 @@ describe('agent template export wiring', () => {
     ].map((file) => path.join(packageRoot, 'types', file));
     const virtualFile = path.join(packageRoot, '__agent_guest_typecheck__.ts');
     const virtualSource = `
-      import type { guest } from 'agent-guest';
-      type Initialize = typeof guest.initialize;
-      type AgentInvoke = typeof guest.invoke;
-      type ToolInvoke = typeof guest.invokeTool;
-      type DiscoverTools = typeof guest.discoverTools;
-    `;
-    const options: ts.CompilerOptions = {
-      noEmit: true,
-      strict: true,
-      skipLibCheck: false,
-      moduleResolution: ts.ModuleResolutionKind.Node10,
-      module: ts.ModuleKind.ESNext,
-      target: ts.ScriptTarget.ES2022,
-      types: [],
-      lib: ['lib.esnext.d.ts', 'lib.dom.d.ts'],
-    };
-    const host = ts.createCompilerHost(options);
-    const fileExists = host.fileExists.bind(host);
-    const readFile = host.readFile.bind(host);
-    const getSourceFile = host.getSourceFile.bind(host);
-
-    host.fileExists = (file) => path.resolve(file) === virtualFile || fileExists(file);
-    host.readFile = (file) => (path.resolve(file) === virtualFile ? virtualSource : readFile(file));
-    host.getSourceFile = (file, languageVersion, onError, shouldCreateNewSourceFile) =>
-      path.resolve(file) === virtualFile
-        ? ts.createSourceFile(file, virtualSource, languageVersion, true)
-        : getSourceFile(file, languageVersion, onError, shouldCreateNewSourceFile);
-
-    const program = ts.createProgram([...typeFiles, virtualFile], options, host);
-    const diagnostics = ts.getPreEmitDiagnostics(program);
-    const formatted = diagnostics.map((diagnostic) => {
-      const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
-      if (diagnostic.file && diagnostic.start !== undefined) {
-        const pos = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
-        return `${path.relative(packageRoot, diagnostic.file.fileName)}:${pos.line + 1}:${pos.character + 1} TS${diagnostic.code}: ${message}`;
-      }
-      return `TS${diagnostic.code}: ${message}`;
-    });
-
-    expect(formatted).toEqual([]);
-  });
-
-  it('review repro: agent-guest declaration exposes split invokeTool', () => {
-    const packageRoot = fileURLToPath(new URL('..', import.meta.url));
-    const typeFiles = [
-      'exports.d.ts',
-      'golem_agent_2_0_0_common.d.ts',
-      'golem_api_1_5_0_host.d.ts',
-      'golem_core_2_0_0_types.d.ts',
-      'golem_tool_0_1_0_common.d.ts',
-      'wasi_io_0_2_3_streams.d.ts',
-      'wasi_io_0_2_3_error.d.ts',
-      'wasi_io_0_2_3_poll.d.ts',
-      'wasi_clocks_0_2_3_monotonic_clock.d.ts',
-    ].map((file) => path.join(packageRoot, 'types', file));
-    const virtualFile = path.join(packageRoot, '__agent_guest_invoke_tool_typecheck__.ts');
-    const virtualSource = `
-      import type { guest } from 'agent-guest';
-
-      type InvokeTool = typeof guest.invokeTool;
-      type ExpectedInvokeTool = (
+      import type { golemAgent200Guest, golemTool010Guest } from 'agent-guest';
+      type Initialize = typeof golemAgent200Guest.initialize;
+      type AgentInvoke = typeof golemAgent200Guest.invoke;
+      type ToolInvoke = typeof golemTool010Guest.invoke;
+      type ExpectedToolInvoke = (
         toolName: string,
         commandPath: string[],
-        input: guest.TypedSchemaValue,
-        stdin: guest.InputStream | undefined,
-        principal: guest.Principal,
-      ) => Promise<guest.InvocationResult>;
-      type _Assert = InvokeTool extends ExpectedInvokeTool ? true : never;
+        input: golemTool010Guest.TypedSchemaValue,
+        stdin: golemTool010Guest.InputStream | undefined,
+        principal: golemTool010Guest.Principal,
+      ) => Promise<golemTool010Guest.InvocationResult>;
+      type _Assert = ToolInvoke extends ExpectedToolInvoke ? true : never;
+      type DiscoverTools = typeof golemTool010Guest.discoverTools;
     `;
     const options: ts.CompilerOptions = {
       noEmit: true,

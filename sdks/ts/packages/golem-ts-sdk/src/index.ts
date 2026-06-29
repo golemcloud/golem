@@ -172,24 +172,6 @@ async function invokeTool(
   throw { tag: 'invalid-tool-name', val: toolName } satisfies ToolError;
 }
 
-function invokeGuest(
-  methodName: string,
-  input: SchemaValueTree,
-  principal: Principal,
-): Promise<SchemaValueTree | undefined> {
-  return invokeAgent(methodName, input, principal);
-}
-
-function invokeToolGuest(
-  toolName: string,
-  commandPath: string[],
-  input: TypedSchemaValue,
-  stdin: InputStream | undefined,
-  principal: Principal,
-): Promise<InvocationResult> {
-  return invokeTool(toolName, commandPath, input, stdin, principal);
-}
-
 async function discoverAgentTypes(): Promise<AgentType[]> {
   try {
     // Check if there were any validation errors during agent registration
@@ -477,20 +459,6 @@ export const golemTool010Guest: GolemToolGuest = {
   discoverTools,
   getTool,
   invoke: invokeTool,
-};
-
-export const guest: Omit<GolemAgentGuest, 'invoke'> &
-  Omit<GolemToolGuest, 'invoke'> & {
-    invoke: typeof invokeGuest;
-    invokeTool: typeof invokeToolGuest;
-  } = {
-  initialize,
-  discoverAgentTypes,
-  getDefinition,
-  discoverTools,
-  getTool,
-  invoke: invokeGuest,
-  invokeTool: invokeToolGuest,
 };
 
 export const saveSnapshot: SaveSnapshotGuest = {
