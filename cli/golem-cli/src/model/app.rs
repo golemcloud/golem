@@ -3052,9 +3052,7 @@ mod app_builder {
                                 self.bridge_sdks.value.for_all_languages()
                             {
                                 if target_language != crate::model::GuestLanguage::Rust
-                                    && sdk_targets
-                                        .and_then(|targets| targets.guest.as_ref())
-                                        .is_some_and(|guest| !guest.agents.is_empty())
+                                    && sdk_targets.is_some_and(|targets| targets.guest.is_some())
                                 {
                                     validation.with_context(
                                         vec![("bridge SDK language", target_language.to_string())],
@@ -3610,7 +3608,9 @@ mod app_builder {
 
 #[cfg(test)]
 mod test {
-    use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
+    use crate::bridge_gen::{
+        BridgeMode, bridge_client_directory_name, bridge_client_directory_name_for_mode,
+    };
     use crate::fs;
     use crate::model::app::{
         Application, ApplicationPreload, ComponentPresetSelector, includes_from_yaml_file,
@@ -3998,6 +3998,99 @@ mod test {
     }
 
     #[test]
+    fn bridge_sdk_output_dir_is_mode_separated_for_guest_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                agents:
+                  - AlphaAgent
+                guest:
+                  agents:
+                    - AlphaAgent
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app.temp_dir()
+                .join("bridge-sdk")
+                .join("rust")
+                .join(bridge_client_directory_name(&alpha_agent))
+        );
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::Guest
+            ),
+            app.temp_dir()
+                .join("bridge-sdk")
+                .join("rust")
+                .join("guest")
+                .join(bridge_client_directory_name_for_mode(
+                    &alpha_agent,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_uses_guest_output_dir_as_per_agent_base() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                guest:
+                  agents:
+                    - AlphaAgent
+                  outputDir: bridge-sdk/rust-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::Guest
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust-guest")
+                .join(bridge_client_directory_name_for_mode(
+                    &alpha_agent,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
     fn non_rust_guest_bridge_mode_is_rejected() {
         let source = indoc! { r#"
             app: hello-app
@@ -4052,7 +4145,7 @@ mod test {
     }
 
     #[test]
-    fn non_rust_guest_bridge_config_without_agents_is_ignored() {
+    fn non_rust_guest_bridge_config_without_agents_is_rejected() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -4100,7 +4193,12 @@ mod test {
         .into_product();
 
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
-        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("guest bridge mode is not supported for TypeScript yet"),
+            "unexpected error: {}",
+            errors[0]
+        );
     }
 
     #[test]

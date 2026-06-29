@@ -355,16 +355,53 @@ mod tests {
         assert!(validate_no_output_dir_collisions(&targets).is_err());
     }
 
+    #[test]
+    fn validate_no_output_dir_collisions_rejects_duplicate_output_dirs() {
+        let temp_dir = tempdir().unwrap();
+        let output_dir = temp_dir.path().join("bridge/alpha-client");
+
+        let targets = vec![
+            bridge_sdk_target_with_mode(
+                "AlphaAgent",
+                GuestLanguage::Rust,
+                BridgeMode::External,
+                output_dir.clone(),
+            ),
+            bridge_sdk_target_with_mode(
+                "AlphaAgent",
+                GuestLanguage::Rust,
+                BridgeMode::Guest,
+                output_dir,
+            ),
+        ];
+
+        assert!(validate_no_output_dir_collisions(&targets).is_err());
+    }
+
     fn bridge_sdk_target(
         agent_type_name: &str,
         target_language: GuestLanguage,
+        output_dir: impl Into<std::path::PathBuf>,
+    ) -> BridgeSdkTarget {
+        bridge_sdk_target_with_mode(
+            agent_type_name,
+            target_language,
+            BridgeMode::External,
+            output_dir,
+        )
+    }
+
+    fn bridge_sdk_target_with_mode(
+        agent_type_name: &str,
+        target_language: GuestLanguage,
+        bridge_mode: BridgeMode,
         output_dir: impl Into<std::path::PathBuf>,
     ) -> BridgeSdkTarget {
         BridgeSdkTarget {
             component_name: ComponentName("component".to_string()),
             agent_type: agent_type(agent_type_name),
             target_language,
-            bridge_mode: BridgeMode::External,
+            bridge_mode,
             output_dir: output_dir.into(),
         }
     }
