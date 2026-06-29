@@ -12,6 +12,7 @@ export default {
   "golem-deploy": "Deploying a Golem Application with `golem deploy`",
   "golem-edit-manifest": "Editing the Golem Application Manifest (golem.yaml)",
   "golem-get-agent-metadata": "Getting Agent Metadata",
+  "golem-cli-structured-output": "Golem CLI Structured Output",
   "golem-js-runtime": "Golem JavaScript Runtime (QuickJS)",
   "golem-interrupt-resume-agent": "Interrupting and Resuming an Agent",
   "golem-list-and-filter-agents": "Listing and Filtering Agents",

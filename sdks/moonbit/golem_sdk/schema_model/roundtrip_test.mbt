@@ -82,10 +82,15 @@ test "composite types round-trip" {
     ]),
   )
   assert_eq(rt_type(inner), inner)
+
+  let secret = schema_type(
+    Secret({ inner: schema_type(String), category: Some("api-key") }),
+  )
+  assert_eq(rt_type(secret), secret)
 }
 
 ///|
-test "values round-trip (primitives, composites, semantic, capability)" {
+test "values round-trip (primitives, composites, semantic)" {
   let v : SchemaValue = Tuple([
     Bool(true),
     S8(-5),
@@ -124,14 +129,6 @@ test "values round-trip (primitives, composites, semantic, capability)" {
     Duration(-123_456L),
     Quantity({ mantissa: 1234L, scale: 2, unit: "kg" }),
     Union("circle", S32(42)),
-    Secret("secret-ref-abc"),
-    QuotaToken({
-      environment_id: { uuid: { high_bits: 1UL, low_bits: 2UL } },
-      resource_name: "cpu",
-      expected_use: 10UL,
-      last_credit: 5L,
-      last_credit_at: { seconds: 7L, nanoseconds: 0U },
-    }),
   ])
   assert_eq(rt_value(v), v)
 }
@@ -359,7 +356,10 @@ test "semantic and capability types round-trip" {
     min: None,
     max: None,
   }
-  let secret_s : @types.SecretSpec = { category: Some("api-key") }
+  let secret_s : SecretSpec = {
+    inner: schema_type(String),
+    category: Some("api-key"),
+  }
   let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu") }
   let branch_a : UnionBranch = {
     tag: "a",
@@ -508,29 +508,168 @@ test "narrow integer values are range-checked on decode" {
 }
 
 ///|
-test "quota-token last-credit-at datetime is validated (encode + decode)" {
-  let payload : @types.QuotaTokenValuePayload = {
-    environment_id: { uuid: { high_bits: 1UL, low_bits: 2UL } },
-    resource_name: "cpu",
-    expected_use: 10UL,
-    last_credit: 5L,
-    last_credit_at: { seconds: 7L, nanoseconds: 1_000_000_000U },
+/// Build an opaque secret handle wrapping a fake owned resource. The generated
+/// `@types.Secret` is a plain index wrapper, so a handle can be fabricated for
+/// codec tests without a host call — as long as the resource is never dropped or
+/// passed to a host import.
+fn fake_secret_handle(index : Int) -> GuestSecretHandle {
+  GuestSecretHandle::new(@types.Secret::Secret(index))
+}
+
+///|
+test "secret value encodes to a handle node and decodes to a fresh handle" {
+  let handle = fake_secret_handle(6)
+  let v : SchemaValue = Secret(handle)
+  let wit = schema_value_to_wit(v)
+  assert_false(handle.is_present())
+  guard wit.value_nodes[wit.root] is @types.SecretValue(_) else {
+    fail("expected a secret-value wire node")
   }
-  let v : SchemaValue = QuotaToken(payload)
-  let re = try? schema_value_to_wit(v)
-  guard re is Err(EncodeError(em)) else {
-    fail("expected EncodeError, got \{re}")
+  guard schema_value_from_wit(wit) is Secret(decoded) else {
+    fail("expected a decoded secret value")
+  }
+  assert_true(decoded.is_present())
+}
+
+///|
+test "encode preflight rejects the same secret handle used twice" {
+  let handle = fake_secret_handle(8)
+  let v : SchemaValue = Tuple([Secret(handle), Secret(handle)])
+  let r = try? schema_value_to_wit(v)
+  guard r is Err(EncodeError(em)) else {
+    fail("expected EncodeError, got \{r}")
+  }
+  assert_true(em.contains("secret"))
+  assert_true(handle.is_present())
+}
+
+///|
+/// Build an opaque quota-token handle wrapping a fake owned resource. The
+/// generated `@types.QuotaToken` is a plain index wrapper, so a handle can be
+/// fabricated for codec tests without a host call — as long as the resource is
+/// never dropped or passed to a host import (which a happy-path codec round-trip
+/// never does).
+fn fake_quota_handle(index : Int) -> GuestQuotaTokenHandle {
+  GuestQuotaTokenHandle::new(@types.QuotaToken::QuotaToken(index))
+}
+
+///|
+test "quota-token value encodes to a handle node and decodes to a fresh handle" {
+  let handle = fake_quota_handle(7)
+  let v : SchemaValue = QuotaToken(handle)
+  let wit = schema_value_to_wit(v)
+  // Encoding moves the owned handle out of the original holder exactly once.
+  assert_false(handle.is_present())
+  // The wire node is the opaque handle carrier, not a structural record.
+  guard wit.value_nodes[wit.root] is @types.QuotaTokenHandle(_) else {
+    fail("expected a quota-token-handle wire node")
+  }
+  // Decoding lifts the owned handle back into a present holder.
+  guard schema_value_from_wit(wit) is QuotaToken(decoded) else {
+    fail("expected a decoded quota-token value")
+  }
+  assert_true(decoded.is_present())
+}
+
+///|
+test "encode preflight rejects an already-transferred quota-token handle" {
+  let handle = fake_quota_handle(1)
+  let _ = handle.take() // consume it up front
+  let r = try? schema_value_to_wit(QuotaToken(handle))
+  guard r is Err(EncodeError(em)) else {
+    fail("expected EncodeError, got \{r}")
   }
   assert_true(em.contains("quota-token"))
-  let bad : @types.SchemaValueTree = {
-    value_nodes: [@types.QuotaTokenValue(payload)],
+}
+
+///|
+test "encode preflight rejects the same quota-token handle used twice" {
+  let handle = fake_quota_handle(2)
+  let v : SchemaValue = Tuple([QuotaToken(handle), QuotaToken(handle)])
+  let r = try? schema_value_to_wit(v)
+  guard r is Err(EncodeError(em)) else {
+    fail("expected EncodeError, got \{r}")
+  }
+  assert_true(em.contains("quota-token"))
+  // The shared handle is left untouched when the preflight rejects the tree.
+  assert_true(handle.is_present())
+}
+
+///|
+test "encode error after a quota-token does not consume the handle" {
+  // A later non-quota validation error (s8 out of range) must be raised by the
+  // preflight before the quota-token handle is moved, so the token survives.
+  let handle = fake_quota_handle(9)
+  let v : SchemaValue = Tuple([QuotaToken(handle), S8(128)])
+  let r = try? schema_value_to_wit(v)
+  guard r is Err(EncodeError(_)) else { fail("expected EncodeError, got \{r}") }
+  assert_true(handle.is_present())
+}
+
+///|
+test "encode rejects two distinct holders wrapping the same raw handle" {
+  let raw = @types.QuotaToken::QuotaToken(11)
+  let a = GuestQuotaTokenHandle::new(raw)
+  let b = GuestQuotaTokenHandle::new(raw)
+  let r = try? schema_value_to_wit(Tuple([QuotaToken(a), QuotaToken(b)]))
+  guard r is Err(EncodeError(em)) else {
+    fail("expected EncodeError, got \{r}")
+  }
+  assert_true(em.contains("more than once"))
+  // Neither handle was moved when the preflight rejected the tree.
+  assert_true(a.is_present() && b.is_present())
+}
+
+///|
+test "decode rejects the same raw handle in two different nodes" {
+  let raw = @types.QuotaToken::QuotaToken(12)
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.QuotaTokenHandle(raw),
+      @types.QuotaTokenHandle(raw),
+      @types.TupleValue([0, 1]),
+    ],
+    root: 2,
+  }
+  let r = try? schema_value_from_wit(tree)
+  guard r is Err(DecodeError(dm)) else {
+    fail("expected DecodeError, got \{r}")
+  }
+  assert_true(dm.contains("more than one handle node"))
+}
+
+///|
+test "decode rejects a handle node referenced from two places" {
+  // A tuple whose two elements both point at the single handle node 0.
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(3)),
+      @types.TupleValue([0, 0]),
+    ],
+    root: 1,
+  }
+  let r = try? schema_value_from_wit(tree)
+  guard r is Err(DecodeError(dm)) else {
+    fail("expected DecodeError, got \{r}")
+  }
+  assert_true(dm.contains("more than once"))
+}
+
+///|
+test "decode rejects a handle node unreachable from the root" {
+  // Root is a unit tuple; the handle node 1 is never referenced.
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.TupleValue([]),
+      @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(4)),
+    ],
     root: 0,
   }
-  let rd = try? schema_value_from_wit(bad)
-  guard rd is Err(DecodeError(dm)) else {
-    fail("expected DecodeError, got \{rd}")
+  let r = try? schema_value_from_wit(tree)
+  guard r is Err(DecodeError(dm)) else {
+    fail("expected DecodeError, got \{r}")
   }
-  assert_true(dm.contains("quota-token"))
+  assert_true(dm.contains("not referenced from the root"))
 }
 
 ///|

@@ -1,9 +1,19 @@
+---
+name: modifying-cli-manifest-schema
+description: "Adding or changing application manifest JSON schema versions and aligning CLI schema references."
+---
+
 # Skill: modifying-cli-manifest-schema
 
 Use this skill when changing the Golem application manifest JSON schema under
 `cli/schema.golem.cloud/app/golem/` or when adding/removing manifest fields in
 `cli/golem-cli` that must be reflected in schema validation and generated
 template references.
+
+Do **not** use this skill for the structured command output schema under
+`cli/golem-cli/command-output-schema/command-output.schema.json`. For `CliOutput`
+types, `to_cli_output_value`, or command-output schema generators, use
+`modifying-cli-output-schema` instead.
 
 ## Core Rules
 

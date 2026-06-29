@@ -29,6 +29,10 @@ pub(all) struct BinaryValuePayload {
   mime_type : String?
 } derive(Eq, Show)
 
+pub(all) struct CardId {
+  uuid : Uuid
+} derive(Eq, Show)
+
 pub(all) struct ComponentId {
   uuid : Uuid
 } derive(Eq, Show)
@@ -130,16 +134,11 @@ pub(all) struct QuantityValue {
   unit : String
 } derive(Eq, Show)
 
+pub(all) struct QuotaToken(Int) derive(Eq, Show)
+pub fn QuotaToken::drop(Self) -> Unit
+
 pub(all) struct QuotaTokenSpec {
   resource_name : String?
-} derive(Eq, Show)
-
-pub(all) struct QuotaTokenValuePayload {
-  environment_id : EnvironmentId
-  resource_name : String
-  expected_use : UInt64
-  last_credit : Int64
-  last_credit_at : Datetime
 } derive(Eq, Show)
 
 pub(all) struct ResultSpec {
@@ -247,8 +246,8 @@ pub(all) enum SchemaValueNode {
   DurationValue(DurationValuePayload)
   QuantityValueNode(QuantityValue)
   UnionValue(UnionValuePayload)
-  SecretValue(SecretValuePayload)
-  QuotaTokenValue(QuotaTokenValuePayload)
+  SecretValue(Secret)
+  QuotaTokenHandle(QuotaToken)
 } derive(Eq, Show)
 
 pub(all) struct SchemaValueTree {
@@ -256,12 +255,12 @@ pub(all) struct SchemaValueTree {
   root : Int
 } derive(Eq, Show)
 
-pub(all) struct SecretSpec {
-  category : String?
-} derive(Eq, Show)
+pub(all) struct Secret(Int) derive(Eq, Show)
+pub fn Secret::drop(Self) -> Unit
 
-pub(all) struct SecretValuePayload {
-  secret_ref : String
+pub(all) struct SecretSpec {
+  inner : Int
+  category : String?
 } derive(Eq, Show)
 
 pub(all) struct TextRestrictions {

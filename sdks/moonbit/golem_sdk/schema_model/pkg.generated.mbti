@@ -95,6 +95,22 @@ pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int raise SchemaModelError
 pub fn GraphEncoder::finish(Self) -> @types.SchemaGraph raise SchemaModelError
 pub fn GraphEncoder::new(Array[SchemaTypeDef]) -> Self raise SchemaModelError
 
+pub(all) struct GuestQuotaTokenHandle {
+  // private fields
+}
+pub fn GuestQuotaTokenHandle::is_present(Self) -> Bool
+pub fn GuestQuotaTokenHandle::new(@types.QuotaToken) -> Self
+pub fn GuestQuotaTokenHandle::take(Self) -> @types.QuotaToken?
+pub fn[R] GuestQuotaTokenHandle::with_handle(Self, (@types.QuotaToken) -> R) -> R?
+
+pub(all) struct GuestSecretHandle {
+  // private fields
+}
+pub fn GuestSecretHandle::is_present(Self) -> Bool
+pub fn GuestSecretHandle::new(@types.Secret) -> Self
+pub fn GuestSecretHandle::take(Self) -> @types.Secret?
+pub fn[R] GuestSecretHandle::with_handle(Self, (@types.Secret) -> R) -> R?
+
 pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
@@ -167,7 +183,7 @@ pub(all) enum SchemaTypeBody {
   Duration
   Quantity(@types.QuantitySpec)
   Union(Array[UnionBranch])
-  Secret(@types.SecretSpec)
+  Secret(SecretSpec)
   QuotaToken(@types.QuotaTokenSpec)
   Future(SchemaType?)
   Stream(SchemaType?)
@@ -212,8 +228,13 @@ pub(all) enum SchemaValue {
   Duration(Int64)
   Quantity(@types.QuantityValue)
   Union(String, SchemaValue)
-  Secret(String)
-  QuotaToken(@types.QuotaTokenValuePayload)
+  Secret(GuestSecretHandle)
+  QuotaToken(GuestQuotaTokenHandle)
+} derive(Eq, Show)
+
+pub(all) struct SecretSpec {
+  inner : SchemaType
+  category : String?
 } derive(Eq, Show)
 
 pub(all) struct TypedSchemaValue {

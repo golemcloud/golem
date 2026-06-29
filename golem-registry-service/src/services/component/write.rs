@@ -28,15 +28,14 @@ use crate::services::environment_plugin_grant::{
 };
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
-use golem_common::base_model::component_metadata::{
-    AgentInitialPermissionTemplate, AgentTypeProvisionConfig,
-};
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
+    PolymorphicCard,
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
@@ -46,9 +45,9 @@ use golem_common::model::component::{
 use golem_common::model::component::{
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
 };
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::{ComponentMetadata, default_agent_initial_card};
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
+use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -106,24 +105,21 @@ impl ComponentWriteService {
         component_id: ComponentId,
         component_revision: ComponentRevision,
         agent_types: &[AgentTypeSchema],
-        environment_name: &EnvironmentName,
-        component_name: &ComponentName,
-    ) -> Result<BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>, ComponentError> {
+    ) -> Result<BTreeMap<AgentTypeName, PolymorphicCard>, ComponentError> {
         let mut result = BTreeMap::new();
 
         for agent_type in agent_types {
-            let template =
-                AgentInitialPermissionTemplate::default_for(environment_name, component_name);
+            let card = default_agent_initial_card();
             self.card_service
                 .create_agent_initial_card(
                     component_id,
                     component_revision,
                     agent_type.type_name.clone(),
-                    &template,
+                    &card,
                 )
                 .await?;
 
-            result.insert(agent_type.type_name.clone(), template);
+            result.insert(agent_type.type_name.clone(), card);
         }
 
         Ok(result)
@@ -255,8 +251,6 @@ impl ComponentWriteService {
                 component_id,
                 ComponentRevision::INITIAL,
                 component_metadata.agent_types(),
-                &environment.name,
-                &component_creation.component_name,
             )
             .await?,
         );
@@ -459,8 +453,6 @@ impl ComponentWriteService {
                     component.id,
                     component.revision,
                     metadata.agent_types(),
-                    &environment.name,
-                    &component.component_name,
                 )
                 .await?,
             );
@@ -482,8 +474,6 @@ impl ComponentWriteService {
                     component.id,
                     component.revision,
                     metadata.agent_types(),
-                    &environment.name,
-                    &component_name,
                 )
                 .await?,
             );
@@ -1065,23 +1055,21 @@ fn validate_component_metadata_invariants(
     }
 
     for agent_type in metadata.agent_types() {
-        match metadata.agent_type_initial_permission_template(&agent_type.type_name) {
+        match metadata.agent_type_initial_permission_card(&agent_type.type_name) {
             Some(_) => {}
             _ => {
-                return Err(ComponentError::MissingAgentInitialPermissionTemplate(
+                return Err(ComponentError::MissingAgentInitialPermissionCard(
                     agent_type.type_name.clone(),
                 ));
             }
         }
     }
 
-    for agent_type_name in metadata.agent_type_initial_permission_templates().keys() {
+    for agent_type_name in metadata.agent_type_initial_permission_cards().keys() {
         if !agent_type_names.contains(agent_type_name) {
-            return Err(
-                ComponentError::UndeclaredAgentTypeInInitialPermissionTemplate(
-                    agent_type_name.clone(),
-                ),
-            );
+            return Err(ComponentError::UndeclaredAgentTypeInInitialPermissionCard(
+                agent_type_name.clone(),
+            ));
         }
     }
 

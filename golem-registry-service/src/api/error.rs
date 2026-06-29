@@ -134,6 +134,9 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::AgentSecretDefaultTypeMismatch { .. } => {
             api::error_code::deployment_validation::AGENT_SECRET_DEFAULT_TYPE_MISMATCH
         }
+        DeployValidationError::AgentSecretInvalidConfigType { .. } => {
+            api::error_code::deployment_validation::AGENT_SECRET_INVALID_CONFIG_TYPE
+        }
         DeployValidationError::NoSecuritySchemeConfigured(_) => {
             api::error_code::deployment_validation::NO_SECURITY_SCHEME_CONFIGURED
         }
@@ -522,8 +525,8 @@ impl From<ComponentError> for ApiError {
             ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
-            ComponentError::MissingAgentInitialPermissionTemplate(_)
-            | ComponentError::UndeclaredAgentTypeInInitialPermissionTemplate(_) => {
+            ComponentError::MissingAgentInitialPermissionCard(_)
+            | ComponentError::UndeclaredAgentTypeInInitialPermissionCard(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
             ComponentError::Unauthorized(inner) => inner.into(),

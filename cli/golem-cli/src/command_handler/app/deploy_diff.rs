@@ -18,6 +18,7 @@ use crate::model::deploy::{
 };
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
+use crate::model::masking::MaskingConfig;
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::component::{ComponentDto, ComponentName};
@@ -134,7 +135,7 @@ impl DeployDiff {
 
     pub fn unified_diffs(
         &self,
-        show_sensitive: bool,
+        masking: MaskingConfig,
         full_diff: bool,
     ) -> anyhow::Result<DeployUnifiedDiffs> {
         let mode = deployment_display_mode(full_diff);
@@ -152,14 +153,14 @@ impl DeployDiff {
                 .as_ref()
                 .map(|diff| {
                     let local = DeploymentDisplay::from_context(DeploymentDisplayContext {
-                        show_sensitive,
+                        masking,
                         mode,
                         deployment: &self.diffable_local_deployment,
                         diff,
                         agent_types_by_component: &local_agent_types,
                     })?;
                     let staged = DeploymentDisplay::from_context(DeploymentDisplayContext {
-                        show_sensitive,
+                        masking,
                         mode,
                         deployment: &self.diffable_staged_deployment,
                         diff,
@@ -174,14 +175,14 @@ impl DeployDiff {
                 .transpose()?,
             display_diff: {
                 let local = DeploymentDisplay::from_context(DeploymentDisplayContext {
-                    show_sensitive,
+                    masking,
                     mode,
                     deployment: &self.diffable_local_deployment,
                     diff: &self.diff,
                     agent_types_by_component: &local_agent_types,
                 })?;
                 let current = DeploymentDisplay::from_context(DeploymentDisplayContext {
-                    show_sensitive,
+                    masking,
                     mode,
                     deployment: &self.diffable_current_deployment,
                     diff: &self.diff,
@@ -744,21 +745,21 @@ impl RollbackDiff {
 
     pub fn unified_diffs(
         &self,
-        show_sensitive: bool,
+        masking: MaskingConfig,
         full_diff: bool,
     ) -> anyhow::Result<RollbackUnifiedDiffs> {
         let mode = deployment_display_mode(full_diff);
         Ok(RollbackUnifiedDiffs {
             display_diff: {
                 let target = DeploymentDisplay::from_context(DeploymentDisplayContext {
-                    show_sensitive,
+                    masking,
                     mode,
                     deployment: &self.diffable_target_deployment,
                     diff: &self.diff,
                     agent_types_by_component: &self.target_agent_types,
                 })?;
                 let current = DeploymentDisplay::from_context(DeploymentDisplayContext {
-                    show_sensitive,
+                    masking,
                     mode,
                     deployment: &self.diffable_current_deployment,
                     diff: &self.diff,

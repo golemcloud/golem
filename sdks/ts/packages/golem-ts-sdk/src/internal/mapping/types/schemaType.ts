@@ -140,6 +140,20 @@ export function resolvedToSchemaType(resolved: ResolvedType): SchemaTypeMapping 
           body.ok ? toSchema(body.ok) : undefined,
           body.err ? toSchema(body.err) : undefined,
         );
+      case 'secret':
+        return t.secret(toSchema(body.inner), body.spec);
+      case 'quota-token':
+        return t.quotaToken(body.spec);
+      case 'path':
+        return t.path(body.spec);
+      case 'url':
+        return t.url(body.restrictions);
+      case 'datetime':
+        return t.datetime();
+      case 'duration':
+        return t.duration();
+      case 'quantity':
+        return t.quantity(body.spec);
       case 'record':
         return registerOrInline(rt, () =>
           t.record(body.fields.map((f) => schemaField(f.name, toSchema(f.type)))),
@@ -240,6 +254,20 @@ export function resolvedGraphToSchemaType(graph: ResolvedGraph): SchemaGraphMapp
           body.ok ? toSchema(body.ok) : undefined,
           body.err ? toSchema(body.err) : undefined,
         );
+      case 'secret':
+        return t.secret(toSchema(body.inner), body.spec);
+      case 'quota-token':
+        return t.quotaToken(body.spec);
+      case 'path':
+        return t.path(body.spec);
+      case 'url':
+        return t.url(body.restrictions);
+      case 'datetime':
+        return t.datetime();
+      case 'duration':
+        return t.duration();
+      case 'quantity':
+        return t.quantity(body.spec);
       case 'record':
         return t.record(body.fields.map((f) => schemaField(f.name, toSchema(f.type))));
       case 'variant':

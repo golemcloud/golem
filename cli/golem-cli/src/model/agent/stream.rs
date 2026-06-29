@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
 use crate::model::text::fmt::format_stderr;
 use crate::model::worker::AgentLogStreamOptions;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStreamEvent {
     pub timestamp: Timestamp,
@@ -35,7 +36,11 @@ pub struct AgentStreamEvent {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+impl StructuredOutput for AgentStreamEvent {
+    const KIND: &'static str = "agent.stream";
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentStreamEventKind {
     Log,

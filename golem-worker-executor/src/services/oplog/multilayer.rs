@@ -818,6 +818,7 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
+                    drain: _,
                 } => {
                     info!(
                         "Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer"
@@ -897,6 +898,7 @@ impl MultiLayerOplog {
                             .await,
                         keep_alive: Some(this.clone()),
                         done: done_tx,
+                        drain: false,
                     })
                     .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -1085,6 +1087,7 @@ pub enum BackgroundTransferMessage {
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
+        drain: bool,
     },
 }
 
@@ -1161,6 +1164,7 @@ impl OplogArchive for WrappedOplogArchive {
                     last_transferred_idx: last_idx,
                     keep_alive: None,
                     done: None,
+                    drain: false,
                 });
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
                 self.entry_count.store(0, Ordering::Release);

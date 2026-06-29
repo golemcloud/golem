@@ -15,6 +15,7 @@ use golem_cli::versions;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
@@ -1168,9 +1169,7 @@ async fn test_component_env_var_substitution() {
     assert!(outputs.success_or_dump());
 
     // But deploying will do so, so it should fail
-    let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
-        .await;
+    let outputs = ctx.cli([flag::SHOW_SECRETS, cmd::DEPLOY, flag::YES]).await;
     assert!(!outputs.success());
 
     assert!(outputs.stdout_contains_ordered([
@@ -1189,9 +1188,7 @@ async fn test_component_env_var_substitution() {
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_1", "123");
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_3", "456");
 
-    let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
-        .await;
+    let outputs = ctx.cli([flag::SHOW_SECRETS, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
     assert!(outputs.stdout_contains_ordered([
@@ -1403,6 +1400,372 @@ async fn test_naming_extremes() {
         ])
         .await;
     assert!(outputs.success_or_dump());
+}
+
+// Runs `agent list --mode <mode> --format json` against the live server and
+// returns the rendered agent-name strings from the response. The JSON view's
+// `agentName` is the rendered, language-specific agent id, e.g.
+// `DurableListAgent("…")`. Panics on non-zero exit or non-JSON output so test
+// failures point at the listing step that broke.
+async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::LIST,
+            "--mode",
+            mode,
+            flag::FORMAT,
+            "json",
+            "--max-count",
+            "200",
+        ])
+        .await;
+    assert!(
+        outputs.success_or_dump(),
+        "`agent list --mode {mode}` failed"
+    );
+
+    let response = outputs
+        .stdout_json::<AgentListResponseView>()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("`agent list --mode {mode}` produced no JSON output"));
+    response.agents.into_iter().map(|a| a.agent_name).collect()
+}
+
+// Scaffolds a fresh Rust app with two agent types: `DurableListAgent` (durable
+// by default) and `EphemeralListAgent` (explicitly `mode = "ephemeral"`), then
+// builds and deploys it. The caller is responsible for invoking agents so they
+// appear in the listing. Returns nothing; the app is live on the started server.
+async fn setup_list_mode_filter_app(ctx: &mut TestContext, app_name: &str) {
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    // Replace the default app manifest with a minimal single-component one,
+    // dropping the default `httpApi` block so the build does not require a
+    // deployed HTTP mapping for CounterAgent.
+    let component_manifest_path = ctx.cwd_path_join("golem.yaml");
+    fs::write_str(
+        &component_manifest_path,
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: {app_name}
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
+            components:
+              {app_name}:rust-main:
+                templates: rust
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    // Replace the generated `src/counter_agent.rs` with two agents: one durable
+    // (the `#[agent_definition]` default) and one explicitly ephemeral via
+    // `mode = "ephemeral"`. `src/lib.rs` already re-exports `counter_agent::*`.
+    let component_source_code_file = ctx.cwd_path_join("src/counter_agent.rs");
+    fs::write_str(
+        &component_source_code_file,
+        indoc! { r#"
+            use golem_rust::{agent_definition, agent_implementation};
+
+            #[agent_definition]
+            pub trait DurableListAgent {
+                fn new(id: String) -> Self;
+                fn ping(&self) -> String;
+            }
+
+            struct DurableListImpl {
+                id: String,
+            }
+
+            #[agent_implementation]
+            impl DurableListAgent for DurableListImpl {
+                fn new(id: String) -> Self {
+                    Self { id }
+                }
+
+                fn ping(&self) -> String {
+                    format!("durable:{}", self.id)
+                }
+            }
+
+            #[agent_definition(mode = "ephemeral")]
+            pub trait EphemeralListAgent {
+                fn new(id: String) -> Self;
+                fn ping(&self) -> String;
+            }
+
+            struct EphemeralListImpl {
+                id: String,
+            }
+
+            #[agent_implementation]
+            impl EphemeralListAgent for EphemeralListImpl {
+                fn new(id: String) -> Self {
+                    Self { id }
+                }
+
+                fn ping(&self) -> String {
+                    format!("ephemeral:{}", self.id)
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+}
+
+// Invokes `agent_type_name("<id>")` `ping` once, creating a worker/oplog entry
+// for that agent instance. Panics on non-zero exit or missing ping echo so a
+// failure points at the invocation step that broke.
+async fn invoke_list_agent(ctx: &TestContext, agent_type_name: &str, id: &str, echo_prefix: &str) {
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("{agent_type_name}(\"{id}\")"),
+            "ping",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains(format!("{echo_prefix}{id}")),
+        "invocation of {agent_type_name}(\"{id}\") did not echo {echo_prefix}{id}"
+    );
+}
+
+const MODE_FILTER_INSTANCE_COUNT: usize = 20;
+
+// Verifies that `agent list --mode ephemeral|durable|all` correctly partitions
+// the listing by agent durability mode, using a non-trivial number of agent
+// instances (20 durable + 20 ephemeral) rather than a single pair.
+//
+// The CLI injects a `mode == <mode>` metadata filter for `--mode ephemeral` and
+// `--mode durable`, while `--mode all` forwards no mode filter so the executor
+// scans both modes. The executor's `modes_from_filter` then narrows the oplog
+// scan to the requested mode (defaulting to durable when the filter is empty).
+//
+// Asserts:
+//   - `--mode ephemeral` lists exactly the 20 ephemeral agents and no durable ones
+//   - `--mode durable`   lists exactly the 20 durable agents and no ephemeral ones
+//   - `--mode all`       lists all 40 agents
+//
+// Any of these assertions failing surfaces a regression in the
+// CLI→worker-service→executor mode-filtering path.
+#[test]
+#[timeout("15 minutes")]
+async fn test_agent_list_mode_filter() {
+    let mut ctx = TestContext::new();
+    let app_name = "agent-list-mode-filter";
+
+    setup_list_mode_filter_app(&mut ctx, app_name).await;
+
+    // Create 20 durable + 20 ephemeral agent instances. Each invocation with a
+    // fresh unique id constructs a new agent, and `ping` ensures it gets a
+    // worker/oplog entry the listing can surface.
+    let durable_ids: Vec<String> = (0..MODE_FILTER_INSTANCE_COUNT)
+        .map(|_| Uuid::new_v4().to_string())
+        .collect();
+    let ephemeral_ids: Vec<String> = (0..MODE_FILTER_INSTANCE_COUNT)
+        .map(|_| Uuid::new_v4().to_string())
+        .collect();
+
+    for id in &durable_ids {
+        invoke_list_agent(&ctx, "DurableListAgent", id, "durable:").await;
+    }
+    for id in &ephemeral_ids {
+        invoke_list_agent(&ctx, "EphemeralListAgent", id, "ephemeral:").await;
+    }
+
+    let count_durable = |names: &[String]| {
+        names
+            .iter()
+            .filter(|n| n.starts_with("DurableListAgent("))
+            .count()
+    };
+    let count_ephemeral = |names: &[String]| {
+        names
+            .iter()
+            .filter(|n| n.starts_with("EphemeralListAgent("))
+            .count()
+    };
+
+    let ephemeral_names = list_agent_names(&ctx, "ephemeral").await;
+    let e_count = count_ephemeral(&ephemeral_names);
+    let d_count = count_durable(&ephemeral_names);
+    assert_eq!(
+        e_count, MODE_FILTER_INSTANCE_COUNT,
+        "`agent list --mode ephemeral` must list exactly {MODE_FILTER_INSTANCE_COUNT} ephemeral \
+         agents, got {e_count} ephemeral and {d_count} durable: {ephemeral_names:?}"
+    );
+    assert_eq!(
+        d_count, 0,
+        "`agent list --mode ephemeral` must not list durable agents, got {d_count}: {ephemeral_names:?}"
+    );
+
+    let durable_names = list_agent_names(&ctx, "durable").await;
+    let d_count = count_durable(&durable_names);
+    let e_count = count_ephemeral(&durable_names);
+    assert_eq!(
+        d_count, MODE_FILTER_INSTANCE_COUNT,
+        "`agent list --mode durable` must list exactly {MODE_FILTER_INSTANCE_COUNT} durable \
+         agents, got {d_count} durable and {e_count} ephemeral: {durable_names:?}"
+    );
+    assert_eq!(
+        e_count, 0,
+        "`agent list --mode durable` must not list ephemeral agents, got {e_count}: {durable_names:?}"
+    );
+
+    let all_names = list_agent_names(&ctx, "all").await;
+    let d_count = count_durable(&all_names);
+    let e_count = count_ephemeral(&all_names);
+    assert_eq!(
+        d_count, MODE_FILTER_INSTANCE_COUNT,
+        "`agent list --mode all` must list exactly {MODE_FILTER_INSTANCE_COUNT} durable agents, \
+         got {d_count}: {all_names:?}"
+    );
+    assert_eq!(
+        e_count, MODE_FILTER_INSTANCE_COUNT,
+        "`agent list --mode all` must list exactly {MODE_FILTER_INSTANCE_COUNT} ephemeral agents, \
+         got {e_count}: {all_names:?}"
+    );
+}
+
+// Verifies that the TS REPL `:agent-list --mode ephemeral|durable|all` colon
+// command forwards the `--mode` parameter to the underlying `agent list` CLI
+// invocation and that the listing is partitioned correctly.
+//
+// The TS REPL's `:agent-list` command delegates to `golem-cli agent list` via
+// the REPL control socket. If the `--mode` flag were silently dropped (e.g. the
+// colon-command arg parser failed to forward it), the listing would fall back
+// to the `durable` default and never show ephemeral agents. This test catches
+// that by asserting `EphemeralListAgent` appears for `--mode ephemeral` and
+// `DurableListAgent` appears for `--mode durable`.
+//
+// Uses a Rust app + TS REPL (the same pattern as `test_rust_counter`) so the
+// test does not depend on the TS component template's agent_guest.wasm.
+#[test]
+#[timeout("10 minutes")]
+async fn test_agent_list_mode_filter_in_ts_repl() {
+    let mut ctx = TestContext::new();
+    let app_name = "agent-list-mode-repl";
+
+    setup_list_mode_filter_app(&mut ctx, app_name).await;
+
+    // Create a small set of durable + ephemeral instances. The REPL test proves
+    // mode forwarding, not scale — 3 of each is enough to distinguish the
+    // partitions and keep the interactive session fast.
+    for _ in 0..3 {
+        let id = Uuid::new_v4().to_string();
+        invoke_list_agent(&ctx, "DurableListAgent", &id, "durable:").await;
+    }
+    for _ in 0..3 {
+        let id = Uuid::new_v4().to_string();
+        invoke_list_agent(&ctx, "EphemeralListAgent", &id, "ephemeral:").await;
+    }
+
+    // The REPL renders `agent list` as a text table in the PTY. Long agent names
+    // like `EphemeralListAgent("<uuid>")` wrap across multiple terminal rows in
+    // the narrow (80-column) PTY, so matching the full name fails. Instead we
+    // match on the first 8 characters of each agent type name (`Ephemera` /
+    // `DurableL`) — exactly the width of the Agent name column — which is enough
+    // to prove the mode filter was forwarded: if `--mode ephemeral` were dropped,
+    // the default `durable` listing would show `DurableL` and never `Ephemera`.
+    //
+    // We don't pass `--format json` to the REPL colon command: the REPL renders
+    // `agent list` as a text table by default, which is the natural output to
+    // match here. The short column-width prefixes are enough to prove the mode
+    // filter was forwarded.
+    ctx.cli_interactive_repl_test(
+        [
+            cmd::REPL,
+            flag::LANGUAGE,
+            "ts",
+            flag::YES,
+            "--disable-stream",
+        ],
+        move |session| {
+            session.set_expect_timeout(Some(Duration::from_secs(300)));
+            session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
+
+            // The colon-command adapter shows the prompt once or twice after
+            // each command: once from `displayPrompt()` in the action's finally
+            // block, and sometimes again from the REPL's own eval callback. We
+            // always consume the first prompt, then try to consume a second
+            // with a short timeout. Without consuming at least the first prompt,
+            // the next `:agent-list` command is not reliably forwarded to the
+            // server — the REPL's input buffer gets cleared by
+            // `clearBufferedCommand()` in the action's finally block.
+            let prompt_regex = r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>";
+
+            // `:agent-list --mode ephemeral` must forward the mode and show only
+            // ephemeral agents. If the mode were dropped, the default `durable`
+            // listing would show `DurableL` and `Ephemera` would never appear,
+            // timing out this expectation.
+            session.send_line_and_expect_regex(r":agent-list --mode ephemeral", r"Ephemera")?;
+            session.expect_regex(prompt_regex)?;
+            session.set_expect_timeout(Some(Duration::from_secs(5)));
+            let _ = session.expect_regex(prompt_regex);
+            session.set_expect_timeout(Some(Duration::from_secs(300)));
+
+            // `:agent-list --mode durable` must forward the mode and show durable
+            // agents.
+            session.send_line_and_expect_regex(r":agent-list --mode durable", r"DurableL")?;
+            session.expect_regex(prompt_regex)?;
+            session.set_expect_timeout(Some(Duration::from_secs(5)));
+            let _ = session.expect_regex(prompt_regex);
+            session.set_expect_timeout(Some(Duration::from_secs(300)));
+
+            // `:agent-list --mode all` must show both partitions.
+            session.send_line_and_expect_regex(r":agent-list --mode all", r"DurableL")?;
+            session.expect_regex(r"Ephemera")?;
+            session.expect_regex(prompt_regex)?;
+            session.set_expect_timeout(Some(Duration::from_secs(5)));
+            let _ = session.expect_regex(prompt_regex);
+            session.set_expect_timeout(Some(Duration::from_secs(300)));
+
+            session.send_line(".exit")?;
+            session.expect_eof()?;
+
+            Ok(())
+        },
+    )
+    .await;
+}
+
+// JSON view of the `agent list` structured output. We only need the `agents`
+// array and the rendered `agentName` field; serde ignores the `outputType`
+// discriminator injected by the CLI's structured-output wrapper.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentListResponseView {
+    agents: Vec<AgentListView>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentListView {
+    agent_name: String,
 }
 
 // Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files

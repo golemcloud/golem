@@ -31,7 +31,9 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 mod replay_state;
+mod secrets;
 mod sockets;
+pub mod tool;
 pub mod wasm_rpc;
 pub mod websocket;
 
@@ -51,7 +53,7 @@ use crate::model::{
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::card::{CardService, LiveCardEvent};
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -91,10 +93,11 @@ pub use durability::*;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
 use futures::future::try_join_all;
+use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
-use golem_common::model::card::CardId;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -127,7 +130,7 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use replay_state::ReplayEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -263,43 +266,47 @@ pub(crate) fn agent_effective_surface_from_component_metadata(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
     agent_id: &ParsedAgentId,
-) -> golem_common::model::card::EffectiveSurface {
-    let template = component
-        .metadata
-        .agent_type_initial_permission_template(&agent_id.agent_type)
-        .cloned()
-        .unwrap_or_else(|| {
-            golem_common::model::component_metadata::AgentInitialPermissionTemplate::default_for(
-                &component.environment_name,
-                &component.component_name,
-            )
-        });
+) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
+    let context = agent_monomorphization_context(component, owned_agent_id, agent_id);
+    let card = agent_initial_card_from_component_metadata(component, agent_id)?;
+    Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
+}
 
-    let context = golem_common::model::card::AgentPermissionMonomorphizationContext {
+fn agent_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    agent_id: &ParsedAgentId,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    golem_common::model::card::AgentPermissionMonomorphizationContext {
         account: component.account_email.clone(),
         application: component.application_name.clone(),
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
         agent_name: owned_agent_id.agent_id.agent_id.clone(),
         agent_type: agent_id.agent_type.clone(),
-    };
+    }
+}
 
-    let Ok(mut card) = golem_common::model::card::monomorphize_agent_initial_card(
-        &template.lower_positive,
-        &template.lower_negative,
-        &template.upper_positive,
-        &template.upper_negative,
-        &context,
-    ) else {
-        return golem_common::model::card::EffectiveSurface::default();
-    };
-    card.card_id = template.card_id;
+fn agent_initial_card_from_component_metadata(
+    component: &Component,
+    agent_id: &ParsedAgentId,
+) -> Result<StoredCard, WorkerExecutorError> {
+    let card = component
+        .metadata
+        .agent_type_initial_permission_card(&agent_id.agent_type)
+        .cloned()
+        .ok_or_else(|| missing_agent_initial_card_error(component, agent_id))?;
+    Ok(StoredCard::Polymorphic(card))
+}
 
-    golem_common::model::card::EffectiveSurface::from_cards(
-        std::slice::from_ref(&card),
-        &golem_common::model::card::recipient::RecipientPattern::Any,
-    )
-    .unwrap_or_default()
+fn missing_agent_initial_card_error(
+    component: &Component,
+    agent_id: &ParsedAgentId,
+) -> WorkerExecutorError {
+    WorkerExecutorError::invalid_request(format!(
+        "Missing initial permission card for agent type {} in component {} revision {}",
+        agent_id.agent_type, component.id, component.revision
+    ))
 }
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
@@ -692,24 +699,58 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.agent_effective_surface(),
         )
     }
+
+    pub(crate) fn agent_wallet_cards_snapshot(&self) -> Vec<StoredCard> {
+        self.state.agent_wallet_cards.values().cloned().collect()
+    }
+
+    fn rederive_agent_effective_surface_from_wallet(&mut self) {
+        self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
+            let context = agent_monomorphization_context(
+                &self.state.component_metadata,
+                &self.owned_agent_id,
+                agent_id,
+            );
+            golem_common::model::card::agent_effective_surface_from_wallet(
+                &context,
+                self.state.agent_wallet_cards.values(),
+            )
+        } else {
+            golem_common::model::card::EffectiveSurface::default()
+        };
+    }
+
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
         if !self.state.is_live() {
             return Ok(());
         }
 
         let events = self
-            .state
-            .card_service
-            .drain_live_card_events(&self.owned_agent_id)
-            .await;
+            .public_state
+            .worker()
+            .get_last_known_status()
+            .await
+            .pending_card_events;
         if events.is_empty() {
             return Ok(());
         }
 
-        for event in events {
-            match event {
-                LiveCardEvent::CardRevoked(card_id) => {
-                    self.apply_card_revoked(card_id, true).await?;
+        for pending_event in events {
+            match pending_event.event {
+                QueuedCardEvent::Revoke(event) => {
+                    let card_id = event.card_id;
+                    self.apply_card_revoked(card_id, pending_event.oplog_index, true)
+                        .await?;
+                }
+                QueuedCardEvent::Install(event) => {
+                    let Some(card) = event.card else {
+                        return Err(WorkerExecutorError::runtime(
+                            "queued card install is missing card payload",
+                        ));
+                    };
+                    let _ = self
+                        .apply_card_install(Some(pending_event.oplog_index), card)
+                        .await?;
                 }
             }
         }
@@ -717,26 +758,69 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
+    pub(crate) async fn apply_card_install(
+        &mut self,
+        queued_event_index: Option<OplogIndex>,
+        card: StoredCard,
+    ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
+        let card_id = card.card_id();
+        let revoked_or_missing = self
+            .state
+            .card_service
+            .check_cards(vec![card_id])
+            .await?
+            .contains(&card_id);
+        let status = self.public_state.worker().get_last_known_status().await;
+
+        if revoked_or_missing {
+            let reason = if status.revoked_cards.contains(&card_id) {
+                CardInstallFailure::CardRevoked
+            } else {
+                CardInstallFailure::NotFound
+            };
+
+            if let Some(queued_event_index) = queued_event_index {
+                self.public_state
+                    .worker()
+                    .add_and_commit_oplog(OplogEntry::card_install_failed(
+                        queued_event_index,
+                        card_id,
+                        reason,
+                    ))
+                    .await;
+            }
+            Ok(Err(reason))
+        } else {
+            self.state.agent_wallet_cards.insert(card_id, card.clone());
+            self.rederive_agent_effective_surface_from_wallet();
+            let wallet_card_ids = self
+                .state
+                .agent_wallet_cards
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            self.state
+                .card_service
+                .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
+                .await;
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
+                .await;
+            Ok(Ok(()))
+        }
+    }
+
     async fn apply_card_revoked(
         &mut self,
         card_id: CardId,
+        queued_event_index: OplogIndex,
         is_live: bool,
     ) -> Result<(), WorkerExecutorError> {
-        if !self.state.agent_wallet_card_ids.remove(&card_id) {
-            return Ok(());
-        }
+        let was_in_wallet = self.state.agent_wallet_cards.remove(&card_id).is_some();
 
-        let current_initial_card_id = self.state.agent_id.as_ref().and_then(|agent_id| {
-            self.state
-                .component_metadata
-                .metadata
-                .agent_type_initial_permission_template(&agent_id.agent_type)
-                .map(|template| template.card_id)
-        });
-
-        if Some(card_id) == current_initial_card_id {
-            self.state.agent_effective_surface =
-                golem_common::model::card::EffectiveSurface::default();
+        if was_in_wallet {
+            self.rederive_agent_effective_surface_from_wallet();
         }
 
         if is_live {
@@ -747,7 +831,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
+                .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
                 .await;
         }
 
@@ -1717,11 +1801,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let tx_id = try_match!(
                 begin_entry,
-                OplogEntry::BeginRemoteTransaction {
-                    timestamp: _,
-                    transaction_id,
-                    original_begin_index: _,
-                }
+                OplogEntry::BeginRemoteTransaction { transaction_id, .. }
             )
             .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
 
@@ -2488,9 +2568,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     debug!("Updating the replay's current phantom id to {new_phantom_id}");
                     self.update_state_to_new_phantom_id(new_phantom_id).await?;
                 }
+                ReplayEvent::CardInstalled { card } => {
+                    let card_id = card.card_id();
+                    debug!(card_id = %card_id, "Applying replayed card installation");
+                    self.state.agent_wallet_cards.insert(card_id, card);
+                    self.rederive_agent_effective_surface_from_wallet();
+                }
                 ReplayEvent::CardRevoked { card_id } => {
                     debug!(card_id = %card_id, "Applying replayed card revocation");
-                    self.apply_card_revoked(card_id, false).await?;
+                    self.apply_card_revoked(card_id, OplogIndex::NONE, false)
+                        .await?;
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
@@ -2554,8 +2641,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn check_post_replay_wallet_liveness(&mut self) -> Result<(), WorkerExecutorError> {
         let wallet_card_ids = self
             .state
-            .agent_wallet_card_ids
-            .iter()
+            .agent_wallet_cards
+            .keys()
             .copied()
             .collect::<Vec<_>>();
         self.state
@@ -2569,11 +2656,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let revoked_card_ids = self.state.card_service.check_cards(wallet_card_ids).await?;
 
-        if !revoked_card_ids.is_empty() {
-            let revoked_card_ids = revoked_card_ids.into_iter().collect::<Vec<_>>();
-            self.state
-                .card_service
-                .enqueue_revoked_cards_for_agent(&self.owned_agent_id, &revoked_card_ids)
+        for card_id in revoked_card_ids {
+            self.public_state
+                .worker()
+                .queue_card_revocation(card_id)
                 .await;
         }
 
@@ -2633,20 +2719,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             validate_agent_config(&updated_agent_config, agent_type)?;
 
-            let initial_card_id = new_metadata
-                .metadata
-                .agent_type_initial_permission_template(&agent_id.agent_type)
-                .map(|template| template.card_id);
-            let agent_effective_surface = agent_effective_surface_from_component_metadata(
-                &new_metadata,
-                &self.owned_agent_id,
-                &agent_id,
-            );
+            let initial_card =
+                agent_initial_card_from_component_metadata(&new_metadata, &agent_id)?;
+            let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
+            let context =
+                agent_monomorphization_context(&new_metadata, &self.owned_agent_id, &agent_id);
+            let agent_effective_surface =
+                golem_common::model::card::agent_effective_surface_from_wallet(
+                    &context,
+                    initial_wallet_cards.values(),
+                );
 
             Some((
                 updated_agent_config,
                 agent_effective_surface,
-                initial_card_id,
+                initial_wallet_cards,
             ))
         } else {
             None
@@ -2670,13 +2757,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             *read_only_paths = compute_read_only_paths(&current_files);
         }
 
-        if let Some((updated_agent_config, agent_effective_surface, initial_card_id)) =
+        if let Some((updated_agent_config, agent_effective_surface, initial_wallet_cards)) =
             updated_agent_state
         {
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
             self.state.agent_effective_surface = agent_effective_surface;
-            self.state.agent_wallet_card_ids = initial_card_id.into_iter().collect();
+            self.state.agent_wallet_cards = initial_wallet_cards;
         };
 
         self.state.component_metadata = new_metadata;
@@ -3093,8 +3180,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 && !recorded_result.replay_equivalent(&output.result)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("{full_function_name} => {recorded_result:?}"),
-                    format!("{full_function_name} => {:?}", output.result),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        recorded_result.redacted_debug()
+                    ),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        output.result.redacted_debug()
+                    ),
                 ));
             }
         }
@@ -4594,7 +4687,7 @@ struct PrivateDurableWorkerState {
 
     component_metadata: Component,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
-    agent_wallet_card_ids: HashSet<CardId>,
+    agent_wallet_cards: BTreeMap<CardId, StoredCard>,
 
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -4735,7 +4828,7 @@ impl PrivateDurableWorkerState {
         component_metadata: Component,
         total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
-        agent_effective_surface: golem_common::model::card::EffectiveSurface,
+        _agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
@@ -4768,16 +4861,40 @@ impl PrivateDurableWorkerState {
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
-        let agent_wallet_card_ids = agent_id
-            .as_ref()
-            .and_then(|agent_id| {
-                component_metadata
-                    .metadata
-                    .agent_type_initial_permission_template(&agent_id.agent_type)
-                    .map(|template| template.card_id)
-            })
-            .into_iter()
-            .collect();
+        let initial_agent_wallet_cards =
+            || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
+                match agent_id.as_ref() {
+                    Some(agent_id) => {
+                        let card = agent_initial_card_from_component_metadata(
+                            &component_metadata,
+                            agent_id,
+                        )?;
+                        Ok(BTreeMap::from([(card.card_id(), card)]))
+                    }
+                    None => Ok(BTreeMap::new()),
+                }
+            };
+        let agent_wallet_cards = if let Some(snapshot_idx) = last_snapshot_index {
+            match oplog.read(snapshot_idx).await {
+                OplogEntry::Snapshot { active_cards, .. } => active_cards
+                    .into_iter()
+                    .map(|card| (card.card_id(), card))
+                    .collect(),
+                _ => initial_agent_wallet_cards()?,
+            }
+        } else {
+            initial_agent_wallet_cards()?
+        };
+        let agent_effective_surface = if let Some(agent_id) = agent_id.as_ref() {
+            let context =
+                agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
+            golem_common::model::card::agent_effective_surface_from_wallet(
+                &context,
+                agent_wallet_cards.values(),
+            )
+        } else {
+            golem_common::model::card::EffectiveSurface::default()
+        };
         Ok(Self {
             oplog_service,
             oplog,
@@ -4819,7 +4936,7 @@ impl PrivateDurableWorkerState {
             read_only_method_name: None,
             component_metadata,
             agent_effective_surface,
-            agent_wallet_card_ids,
+            agent_wallet_cards,
             total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,

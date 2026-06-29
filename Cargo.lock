@@ -4245,6 +4245,8 @@ dependencies = [
  "async-recursion",
  "async-scoped",
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
  "axum",
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -4311,6 +4313,7 @@ dependencies = [
  "system-interface",
  "tempfile",
  "test-r",
+ "testcontainers",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.25.0",
@@ -4321,6 +4324,7 @@ dependencies = [
  "tonic-tracing-opentelemetry",
  "tracing",
  "try_match",
+ "tryhard",
  "url",
  "uuid",
  "wasmtime",
@@ -4339,6 +4343,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "bytes",
+ "chrono",
  "golem-api-grpc",
  "golem-common",
  "golem-schema",
@@ -5228,6 +5233,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
+ "chrono",
  "clap",
  "convert_case 0.11.0",
  "futures",
@@ -5257,6 +5263,7 @@ dependencies = [
  "tokio-tungstenite 0.25.0",
  "tracing",
  "tracing-opentelemetry",
+ "url",
  "uuid",
  "wac-graph",
 ]
@@ -11410,9 +11417,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.3.4"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "444d2eef3cfd42a26f2a852d95cbde84bdbfb72bde3a7c998054c1c91cb01101"
+checksum = "3b97802faed27e133d390e0a08afa00a112e525f51fb4a0aac320db6f1fb42de"
 dependencies = [
  "anyhow",
  "camino",

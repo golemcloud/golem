@@ -24,7 +24,8 @@ members = [
 
 exclude = [
     "test-components",
-    "sdks/golem-rust"
+    "sdks/golem-rust",
+    "dev-tools"
 ]
 
 [workspace.metadata]
@@ -295,7 +296,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.248.0"
 wasm-metadata = { version = "0.248.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.3.4", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.3.6", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.248"
 wasmparser = "0.248.0"
 wasmprinter = "0.248.0"

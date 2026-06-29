@@ -131,11 +131,13 @@ windows-sys = { workspace = true }
 axum = { workspace = true }
 expectrl = { workspace = true }
 goldenfile = { workspace = true }
+golem-common = { workspace = true, features = ["proptest"] }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
+syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }
 
 [build-dependencies]

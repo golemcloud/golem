@@ -37,20 +37,24 @@ use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::oplog::CardInstallFailure;
 use golem_common::model::oplog::host_functions::{
-    GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
-    GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
-    GolemApiGetSelfMetadata, GolemApiResolveAgentIdStrict, GolemApiResolveComponentId,
-    GolemApiRevertWorker, GolemApiUpdateWorker,
+    GolemApiCompletePromise, GolemApiCreatePromise, GolemApiDeriveCard, GolemApiFork,
+    GolemApiForkWorker, GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata,
+    GolemApiGetPromiseResult, GolemApiGetSelfMetadata, GolemApiInstallCard,
+    GolemApiResolveAgentIdStrict, GolemApiResolveComponentId, GolemApiRevertWorker,
+    GolemApiUpdateWorker,
 };
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiComponentSlug,
-    HostRequestGolemApiComponentSlugAndAgentName, HostRequestGolemApiForkAgent,
-    HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent, HostRequestGolemApiUpdateAgent,
-    HostRequestNoInput, HostResponseGolemApiAgentId, HostResponseGolemApiAgentMetadata,
-    HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
+    DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiCard,
+    HostRequestGolemApiComponentSlug, HostRequestGolemApiComponentSlugAndAgentName,
+    HostRequestGolemApiForkAgent, HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent,
+    HostRequestGolemApiUpdateAgent, HostRequestNoInput, HostResponseGolemApiAgentId,
+    HostResponseGolemApiAgentMetadata, HostResponseGolemApiCard, HostResponseGolemApiComponentId,
+    HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey, HostResponseGolemApiInstallCard,
     HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
     HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
     HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
@@ -96,6 +100,28 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
         | WorkerExecutorError::ComponentNotFound { .. } => HostFailureKind::Permanent,
         _ => HostFailureKind::Transient,
     }
+}
+
+fn card_install_failure_to_wit(
+    failure: CardInstallFailure,
+) -> golem_api_1_x::host::CardInstallError {
+    match failure {
+        CardInstallFailure::CardRevoked => golem_api_1_x::host::CardInstallError::Revoked,
+        CardInstallFailure::NotFound => golem_api_1_x::host::CardInstallError::NotFound,
+        CardInstallFailure::RecipientMismatch | CardInstallFailure::NotPermitted => {
+            golem_api_1_x::host::CardInstallError::NotPermitted
+        }
+    }
+}
+
+fn card_id_to_wit(card_id: CardId) -> golem_api_1_x::host::CardId {
+    golem_api_1_x::host::CardId {
+        uuid: card_id.0.into(),
+    }
+}
+
+fn card_id_from_wit(card_id: golem_api_1_x::host::CardId) -> CardId {
+    CardId(card_id.uuid.into())
 }
 
 impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
@@ -576,6 +602,82 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .await?;
         Ok(result.uuid.into())
+    }
+
+    async fn self_card(&mut self) -> anyhow::Result<Option<golem_api_1_x::host::Card>> {
+        self.observe_function_call("golem::api", "self-card");
+        Ok(self
+            .state
+            .agent_wallet_cards
+            .keys()
+            .next()
+            .copied()
+            .map(|card_id| golem_api_1_x::host::Card {
+                card_id: card_id_to_wit(card_id),
+            }))
+    }
+
+    async fn derive_card(
+        &mut self,
+        card: golem_api_1_x::host::Card,
+    ) -> anyhow::Result<Result<golem_api_1_x::host::Card, String>> {
+        let card_id = card_id_from_wit(card.card_id);
+        let handle = CallHandle::<GolemApiDeriveCard, NotCancellable>::start(
+            self,
+            HostRequestGolemApiCard { card_id: card_id.0 },
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
+
+        let result = handle
+            .run(self, async move |ctx| {
+                let result = if ctx.state.agent_wallet_cards.contains_key(&card_id) {
+                    Ok(card_id.0)
+                } else {
+                    Err("card is not installed in this agent wallet".to_string())
+                };
+
+                Ok::<_, anyhow::Error>(HostResponseGolemApiCard { result })
+            })
+            .await?;
+
+        Ok(result.result.map(|card_id| golem_api_1_x::host::Card {
+            card_id: card_id_to_wit(CardId(card_id)),
+        }))
+    }
+
+    async fn install_card(
+        &mut self,
+        card: golem_api_1_x::host::Card,
+    ) -> anyhow::Result<Result<(), golem_api_1_x::host::CardInstallError>> {
+        let card_id = card_id_from_wit(card.card_id);
+        let handle = CallHandle::<GolemApiInstallCard, NotCancellable>::start(
+            self,
+            HostRequestGolemApiCard { card_id: card_id.0 },
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+
+        let result = handle
+            .run(self, async move |ctx| {
+                let card = ctx
+                    .state
+                    .card_service
+                    .get_cards(vec![card_id])
+                    .await?
+                    .into_iter()
+                    .next();
+                let result = if let Some(card) = card {
+                    ctx.apply_card_install(None, card).await?
+                } else {
+                    Err(CardInstallFailure::NotFound)
+                };
+
+                Ok::<_, anyhow::Error>(HostResponseGolemApiInstallCard { result })
+            })
+            .await?;
+
+        Ok(result.result.map_err(card_install_failure_to_wit))
     }
 
     async fn update_agent(
@@ -1481,6 +1583,21 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
         component_revision: u64,
     ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
+
+        // The raw oplog entries are guest-owned: their only live
+        // `schema-value-tree` (each `create.local-agent-config[].value`) may
+        // carry owned `quota-token` handles that were transferred into the
+        // resource table at the WIT boundary. The pure `TryFrom` conversion
+        // below rejects quota tokens but cannot delete the handles, and this
+        // function returns its error as a non-trapping `result::err`, so drain
+        // any such handle up front (rejecting the batch) before any other
+        // non-trapping early return can drop the entries without cleanup.
+        let entries = match crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
+            entries, self,
+        ) {
+            Ok(entries) => entries,
+            Err(e) => return Ok(Err(e)),
+        };
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();

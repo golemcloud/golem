@@ -83,9 +83,14 @@ function parseJsonCommandOutput<T>(output: string): T | undefined {
 }
 
 function extractInvokeJsonResult(output: string): unknown {
-  const parsed = parseJsonCommandOutput<Record<string, unknown>>(output);
+  const parsed = parseJsonCommandOutput<unknown>(output);
   if (!parsed || typeof parsed !== "object") {
     return parsed;
+  }
+
+  const document = parsed as Record<string, unknown>;
+  if (document.$type !== "agent.invoke") {
+    return undefined;
   }
 
   const unwrapValueAndType = (valueAndType: unknown): unknown => {
@@ -96,17 +101,17 @@ function extractInvokeJsonResult(output: string): unknown {
     return "value" in valueAndType ? (valueAndType as Record<string, unknown>).value : undefined;
   };
 
-  const resultJson = parsed.result_json;
+  const resultJson = document.resultJson;
   if (resultJson && typeof resultJson === "object") {
     return unwrapValueAndType(resultJson);
   }
 
-  const resultsJson = parsed.results_json;
+  const resultsJson = document.resultsJson;
   if (Array.isArray(resultsJson)) {
     return resultsJson.map(unwrapValueAndType);
   }
 
-  return parsed;
+  return undefined;
 }
 
 // --- Schemas ---
@@ -1701,12 +1706,22 @@ export class ScenarioExecutor {
       return undefined;
     }
 
-    const parsed = parseJsonCommandOutput<unknown[]>(result.stdout);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
+    const parsed = parseJsonCommandOutput<unknown>(result.stdout);
+    if (!parsed || typeof parsed !== "object") {
       return undefined;
     }
 
-    const env = parsed[0] as Record<string, unknown>;
+    const document = parsed as Record<string, unknown>;
+    if (document.$type !== "environment.list" || !Array.isArray(document.environments)) {
+      return undefined;
+    }
+
+    const environments = document.environments;
+    if (environments.length === 0) {
+      return undefined;
+    }
+
+    const env = environments[0] as Record<string, unknown>;
     const envSummary = env["environment"] as Record<string, unknown> | undefined;
     if (!envSummary) {
       return undefined;

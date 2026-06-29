@@ -22,10 +22,10 @@ pub use wstd;
 pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, Schema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
+    SchemaType, SchemaValue, TypedSchemaValue,
 };
-pub use golem_schema::{AgentId, ComponentId, EnvironmentId, PromiseId};
+pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 
 pub fn encode_schema_graph(
     graph: &SchemaGraph,
@@ -39,12 +39,14 @@ pub fn decode_schema_graph(
     schema::wit::decode_graph(graph)
 }
 
-pub fn encode_schema_value(value: &SchemaValue) -> schema::wit::wire::SchemaValueTree {
+pub fn encode_schema_value(
+    value: &SchemaValue,
+) -> Result<schema::wit::wire::SchemaValueTree, schema::wit::EncodeError> {
     schema::wit::encode_value(value)
 }
 
 pub fn decode_schema_value(
-    value: &schema::wit::wire::SchemaValueTree,
+    value: schema::wit::wire::SchemaValueTree,
 ) -> Result<SchemaValue, schema::wit::DecodeError> {
     schema::wit::decode_value(value)
 }
@@ -95,6 +97,10 @@ pub mod bindings {
             pub(crate) use crate::raw_bindings::golem::quota::types;
         }
 
+        pub mod secrets {
+            pub use crate::raw_bindings::golem::secrets::{reveal, types};
+        }
+
         pub mod agent {
             pub use crate::raw_bindings::golem::agent::host;
         }
@@ -124,6 +130,8 @@ pub mod load_snapshot {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -162,6 +170,8 @@ pub mod save_snapshot {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -201,6 +211,8 @@ pub mod golem_agentic {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -255,6 +267,8 @@ pub mod oplog_processor {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -286,6 +300,7 @@ pub use json::*;
 
 mod checkpoint;
 pub mod quota;
+pub mod secrets;
 mod transaction;
 
 use std::future::Future;
@@ -300,6 +315,7 @@ pub type OplogIndex = u64;
 pub mod websocket;
 pub use checkpoint::*;
 pub use quota::*;
+pub use secrets::*;
 pub mod retry;
 pub use transaction::*;
 pub use websocket::{WebSocketCloseInfo, WebSocketError, WebSocketMessage, WebsocketConnection};
@@ -327,6 +343,18 @@ fn schema_component_id_to_wire(value: ComponentId) -> schema::wit::wire::Compone
 
 fn wire_component_id_to_schema(value: schema::wit::wire::ComponentId) -> ComponentId {
     ComponentId {
+        uuid: wire_uuid_to_schema(value.uuid),
+    }
+}
+
+fn schema_card_id_to_wire(value: CardId) -> schema::wit::wire::CardId {
+    schema::wit::wire::CardId {
+        uuid: schema_uuid_to_wire(value.uuid),
+    }
+}
+
+fn wire_card_id_to_schema(value: schema::wit::wire::CardId) -> CardId {
+    CardId {
         uuid: wire_uuid_to_schema(value.uuid),
     }
 }
@@ -402,6 +430,54 @@ impl From<PersistenceLevel> for host_api::PersistenceLevel {
 pub enum UpdateMode {
     Automatic,
     SnapshotBased,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+pub struct Card {
+    pub card_id: CardId,
+}
+
+impl From<host_api::Card> for Card {
+    fn from(value: host_api::Card) -> Self {
+        Self {
+            card_id: wire_card_id_to_schema(value.card_id),
+        }
+    }
+}
+
+impl From<Card> for host_api::Card {
+    fn from(value: Card) -> Self {
+        Self {
+            card_id: schema_card_id_to_wire(value.card_id),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+pub enum CardInstallError {
+    Revoked,
+    NotFound,
+    NotPermitted,
+}
+
+impl From<host_api::CardInstallError> for CardInstallError {
+    fn from(value: host_api::CardInstallError) -> Self {
+        match value {
+            host_api::CardInstallError::Revoked => Self::Revoked,
+            host_api::CardInstallError::NotFound => Self::NotFound,
+            host_api::CardInstallError::NotPermitted => Self::NotPermitted,
+        }
+    }
+}
+
+impl From<CardInstallError> for host_api::CardInstallError {
+    fn from(value: CardInstallError) -> Self {
+        match value {
+            CardInstallError::Revoked => Self::Revoked,
+            CardInstallError::NotFound => Self::NotFound,
+            CardInstallError::NotPermitted => Self::NotPermitted,
+        }
+    }
 }
 
 impl From<host_api::UpdateMode> for UpdateMode {
@@ -1017,6 +1093,20 @@ pub async fn with_idempotence_mode_async<R, F: Future<Output = R>>(
 /// to introduce idempotence.
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(host_api::generate_idempotency_key())
+}
+
+pub fn self_card() -> Option<Card> {
+    host_api::self_card().map(Into::into)
+}
+
+pub fn derive_card(card: Card) -> Result<Card, String> {
+    let card = host_api::Card::from(card);
+    host_api::derive_card(card).map(Into::into)
+}
+
+pub fn install_card(card: Card) -> Result<(), CardInstallError> {
+    let card = host_api::Card::from(card);
+    host_api::install_card(card).map_err(Into::into)
 }
 
 pub struct AtomicOperationGuard {

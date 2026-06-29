@@ -23,7 +23,14 @@
 
 import { Principal as HostPrincipal } from 'golem:agent/common@2.0.0';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
-import { SchemaValue, schemaValueFromWit, schemaValueToWit, v } from '../../schema-model';
+import {
+  drainUnconsumedQuotaHandles,
+  preflightWitValueTree,
+  SchemaValue,
+  schemaValueFromWit,
+  schemaValueToWit,
+  v,
+} from '../../schema-model';
 import {
   createWireDecoder,
   createWireEncoder,
@@ -33,12 +40,14 @@ import {
   serializeGraph,
   serializeGraphToWit,
 } from './schemaValue';
+import { r, resolvedField } from '../types/resolvedType';
 import {
   MultimodalCase,
   RuntimeOutput,
   RuntimeParam,
   RuntimeTypeInfo,
 } from '../../typeInfoInternal';
+import type { ResolvedGraph, ResolvedType } from '../types/resolvedType';
 import {
   unstructuredBinaryFromValue,
   unstructuredBinaryToValue,
@@ -46,7 +55,6 @@ import {
   unstructuredTextToValue,
 } from '../../schema/rich';
 import { sdkPrincipalFromHost } from '../../../principal';
-import { QuotaToken } from '../../../host/quota';
 import { Config } from '../../../agentConfig';
 
 // ============================================================
@@ -84,11 +92,8 @@ export function precompileOutputCodec(output: RuntimeOutput): void {
 
 export function serializeRuntimeValue(value: any, type: RuntimeTypeInfo): SchemaValue {
   switch (type.tag) {
-    case 'schema': {
-      const toSerialize =
-        type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
-      return serializeGraph(toSerialize, type.graph);
-    }
+    case 'schema':
+      return serializeGraph(value, type.graph);
     case 'unstructured-text':
       return unstructuredTextToValue(value);
     case 'unstructured-binary':
@@ -108,10 +113,8 @@ export function deserializeRuntimeValue(
   type: RuntimeTypeInfo,
 ): any {
   switch (type.tag) {
-    case 'schema': {
-      const result = deserializeGraph(value, type.graph);
-      return type.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
-    }
+    case 'schema':
+      return deserializeGraph(value, type.graph);
     case 'unstructured-text':
       return unstructuredTextFromValue(parameterName, value, type.languages);
     case 'unstructured-binary':
@@ -269,14 +272,20 @@ export function encodeInputRecordToWit(args: any[], userParams: RuntimeParam[]):
     return schemaValueToWit(encodeInputRecord(args, userParams));
   }
 
+  if (userParams.some((p) => runtimeTypeContainsOwnedHandle(p.type))) {
+    const schemaParams = userParams as RuntimeParamWithSchema[];
+    return serializeGraphToWit(
+      inputRecordObject(args, schemaParams),
+      inputRecordGraph(schemaParams),
+    );
+  }
+
   const enc = createWireEncoder();
   const fieldIndices = userParams.map((param, i) => {
     const type = param.type as Extract<RuntimeTypeInfo, { tag: 'schema' }>;
     const value = i < args.length ? args[i] : undefined;
-    const toSerialize =
-      type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
     const codec = getGraphCodec(type.graph);
-    return codec ? codec.emit(toSerialize, enc.valueNodes) : enc.emitGraph(toSerialize, type.graph);
+    return codec ? codec.emit(value, enc.valueNodes) : enc.emitGraph(value, type.graph);
   });
   const root = enc.pushRecord(fieldIndices);
   return { valueNodes: enc.valueNodes, root };
@@ -294,9 +303,42 @@ export function decodeInputRecordFromWit(
   params: RuntimeParam[],
   principal: HostPrincipal,
 ): any[] {
+  preflightBoundaryDecode(input.valueNodes, input.root);
+
   const consumesField = (p: RuntimeParam) => p.type.tag !== 'principal' && p.type.tag !== 'config';
-  if (!params.filter(consumesField).every((p) => p.type.tag === 'schema')) {
-    return decodeInputRecord(schemaValueFromWit(input), params, principal);
+  const fieldParams = params.filter(consumesField);
+  if (!fieldParams.every((p) => p.type.tag === 'schema')) {
+    const clone = cloneWitValueTree(input);
+    const result = decodeInputRecord(schemaValueFromWit(clone), params, principal);
+    consumeOwnedHandlesFromClone(input, clone);
+    return result;
+  }
+
+  if (fieldParams.some((p) => runtimeTypeContainsOwnedHandle(p.type))) {
+    const schemaParams = fieldParams as RuntimeParamWithSchema[];
+    const dec = createWireDecoder(input.valueNodes);
+    const fieldIndices = dec.recordFieldIndices(input.root);
+    if (fieldIndices.length < schemaParams.length) {
+      throw new Error(`Missing argument for parameter '${schemaParams[fieldIndices.length].name}'`);
+    }
+    if (fieldIndices.length > schemaParams.length) {
+      throw new Error(
+        `Unexpected extra arguments: expected ${schemaParams.length}, got ${fieldIndices.length}`,
+      );
+    }
+
+    const record = dec.readGraph(input.root, inputRecordGraph(schemaParams));
+    let fieldIndex = 0;
+    return params.map((param) => {
+      const type = param.type;
+      if (type.tag === 'principal') {
+        return sdkPrincipalFromHost(principal);
+      }
+      if (type.tag === 'config') {
+        return new Config(type.tsType.properties, type.tsType.requiredMembers);
+      }
+      return record[inputRecordFieldName(fieldIndex++)];
+    });
   }
 
   const dec = createWireDecoder(input.valueNodes);
@@ -329,7 +371,7 @@ export function decodeInputRecordFromWit(
     } else {
       result = dec.readGraph(idx, schemaType.graph);
     }
-    return schemaType.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
+    return result;
   });
 
   if (fieldIndex !== fieldIndices.length) {
@@ -339,6 +381,163 @@ export function decodeInputRecordFromWit(
   }
 
   return args;
+}
+
+type RuntimeParamWithSchema = RuntimeParam & {
+  type: Extract<RuntimeTypeInfo, { tag: 'schema' }>;
+};
+
+function inputRecordObject(args: any[], userParams: RuntimeParamWithSchema[]): Record<string, any> {
+  const record: Record<string, any> = {};
+  for (let i = 0; i < userParams.length; i++) {
+    record[inputRecordFieldName(i)] = i < args.length ? args[i] : undefined;
+  }
+  return record;
+}
+
+function inputRecordGraph(userParams: RuntimeParamWithSchema[]): ResolvedGraph {
+  const defs = new Map<string, ResolvedType>();
+  const fields = userParams.map((param, i) => {
+    const prefix = `${inputRecordFieldName(i)}:`;
+    for (const [id, def] of param.type.graph.defs) {
+      defs.set(`${prefix}${id}`, namespaceResolvedType(def, prefix));
+    }
+    return resolvedField(
+      inputRecordFieldName(i),
+      namespaceResolvedType(param.type.graph.root, prefix),
+    );
+  });
+
+  return {
+    defs,
+    root: r.record(fields),
+  };
+}
+
+function inputRecordFieldName(index: number): string {
+  return `$${index}`;
+}
+
+function namespaceResolvedType(type: ResolvedType, prefix: string): ResolvedType {
+  const body = type.body;
+  switch (body.tag) {
+    case 'ref':
+      return { ...type, body: { tag: 'ref', id: `${prefix}${body.id}` } };
+    case 'list':
+      return { ...type, body: { ...body, element: namespaceResolvedType(body.element, prefix) } };
+    case 'map':
+      return {
+        ...type,
+        body: {
+          ...body,
+          key: namespaceResolvedType(body.key, prefix),
+          value: namespaceResolvedType(body.value, prefix),
+        },
+      };
+    case 'tuple':
+      return {
+        ...type,
+        body: {
+          ...body,
+          elements: body.elements.map((element) => namespaceResolvedType(element, prefix)),
+        },
+      };
+    case 'record':
+      return {
+        ...type,
+        body: {
+          ...body,
+          fields: body.fields.map((field) => ({
+            ...field,
+            type: namespaceResolvedType(field.type, prefix),
+          })),
+        },
+      };
+    case 'variant':
+      return {
+        ...type,
+        body: {
+          ...body,
+          cases: body.cases.map((c) => ({
+            ...c,
+            payload: c.payload !== undefined ? namespaceResolvedType(c.payload, prefix) : undefined,
+          })),
+        },
+      };
+    case 'option':
+      return { ...type, body: { ...body, element: namespaceResolvedType(body.element, prefix) } };
+    case 'result':
+      return {
+        ...type,
+        body: {
+          ...body,
+          ok: body.ok !== undefined ? namespaceResolvedType(body.ok, prefix) : undefined,
+          err: body.err !== undefined ? namespaceResolvedType(body.err, prefix) : undefined,
+        },
+      };
+    case 'secret':
+      return { ...type, body: { ...body, inner: namespaceResolvedType(body.inner, prefix) } };
+    default:
+      return type;
+  }
+}
+
+function runtimeTypeContainsOwnedHandle(type: RuntimeTypeInfo): boolean {
+  return type.tag === 'schema' && resolvedGraphContainsOwnedHandle(type.graph);
+}
+
+function resolvedGraphContainsOwnedHandle(graph: ResolvedGraph): boolean {
+  return resolvedTypeContainsOwnedHandle(graph.root, graph, new Set());
+}
+
+function resolvedTypeContainsOwnedHandle(
+  type: ResolvedType,
+  graph: ResolvedGraph,
+  seenRefs: Set<string>,
+): boolean {
+  const body = type.body;
+  switch (body.tag) {
+    case 'secret':
+    case 'quota-token':
+      return true;
+    case 'list':
+    case 'option':
+      return resolvedTypeContainsOwnedHandle(body.element, graph, seenRefs);
+    case 'map':
+      return (
+        resolvedTypeContainsOwnedHandle(body.key, graph, seenRefs) ||
+        resolvedTypeContainsOwnedHandle(body.value, graph, seenRefs)
+      );
+    case 'tuple':
+      return body.elements.some((element) =>
+        resolvedTypeContainsOwnedHandle(element, graph, seenRefs),
+      );
+    case 'record':
+      return body.fields.some((field) =>
+        resolvedTypeContainsOwnedHandle(field.type, graph, seenRefs),
+      );
+    case 'variant':
+      return body.cases.some(
+        (c) =>
+          c.payload !== undefined && resolvedTypeContainsOwnedHandle(c.payload, graph, seenRefs),
+      );
+    case 'result':
+      return (
+        (body.ok !== undefined && resolvedTypeContainsOwnedHandle(body.ok, graph, seenRefs)) ||
+        (body.err !== undefined && resolvedTypeContainsOwnedHandle(body.err, graph, seenRefs))
+      );
+    case 'ref': {
+      if (seenRefs.has(body.id)) return false;
+      const def = graph.defs.get(body.id);
+      if (def === undefined) return false;
+      seenRefs.add(body.id);
+      const result = resolvedTypeContainsOwnedHandle(def, graph, seenRefs);
+      seenRefs.delete(body.id);
+      return result;
+    }
+    default:
+      return false;
+  }
 }
 
 // ============================================================
@@ -379,10 +578,8 @@ export function encodeOutputToWit(
   }
   const type = output.type;
   if (type.tag === 'schema') {
-    const toSerialize =
-      type.tsType.kind === 'quota-token' ? (returnValue as QuotaToken)._toRecord() : returnValue;
     const codec = getGraphCodec(type.graph);
-    return codec ? codec.encode(toSerialize) : serializeGraphToWit(toSerialize, type.graph);
+    return codec ? codec.encode(returnValue) : serializeGraphToWit(returnValue, type.graph);
   }
   return schemaValueToWit(serializeRuntimeValue(returnValue, type));
 }
@@ -403,11 +600,49 @@ export function decodeOutputFromWit(
   if (value === undefined) {
     throw new Error('Expected a return value for a non-unit method output, got none');
   }
+  preflightBoundaryDecode(value.valueNodes, value.root);
+
   const type = output.type;
   if (type.tag === 'schema') {
     const codec = getGraphCodec(type.graph);
-    const result = codec ? codec.decode(value) : deserializeGraphFromWit(value, type.graph);
-    return type.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
+    return codec ? codec.decode(value) : deserializeGraphFromWit(value, type.graph);
   }
-  return deserializeRuntimeValue('returnValue', schemaValueFromWit(value), type);
+  const clone = cloneWitValueTree(value);
+  const result = deserializeRuntimeValue('returnValue', schemaValueFromWit(clone), type);
+  consumeOwnedHandlesFromClone(value, clone);
+  return result;
+}
+
+function preflightBoundaryDecode(
+  valueNodes: SchemaValueTree['valueNodes'],
+  root: SchemaValueTree['root'],
+): void {
+  try {
+    preflightWitValueTree(valueNodes, root);
+  } catch (e) {
+    drainUnconsumedQuotaHandles(valueNodes);
+    throw e;
+  }
+}
+
+export function cloneWitValueTree(value: SchemaValueTree): SchemaValueTree {
+  return {
+    root: value.root,
+    valueNodes: value.valueNodes.map((node) => ({ ...node }) as typeof node),
+  };
+}
+
+export function consumeOwnedHandlesFromClone(
+  original: SchemaValueTree,
+  clone: SchemaValueTree,
+): void {
+  for (let i = 0; i < clone.valueNodes.length; i++) {
+    const cloned = clone.valueNodes[i] as { tag: string; val?: unknown };
+    if (
+      (cloned.tag === 'secret-value' || cloned.tag === 'quota-token-handle') &&
+      cloned.val === undefined
+    ) {
+      (original.valueNodes[i] as { val?: unknown }).val = undefined;
+    }
+  }
 }

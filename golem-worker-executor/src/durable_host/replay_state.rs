@@ -17,6 +17,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::CardId;
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -47,6 +48,7 @@ pub enum ReplayEvent {
     ReplayFinished,
     UpdateReplayed { new_revision: ComponentRevision },
     ForkReplayed { new_phantom_id: Uuid },
+    CardInstalled { card: StoredCard },
     CardRevoked { card_id: CardId },
 }
 
@@ -423,10 +425,12 @@ impl ReplayState {
             .await
         }
         if let OplogEntry::CardRevoked { card_id, .. } = &oplog_entry {
-            self.record_replay_event(ReplayEvent::CardRevoked {
-                card_id: CardId(*card_id),
-            })
-            .await;
+            self.record_replay_event(ReplayEvent::CardRevoked { card_id: *card_id })
+                .await;
+        }
+        if let OplogEntry::CardInstalled { card, .. } = &oplog_entry {
+            self.record_replay_event(ReplayEvent::CardInstalled { card: card.clone() })
+                .await;
         }
         // The legacy adapter persists GolemApiFork as a matched
         // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
@@ -690,7 +694,7 @@ impl ReplayState {
                 // Initial skip is used to advance the replay cursor to the beginning of the replay / index of the loaded snapshot.
                 // All card events in that region are already part of the snapshot, so no need to consider them here.
                 if !initial_skip {
-                    self.record_card_revoked_events_in_region(&skipped_region)
+                    self.record_card_terminal_events_in_region(&skipped_region)
                         .await;
                 }
                 let mut internal = self.internal.write().await;
@@ -701,7 +705,7 @@ impl ReplayState {
         }
     }
 
-    async fn record_card_revoked_events_in_region(&mut self, region: &OplogRegion) {
+    async fn record_card_terminal_events_in_region(&mut self, region: &OplogRegion) {
         let mut next = region.start;
         let end = region.end.as_u64();
 
@@ -710,11 +714,16 @@ impl ReplayState {
             let count = remaining.min(CHUNK_SIZE);
 
             for (entry_index, entry) in self.read_oplog(next, count).await {
-                if let OplogEntry::CardRevoked { card_id, .. } = entry {
-                    self.record_replay_event(ReplayEvent::CardRevoked {
-                        card_id: CardId(card_id),
-                    })
-                    .await;
+                match entry {
+                    OplogEntry::CardRevoked { card_id, .. } => {
+                        self.record_replay_event(ReplayEvent::CardRevoked { card_id })
+                            .await;
+                    }
+                    OplogEntry::CardInstalled { card, .. } => {
+                        self.record_replay_event(ReplayEvent::CardInstalled { card })
+                            .await;
+                    }
+                    _ => {}
                 }
                 next = entry_index.next()
             }

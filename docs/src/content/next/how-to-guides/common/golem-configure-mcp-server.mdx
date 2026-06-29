@@ -14,7 +14,7 @@ Add an `mcp` section to the root `golem.yaml`:
 mcp:
   deployments:
     local:
-      - domain: my-app.localhost:9007
+      - subdomain: my-app  # resolves to my-app.localhost:9007 by default
         agents:
           CounterAgent: {}
           TaskAgent: {}
@@ -25,8 +25,13 @@ mcp:
 - `mcp.deployments` is a map keyed by **environment name** (e.g., `local`, `cloud`, `staging`)
 - Each environment contains a list of deployment objects
 - Each deployment has:
-  - `domain`: the (sub)domain to bind to
+  - `subdomain`: a single DNS label (lowercase letters, digits, and hyphens only — no dots, port, or URL scheme) resolved through the target environment server. Local MCP deployments resolve to `<subdomain>.localhost:9007` by default, or `<subdomain>.localhost:<mcpPort>` when `localServer.mcpPort` is set to a stable nonzero port. Cloud MCP deployments resolve to `<subdomain>.mcps.golem.cloud`.
+  - `domain`: a full domain such as `mcp.example.com` for custom registered domains or custom server environments.
   - `agents`: a map of agent type names (PascalCase) to their deployment options
+
+Define exactly one of `subdomain` or `domain` on each deployment. Prefer `subdomain` for built-in `server: local` and `server: cloud` environments. Use `domain` when you need a full custom domain. `subdomain` cannot be used with custom server environments — those must use `domain`.
+
+Do not use `localServer.mcpPort: 0` in the manifest. Port `0` is only allowed when passed directly as `--mcp-port 0` to `golem server run`; manifest deployment domains require stable nonzero ports.
 
 ### Local Development
 
@@ -36,7 +41,7 @@ For local development, the MCP server listens on port **9007** by default (separ
 mcp:
   deployments:
     local:
-      - domain: my-app.localhost:9007
+      - subdomain: my-app  # resolves to my-app.localhost:9007 by default
         agents:
           MyAgent: {}
 ```
@@ -49,17 +54,17 @@ http://my-app.localhost:9007/mcp
 
 ### Cloud Deployment
 
-For Golem Cloud, configure the `cloud` environment with a registered domain:
+For Golem Cloud's built-in server, configure the `cloud` environment and use `subdomain`:
 
 ```yaml
 mcp:
   deployments:
     local:
-      - domain: my-app.localhost:9007
+      - subdomain: my-app  # resolves to my-app.localhost:9007 by default
         agents:
           MyAgent: {}
     cloud:
-      - domain: my-app.example.com
+      - subdomain: my-app  # resolves to my-app.mcps.golem.cloud
         agents:
           MyAgent:
             securityScheme: my-oauth
@@ -75,6 +80,18 @@ Deploy to cloud with:
 
 ```shell
 golem deploy --yes --cloud
+```
+
+For custom DNS or custom server environments, use `domain` with a full domain:
+
+```yaml
+mcp:
+  deployments:
+    prod:
+      - domain: mcp.example.com
+        agents:
+          MyAgent:
+            securityScheme: my-oauth
 ```
 
 ## Agent Options
@@ -134,7 +151,7 @@ After creating a security scheme, reference it by name:
 mcp:
   deployments:
     local:
-      - domain: my-app.localhost:9007
+      - subdomain: my-app  # resolves to my-app.localhost:9007 by default
         agents:
           SecureAgent:
             securityScheme: my-oidc
@@ -235,11 +252,11 @@ Configure different domains and security settings per environment:
 mcp:
   deployments:
     local:
-      - domain: my-app.localhost:9007
+      - subdomain: my-app  # resolves to my-app.localhost:9007 by default
         agents:
           MyAgent: {}
     cloud:
-      - domain: mcp.myapp.com
+      - subdomain: my-app  # resolves to my-app.mcps.golem.cloud
         agents:
           MyAgent:
             securityScheme: prod-google-oidc
@@ -278,11 +295,11 @@ Then connect to `http://my-app.localhost:9007/mcp` using the Streamable HTTP tra
 mcp:
   deployments:
     local:
-      - domain: counter-app.localhost:9007
+      - subdomain: counter-app  # resolves to counter-app.localhost:9007 by default
         agents:
           CounterAgent: {}
     cloud:
-      - domain: mcp.counter-app.com
+      - subdomain: counter-app  # resolves to counter-app.mcps.golem.cloud
         agents:
           CounterAgent:
             securityScheme: google-oidc
@@ -300,6 +317,6 @@ environments:
 - The MCP server listens on port **9007** by default for local development (separate from the HTTP API gateway port 9006)
 - The MCP endpoint path is always `/mcp` (e.g., `http://my-app.localhost:9007/mcp`)
 - Security schemes must be created via `golem api security-scheme create` before they can be referenced
-- The domain must be unique per environment
+- The resolved domain must be unique per environment
 - After changing `golem.yaml`, run `golem deploy --yes` to apply changes
 - The OAuth callback path for MCP security schemes is `/mcp/oauth/callback`

@@ -8,6 +8,10 @@ declare module 'golem:core/types@2.0.0' {
    * Converts a UUID to a string
    */
   export function uuidToString(uuid: Uuid): string;
+  export class QuotaToken {
+  }
+  export class Secret {
+  }
   /**
    * ============================================================
    * Carrier indices
@@ -75,6 +79,12 @@ declare module 'golem:core/types@2.0.0' {
    * Represents a Golem account
    */
   export type AccountId = {
+    uuid: Uuid;
+  };
+  /**
+   * Represents a Golem permission card
+   */
+  export type CardId = {
     uuid: Uuid;
   };
   /**
@@ -308,6 +318,8 @@ declare module 'golem:core/types@2.0.0' {
    * --- Capability nodes ---
    */
   export type SecretSpec = {
+    /** Revealed payload type carried by this secret handle. */
+    inner: TypeNodeIndex;
     /** Optional categorisation (e.g., `"api-key"`, `"oauth-token"`). */
     category?: string;
   };
@@ -562,28 +574,6 @@ declare module 'golem:core/types@2.0.0' {
      */
     body: ValueNodeIndex;
   };
-  /**
-   * Capability value: secret transport is **by reference**. The schema side
-   * declares the secret; the value side carries an opaque reference that the
-   * authority resolves on read. The literal secret material never crosses
-   * this carrier.
-   */
-  export type SecretValuePayload = {
-    /** Opaque, authority-resolved reference. */
-    secretRef: string;
-  };
-  /**
-   * Capability value: quota-token transport is **by snapshot**. The receiver
-   * re-acquires a live lease against `(environment-id, resource-name)` on
-   * demand.
-   */
-  export type QuotaTokenValuePayload = {
-    environmentId: EnvironmentId;
-    resourceName: string;
-    expectedUse: bigint;
-    lastCredit: bigint;
-    lastCreditAt: Datetime;
-  };
   export type SchemaValueNode = 
   /** Primitives */
   {
@@ -716,11 +706,11 @@ declare module 'golem:core/types@2.0.0' {
   /** Capability nodes */
   {
     tag: 'secret-value'
-    val: SecretValuePayload
+    val: Secret
   } |
   {
-    tag: 'quota-token-value'
-    val: QuotaTokenValuePayload
+    tag: 'quota-token-handle'
+    val: QuotaToken
   };
   /**
    * ============================================================

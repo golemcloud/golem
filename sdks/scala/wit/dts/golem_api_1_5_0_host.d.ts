@@ -79,6 +79,20 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function generateIdempotencyKey(): Uuid;
   /**
+   * Returns one permission card currently installed in this agent's wallet, if any.
+   */
+  export function selfCard(): Card | undefined;
+  /**
+   * Derives a card handle from an installed card. This minimal test-facing form keeps the card as plain data.
+   * @throws string
+   */
+  export function deriveCard(card: Card): Card;
+  /**
+   * Installs a card into this agent's own wallet.
+   * @throws CardInstallError
+   */
+  export function installCard(card: Card): void;
+  /**
    * Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
    * not waiting for the agent to get updated.
    */
@@ -151,6 +165,7 @@ declare module 'golem:api/host@1.5.0' {
     get(): Uint8Array | undefined;
   }
   export type ComponentId = golemCore200Types.ComponentId;
+  export type CardId = golemCore200Types.CardId;
   export type Uuid = golemCore200Types.Uuid;
   export type AgentId = golemCore200Types.AgentId;
   export type PromiseId = golemCore200Types.PromiseId;
@@ -337,10 +352,18 @@ declare module 'golem:api/host@1.5.0' {
     val: ForkDetails
   };
   /**
+   * Plain-data handle to a permission card visible to the guest.
+   */
+  export type Card = {
+    cardId: CardId;
+  };
+  export type CardInstallError = "revoked" | "not-found" | "not-permitted";
+  /**
    * Snapshot payload
    */
   export type Snapshot = {
     payload: Uint8Array;
     mimeType: string;
   };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

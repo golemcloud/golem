@@ -70,7 +70,7 @@ describe('Invalid types in agents', () => {
 
     const resultTypeInvalid3 = getAnalysedTypeInFun1('resultTypeInvalid3');
 
-    expect(dateType.val).toBe('Unsupported type `Date`. Use a `string` if possible');
+    expect((dateType.val as ResolvedGraph).root.body).toEqual({ tag: 'datetime' });
 
     expect(regExpType.val).toBe('Unsupported type `RegExp`. Use a `string` if possible');
 
@@ -149,7 +149,7 @@ describe('Invalid types in agents', () => {
     const fun12Type = mapTsTypeToResolvedGraph(fun12ReturnType!, undefined);
     const fun13Type = mapTsTypeToResolvedGraph(fun13ReturnType!, undefined);
 
-    expect(fun2Type.val).toBe('Unsupported type `Date`. Use a `string` if possible');
+    expect((fun2Type.val as ResolvedGraph).root.body).toEqual({ tag: 'datetime' });
 
     expect(fun3Type.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
 

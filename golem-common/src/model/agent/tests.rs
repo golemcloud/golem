@@ -928,7 +928,11 @@ mod agent_error_tests {
                     language: None,
                 }),
                 SchemaValue::Secret(SecretValuePayload {
-                    secret_ref: "shhh".to_string(),
+                    secret_id: uuid::Uuid::nil(),
+                    config_key: None,
+                    version: 0,
+                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    category: None,
                 }),
             ],
         };
@@ -936,7 +940,7 @@ mod agent_error_tests {
         let err = AgentError::CustomError(typed);
         let rendered = err.to_string();
         assert!(
-            rendered.contains("<redacted>"),
+            rendered.contains("<redacted: secret>"),
             "expected secret to be redacted, got: {rendered:?}"
         );
         assert!(

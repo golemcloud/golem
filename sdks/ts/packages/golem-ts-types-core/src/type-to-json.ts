@@ -197,12 +197,22 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
         kind: 'config',
         name: type.name,
         owner: type.owner,
-        properties: type.properties.map(({ path, secret, type }) => ({
+        properties: type.properties.map(({ path, secret, type, secretHandleOptional }) => ({
           path,
           secret,
           type: buildJSONFromType(type),
+          ...(secretHandleOptional === undefined ? {} : { secretHandleOptional }),
         })),
         requiredMembers: type.requiredMembers,
+        optional: type.optional,
+      };
+
+    case 'secret':
+      return {
+        kind: 'secret',
+        name: type.name,
+        owner: type.owner,
+        typeArg: buildJSONFromType(type.element),
         optional: type.optional,
       };
 
@@ -215,6 +225,20 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
         name: type.name,
         owner: type.owner,
         optional: type.optional,
+      };
+
+    case 'path':
+    case 'url':
+    case 'datetime':
+    case 'duration':
+      return { kind: type.kind, name: type.name, owner: type.owner, optional: type.optional };
+    case 'quantity':
+      return {
+        kind: 'quantity',
+        name: type.name,
+        owner: type.owner,
+        optional: type.optional,
+        spec: type.spec,
       };
 
     case 'unresolved-type':

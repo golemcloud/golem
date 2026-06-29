@@ -16,8 +16,6 @@
 
 package golem.schema
 
-import golem.{EnvironmentId, Uuid}
-
 // Non-recursive leaf structures of the schema model. These mirror the
 // corresponding `golem:core/types@2.0.0` records/variants exactly so the WIT
 // codecs can pass them through unchanged.
@@ -98,7 +96,7 @@ final case class QuantitySpec(
   max: Option[QuantityValue] = None
 )
 
-final case class SecretSpec(category: Option[String] = None)
+final case class SecretSpec(inner: SchemaType, category: Option[String] = None)
 
 final case class QuotaTokenSpec(resourceName: Option[String] = None)
 
@@ -115,15 +113,3 @@ object DiscriminatorRule {
   final case class FieldEquals(field: FieldDiscriminator) extends DiscriminatorRule
   final case class FieldAbsent(fieldName: String)         extends DiscriminatorRule
 }
-
-/**
- * Capability value snapshot for a quota token. The receiver re-acquires a live
- * lease against `(environmentId, resourceName)` on demand.
- */
-final case class QuotaTokenValuePayload(
-  environmentId: EnvironmentId,
-  resourceName: String,
-  expectedUse: Long,
-  lastCredit: Long,
-  lastCreditAt: Datetime
-)

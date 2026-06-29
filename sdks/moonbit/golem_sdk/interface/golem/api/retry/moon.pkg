@@ -1,5 +1,5 @@
 import {
-  "golemcloud/golem_sdk/ffi" @ffi,
+  "golemcloud/golem_sdk/ffi",
 }
 
 warnings = "-44"

@@ -40,7 +40,10 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::component::ComponentGetView;
+use crate::model::text::action_result::AgentRedeployResult;
+use crate::model::text::component::{
+    ComponentGetView, ComponentListView, ComponentManifestTraceView,
+};
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
@@ -115,8 +118,6 @@ impl ComponentCommandHandler {
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
-        let show_sensitive = self.ctx.show_sensitive();
-
         let environment = self
             .ctx
             .environment_handler()
@@ -138,13 +139,15 @@ impl ComponentCommandHandler {
                         .await?
                         .values
                         .into_iter()
-                        .map(|component| ComponentView::new(show_sensitive, component))
+                        .map(ComponentView::new)
                         .collect::<Vec<_>>())
                 },
             )
             .await?;
 
-        self.ctx.log_handler().log_view(&components)?;
+        self.ctx
+            .log_handler()
+            .log_output(ComponentListView { components })?;
 
         Ok(())
     }
@@ -188,7 +191,7 @@ impl ComponentCommandHandler {
                 )
                 .await?;
             if let Some(component) = component {
-                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
+                component_views.push(ComponentView::new(component));
             }
         }
 
@@ -208,7 +211,7 @@ impl ComponentCommandHandler {
         for component_view in component_views {
             self.ctx
                 .log_handler()
-                .log_view(&ComponentGetView(component_view))?;
+                .log_output(ComponentGetView(component_view))?;
             logln("");
         }
 
@@ -327,13 +330,16 @@ impl ComponentCommandHandler {
                 ),
             );
             let _indent = self.ctx.log_handler().decorated_indent_primary();
-            self.ctx.log_handler().log_serializable(
-                &app_ctx
-                    .application()
-                    .component(&component_name)
-                    .layer_properties()
-                    .with_compacted_traces(),
-            )?
+            self.ctx
+                .log_handler()
+                .log_output(ComponentManifestTraceView {
+                    component_name: component_name.clone(),
+                    properties: app_ctx
+                        .application()
+                        .component(&component_name)
+                        .layer_properties()
+                        .with_compacted_traces(),
+                })?
         }
 
         Ok(())
@@ -370,7 +376,7 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
-        self.ctx.log_handler().log_view(&update_results)?;
+        self.ctx.log_handler().log_output(update_results.clone())?;
 
         if !update_results.failed.is_empty() {
             bail!(NonSuccessfulExit)
@@ -397,8 +403,15 @@ impl ComponentCommandHandler {
                 .await?;
         }
 
-        // TODO: json / yaml output?
         // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        self.ctx.log_handler().log_output(AgentRedeployResult {
+            redeployed: true,
+            components: components
+                .iter()
+                .map(|component| component.component_name.clone())
+                .collect(),
+        })?;
+
         Ok(())
     }
 

@@ -238,6 +238,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         )
     }
 
+    fn create_card_service(
+        &self,
+        registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(CardServiceDefault::new(registry_service))
+    }
+
     fn create_resource_limits(
         &self,
         golem_config: &GolemConfig,
@@ -503,6 +510,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
         golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -715,8 +726,7 @@ pub async fn create_worker_executor_impl<
         registry_service.clone(),
         blob_storage.clone(),
     );
-    let card_service: Arc<dyn CardService> =
-        Arc::new(CardServiceDefault::new(registry_service.clone()));
+    let card_service = bootstrap.create_card_service(registry_service.clone());
 
     let environment_state_service = bootstrap.create_environment_state_service(
         &golem_config.environment_state_service,

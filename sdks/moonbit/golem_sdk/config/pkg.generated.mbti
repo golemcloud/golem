@@ -33,8 +33,8 @@ pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Secret[T]
 
 // Traits
 pub(open) trait ConfigField {
-  collect_entries(Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
-  load(Array[String]) -> Self raise @common.AgentError
+  fn collect_entries(Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
+  fn load(Array[String]) -> Self raise @common.AgentError
 }
 pub impl ConfigField for Bool
 pub impl ConfigField for Byte

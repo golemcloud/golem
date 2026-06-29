@@ -142,6 +142,45 @@ impl From<AccountId> for Uuid {
     }
 }
 
+/// Native counterpart of `golem:core/types@2.0.0::card-id`.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[schema(named = "golem.core.CardId")]
+pub struct CardId {
+    pub uuid: Uuid,
+}
+
+impl CardId {
+    pub fn new(uuid: Uuid) -> Self {
+        Self { uuid }
+    }
+}
+
+impl From<Uuid> for CardId {
+    fn from(uuid: Uuid) -> Self {
+        Self::new(uuid)
+    }
+}
+
+impl From<CardId> for Uuid {
+    fn from(value: CardId) -> Self {
+        value.uuid
+    }
+}
+
 /// Native counterpart of `golem:core/types@2.0.0::agent-id`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]

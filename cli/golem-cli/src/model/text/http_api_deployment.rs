@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_main_id, format_message_highlight,
     log_table, new_table_full_condensed,
 };
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentSecurity};
@@ -21,6 +23,8 @@ use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpApiDeploymentGetView(pub HttpApiDeployment);
+
+impl Masked for HttpApiDeploymentGetView {}
 
 impl MessageWithFields for HttpApiDeploymentGetView {
     fn message(&self) -> String {
@@ -33,6 +37,20 @@ impl MessageWithFields for HttpApiDeploymentGetView {
     fn fields(&self) -> Vec<(String, String)> {
         http_api_deployment_fields(&self.0)
     }
+}
+
+impl StructuredOutput for HttpApiDeploymentGetView {
+    const KIND: &'static str = "api.deployment.get";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDeploymentListView {
+    pub deployments: Vec<HttpApiDeployment>,
+}
+
+impl StructuredOutput for HttpApiDeploymentListView {
+    const KIND: &'static str = "api.deployment.list";
 }
 
 fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> {
@@ -68,7 +86,7 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
     fields.build()
 }
 
-impl TextView for Vec<HttpApiDeployment> {
+impl TextOutput for HttpApiDeploymentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Domain"),
@@ -76,7 +94,7 @@ impl TextView for Vec<HttpApiDeployment> {
             Column::new("Environment ID").fixed(),
             Column::new("Revision").fixed(),
         ]);
-        for dep in self {
+        for dep in &self.deployments {
             table.add_row(vec![
                 dep.domain.to_string(),
                 dep.id.to_string(),

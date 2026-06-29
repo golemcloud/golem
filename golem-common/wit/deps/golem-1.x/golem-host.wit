@@ -3,7 +3,7 @@ package golem:api@1.5.0;
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use golem:core/types@2.0.0.{component-id, uuid, agent-id, promise-id, oplog-index};
+    use golem:core/types@2.0.0.{component-id, card-id, uuid, agent-id, promise-id, oplog-index};
     use wasi:io/poll@0.2.3.{pollable};
 
     /// Represents a Golem component's version
@@ -190,6 +190,17 @@ interface host {
       get: func() -> option<list<u8>>;
     }
 
+    /// Plain-data handle to a permission card visible to the guest.
+    record card {
+        card-id: card-id,
+    }
+
+    enum card-install-error {
+        revoked,
+        not-found,
+        not-permitted,
+    }
+
     /// Create a new promise
     create-promise: func() -> promise-id;
 
@@ -249,6 +260,15 @@ interface host {
     /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
     /// to introduce idempotence.
     generate-idempotency-key: func() -> uuid;
+
+    /// Returns one permission card currently installed in this agent's wallet, if any.
+    self-card: func() -> option<card>;
+
+    /// Derives a card handle from an installed card. This minimal test-facing form keeps the card as plain data.
+    derive-card: func(card: card) -> result<card, string>;
+
+    /// Installs a card into this agent's own wallet.
+    install-card: func(card: card) -> result<_, card-install-error>;
 
     /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
     /// not waiting for the agent to get updated.

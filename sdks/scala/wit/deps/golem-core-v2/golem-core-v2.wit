@@ -91,6 +91,11 @@ interface types {
         uuid: uuid,
     }
 
+    /// Represents a Golem permission card
+    record card-id {
+        uuid: uuid
+    }
+
     /// An index into the persistent log storing all performed operations of an agent
     type oplog-index = u64;
 
@@ -101,6 +106,24 @@ interface types {
         agent-id: agent-id,
         oplog-idx: oplog-index,
     }
+
+    // ============================================================
+    // Capability resources
+    // ============================================================
+
+    /// An unforgeable capability granting the right to consume a named
+    /// resource. The handle is opaque: a guest can only obtain one from the
+    /// host (e.g. via `golem:quota`) and can never inspect or fabricate its
+    /// internal state. When carried in a `schema-value-tree` (see
+    /// `schema-value-node::quota-token-handle`) the handle is transferred by
+    /// ownership; the host converts it to/from its internal trusted
+    /// representation at the boundary.
+    resource quota-token;
+
+    /// An unforgeable handle to sensitive material held by the runtime. The
+    /// handle is opaque to guests: components can pass it through schema values
+    /// and reveal it only through capability-gated host interfaces.
+    resource secret;
 
     // ============================================================
     // Schema graph (self-contained type carrier)
@@ -406,6 +429,8 @@ interface types {
     // --- Capability nodes ---
 
     record secret-spec {
+        /// Revealed payload type carried by this secret handle.
+        inner: type-node-index,
         /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
         category: option<string>,
     }
@@ -476,8 +501,8 @@ interface types {
         union-value(union-value-payload),
 
         // Capability nodes
-        secret-value(secret-value-payload),
-        quota-token-value(quota-token-value-payload),
+        secret-value(own<secret>),
+        quota-token-handle(own<quota-token>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
     }
@@ -526,26 +551,6 @@ interface types {
         /// type and (by construction) satisfies the branch's discriminator
         /// rule.
         body: value-node-index,
-    }
-
-    /// Capability value: secret transport is **by reference**. The schema side
-    /// declares the secret; the value side carries an opaque reference that the
-    /// authority resolves on read. The literal secret material never crosses
-    /// this carrier.
-    record secret-value-payload {
-        /// Opaque, authority-resolved reference.
-        secret-ref: string,
-    }
-
-    /// Capability value: quota-token transport is **by snapshot**. The receiver
-    /// re-acquires a live lease against `(environment-id, resource-name)` on
-    /// demand.
-    record quota-token-value-payload {
-        environment-id: environment-id,
-        resource-name: string,
-        expected-use: u64,
-        last-credit: s64,
-        last-credit-at: datetime,
     }
 
     // ============================================================
