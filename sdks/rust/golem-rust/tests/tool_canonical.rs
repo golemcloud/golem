@@ -458,7 +458,7 @@ mod canonical {
         use golem_rust::agentic::{
             EffectiveCommandField, ExtendedConstraint, ExtendedOptionShape, ExtendedRef,
             ExtendedRepeatableListShape, ExtendedToolType, ExtendedValueIsLiteral,
-            get_extended_tool_by_name, get_tool_by_name, option_collected_graph,
+            get_extended_tool_by_name, get_tool_by_name, option_collected_graph, render_help,
         };
         use golem_rust::golem_agentic::golem::tool::common::{ErrorKind, FlagShape, Repetition};
         use golem_rust::schema::{SchemaType, SchemaValue};
@@ -523,6 +523,12 @@ mod canonical {
             Failed(String),
         }
 
+        #[derive(ToolError)]
+        enum StashError {
+            #[tool_error(kind = "usage-error", exit_code = 128)]
+            NoSuchStash { name: String },
+        }
+
         /// Stupid content tracker.
         #[tool_definition]
         trait Git {
@@ -572,6 +578,14 @@ mod canonical {
                 paginate: bool,
                 config: BTreeMap<String, String>,
             ) -> RemoteSubtree;
+
+            /// Stash the changes in a dirty working directory away. Subtree with
+            /// an implicit body: `git stash` runs the `stash` body, while
+            /// `git stash pop` / `git stash apply` walk to the child commands.
+            #[command(subtree = Stash)]
+            #[arg(verbose = "global", short = 'v', kind = "count-flag", max = 3)]
+            #[arg(git_dir = "global", env = "GIT_DIR", default = ".git")]
+            fn stash(&self, verbose: u32, git_dir: PathBuf) -> StashSubtree;
 
             /// Show commit logs.
             #[command(annotations(read_only = true, idempotent = true))]
@@ -655,6 +669,38 @@ mod canonical {
             ) -> Result<(), SetUrlError>;
         }
 
+        /// Placeholder return type for the `stash` subtree dispatcher.
+        struct StashSubtree;
+
+        /// Subcommand subtree under `git stash`. The root carries an implicit
+        /// body (the `stash` method), so `git stash` runs the body while
+        /// `git stash pop` / `git stash apply` walk to the child commands.
+        #[tool_definition]
+        trait Stash {
+            /// Stash the changes in a dirty working directory away.
+            #[arg(message = "option", short = 'm', required = true)]
+            #[arg(keep_index = "flag", short = 'k', default = false)]
+            // `verbose` repeats the inherited `git stash` global; it is de-projected
+            // from the body when grafted under `git stash`.
+            #[arg(verbose, kind = "count-flag", max = 3)]
+            fn stash(
+                &self,
+                message: String,
+                keep_index: bool,
+                verbose: u32,
+            ) -> Result<(), StashError>;
+
+            /// Remove and apply a single stashed state.
+            #[arg(name = "positional", required = false)]
+            #[arg(index = "option", short = 'i')]
+            fn pop(&self, name: Option<String>, index: Option<u32>) -> Result<(), StashError>;
+
+            /// Apply a single stashed state without removing it.
+            #[arg(name = "positional", required = false)]
+            #[arg(index = "option", short = 'i')]
+            fn apply(&self, name: Option<String>, index: Option<u32>) -> Result<(), StashError>;
+        }
+
         struct LeafGit;
 
         #[tool_implementation]
@@ -688,6 +734,10 @@ mod canonical {
                 _config: BTreeMap<String, String>,
             ) -> RemoteSubtree {
                 RemoteSubtree
+            }
+
+            fn stash(&self, _verbose: u32, _git_dir: PathBuf) -> StashSubtree {
+                StashSubtree
             }
 
             fn log(
@@ -1123,6 +1173,100 @@ mod canonical {
                     .iter()
                     .any(|c| matches!(c, ExtendedConstraint::MutexGroups(_))),
                 "set-url has a mutex-groups constraint"
+            );
+        }
+
+        #[test]
+        #[test_r::never_capture]
+        fn git_stash_subtree_has_implicit_body_and_children() {
+            let tool = git_tool();
+            let stash_idx = child_index(&tool, 0, "stash");
+            let stash = &tool.commands[stash_idx];
+
+            // §4.1 / §4.4: a command node may carry both a body and subcommands.
+            // `git stash` runs the implicit body; `git stash pop`/`apply` walk to
+            // the children.
+            assert!(stash.body.is_some(), "stash subtree root carries a body");
+            let sub_names: Vec<&str> = stash
+                .subcommands
+                .iter()
+                .map(|&i| tool.commands[i as usize].name.as_str())
+                .collect();
+            assert!(sub_names.contains(&"pop"));
+            assert!(sub_names.contains(&"apply"));
+
+            // The body carries its own `message` input and the `keep-index` flag.
+            let body = stash.body.as_ref().unwrap();
+            let message = body
+                .options
+                .iter()
+                .find(|o| o.long == "message")
+                .expect("stash body has a message option");
+            assert_eq!(message.short, Some('m'));
+            assert!(message.required);
+            assert!(body.flags.iter().any(|f| f.long == "keep-index"));
+
+            // The parent globals (verbose count-flag, git-dir option) propagate
+            // onto the grafted root.
+            assert!(stash.globals.flags.iter().any(|f| f.long == "verbose"));
+            assert!(stash.globals.options.iter().any(|o| o.long == "git-dir"));
+
+            // The body's own `verbose` (re-declaring the inherited count-flag
+            // global) is de-projected: it does not duplicate the inherited global.
+            assert!(
+                !body.flags.iter().any(|f| f.long == "verbose"),
+                "inherited verbose global must be suppressed from the stash body"
+            );
+
+            // D7 at the grafted-subtree root: canonical input field order is
+            // inherited globals (options then flags), then this body's options
+            // then flags — no duplicate `verbose`.
+            let fields = tool.canonical_input_fields(stash_idx);
+            let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+            assert_eq!(
+                names,
+                vec!["git-dir", "verbose", "message", "keep-index"],
+                "canonical input field order for the stash subtree root (D7)"
+            );
+
+            // Help at the stash path shows both the body inputs and Subcommands:.
+            let help = render_help(&tool, &["stash".to_string()]).expect("stash help");
+            assert!(
+                help.contains("--message"),
+                "help shows the body option: {help}"
+            );
+            assert!(
+                help.contains("--keep-index"),
+                "help shows the body flag: {help}"
+            );
+            assert!(
+                help.contains("Subcommands:"),
+                "help lists the child commands: {help}"
+            );
+
+            // The `pop` child resolves under stash and has its own body.
+            let pop_idx = child_index(&tool, stash_idx, "pop");
+            let pop = &tool.commands[pop_idx];
+            assert!(pop.body.is_some(), "pop has its own body");
+
+            // The `pop` child inherits the stash subtree's propagating globals
+            // (git-dir option, verbose count-flag) on top of which its own body
+            // fields (name positional, index option) are layered — D7 below an
+            // implicit-body subtree root.
+            let pop_fields = tool.canonical_input_fields(pop_idx);
+            let pop_names: Vec<&str> = pop_fields.iter().map(|f| f.name.as_str()).collect();
+            assert_eq!(
+                pop_names,
+                vec!["git-dir", "verbose", "name", "index"],
+                "canonical input field order for a child below an implicit-body subtree root (D7)"
+            );
+
+            // Help at the `stash pop` path resolves and shows the child's inputs.
+            let pop_help = render_help(&tool, &["stash".to_string(), "pop".to_string()])
+                .expect("stash pop help");
+            assert!(
+                pop_help.contains("--index"),
+                "pop help shows --index: {pop_help}"
             );
         }
 

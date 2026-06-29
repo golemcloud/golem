@@ -56,6 +56,77 @@ pub struct ExtendedCommandBody {
     pub result: Option<ExtendedResultSpec>,
     pub errors: Vec<ExtendedErrorCase>,
     pub annotations: Option<CommandAnnotations>,
+    /// The body's positional-eligible parameters, in declaration order, used to
+    /// finalize the tail positional after inherited-global de-projection (see
+    /// [`reinfer_body_tail`]). The final surface of a `Vec<T>` candidate (tail
+    /// positional vs repeatable-list option) depends on which following
+    /// re-declarations survive composition, so the macro records the authored
+    /// facts needed to finalize it; an explicit tail additionally carries its full
+    /// authored spec so promotion is lossless. Empty for hand-built bodies and
+    /// ignored by canonical conversion.
+    pub positional_plan: Vec<PositionalCandidate>,
+}
+
+/// One positional-eligible parameter of a command body, recorded by the macro in
+/// declaration order so the runtime can finalize the tail positional after
+/// inherited-global de-projection. See [`ExtendedCommandBody::positional_plan`]
+/// and [`reinfer_body_tail`].
+#[derive(Clone, Debug)]
+pub enum PositionalCandidate {
+    /// A parameter that can never be the tail (a fixed scalar positional, or an
+    /// explicit `#[arg(... = "positional")]`). It is recorded only so the
+    /// declaration order of surviving candidates is known.
+    Plain { name: String },
+    /// A `Vec<T>` whose final surface — the tail positional or a repeatable-list
+    /// option — depends on which following re-declarations survive de-projection
+    /// (§5.8: the *last* positional `Vec<T>` is the tail, an earlier one is a
+    /// repeatable-list option). The macro emits only the selected surface into the
+    /// body. When demoting an inferred tail to an option the finalizer
+    /// reconstructs it by copying the in-body spec (the value graph carries over
+    /// unchanged), using these authored facts to reject a re-projection the target
+    /// surface cannot represent. An explicit tail instead carries its full
+    /// authored spec in `authored_tail_surrogate`, so promoting it back from a
+    /// surrogate option is lossless.
+    VecCandidate {
+        name: String,
+        /// Whether the tail was explicitly authored (`#[arg(... = "tail")]`); an
+        /// explicit tail is never silently demoted to a repeatable-list option.
+        explicit_tail: bool,
+        /// Whether the parameter was `Option<Vec<T>>`; it can never become the
+        /// tail (a tail is already variadic and has no representable absent state).
+        optional_vec: bool,
+        /// Whether `min`/`max` were authored. They are overloaded — occurrence
+        /// bounds on a tail, item numeric bounds on a repeatable-list option — so
+        /// an *inferred* candidate carrying them cannot switch surface without
+        /// changing their meaning, and re-projection is rejected rather than
+        /// silently reinterpreted. (Ignored for an explicit tail, whose authored
+        /// occurrence bounds are preserved verbatim via `authored_tail_surrogate`.)
+        has_min_or_max_attr: bool,
+        /// For an explicit `#[arg(... = "tail")]` that the macro lowered to an
+        /// inherited-global option surrogate (so it would not steal a genuine tail
+        /// slot before de-projection): the full authored tail spec. When the
+        /// surrogate survives and becomes the last positional, the finalizer
+        /// installs this verbatim instead of reconstructing a tail from the option
+        /// (which has no `separator`/`verbatim`/`accepts_stdio`/occurrence-bound
+        /// fields). `None` for inferred candidates, which keep the
+        /// reconstruct-from-spec path. Boxed to keep this variant compact.
+        authored_tail_surrogate: Option<Box<ExtendedTailPositional>>,
+        /// Long names of the body options declared after this `Vec<T>`, in
+        /// declaration order. When this candidate is demoted from the tail to a
+        /// repeatable-list option, it is inserted before the first of these that
+        /// survived de-projection (preserving declaration order, §D7); otherwise
+        /// it is appended.
+        later_option_names: Vec<String>,
+    },
+}
+
+impl PositionalCandidate {
+    fn name(&self) -> &str {
+        match self {
+            PositionalCandidate::Plain { name }
+            | PositionalCandidate::VecCandidate { name, .. } => name,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -233,7 +304,6 @@ pub enum ToolBuildError {
         value: String,
     },
     SubtreeCycle(String),
-    SubtreeRootHasBody(String),
     SubtreeRootNameMismatch {
         expected: String,
         actual: String,
@@ -275,6 +345,12 @@ pub enum ToolBuildError {
         min: u32,
         max: u32,
     },
+    RequiredPositionalAfterOptional(String),
+    FixedPositionalAfterTail(String),
+    VecSurfaceConflict {
+        name: String,
+        reason: String,
+    },
 }
 
 impl Display for ToolBuildError {
@@ -298,14 +374,13 @@ impl Display for ToolBuildError {
                 write!(f, "invalid {kind}: {value:?}")
             }
             ToolBuildError::SubtreeCycle(s) => write!(f, "subtree cycle detected: {s}"),
-            ToolBuildError::SubtreeRootHasBody(s) => write!(f, "subtree root has a body: {s}"),
             ToolBuildError::SubtreeRootNameMismatch { expected, actual } => write!(
                 f,
                 "subtree root name {actual:?} does not match the parent command name {expected:?}"
             ),
             ToolBuildError::SubtreeAnnotationsUnsupported(s) => write!(
                 f,
-                "annotations are not supported on the pure-dispatcher subtree command {s:?} (the model places command-annotations on a command body)"
+                "annotations are not supported on a #[command(subtree = ...)] method {s:?} (the model places command-annotations on a command body)"
             ),
             ToolBuildError::DuplicateName(s) => write!(f, "duplicate tool metadata name: {s}"),
             ToolBuildError::DuplicateShort(c) => write!(f, "duplicate short form: {c:?}"),
@@ -371,6 +446,21 @@ impl Display for ToolBuildError {
                 f,
                 "tail positional {name:?} has an impossible occurrence range: min {min} is greater \
                  than max {max}"
+            ),
+            ToolBuildError::RequiredPositionalAfterOptional(name) => write!(
+                f,
+                "required positional {name:?} cannot appear after an optional positional; optional \
+                 positionals must be trailing"
+            ),
+            ToolBuildError::FixedPositionalAfterTail(name) => write!(
+                f,
+                "fixed positional {name:?} cannot appear after a tail positional; the tail \
+                 positional must be the last positional"
+            ),
+            ToolBuildError::VecSurfaceConflict { name, reason } => write!(
+                f,
+                "the `Vec<_>` parameter {name:?} cannot be re-projected after inherited-global \
+                 de-projection: {reason}"
             ),
         }
     }
@@ -1460,6 +1550,13 @@ fn check_body(
         register_flag_scope(&mut scope, flag);
     }
 
+    // Optional fixed positionals must be trailing: once an optional one appears,
+    // no required one may follow, or the boundary between them is ambiguous. The
+    // macro enforces this for locally declared positionals, but inherited-global
+    // de-projection can leave a re-declared optional positional local at runtime
+    // (its inherited global is itself de-projected against a strict ancestor), so
+    // the surviving order is re-checked here.
+    let mut saw_optional_positional = false;
     for positional in &body.positionals.fixed {
         check_identifier("positional name", &positional.name)?;
         check_graph_closed(
@@ -1475,6 +1572,15 @@ fn check_body(
             return Err(ToolBuildError::VariantInInputPosition(
                 positional.name.clone(),
             ));
+        }
+        if positional.required {
+            if saw_optional_positional {
+                return Err(ToolBuildError::RequiredPositionalAfterOptional(
+                    positional.name.clone(),
+                ));
+            }
+        } else {
+            saw_optional_positional = true;
         }
     }
 
@@ -1853,7 +1959,16 @@ fn render_flag_help(f: &FlagSpec, global: bool) -> String {
 pub struct ToolBuildCtx {
     stack: Vec<String>,
     command_path: Vec<String>,
+    inherited_globals: Vec<EffectiveCommandField>,
+    graft_roots: Vec<PendingGraftRoot>,
 }
+
+#[derive(Clone)]
+struct PendingGraftRoot {
+    expected_name: String,
+    override_name: Option<String>,
+}
+
 impl ToolBuildCtx {
     pub fn new() -> Self {
         Self::default()
@@ -1901,6 +2016,52 @@ impl ToolBuildCtx {
         self.pop_descriptor();
         result
     }
+    pub fn inherited_globals(&self) -> &[EffectiveCommandField] {
+        &self.inherited_globals
+    }
+    pub fn with_inherited_globals<T>(
+        &mut self,
+        globals: Vec<EffectiveCommandField>,
+        f: impl FnOnce(&mut Self) -> Result<T, ToolBuildError>,
+    ) -> Result<T, ToolBuildError> {
+        let old_len = self.inherited_globals.len();
+        self.inherited_globals.extend(globals);
+        let result = f(self);
+        self.inherited_globals.truncate(old_len);
+        result
+    }
+    pub fn with_graft_root<T>(
+        &mut self,
+        expected_name: String,
+        override_name: Option<String>,
+        f: impl FnOnce(&mut Self) -> Result<T, ToolBuildError>,
+    ) -> Result<T, ToolBuildError> {
+        self.graft_roots.push(PendingGraftRoot {
+            expected_name,
+            override_name,
+        });
+        let result = f(self);
+        self.graft_roots.pop();
+        result
+    }
+    pub fn apply_pending_graft_root(
+        &self,
+        root: &mut ExtendedCommandNode,
+    ) -> Result<(), ToolBuildError> {
+        let Some(pending) = self.graft_roots.last() else {
+            return Ok(());
+        };
+        if pending.override_name.is_none() && root.name != pending.expected_name {
+            return Err(ToolBuildError::SubtreeRootNameMismatch {
+                expected: pending.expected_name.clone(),
+                actual: root.name.clone(),
+            });
+        }
+        if let Some(name) = &pending.override_name {
+            root.name = name.clone();
+        }
+        Ok(())
+    }
     fn cycle_path(&self, repeated: &str) -> String {
         let mut chain: Vec<&str> = self.stack.iter().map(String::as_str).collect();
         chain.push(repeated);
@@ -1920,17 +2081,47 @@ pub trait ToolDefinitionDescriptor {
     fn metadata(ctx: &mut ToolBuildCtx) -> Result<ExtendedToolType, ToolBuildError>;
 }
 
+pub fn reconcile_subtree_parent_globals(
+    mut parent_globals: ExtendedGlobals,
+    strict_ancestor_globals: &[EffectiveCommandField],
+    command_name: &str,
+) -> Result<ExtendedGlobals, ToolBuildError> {
+    reconcile_globals(&mut parent_globals, strict_ancestor_globals, command_name)?;
+    Ok(parent_globals)
+}
+
+pub fn reconcile_command_inherited_globals(
+    node: &mut ExtendedCommandNode,
+    strict_ancestor_globals: &[EffectiveCommandField],
+    command_name: &str,
+) -> Result<(), ToolBuildError> {
+    reconcile_globals(&mut node.globals, strict_ancestor_globals, command_name)?;
+    if let Some(body) = node.body.as_mut() {
+        reconcile_body(body, strict_ancestor_globals, command_name)?;
+    }
+    Ok(())
+}
+
 /// Turn a child subtree's command list into the graft-local nodes to splice
-/// beneath a parent. The child root (index 0) becomes the pure-dispatcher
-/// placeholder for the parent's subtree command: its `body` must be `None`, its
-/// `globals` and `subcommands` are preserved (so recursive globals still apply
-/// and the graft-local child indices stay valid), and its `name`/`doc`/
-/// `aliases` may be overridden by the parent's `#[command(...)]`.
+/// beneath a parent. The child root (index 0) becomes the parent's subtree
+/// command: its `globals` and `subcommands` are preserved (so recursive
+/// globals still apply and the graft-local child indices stay valid), and its
+/// `name`/`doc`/`aliases` may be overridden by the parent's `#[command(...)]`.
+///
+/// The child root may carry a body — the child trait's implicit-body method
+/// (e.g. `git stash` runs the `stash` body while `git stash pop` walks to the
+/// `pop` child). The subtree method's propagating params (`parent_globals`)
+/// are first reconciled against `strict_ancestor_globals`, then the child root's
+/// own globals and body are reconciled against the full inherited set. A
+/// compatible same-name re-declaration is de-projected onto the inherited
+/// global; an incompatible one is rejected as `InheritedGlobalConflict`.
+/// Surviving `parent_globals` are then prepended onto the grafted root's
+/// globals so they propagate to every descendant subcommand.
 ///
 /// `expected_name` is the parent subtree method's command name; unless an
 /// explicit `override_name` is given, the child root name must equal it
-/// (`SubtreeRootNameMismatch`). Command-annotations are not supported on a pure
-/// dispatcher (the model places them on a command body), so a non-`None`
+/// (`SubtreeRootNameMismatch`). Command-annotations are not supported on a
+/// subtree command (the model places them on a command body), so a non-`None`
 /// `override_annotations` is rejected rather than silently dropped.
 ///
 /// Command indices are returned unchanged (graft-local); the final offset into
@@ -1938,6 +2129,8 @@ pub trait ToolDefinitionDescriptor {
 pub fn graft_subtree(
     child: ExtendedToolType,
     expected_name: &str,
+    parent_globals: ExtendedGlobals,
+    strict_ancestor_globals: &[EffectiveCommandField],
     override_name: Option<String>,
     override_doc: Option<Doc>,
     override_aliases: Option<Vec<String>>,
@@ -1945,9 +2138,6 @@ pub fn graft_subtree(
 ) -> Result<Vec<ExtendedCommandNode>, ToolBuildError> {
     let mut nodes = child.commands;
     let root = nodes.first_mut().ok_or(ToolBuildError::EmptyCommandTree)?;
-    if root.body.is_some() {
-        return Err(ToolBuildError::SubtreeRootHasBody(root.name.clone()));
-    }
     if override_annotations.is_some() {
         return Err(ToolBuildError::SubtreeAnnotationsUnsupported(
             override_name.clone().unwrap_or_else(|| root.name.clone()),
@@ -1959,6 +2149,8 @@ pub fn graft_subtree(
             actual: root.name.clone(),
         });
     }
+    // Apply overrides first so any reconciliation error reports the final
+    // grafted command name rather than the standalone child root name.
     if let Some(name) = override_name {
         root.name = name;
     }
@@ -1968,7 +2160,50 @@ pub fn graft_subtree(
     if let Some(aliases) = override_aliases {
         root.aliases = aliases;
     }
-    // body stays None; globals and subcommands (graft-local indices) unchanged.
+
+    let command_name = root.name.clone();
+
+    // The subtree method's params become propagating globals on the grafted
+    // root. They are inherited from the parent command, so first reconcile them
+    // against strict ancestors above the graft point, then reconcile the grafted
+    // root's own globals/body against the full inherited set. Doing both here
+    // preserves the normal inherited-global contract even though the parent
+    // globals will be stored as same-node globals on the grafted root.
+    let parent_globals =
+        reconcile_subtree_parent_globals(parent_globals, strict_ancestor_globals, &command_name)?;
+
+    let mut inherited = strict_ancestor_globals.to_vec();
+    inherited.extend(
+        parent_globals
+            .options
+            .iter()
+            .cloned()
+            .map(EffectiveCommandField::Option),
+    );
+    inherited.extend(
+        parent_globals
+            .flags
+            .iter()
+            .cloned()
+            .map(EffectiveCommandField::Flag),
+    );
+
+    reconcile_globals(&mut root.globals, &inherited, &command_name)?;
+    if let Some(body) = root.body.as_mut() {
+        reconcile_body(body, &inherited, &command_name)?;
+    }
+
+    // Prepend the parent globals so they propagate to every descendant
+    // subcommand of the grafted root. Globals and subcommands keep their
+    // graft-local indices; `append_grafted_subtree` shifts them on append.
+    let mut opts = parent_globals.options;
+    opts.append(&mut root.globals.options);
+    root.globals.options = opts;
+
+    let mut flags = parent_globals.flags;
+    flags.append(&mut root.globals.flags);
+    root.globals.flags = flags;
+
     Ok(nodes)
 }
 
@@ -2289,7 +2524,342 @@ fn reconcile_body(
             body.positionals.tail = Some(tail);
         }
     }
+
+    // De-projection may have removed the parameter that was the tail (or a later
+    // positional that kept an earlier `Vec<T>` out of tail position), so re-infer
+    // the tail against the parameters that actually survived.
+    reinfer_body_tail(body)?;
     Ok(())
+}
+
+/// Finalize a command body's tail positional after [`reconcile_body`] removed the
+/// inherited re-declarations that did not survive in scope.
+///
+/// The macro emits only each `Vec<T>` candidate's *selected* surface into the body
+/// (tail positional or repeatable-list option) and records the candidate, in
+/// declaration order, in [`ExtendedCommandBody::positional_plan`] (§5.8: the
+/// *last* positional `Vec<T>` is the tail, an earlier one is a repeatable-list
+/// option). Because the selection assumed the macro-known inherited
+/// re-declarations would de-project, this pass repairs it against the parameters
+/// that actually survived. It:
+///
+/// * **demotes** an installed tail into a repeatable-list option (reconstructed by
+///   copying the tail's value graph) when another positional survived after it —
+///   rejecting an explicitly authored tail, or an inferred tail carrying
+///   occurrence bounds / tail-only attributes a repeatable-list option cannot
+///   represent; and
+/// * **promotes** the last surviving `Vec<T>` candidate's repeatable-list option
+///   into the tail (reconstructed likewise) when its natural tail was
+///   de-projected — rejecting one carrying option-only attributes a tail cannot
+///   represent.
+///
+/// It is a no-op for hand-built bodies (empty plan) and whenever the natural tail
+/// is already the last surviving positional.
+fn reinfer_body_tail(body: &mut ExtendedCommandBody) -> Result<(), ToolBuildError> {
+    if body.positional_plan.is_empty() {
+        return Ok(());
+    }
+    // The last surviving positional-eligible candidate, in declaration order.
+    let mut last = None;
+    for (idx, candidate) in body.positional_plan.iter().enumerate() {
+        if body_contains_positional(body, candidate.name()) {
+            last = Some(idx);
+        }
+    }
+    let Some(last_idx) = last else { return Ok(()) };
+    let last_name = body.positional_plan[last_idx].name().to_string();
+
+    // An explicitly-authored tail that survives de-projection must be the last
+    // positional-eligible candidate. If a positional survives after it, its
+    // authored order is violated — whether it still holds the tail slot or was
+    // lowered to an inherited-global surrogate option (a form invisible to the
+    // demote path below, which only sees an installed tail). An explicit tail that
+    // was de-projected entirely is gone and no longer constrains: a genuine later
+    // `Vec<T>` tail may legitimately take the slot.
+    if body.positional_plan[..last_idx].iter().any(|c| {
+        matches!(
+            c,
+            PositionalCandidate::VecCandidate {
+                explicit_tail: true,
+                ..
+            }
+        ) && body_contains_positional(body, c.name())
+    }) {
+        return Err(ToolBuildError::FixedPositionalAfterTail(last_name));
+    }
+
+    // Demote first: an installed inferred tail whose declaration precedes a
+    // surviving positional is no longer last (§5.8). Doing this before promotion
+    // means that if the last candidate is itself promoted (and its option removed)
+    // the demoted option is still inserted relative to the remaining later options.
+    if let Some(tail_name) = body.positionals.tail.as_ref().map(|t| t.name.clone())
+        && let Some(tail_idx) = body
+            .positional_plan
+            .iter()
+            .position(|c| c.name() == tail_name)
+        && tail_idx < last_idx
+    {
+        demote_tail_to_option(body, tail_idx)?;
+    }
+
+    // Promote: the last surviving candidate must hold the tail slot. When it is a
+    // `Vec<T>` currently projected as a repeatable-list option (its natural tail
+    // was de-projected), move it into the tail slot.
+    if matches!(
+        body.positional_plan[last_idx],
+        PositionalCandidate::VecCandidate { .. }
+    ) {
+        promote_option_to_tail(body, last_idx)?;
+    }
+    Ok(())
+}
+
+/// Demote the body's installed inferred tail (the candidate at `tail_idx`) into a
+/// repeatable-list option, because a positional survives after it. The option is
+/// reconstructed from the tail's value graph and inserted in declaration order
+/// among the body options. Rejects an inferred tail whose authored occurrence
+/// bounds (`min`/`max`) or tail-only attributes a repeatable-list option cannot
+/// represent. (An explicit tail before a survivor is rejected earlier, in
+/// [`reinfer_body_tail`].)
+fn demote_tail_to_option(
+    body: &mut ExtendedCommandBody,
+    tail_idx: usize,
+) -> Result<(), ToolBuildError> {
+    let PositionalCandidate::VecCandidate {
+        name,
+        has_min_or_max_attr,
+        later_option_names,
+        ..
+    } = &body.positional_plan[tail_idx]
+    else {
+        return Ok(());
+    };
+    let name = name.clone();
+    let has_min_or_max_attr = *has_min_or_max_attr;
+    let later_option_names = later_option_names.clone();
+
+    // Only act on the candidate that actually holds the tail slot.
+    if body.positionals.tail.as_ref().map(|t| &t.name) != Some(&name) {
+        return Ok(());
+    }
+
+    // `min`/`max` are overloaded between surfaces — occurrence bounds on a tail,
+    // item numeric bounds on a repeatable-list option — so a candidate that
+    // authored either cannot switch surface without changing their meaning. This
+    // consults the authored fact rather than the materialized tail shape because
+    // an authored `min = 0` coincides with the tail default and so leaves no trace
+    // in the tail's `min`/`max` fields.
+    if has_min_or_max_attr {
+        return Err(ToolBuildError::VecSurfaceConflict {
+            name,
+            reason: "it authored a `min`/`max` bound, which means occurrence count \
+                     on a tail positional but item count on a repeatable-list \
+                     option; a parameter now follows it so it must become a \
+                     repeatable-list option, which would change that meaning"
+                .to_string(),
+        });
+    }
+
+    let tail = body
+        .positionals
+        .tail
+        .as_ref()
+        .expect("tail name matched above");
+    // A repeatable-list option has no separator/verbatim/stdio handling, so a
+    // tail using any of those cannot be represented as one.
+    if tail.separator.is_some() || tail.verbatim || tail.accepts_stdio {
+        return Err(ToolBuildError::VecSurfaceConflict {
+            name,
+            reason: "it has a tail-only attribute (`separator`/`verbatim`/`accepts_stdio`) \
+                     that a repeatable-list option cannot express, but a parameter now \
+                     follows it so it must become a repeatable-list option"
+                .to_string(),
+        });
+    }
+
+    let tail = body
+        .positionals
+        .tail
+        .take()
+        .expect("tail name matched above");
+    let option = ExtendedOptionSpec {
+        long: tail.name,
+        short: None,
+        aliases: Vec::new(),
+        doc: tail.doc,
+        value_name: tail.value_name,
+        shape: ExtendedOptionShape::RepeatableList(ExtendedRepeatableListShape {
+            repetition: wire::Repetition::Repeated,
+            item_type: tail.item_type,
+        }),
+        default: None,
+        required: false,
+        env_var: None,
+    };
+    // §D7: body options are in declaration order. Insert before the first option
+    // declared after this `Vec<T>` that survived de-projection; otherwise append.
+    let insert_at = later_option_names
+        .iter()
+        .find_map(|later| body.options.iter().position(|o| &o.long == later));
+    match insert_at {
+        Some(pos) => body.options.insert(pos, option),
+        None => body.options.push(option),
+    }
+    Ok(())
+}
+
+/// Promote the last surviving `Vec<T>` candidate (at `last_idx`) from a
+/// repeatable-list option into the tail positional, because its natural tail was
+/// de-projected. An explicit tail lowered to an inherited-global surrogate option
+/// installs its full authored spec (`authored_tail_surrogate`) verbatim, so its
+/// tail-only attributes are preserved; an inferred candidate is reconstructed
+/// from the option's value graph instead. A no-op if it already holds the tail
+/// slot or never projected to an option; rejects an inferred candidate carrying
+/// option-only attributes (or an `Option<Vec<T>>`, or authored `min`/`max`) that
+/// a tail cannot represent.
+fn promote_option_to_tail(
+    body: &mut ExtendedCommandBody,
+    last_idx: usize,
+) -> Result<(), ToolBuildError> {
+    let PositionalCandidate::VecCandidate {
+        name,
+        optional_vec,
+        has_min_or_max_attr,
+        authored_tail_surrogate,
+        ..
+    } = &body.positional_plan[last_idx]
+    else {
+        return Ok(());
+    };
+    let name = name.clone();
+    let optional_vec = *optional_vec;
+    let has_min_or_max_attr = *has_min_or_max_attr;
+    let authored_tail_surrogate = authored_tail_surrogate.clone();
+
+    // Already the tail (its natural tail survived): nothing to do.
+    if body
+        .positionals
+        .tail
+        .as_ref()
+        .is_some_and(|t| t.name == name)
+    {
+        return Ok(());
+    }
+    let Some(pos) = body.options.iter().position(|o| o.long == name) else {
+        return Ok(());
+    };
+
+    // An explicit tail lowered to an inherited-global surrogate option: install
+    // its full authored spec verbatim. The surrogate option carries none of the
+    // tail-only fields (`separator`/`verbatim`/`accepts_stdio`/occurrence bounds),
+    // so reconstructing from it would silently drop them; the authored spec keeps
+    // them (and any resulting invalid state, e.g. `verbatim` without `separator`,
+    // is caught later by `validate_tool`). `min`/`max` are already occurrence
+    // bounds here, so the inferred-only `has_min_or_max_attr` rejection is skipped.
+    if let Some(authored_tail) = authored_tail_surrogate {
+        // Defensive against hand-built bodies: confirm the option really is the
+        // droppable repeatable-list surrogate before replacing it with the tail.
+        verify_promotable_surrogate(&body.options[pos], &name)?;
+        body.options.remove(pos);
+        body.positionals.tail = Some(*authored_tail);
+        return Ok(());
+    }
+
+    // A tail is variadic with no absent state and interprets `min`/`max` as
+    // occurrence bounds, so these authored shapes cannot move onto a tail.
+    if optional_vec {
+        return Err(ToolBuildError::VecSurfaceConflict {
+            name,
+            reason: "it is an `Option<Vec<T>>`, which has no tail-positional \
+                     representation, but de-projection made it the last positional \
+                     so it must become the tail"
+                .to_string(),
+        });
+    }
+    if has_min_or_max_attr {
+        return Err(ToolBuildError::VecSurfaceConflict {
+            name,
+            reason: "it has a `min`/`max` bound applied to its items as a \
+                     repeatable-list option, but de-projection made it the last \
+                     positional so it must become the tail (where `min`/`max` would \
+                     instead bound the occurrence count)"
+                .to_string(),
+        });
+    }
+    verify_promotable_surrogate(&body.options[pos], &name)?;
+
+    let option = body.options.remove(pos);
+    let item_type = match option.shape {
+        ExtendedOptionShape::RepeatableList(list) => list.item_type,
+        _ => unreachable!("shape checked as RepeatableList above"),
+    };
+    body.positionals.tail = Some(ExtendedTailPositional {
+        name: option.long,
+        doc: option.doc,
+        value_name: option.value_name,
+        item_type,
+        min: 0,
+        max: None,
+        separator: None,
+        verbatim: false,
+        accepts_stdio: false,
+    });
+    Ok(())
+}
+
+/// Verify that `option` is a droppable repeatable-list surrogate that can take the
+/// tail slot: it must carry no option-only surface a tail positional cannot
+/// express (`short`/`aliases`/`default`/`required`/`env`), and must be a
+/// `RepeatableList` with `Repeated` (non-delimited) repetition.
+fn verify_promotable_surrogate(
+    option: &ExtendedOptionSpec,
+    name: &str,
+) -> Result<(), ToolBuildError> {
+    if option.short.is_some()
+        || !option.aliases.is_empty()
+        || option.default.is_some()
+        || option.required
+        || option.env_var.is_some()
+    {
+        return Err(ToolBuildError::VecSurfaceConflict {
+            name: name.to_string(),
+            reason: "it has an option-only attribute (`short`/`aliases`/`default`/\
+                     `required`/`env`) that a tail positional cannot express, but \
+                     de-projection made it the last positional so it must become the tail"
+                .to_string(),
+        });
+    }
+    let ExtendedOptionShape::RepeatableList(list) = &option.shape else {
+        return Err(ToolBuildError::VecSurfaceConflict {
+            name: name.to_string(),
+            reason: "it does not project to a repeatable list, so it has no \
+                     tail-positional representation"
+                .to_string(),
+        });
+    };
+    if !matches!(list.repetition, wire::Repetition::Repeated) {
+        return Err(ToolBuildError::VecSurfaceConflict {
+            name: name.to_string(),
+            reason: "it uses a delimited repetition that a tail positional cannot \
+                     express, but de-projection made it the last positional so it \
+                     must become the tail"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether the body still carries a positional-eligible parameter with the given
+/// surface name (as a fixed positional, the tail, or a repeatable-list option),
+/// i.e. it survived de-projection.
+fn body_contains_positional(body: &ExtendedCommandBody, name: &str) -> bool {
+    body.positionals.fixed.iter().any(|p| p.name == name)
+        || body
+            .positionals
+            .tail
+            .as_ref()
+            .is_some_and(|t| t.name == name)
+        || body.options.iter().any(|o| o.long == name)
 }
 
 /// Decide the fate of one local declaration against the inherited globals in
@@ -2330,7 +2900,10 @@ fn reconcile_local(
                 command: command.to_string(),
             });
         }
-        compatible.push(effective_field_primary_name(inherited));
+        let primary = effective_field_primary_name(inherited);
+        if !compatible.iter().any(|p| p == &primary) {
+            compatible.push(primary);
+        }
     }
     if compatible.len() > 1 {
         return Err(ToolBuildError::InheritedGlobalConflict {
@@ -2789,6 +3362,7 @@ mod tests {
                         }),
                         errors: vec![],
                         annotations: None,
+                        positional_plan: vec![],
                     }),
                 },
             ],
@@ -2872,6 +3446,7 @@ mod tests {
                         result: None,
                         errors: vec![],
                         annotations: None,
+                        positional_plan: vec![],
                     }),
                 },
             ],
@@ -2954,24 +3529,187 @@ mod tests {
     }
 
     #[test]
-    fn graft_rejects_root_with_body() {
-        let err = graft_subtree(
+    fn graft_accepts_root_with_body() {
+        // A grafted subtree root may carry its own body (the child trait's
+        // implicit-body method). With no parent globals, the body survives
+        // unchanged.
+        let graft = graft_subtree(
             leaf_tool_with_body(empty_body()),
             "t",
+            ExtendedGlobals::default(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(graft[0].body.is_some(), "grafted root keeps its body");
+    }
+
+    #[test]
+    fn graft_deprojects_child_body_against_parent_globals() {
+        // The child root body re-declares `verbose` as a string option, which is
+        // compatible with the parent global of the same name; it is de-projected
+        // and the parent global is the single source of truth.
+        let parent_globals = ExtendedGlobals {
+            options: vec![scalar_opt("verbose", None)],
+            flags: vec![],
+        };
+        let mut child_body = empty_body();
+        child_body.options = vec![scalar_opt("verbose", None)];
+        child_body.options[0].doc = doc("local verbose");
+        let graft = graft_subtree(
+            leaf_tool_with_body(child_body),
+            "t",
+            parent_globals,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let body = graft[0].body.as_ref().expect("body preserved");
+        assert!(
+            !body.options.iter().any(|o| o.long == "verbose"),
+            "compatible body option is de-projected onto the parent global"
+        );
+        assert!(
+            graft[0].globals.options.iter().any(|o| o.long == "verbose"),
+            "parent global is prepended onto the grafted root globals"
+        );
+    }
+
+    #[test]
+    fn graft_rejects_incompatible_child_body_vs_parent_global() {
+        // The child root body declares `verbose` as a string option, but the
+        // parent global is a bool flag of the same name: incompatible shapes
+        // are an `InheritedGlobalConflict`, reported against the final grafted
+        // command name.
+        let parent_globals = ExtendedGlobals {
+            options: vec![],
+            flags: vec![bool_flag("verbose", None)],
+        };
+        let mut child_body = empty_body();
+        child_body.options = vec![scalar_opt("verbose", None)];
+        let err = graft_subtree(
+            leaf_tool_with_body(child_body),
+            "t",
+            parent_globals,
+            &[],
             None,
             None,
             None,
             None,
         )
         .unwrap_err();
-        assert!(matches!(err, ToolBuildError::SubtreeRootHasBody(_)));
+        assert!(matches!(
+            err,
+            ToolBuildError::InheritedGlobalConflict { name, command, .. }
+                if name == "verbose" && command == "t"
+        ));
+    }
+
+    /// A single-root child whose root carries `globals` (no body). Used to
+    /// exercise graft-time reconciliation of the grafted root's own globals
+    /// against `parent_globals`.
+    fn leaf_tool_with_globals(globals: ExtendedGlobals) -> ExtendedToolType {
+        ExtendedToolType {
+            version: "0.1.0".to_string(),
+            commands: vec![ExtendedCommandNode {
+                name: "t".to_string(),
+                aliases: vec![],
+                doc: doc(""),
+                globals,
+                subcommands: vec![],
+                body: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn graft_deprojects_child_root_globals_against_parent_globals() {
+        // The child root re-declares `verbose` as its own global (e.g. the
+        // standalone child trait propagating it to its own descendants). It is
+        // compatible with the parent global of the same name, so it is
+        // de-projected and the prepended parent global is the single source.
+        let parent_globals = ExtendedGlobals {
+            options: vec![],
+            flags: vec![bool_flag("verbose", None)],
+        };
+        let child_globals = ExtendedGlobals {
+            options: vec![],
+            flags: vec![bool_flag("verbose", None)],
+        };
+        let graft = graft_subtree(
+            leaf_tool_with_globals(child_globals),
+            "t",
+            parent_globals,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let verbose_count = graft[0]
+            .globals
+            .flags
+            .iter()
+            .filter(|f| f.long == "verbose")
+            .count();
+        assert_eq!(
+            verbose_count, 1,
+            "compatible child-root global is de-projected; exactly one verbose global remains"
+        );
+    }
+
+    #[test]
+    fn graft_rejects_incompatible_child_root_global_vs_parent_global() {
+        // The child root global `verbose` (string option) is incompatible with
+        // the parent global `verbose` (bool flag): `InheritedGlobalConflict`.
+        let parent_globals = ExtendedGlobals {
+            options: vec![],
+            flags: vec![bool_flag("verbose", None)],
+        };
+        let child_globals = ExtendedGlobals {
+            options: vec![scalar_opt("verbose", None)],
+            flags: vec![],
+        };
+        let err = graft_subtree(
+            leaf_tool_with_globals(child_globals),
+            "t",
+            parent_globals,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ToolBuildError::InheritedGlobalConflict { name, command, .. }
+                if name == "verbose" && command == "t"
+        ));
     }
 
     #[test]
     fn graft_preserves_local_indices() {
-        // The child root stays at index 0 as a body-less placeholder; its
-        // graft-local subcommand index (1) is unchanged.
-        let graft = graft_subtree(dispatcher_child(), "child", None, None, None, None).unwrap();
+        // The child root stays at index 0; its graft-local subcommand index (1)
+        // is unchanged.
+        let graft = graft_subtree(
+            dispatcher_child(),
+            "child",
+            ExtendedGlobals::default(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(graft.len(), 2);
         assert!(graft[0].body.is_none());
         assert_eq!(graft[0].subcommands, vec![1]);
@@ -2993,8 +3731,17 @@ mod tests {
 
     #[test]
     fn graft_enforces_name_rule_and_rejects_annotations() {
-        let mismatch =
-            graft_subtree(dispatcher_child(), "remote", None, None, None, None).unwrap_err();
+        let mismatch = graft_subtree(
+            dispatcher_child(),
+            "remote",
+            ExtendedGlobals::default(),
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(matches!(
             mismatch,
             ToolBuildError::SubtreeRootNameMismatch { .. }
@@ -3004,6 +3751,8 @@ mod tests {
         let ok = graft_subtree(
             dispatcher_child(),
             "remote",
+            ExtendedGlobals::default(),
+            &[],
             Some("remote".into()),
             None,
             None,
@@ -3015,6 +3764,8 @@ mod tests {
         let ann = graft_subtree(
             dispatcher_child(),
             "child",
+            ExtendedGlobals::default(),
+            &[],
             None,
             None,
             None,
@@ -3171,6 +3922,7 @@ mod tests {
             result: None,
             errors: vec![],
             annotations: None,
+            positional_plan: vec![],
         }
     }
 

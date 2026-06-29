@@ -803,6 +803,887 @@ mod tests {
         );
     }
 
+    #[tool_definition]
+    trait RootBodyAliasCollisionChild {
+        #[arg(format = "option", aliases = ["count"])]
+        #[constraint(requires_all = value_is("count", 1))]
+        fn root_body_alias_collision_child(&self, format: String) -> Result<(), RemoteError>;
+    }
+
+    struct RootBodyAliasCollisionSubtree;
+
+    #[tool_definition]
+    trait RootBodyAliasCollisionParent {
+        #[arg(count = "global")]
+        fn root_body_alias_collision_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = RootBodyAliasCollisionChild)]
+        fn root_body_alias_collision_child(&self, format: String) -> RootBodyAliasCollisionSubtree;
+    }
+
+    #[test]
+    fn grafted_root_body_alias_collision_with_strict_ancestor_is_rejected() {
+        let err = __golem_tool_descriptor_for_RootBodyAliasCollisionParent(&mut ToolBuildCtx::new())
+            .expect_err(
+                "a grafted root body option colliding with the subtree global and an incompatible strict ancestor global must be rejected",
+            );
+        assert!(
+            matches!(
+                err,
+                ToolBuildError::InheritedGlobalConflict { ref name, ref inherited, ref command }
+                    if name == "count"
+                        && inherited == "count"
+                        && command == "root-body-alias-collision-child"
+            ),
+            "expected an InheritedGlobalConflict for alias `count` on the grafted root body, got {err:?}",
+        );
+    }
+
+    #[tool_definition]
+    trait RootBodyTailInferenceChild {
+        fn root_body_tail_inference_child(
+            &self,
+            items: Vec<String>,
+            format: String,
+        ) -> Result<(), RemoteError>;
+    }
+
+    struct RootBodyTailInferenceSubtree;
+
+    #[tool_definition]
+    trait RootBodyTailInferenceParent {
+        #[command(subtree = RootBodyTailInferenceChild)]
+        fn root_body_tail_inference_child(&self, format: String) -> RootBodyTailInferenceSubtree;
+    }
+
+    #[test]
+    fn grafted_root_body_deprojection_preserves_tail_inference() {
+        let tool =
+            __golem_tool_descriptor_for_RootBodyTailInferenceParent(&mut ToolBuildCtx::new())
+                .expect("descriptor builds");
+
+        let child_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "root-body-tail-inference-child")
+            .expect("child subtree is grafted") as usize;
+        let body = tool.commands[child_idx]
+            .body
+            .as_ref()
+            .expect("grafted root body is preserved");
+
+        assert!(
+            !body.positionals.fixed.iter().any(|p| p.name == "format")
+                && !body.options.iter().any(|o| o.long == "format"),
+            "root-body-local `format` must be removed because the subtree method supplies it as an inherited global",
+        );
+        assert_eq!(
+            body.positionals.tail.as_ref().map(|t| t.name.as_str()),
+            Some("items"),
+            "the trailing inherited-global re-declaration must not prevent `items` from being inferred as the tail positional on a grafted root body",
+        );
+        assert!(
+            !body.options.iter().any(|o| o.long == "items"),
+            "`items` should not be projected as a repeatable-list option when the only later positional is de-projected",
+        );
+        tool.try_to_tool().expect("composed tool is valid");
+    }
+
+    #[tool_definition]
+    trait OverrideConflictChild {
+        #[arg(verbose = "option")]
+        fn override_conflict_child(&self, verbose: String) -> Result<(), RemoteError>;
+    }
+
+    struct OverrideConflictSubtree;
+
+    #[tool_definition]
+    trait OverrideConflictParent {
+        #[command(subtree = OverrideConflictChild, name = "renamed")]
+        fn child(&self, verbose: bool) -> OverrideConflictSubtree;
+    }
+
+    #[test]
+    fn grafted_root_body_conflict_reports_overridden_command_name() {
+        let err = __golem_tool_descriptor_for_OverrideConflictParent(&mut ToolBuildCtx::new())
+            .expect_err("incompatible inherited global must be rejected");
+        assert!(
+            matches!(
+                err,
+                ToolBuildError::InheritedGlobalConflict { ref name, ref inherited, ref command }
+                    if name == "verbose" && inherited == "verbose" && command == "renamed"
+            ),
+            "expected the inherited-global conflict to be reported against the final overridden command name `renamed`, got {err:?}",
+        );
+    }
+
+    #[tool_definition]
+    trait MismatchedConflictChild {
+        #[arg(verbose = "option")]
+        fn mismatched_conflict_child(&self, verbose: String) -> Result<(), RemoteError>;
+    }
+
+    struct MismatchedConflictSubtree;
+
+    #[tool_definition]
+    trait MismatchedConflictParent {
+        #[command(subtree = MismatchedConflictChild)]
+        fn renamed(&self, verbose: bool) -> MismatchedConflictSubtree;
+    }
+
+    #[test]
+    fn subtree_root_name_mismatch_is_reported_before_inherited_global_conflict() {
+        let err = __golem_tool_descriptor_for_MismatchedConflictParent(&mut ToolBuildCtx::new())
+            .expect_err(
+                "a subtree root whose name differs from the parent command must be rejected",
+            );
+        assert!(
+            matches!(
+                err,
+                ToolBuildError::SubtreeRootNameMismatch { ref expected, ref actual }
+                    if expected == "renamed" && actual == "mismatched-conflict-child"
+            ),
+            "expected SubtreeRootNameMismatch to win before inherited-global reconciliation, got {err:?}",
+        );
+    }
+
+    #[tool_definition]
+    trait MismatchedParentGlobalConflictChild {
+        fn mismatched_parent_global_conflict_child(&self, value: String)
+        -> Result<(), RemoteError>;
+    }
+
+    struct MismatchedParentGlobalConflictSubtree;
+
+    #[tool_definition]
+    trait MismatchedParentGlobalConflictParent {
+        #[arg(verbose = "global")]
+        fn mismatched_parent_global_conflict_parent(
+            &self,
+            verbose: String,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = MismatchedParentGlobalConflictChild)]
+        fn renamed(&self, verbose: bool) -> MismatchedParentGlobalConflictSubtree;
+    }
+
+    #[test]
+    fn subtree_root_name_mismatch_beats_parent_global_reconciliation() {
+        let err = __golem_tool_descriptor_for_MismatchedParentGlobalConflictParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect_err("a subtree root whose name differs from the parent command must be rejected");
+        assert!(
+            matches!(
+                err,
+                ToolBuildError::SubtreeRootNameMismatch { ref expected, ref actual }
+                    if expected == "renamed" && actual == "mismatched-parent-global-conflict-child"
+            ),
+            "expected SubtreeRootNameMismatch to win before parent-global reconciliation, got {err:?}",
+        );
+    }
+
+    #[tool_definition]
+    trait AliasDeprojectedNestedLeaf {
+        #[arg(format = "option")]
+        fn alias_deprojected_nested_leaf(&self, format: String) -> Result<(), RemoteError>;
+    }
+
+    struct AliasDeprojectedNestedLeafSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedNestedMiddle {
+        #[command(subtree = AliasDeprojectedNestedLeaf)]
+        fn alias_deprojected_nested_leaf(&self) -> AliasDeprojectedNestedLeafSubtree;
+    }
+
+    struct AliasDeprojectedNestedMiddleSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedNestedParent {
+        #[arg(count = "global")]
+        fn alias_deprojected_nested_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = AliasDeprojectedNestedMiddle)]
+        #[arg(format = "global", aliases = ["count"])]
+        fn alias_deprojected_nested_middle(
+            &self,
+            format: u32,
+        ) -> AliasDeprojectedNestedMiddleSubtree;
+    }
+
+    #[test]
+    fn deprojected_subtree_global_alias_does_not_shadow_nested_root_body() {
+        let tool = __golem_tool_descriptor_for_AliasDeprojectedNestedParent(&mut ToolBuildCtx::new())
+            .expect(
+                "a subtree global de-projected through an alias must not remain effective under nested grafts",
+            );
+        let middle_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "alias-deprojected-nested-middle")
+            .expect("middle subtree is grafted") as usize;
+        assert!(
+            !tool.commands[middle_idx]
+                .globals
+                .options
+                .iter()
+                .any(|o| o.long == "format"),
+            "the alias-compatible subtree global is de-projected and must not survive as `format`",
+        );
+        let leaf_idx = tool.commands[middle_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "alias-deprojected-nested-leaf")
+            .expect("leaf subtree is grafted") as usize;
+        let leaf_body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+        assert!(
+            leaf_body.options.iter().any(|o| o.long == "format"),
+            "the nested leaf's local `format` option must remain because no effective inherited global named `format` survives",
+        );
+    }
+
+    #[tool_definition]
+    trait AliasDeprojectedRootGlobalNestedLeaf {
+        #[arg(format = "option")]
+        fn alias_deprojected_root_global_nested_leaf(
+            &self,
+            format: String,
+        ) -> Result<(), RemoteError>;
+    }
+
+    struct AliasDeprojectedRootGlobalNestedLeafSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedRootGlobalNestedMiddle {
+        #[arg(format = "global", aliases = ["count"])]
+        fn alias_deprojected_root_global_nested_middle(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = AliasDeprojectedRootGlobalNestedLeaf)]
+        fn alias_deprojected_root_global_nested_leaf(
+            &self,
+        ) -> AliasDeprojectedRootGlobalNestedLeafSubtree;
+    }
+
+    struct AliasDeprojectedRootGlobalNestedMiddleSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedRootGlobalNestedParent {
+        #[arg(count = "global")]
+        fn alias_deprojected_root_global_nested_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = AliasDeprojectedRootGlobalNestedMiddle)]
+        fn alias_deprojected_root_global_nested_middle(
+            &self,
+        ) -> AliasDeprojectedRootGlobalNestedMiddleSubtree;
+    }
+
+    #[test]
+    fn deprojected_child_root_global_alias_does_not_shadow_nested_root_body() {
+        let tool = __golem_tool_descriptor_for_AliasDeprojectedRootGlobalNestedParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect(
+            "a child root global de-projected through an alias must not remain effective under nested grafts",
+        );
+        let middle_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| {
+                tool.commands[idx as usize].name == "alias-deprojected-root-global-nested-middle"
+            })
+            .expect("middle subtree is grafted") as usize;
+        assert!(
+            !tool.commands[middle_idx]
+                .globals
+                .options
+                .iter()
+                .any(|o| o.long == "format"),
+            "the alias-compatible child root global is de-projected and must not survive as `format`",
+        );
+        let leaf_idx = tool.commands[middle_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| {
+                tool.commands[idx as usize].name == "alias-deprojected-root-global-nested-leaf"
+            })
+            .expect("leaf subtree is grafted") as usize;
+        let leaf_body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+        assert!(
+            leaf_body.options.iter().any(|o| o.long == "format"),
+            "the nested leaf's local `format` option must remain because no effective inherited global named `format` survives",
+        );
+    }
+
+    #[tool_definition]
+    trait AliasDeprojectedRootGlobalTailChild {
+        #[arg(format = "global", aliases = ["count"])]
+        fn alias_deprojected_root_global_tail_child(&self, format: u32) -> Result<(), RemoteError>;
+
+        fn leaf(&self, items: Vec<String>, format: u32) -> Result<(), RemoteError>;
+    }
+
+    struct AliasDeprojectedRootGlobalTailSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedRootGlobalTailParent {
+        #[arg(count = "global")]
+        fn alias_deprojected_root_global_tail_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = AliasDeprojectedRootGlobalTailChild)]
+        fn alias_deprojected_root_global_tail_child(&self)
+        -> AliasDeprojectedRootGlobalTailSubtree;
+    }
+
+    #[test]
+    fn deprojected_child_root_global_alias_does_not_affect_leaf_tail_inference() {
+        let tool = __golem_tool_descriptor_for_AliasDeprojectedRootGlobalTailParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect("descriptor builds");
+
+        let child_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| {
+                tool.commands[idx as usize].name == "alias-deprojected-root-global-tail-child"
+            })
+            .expect("child subtree is grafted") as usize;
+        assert!(
+            !tool.commands[child_idx]
+                .globals
+                .options
+                .iter()
+                .any(|o| o.long == "format"),
+            "the child root global `format` is de-projected through alias `count` and must not survive",
+        );
+
+        let leaf_idx = tool.commands[child_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "leaf")
+            .expect("leaf command is present") as usize;
+        let body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+
+        assert!(
+            body.positionals.fixed.iter().any(|p| p.name == "format"),
+            "leaf-local `format` remains because no effective inherited global named `format` survives",
+        );
+        assert!(
+            body.positionals.tail.is_none(),
+            "`items: Vec<_>` is followed by surviving local `format`, so it is not in tail position",
+        );
+        assert!(
+            body.options.iter().any(|o| {
+                o.long == "items" && matches!(o.shape, ExtendedOptionShape::RepeatableList(_))
+            }),
+            "a non-tail Vec parameter projects as a repeatable-list option",
+        );
+    }
+
+    #[tool_definition]
+    trait DemotedTailOptionOrderChild {
+        #[arg(format = "global", aliases = ["count"])]
+        fn demoted_tail_option_order_child(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(mode = "option")]
+        fn leaf(&self, items: Vec<String>, mode: String, format: u32) -> Result<(), RemoteError>;
+    }
+
+    struct DemotedTailOptionOrderSubtree;
+
+    #[tool_definition]
+    trait DemotedTailOptionOrderParent {
+        #[arg(count = "global")]
+        fn demoted_tail_option_order_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = DemotedTailOptionOrderChild)]
+        fn demoted_tail_option_order_child(&self) -> DemotedTailOptionOrderSubtree;
+    }
+
+    #[test]
+    fn demoted_tail_option_is_reinserted_in_declaration_order() {
+        let tool =
+            __golem_tool_descriptor_for_DemotedTailOptionOrderParent(&mut ToolBuildCtx::new())
+                .expect("descriptor builds");
+
+        let leaf = tool
+            .commands
+            .iter()
+            .find(|command| command.name == "leaf")
+            .expect("leaf command");
+        let body = leaf.body.as_ref().expect("leaf body");
+
+        assert!(
+            body.positionals.tail.is_none(),
+            "items must be demoted because leaf-local format survives",
+        );
+        let option_names: Vec<&str> = body
+            .options
+            .iter()
+            .map(|option| option.long.as_str())
+            .collect();
+        assert_eq!(
+            option_names,
+            vec!["items", "mode"],
+            "demoting items from tail to repeatable-list option should preserve declaration order among body options",
+        );
+    }
+
+    #[tool_definition]
+    trait DemotedTailMinZeroChild {
+        #[arg(format = "global", aliases = ["count"])]
+        fn demoted_tail_min_zero_child(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(items, min = 0)]
+        fn leaf(&self, items: Vec<String>, format: u32) -> Result<(), RemoteError>;
+    }
+
+    struct DemotedTailMinZeroSubtree;
+
+    #[tool_definition]
+    trait DemotedTailMinZeroParent {
+        #[arg(count = "global")]
+        fn demoted_tail_min_zero_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = DemotedTailMinZeroChild)]
+        fn demoted_tail_min_zero_child(&self) -> DemotedTailMinZeroSubtree;
+    }
+
+    #[test]
+    fn demoted_tail_with_authored_min_zero_is_rejected() {
+        let err = __golem_tool_descriptor_for_DemotedTailMinZeroParent(&mut ToolBuildCtx::new())
+            .expect_err("authored min/max cannot be reinterpreted when demoting a tail");
+
+        assert!(
+            matches!(err, ToolBuildError::VecSurfaceConflict { ref name, .. } if name == "items"),
+            "expected VecSurfaceConflict for demoted items with authored min = 0, got {err:?}",
+        );
+    }
+
+    #[tool_definition]
+    trait ExplicitTailBeforeSurvivingLocalChild {
+        #[arg(format = "global", aliases = ["count"])]
+        fn explicit_tail_before_surviving_local_child(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(items = "tail")]
+        fn leaf(&self, items: Vec<String>, format: u32) -> Result<(), RemoteError>;
+    }
+
+    struct ExplicitTailBeforeSurvivingLocalSubtree;
+
+    #[tool_definition]
+    trait ExplicitTailBeforeSurvivingLocalParent {
+        #[arg(count = "global")]
+        fn explicit_tail_before_surviving_local_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = ExplicitTailBeforeSurvivingLocalChild)]
+        fn explicit_tail_before_surviving_local_child(
+            &self,
+        ) -> ExplicitTailBeforeSurvivingLocalSubtree;
+    }
+
+    #[test]
+    fn deprojected_child_root_global_alias_revalidates_explicit_tail_order() {
+        let result = __golem_tool_descriptor_for_ExplicitTailBeforeSurvivingLocalParent(
+            &mut ToolBuildCtx::new(),
+        );
+        let Ok(tool) = result else {
+            return;
+        };
+
+        assert!(
+            tool.try_to_tool().is_err(),
+            "once child root global `format` is de-projected via alias `count`, leaf-local `format` survives; explicitly-authored tail `items` before that fixed positional must be rejected",
+        );
+    }
+
+    #[tool_definition]
+    trait ExplicitInheritedTailSurrogateChild {
+        #[arg(items = "global", aliases = ["count"])]
+        fn explicit_inherited_tail_surrogate_child(
+            &self,
+            items: Vec<String>,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(items = "tail")]
+        fn leaf(&self, items: Vec<String>, format: String) -> Result<(), RemoteError>;
+    }
+
+    struct ExplicitInheritedTailSurrogateSubtree;
+
+    #[tool_definition]
+    trait ExplicitInheritedTailSurrogateParent {
+        #[arg(count = "global")]
+        fn explicit_inherited_tail_surrogate_parent(
+            &self,
+            count: Vec<String>,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = ExplicitInheritedTailSurrogateChild)]
+        fn explicit_inherited_tail_surrogate_child(&self) -> ExplicitInheritedTailSurrogateSubtree;
+    }
+
+    #[test]
+    fn explicit_inherited_tail_surrogate_before_surviving_positional_is_rejected() {
+        let result = __golem_tool_descriptor_for_ExplicitInheritedTailSurrogateParent(
+            &mut ToolBuildCtx::new(),
+        );
+        let err = match result {
+            Ok(tool) => tool.try_to_tool().expect_err(
+                "an explicitly-authored tail lowered through an inherited-global surrogate must still be rejected when a later fixed positional survives",
+            ),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, ToolBuildError::FixedPositionalAfterTail(ref name) if name == "format"),
+            "expected FixedPositionalAfterTail for surviving positional after explicit tail, got {err:?}",
+        );
+    }
+
+    #[tool_definition]
+    trait ExplicitInheritedTailSurrogateAttrsChild {
+        #[arg(items = "global", aliases = ["count"])]
+        fn explicit_inherited_tail_surrogate_attrs_child(
+            &self,
+            items: Vec<String>,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(items = "tail", separator = "--", accepts_stdio = true)]
+        fn leaf(&self, items: Vec<String>) -> Result<(), RemoteError>;
+    }
+
+    struct ExplicitInheritedTailSurrogateAttrsSubtree;
+
+    #[tool_definition]
+    trait ExplicitInheritedTailSurrogateAttrsParent {
+        #[arg(count = "global")]
+        fn explicit_inherited_tail_surrogate_attrs_parent(
+            &self,
+            count: Vec<String>,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = ExplicitInheritedTailSurrogateAttrsChild)]
+        fn explicit_inherited_tail_surrogate_attrs_child(
+            &self,
+        ) -> ExplicitInheritedTailSurrogateAttrsSubtree;
+    }
+
+    #[test]
+    fn promoted_explicit_inherited_tail_surrogate_preserves_tail_attrs() {
+        let tool = __golem_tool_descriptor_for_ExplicitInheritedTailSurrogateAttrsParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect("descriptor builds");
+        let leaf = tool
+            .commands
+            .iter()
+            .find(|command| command.name == "leaf")
+            .expect("leaf command");
+        let tail = leaf
+            .body
+            .as_ref()
+            .and_then(|body| body.positionals.tail.as_ref())
+            .expect("items survives as the leaf tail");
+
+        assert_eq!(tail.name, "items");
+        assert_eq!(
+            tail.separator.as_deref(),
+            Some("--"),
+            "a surviving explicit tail surrogate must keep authored tail separator",
+        );
+        assert!(
+            tail.accepts_stdio,
+            "a surviving explicit tail surrogate must keep authored accepts_stdio",
+        );
+        tool.try_to_tool().expect("tool is valid");
+    }
+
+    #[tool_definition]
+    trait ExplicitInheritedTailSurrogateVerbatimChild {
+        #[arg(items = "global", aliases = ["count"])]
+        fn explicit_inherited_tail_surrogate_verbatim_child(
+            &self,
+            items: Vec<String>,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(items = "tail", verbatim = true)]
+        fn leaf(&self, items: Vec<String>) -> Result<(), RemoteError>;
+    }
+
+    struct ExplicitInheritedTailSurrogateVerbatimSubtree;
+
+    #[tool_definition]
+    trait ExplicitInheritedTailSurrogateVerbatimParent {
+        #[arg(count = "global")]
+        fn explicit_inherited_tail_surrogate_verbatim_parent(
+            &self,
+            count: Vec<String>,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = ExplicitInheritedTailSurrogateVerbatimChild)]
+        fn explicit_inherited_tail_surrogate_verbatim_child(
+            &self,
+        ) -> ExplicitInheritedTailSurrogateVerbatimSubtree;
+    }
+
+    #[test]
+    fn promoted_explicit_inherited_tail_surrogate_rejects_verbatim_without_separator() {
+        let result = __golem_tool_descriptor_for_ExplicitInheritedTailSurrogateVerbatimParent(
+            &mut ToolBuildCtx::new(),
+        );
+        let err = match result {
+            Ok(tool) => tool.try_to_tool().expect_err(
+                "verbatim=true without a separator must remain invalid when an explicit inherited tail surrogate is promoted",
+            ),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, ToolBuildError::VerbatimWithoutSeparator(ref name) if name == "items"),
+            "expected VerbatimWithoutSeparator for promoted explicit tail `items`, got {err:?}",
+        );
+    }
+
+    #[tool_definition]
+    trait AliasDeprojectedAncestorTailChild {
+        #[arg(format = "global", aliases = ["count"])]
+        fn alias_deprojected_ancestor_tail_child(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(&self, items: Vec<String>, count: u32) -> Result<(), RemoteError>;
+    }
+
+    struct AliasDeprojectedAncestorTailSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedAncestorTailParent {
+        #[arg(count = "global")]
+        fn alias_deprojected_ancestor_tail_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = AliasDeprojectedAncestorTailChild)]
+        fn alias_deprojected_ancestor_tail_child(&self) -> AliasDeprojectedAncestorTailSubtree;
+    }
+
+    #[test]
+    fn deprojected_child_root_global_alias_keeps_strict_ancestor_for_leaf_tail_inference() {
+        let tool = __golem_tool_descriptor_for_AliasDeprojectedAncestorTailParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect("descriptor builds");
+
+        let child_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| {
+                tool.commands[idx as usize].name == "alias-deprojected-ancestor-tail-child"
+            })
+            .expect("child subtree is grafted") as usize;
+        assert!(
+            !tool.commands[child_idx]
+                .globals
+                .options
+                .iter()
+                .any(|o| o.long == "format"),
+            "the child root global `format` is de-projected through alias `count` and must not survive",
+        );
+
+        let leaf_idx = tool.commands[child_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "leaf")
+            .expect("leaf command is present") as usize;
+        let body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+
+        assert!(
+            !body.positionals.fixed.iter().any(|p| p.name == "count")
+                && !body.options.iter().any(|o| o.long == "count"),
+            "leaf-local `count` must be removed because strict ancestor global `count` remains effective",
+        );
+        assert_eq!(
+            body.positionals.tail.as_ref().map(|t| t.name.as_str()),
+            Some("items"),
+            "the trailing strict-ancestor global re-declaration must not prevent `items` from being inferred as the tail positional",
+        );
+        assert!(
+            !body.options.iter().any(|o| o.long == "items"),
+            "`items` should not be projected as a repeatable-list option when the only later positional is de-projected",
+        );
+        tool.try_to_tool().expect("composed tool is valid");
+    }
+
+    #[tool_definition]
+    trait PureStrictAncestorAliasTailChild {
+        fn leaf(&self, items: Vec<String>, format: u32) -> Result<(), RemoteError>;
+    }
+
+    struct PureStrictAncestorAliasTailSubtree;
+
+    #[tool_definition]
+    trait PureStrictAncestorAliasTailParent {
+        #[arg(count = "global", aliases = ["format"])]
+        fn pure_strict_ancestor_alias_tail_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = PureStrictAncestorAliasTailChild)]
+        fn pure_strict_ancestor_alias_tail_child(&self) -> PureStrictAncestorAliasTailSubtree;
+    }
+
+    #[test]
+    fn strict_ancestor_alias_deprojection_keeps_leaf_tail_inference_without_child_root_global() {
+        let tool =
+            __golem_tool_descriptor_for_PureStrictAncestorAliasTailParent(&mut ToolBuildCtx::new())
+                .expect("descriptor builds");
+
+        let child_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| {
+                tool.commands[idx as usize].name == "pure-strict-ancestor-alias-tail-child"
+            })
+            .expect("child subtree is grafted") as usize;
+        let leaf_idx = tool.commands[child_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "leaf")
+            .expect("leaf command is present") as usize;
+        let body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+
+        assert!(
+            !body.positionals.fixed.iter().any(|p| p.name == "format")
+                && !body.options.iter().any(|o| o.long == "format"),
+            "leaf-local `format` must be removed because strict ancestor global alias `format` remains effective",
+        );
+        assert_eq!(
+            body.positionals.tail.as_ref().map(|t| t.name.as_str()),
+            Some("items"),
+            "the trailing strict-ancestor alias re-declaration must not prevent `items` from being inferred as the tail positional",
+        );
+        assert!(
+            !body.options.iter().any(|o| o.long == "items"),
+            "`items` should not be projected as a repeatable-list option when the only later positional is de-projected",
+        );
+        tool.try_to_tool().expect("composed tool is valid");
+    }
+
+    #[tool_definition]
+    trait AliasDeprojectedOptionalPositionalChild {
+        #[arg(format = "global", aliases = ["count"])]
+        fn alias_deprojected_optional_positional_child(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(format = "positional", required = false)]
+        fn leaf(&self, format: String, name: String) -> Result<(), RemoteError>;
+    }
+
+    struct AliasDeprojectedOptionalPositionalSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedOptionalPositionalParent {
+        #[arg(count = "global")]
+        fn alias_deprojected_optional_positional_parent(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = AliasDeprojectedOptionalPositionalChild)]
+        fn alias_deprojected_optional_positional_child(
+            &self,
+        ) -> AliasDeprojectedOptionalPositionalSubtree;
+    }
+
+    #[test]
+    fn deprojected_child_root_global_alias_does_not_hide_optional_before_required() {
+        let result = __golem_tool_descriptor_for_AliasDeprojectedOptionalPositionalParent(
+            &mut ToolBuildCtx::new(),
+        );
+        let Ok(tool) = result else {
+            return;
+        };
+
+        assert!(
+            tool.try_to_tool().is_err(),
+            "an optional fixed positional before a required fixed positional must be rejected either while building the descriptor or during runtime validation after de-projection leaves it local",
+        );
+    }
+
     // Cross-subtree tail-inference boundary (oracle finding 2): a subtree child
     // is synthesized standalone, before it knows which of its parameters the
     // parent hoists into a propagating global, so a child subcommand cannot rely
@@ -883,6 +1764,133 @@ mod tests {
             "the inherited `format` re-declaration must be removed from the collect body"
         );
         tool.try_to_tool().expect("tool is valid");
+    }
+
+    #[test]
+    fn inferred_tail_after_inherited_trailing_global_accepts_tail_separator() {
+        let output = cargo_check_tool_crate(
+            "inferred-tail-separator-after-inherited-global",
+            r#"
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait GoodTool {
+    #[arg(format = "global")]
+    fn good_tool(&self, format: String, target: String) -> Result<(), E>;
+
+    #[arg(items, separator = "--")]
+    fn collect(&self, items: Vec<String>, format: String) -> Result<(), E>;
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "after inherited `format` is de-projected, `items` is the inferred tail; `separator` is a valid tail attr and should be consumed by the final tail shape, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn inferred_tail_after_inherited_trailing_global_accepts_tail_min() {
+        let output = cargo_check_tool_crate(
+            "inferred-tail-min-after-inherited-global",
+            r#"
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait GoodTool {
+    #[arg(format = "global")]
+    fn good_tool(&self, format: String, target: String) -> Result<(), E>;
+
+    #[arg(items, min = 1)]
+    fn collect(&self, items: Vec<String>, format: String) -> Result<(), E>;
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "after inherited `format` is de-projected, `items` is the inferred tail; `min` is a valid tail occurrence bound and should be consumed by the final tail shape, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn non_tail_vec_option_signed_min_does_not_typecheck_unused_tail_form() {
+        let output = cargo_check_tool_crate(
+            "vec-option-signed-min-unused-tail",
+            r#"
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait GoodTool {
+    #[arg(nums, min = -5_i64)]
+    fn run(&self, nums: Vec<i64>, suffix: String) -> Result<(), E>;
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a non-tail Vec<i64> should treat min as an item numeric bound; the unused tail form must not typecheck it as u32\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn inferred_tail_custom_item_occurrence_min_does_not_typecheck_unused_option_form() {
+        let output = cargo_check_tool_crate(
+            "inferred-tail-custom-item-min-unused-option",
+            r#"
+use golem_rust::{tool_definition, FromSchema, IntoSchema, ToolError};
+
+#[derive(Clone, IntoSchema, FromSchema)]
+struct Item {
+    value: String,
+}
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait GoodTool {
+    #[arg(items, min = 1)]
+    fn run(&self, items: Vec<Item>) -> Result<(), E>;
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "an inferred tail over a custom item should treat min as an occurrence bound; the unused option form must not typecheck it as Item\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     #[tool_definition]
@@ -1099,7 +2107,7 @@ impl BadTool for BadToolImpl {
 
     #[test]
     fn explicit_tail_parameter_before_fixed_positional_is_rejected() {
-        let output = cargo_check_tool_crate(
+        let output = cargo_test_tool_crate(
             "tail-before-fixed",
             r#"
 use golem_rust::{tool_definition, tool_implementation, ToolError};
@@ -1129,7 +2137,7 @@ impl BadTool for BadToolImpl {
 
         assert!(
             !output.status.success(),
-            "an explicit tail positional before a later fixed positional should be rejected, but cargo check succeeded\nstdout:\n{}\nstderr:\n{}",
+            "an explicit tail positional before a later fixed positional should be rejected, but cargo test succeeded\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
@@ -1212,8 +2220,447 @@ impl BadTool for BadToolImpl {
     }
 
     #[test]
-    fn optional_fixed_positional_before_required_fixed_positional_is_rejected() {
+    fn many_root_globals_with_leaf_command_compile() {
+        let global_count = usize::BITS as usize;
+        let mut source = String::from("use golem_rust::tool_definition;\n\n");
+        source.push_str("#[tool_definition]\ntrait ManyGlobals {\n");
+        for i in 0..global_count {
+            source.push_str(&format!("    #[arg(g{i} = \"global\")]\n"));
+        }
+        source.push_str("    fn many_globals(\n        &self,\n");
+        for i in 0..global_count {
+            source.push_str(&format!("        g{i}: String,\n"));
+        }
+        source.push_str("        target: String,\n    );\n");
+        source.push_str("    fn leaf(&self, value: String);\n}\n");
+
+        let output = cargo_check_tool_crate("many-root-globals", &source);
+
+        assert!(
+            output.status.success(),
+            "a tool definition should not panic or fail to compile merely because it has {global_count} root globals and a leaf command, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[tool_definition]
+    trait ManyContextSensitiveLeafPositionals {
+        fn leaf(
+            &self,
+            v0: Vec<String>,
+            v1: Vec<String>,
+            v2: Vec<String>,
+            v3: Vec<String>,
+            v4: Vec<String>,
+            v5: Vec<String>,
+            v6: Vec<String>,
+            v7: Vec<String>,
+            v8: Vec<String>,
+            v9: Vec<String>,
+            v10: Vec<String>,
+            v11: Vec<String>,
+            v12: Vec<String>,
+        ) -> Result<(), RemoteError>;
+    }
+
+    #[test]
+    fn many_context_sensitive_leaf_positionals_build_without_inherited_globals() {
+        let tool = __golem_tool_descriptor_for_ManyContextSensitiveLeafPositionals(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect(
+            "a standalone leaf with many Vec positionals and no inherited globals should use normal option/tail projection",
+        );
+
+        let leaf = tool
+            .commands
+            .iter()
+            .find(|command| command.name == "leaf")
+            .expect("leaf command exists");
+        let body = leaf.body.as_ref().expect("leaf body");
+        assert_eq!(
+            body.positionals
+                .tail
+                .as_ref()
+                .map(|tail| tail.name.as_str()),
+            Some("v12"),
+            "the final Vec parameter should infer as the tail positional",
+        );
+        for i in 0..12 {
+            let name = format!("v{i}");
+            assert!(
+                body.options.iter().any(|option| {
+                    option.long == name
+                        && matches!(option.shape, ExtendedOptionShape::RepeatableList(_))
+                }),
+                "non-final Vec parameter {name} should project as a repeatable-list option",
+            );
+        }
+        tool.try_to_tool().expect("standalone tool is valid");
+    }
+
+    #[test]
+    fn many_context_sensitive_leaf_positionals_preserve_option_attrs_without_inherited_globals() {
         let output = cargo_check_tool_crate(
+            "many-vec-option-attrs",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait ManyVecOptionAttrs {
+    #[arg(v0, short = 'a')]
+    fn leaf(
+        &self,
+        v0: Vec<String>,
+        v1: Vec<String>,
+        v2: Vec<String>,
+        v3: Vec<String>,
+        v4: Vec<String>,
+        v5: Vec<String>,
+        v6: Vec<String>,
+        v7: Vec<String>,
+        v8: Vec<String>,
+        v9: Vec<String>,
+        v10: Vec<String>,
+        v11: Vec<String>,
+        v12: Vec<String>,
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "with no inherited globals, only the final Vec is a tail; earlier Vec parameters are repeatable-list options and option attributes such as `short` must be accepted, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[tool_definition]
+    trait SparseInheritedManyVecChild {
+        fn leaf(
+            &self,
+            v0: Vec<String>,
+            v1: Vec<String>,
+            v2: Vec<String>,
+            v3: Vec<String>,
+            v4: Vec<String>,
+            v5: Vec<String>,
+            v6: Vec<String>,
+            v7: Vec<String>,
+            v8: Vec<String>,
+            v9: Vec<String>,
+            v10: Vec<String>,
+            v11: Vec<String>,
+            v12: Vec<String>,
+        ) -> Result<(), RemoteError>;
+    }
+
+    struct SparseInheritedManyVecSubtree;
+
+    #[tool_definition]
+    trait SparseInheritedManyVecParent {
+        #[arg(v0 = "global")]
+        #[command(subtree = SparseInheritedManyVecChild)]
+        fn sparse_inherited_many_vec_child(&self, v0: Vec<String>)
+        -> SparseInheritedManyVecSubtree;
+    }
+
+    #[test]
+    fn many_context_sensitive_leaf_positionals_allow_sparse_inherited_subset() {
+        let tool =
+            __golem_tool_descriptor_for_SparseInheritedManyVecParent(&mut ToolBuildCtx::new())
+                .expect("only v0 is inherited; the remaining Vec parameters have a valid shape");
+
+        let child_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "sparse-inherited-many-vec-child")
+            .expect("child subtree is grafted") as usize;
+        let leaf_idx = tool.commands[child_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "leaf")
+            .expect("leaf command is present") as usize;
+        let body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+
+        assert!(
+            !body.options.iter().any(|option| option.long == "v0"),
+            "v0 is de-projected onto the inherited global",
+        );
+        assert_eq!(
+            body.positionals
+                .tail
+                .as_ref()
+                .map(|tail| tail.name.as_str()),
+            Some("v12"),
+            "the final non-inherited Vec parameter remains the tail positional",
+        );
+        tool.try_to_tool().expect("composed tool is valid");
+    }
+
+    #[tool_definition]
+    trait SparseInheritedTrailingManyVecChild {
+        fn leaf(
+            &self,
+            v0: Vec<String>,
+            v1: Vec<String>,
+            v2: Vec<String>,
+            v3: Vec<String>,
+            v4: Vec<String>,
+            v5: Vec<String>,
+            v6: Vec<String>,
+            v7: Vec<String>,
+            v8: Vec<String>,
+            v9: Vec<String>,
+            v10: Vec<String>,
+            v11: Vec<String>,
+            v12: Vec<String>,
+        ) -> Result<(), RemoteError>;
+    }
+
+    struct SparseInheritedTrailingManyVecSubtree;
+
+    #[tool_definition]
+    trait SparseInheritedTrailingManyVecParent {
+        #[arg(v12 = "global")]
+        #[command(subtree = SparseInheritedTrailingManyVecChild)]
+        fn sparse_inherited_trailing_many_vec_child(
+            &self,
+            v12: Vec<String>,
+        ) -> SparseInheritedTrailingManyVecSubtree;
+    }
+
+    #[test]
+    fn many_context_sensitive_leaf_positionals_allow_sparse_trailing_inherited_subset() {
+        let tool = __golem_tool_descriptor_for_SparseInheritedTrailingManyVecParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect("only v12 is inherited; v11 should become the remaining tail positional");
+
+        let child_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| {
+                tool.commands[idx as usize].name == "sparse-inherited-trailing-many-vec-child"
+            })
+            .expect("child subtree is grafted") as usize;
+        let leaf_idx = tool.commands[child_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "leaf")
+            .expect("leaf command is present") as usize;
+        let body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+
+        assert!(
+            !body.options.iter().any(|option| option.long == "v12")
+                && body
+                    .positionals
+                    .tail
+                    .as_ref()
+                    .map(|tail| tail.name.as_str())
+                    != Some("v12"),
+            "v12 is de-projected onto the inherited global",
+        );
+        assert_eq!(
+            body.positionals
+                .tail
+                .as_ref()
+                .map(|tail| tail.name.as_str()),
+            Some("v11"),
+            "after the trailing inherited Vec is de-projected, the preceding Vec parameter must be inferred as the tail positional",
+        );
+        tool.try_to_tool().expect("composed tool is valid");
+    }
+
+    #[tool_definition]
+    trait MixedRootAndStrictSparseManyVecChild {
+        #[arg(v0 = "global")]
+        fn mixed_root_and_strict_sparse_many_vec_child(
+            &self,
+            v0: Vec<String>,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(
+            &self,
+            v0: Vec<String>,
+            v1: Vec<String>,
+            v2: Vec<String>,
+            v3: Vec<String>,
+            v4: Vec<String>,
+            v5: Vec<String>,
+            v6: Vec<String>,
+            v7: Vec<String>,
+            v8: Vec<String>,
+            v9: Vec<String>,
+            v10: Vec<String>,
+            v11: Vec<String>,
+            v12: Vec<String>,
+        ) -> Result<(), RemoteError>;
+    }
+
+    struct MixedRootAndStrictSparseManyVecSubtree;
+
+    #[tool_definition]
+    trait MixedRootAndStrictSparseManyVecParent {
+        #[arg(v12 = "global")]
+        #[command(subtree = MixedRootAndStrictSparseManyVecChild)]
+        fn mixed_root_and_strict_sparse_many_vec_child(
+            &self,
+            v12: Vec<String>,
+        ) -> MixedRootAndStrictSparseManyVecSubtree;
+    }
+
+    #[test]
+    fn many_context_sensitive_leaf_positionals_allow_mixed_root_and_sparse_strict_subset() {
+        let tool = __golem_tool_descriptor_for_MixedRootAndStrictSparseManyVecParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect(
+            "a bounded root global plus one sparse strict inherited global still leaves a valid leaf shape",
+        );
+
+        let child_idx = tool.commands[0]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| {
+                tool.commands[idx as usize].name == "mixed-root-and-strict-sparse-many-vec-child"
+            })
+            .expect("child subtree is grafted") as usize;
+        let leaf_idx = tool.commands[child_idx]
+            .subcommands
+            .iter()
+            .copied()
+            .find(|&idx| tool.commands[idx as usize].name == "leaf")
+            .expect("leaf command is present") as usize;
+        let body = tool.commands[leaf_idx].body.as_ref().expect("leaf body");
+
+        assert!(
+            !body.options.iter().any(|option| option.long == "v12")
+                && body
+                    .positionals
+                    .tail
+                    .as_ref()
+                    .map(|tail| tail.name.as_str())
+                    != Some("v12"),
+            "v12 is de-projected onto the strict inherited global",
+        );
+        assert_eq!(
+            body.positionals
+                .tail
+                .as_ref()
+                .map(|tail| tail.name.as_str()),
+            Some("v11"),
+            "after the sparse strict inherited Vec is de-projected, v11 must be inferred as the tail positional even when another context-sensitive root global exists",
+        );
+        tool.try_to_tool().expect("composed tool is valid");
+    }
+
+    #[tool_definition]
+    trait ManyOverlappingGraftedRootGlobalsChild {
+        #[arg(g0 = "global")]
+        #[arg(g1 = "global")]
+        #[arg(g2 = "global")]
+        #[arg(g3 = "global")]
+        #[arg(g4 = "global")]
+        #[arg(g5 = "global")]
+        #[arg(g6 = "global")]
+        #[arg(g7 = "global")]
+        #[arg(g8 = "global")]
+        #[arg(g9 = "global")]
+        #[arg(g10 = "global")]
+        #[arg(g11 = "global")]
+        #[arg(g12 = "global")]
+        fn many_overlapping_grafted_root_globals_child(
+            &self,
+            g0: String,
+            g1: String,
+            g2: String,
+            g3: String,
+            g4: String,
+            g5: String,
+            g6: String,
+            g7: String,
+            g8: String,
+            g9: String,
+            g10: String,
+            g11: String,
+            g12: String,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(
+            &self,
+            g0: String,
+            g1: String,
+            g2: String,
+            g3: String,
+            g4: String,
+            g5: String,
+            g6: String,
+            g7: String,
+            g8: String,
+            g9: String,
+            g10: String,
+            g11: String,
+            g12: String,
+            value: String,
+        ) -> Result<(), RemoteError>;
+    }
+
+    struct ManyOverlappingGraftedRootGlobalsSubtree;
+
+    #[tool_definition]
+    trait ManyOverlappingGraftedRootGlobalsParent {
+        #[arg(g0 = "global")]
+        fn many_overlapping_grafted_root_globals_parent(
+            &self,
+            g0: String,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[command(subtree = ManyOverlappingGraftedRootGlobalsChild)]
+        fn many_overlapping_grafted_root_globals_child(
+            &self,
+        ) -> ManyOverlappingGraftedRootGlobalsSubtree;
+    }
+
+    #[test]
+    fn many_overlapping_grafted_root_globals_build_when_one_is_deprojected() {
+        let tool = __golem_tool_descriptor_for_ManyOverlappingGraftedRootGlobalsParent(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect(
+            "a valid grafted child with many overlapping root globals should build when one child root global is de-projected",
+        );
+
+        let child = tool
+            .commands
+            .iter()
+            .find(|command| command.name == "many-overlapping-grafted-root-globals-child")
+            .expect("child subtree root is grafted");
+        assert!(
+            !child
+                .globals
+                .options
+                .iter()
+                .any(|option| option.long == "g0"),
+            "the child root's duplicate g0 global is de-projected onto the parent root global"
+        );
+        tool.try_to_tool().expect("composed tool is valid");
+    }
+
+    #[test]
+    fn optional_fixed_positional_before_required_fixed_positional_is_rejected() {
+        let output = cargo_test_tool_crate(
             "optional-before-required-positional",
             r#"
 use golem_rust::{tool_definition, tool_implementation, ToolError};
@@ -1246,7 +2693,7 @@ impl BadTool for BadToolImpl {
 
         assert!(
             !output.status.success(),
-            "an optional fixed positional before a required fixed positional should be rejected, but cargo check succeeded\nstdout:\n{}\nstderr:\n{}",
+            "an optional fixed positional before a required fixed positional should be rejected, but cargo test succeeded\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
@@ -2678,6 +4125,14 @@ impl BadTool for BadToolImpl {
     }
 
     fn cargo_check_tool_crate(name: &str, source: &str) -> std::process::Output {
+        cargo_tool_crate(name, source, "check")
+    }
+
+    fn cargo_test_tool_crate(name: &str, source: &str) -> std::process::Output {
+        cargo_tool_crate(name, source, "test")
+    }
+
+    fn cargo_tool_crate(name: &str, source: &str, command: &str) -> std::process::Output {
         let root = std::env::temp_dir().join(format!(
             "golem-rust-tool-{name}-{}-{}",
             std::process::id(),
@@ -2712,12 +4167,14 @@ golem-rust = {{ path = {}, features = ["export_golem_agentic"] }}
             .expect("golem-rust crate should have an SDK workspace parent")
             .join("target");
         let output = Command::new("cargo")
-            .arg("check")
+            .arg(command)
             .arg("--quiet")
             .env("CARGO_TARGET_DIR", target_dir)
             .current_dir(&root)
             .output()
-            .expect("failed to run cargo check for temporary tool crate");
+            .unwrap_or_else(|error| {
+                panic!("failed to run cargo {command} for temporary tool crate: {error}")
+            });
 
         fs::remove_dir_all(&root).unwrap_or_else(|error| {
             panic!(

@@ -82,6 +82,15 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
                 let mut commands: ::std::vec::Vec<golem_rust::agentic::ExtendedCommandNode> =
                     ::std::vec::Vec::new();
                 commands.push(#root_node);
+                ctx.apply_pending_graft_root(&mut commands[0])?;
+                {
+                    let __root_name = commands[0].name.clone();
+                    golem_rust::agentic::reconcile_command_inherited_globals(
+                        &mut commands[0],
+                        ctx.inherited_globals(),
+                        &__root_name,
+                    )?;
+                }
                 #(#links)*
                 let mut __tool = golem_rust::agentic::ExtendedToolType {
                     version: #version,
@@ -106,8 +115,10 @@ struct Plan {
     tool_name: String,
     /// Index of the implicit-body method (`kebab(method) == tool name`), if any.
     root_idx: Option<usize>,
-    /// Long names + aliases of the root command's globals; descendant commands
-    /// must not re-project these (they are inherited by walking root→node).
+    /// Long names + aliases of the root command's globals. A leaf command that
+    /// re-declares one of these is lowered through an inherited-tail surrogate
+    /// when it is an explicit tail; all other inherited-global de-projection and
+    /// tail re-inference is performed at runtime by `normalize_inherited_globals`.
     root_global_names: BTreeSet<String>,
 }
 
@@ -278,18 +289,24 @@ fn build_leaf_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error> {
     })
 }
 
-/// Emits the block that builds a child descriptor, grafts it as a pure
-/// dispatcher, prepends the subtree method's params as placeholder globals, and
-/// links it under root.
+/// Emits the block that builds a child descriptor, grafts it under root, and
+/// links it. The subtree method's params are passed as `parent_globals` so
+/// `graft_subtree` reconciles the grafted root's body/globals against them and
+/// prepends them as propagating globals for descendant subcommands.
 fn build_subtree_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error> {
     let subtree = cmd.subtree.as_ref().expect("subtree present");
     let call_path = subtree_call_path(&subtree.path)?;
     let expected_name = command_name(cmd, &plan.tool_name, false);
+    let grafted_name = subtree
+        .name_override
+        .clone()
+        .unwrap_or_else(|| expected_name.clone());
 
     let override_name = match &subtree.name_override {
         Some(n) => quote! { ::std::option::Option::Some(#n.to_string()) },
         None => quote! { ::std::option::Option::None },
     };
+    let override_name_for_ctx = override_name.clone();
     let override_doc = if cmd.doc == DocIr::default() {
         quote! { ::std::option::Option::None }
     } else {
@@ -303,17 +320,19 @@ fn build_subtree_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error
         quote! { ::std::option::Option::Some(::std::vec![ #(#aliases),* ]) }
     };
 
-    // The subtree method's params become globals on the graft placeholder so
-    // they propagate to every descendant subcommand. A param that repeats a
-    // global already inherited from the parent root command is not skipped here:
-    // it is emitted as a placeholder global and reconciled (removed when
-    // compatible, rejected when conflicting) by `normalize_inherited_globals`.
+    // The subtree method's params become propagating globals on the grafted
+    // root. A param that repeats a global already inherited from the parent
+    // root command is not skipped here: it is emitted as a parent global and
+    // reconciled (removed when compatible, rejected when conflicting) by
+    // `graft_subtree` (against the grafted root's own body/globals) and by
+    // `normalize_inherited_globals` (against strict ancestors above the graft
+    // point).
     let mut opts = Vec::new();
     let mut flags = Vec::new();
     for param in &cmd.params {
         let arg = arg_for(cmd, &param.ident);
         // Subtree-method params only contribute propagating globals, never a tail
-        // positional, so tail inference is disabled (`is_last_param = false`).
+        // positional, so tail inference is disabled (`emit_as_tail = false`).
         match classify(&param.ident, &param.ty, arg, true, false)? {
             Projection::Option(spec) => opts.push(spec),
             Projection::Flag(spec) => flags.push(spec),
@@ -328,31 +347,74 @@ fn build_subtree_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error
 
     Ok(quote! {
         {
-            let __child = #call_path(ctx)?;
-            let mut __graft = golem_rust::agentic::graft_subtree(
+            let __parent_globals = golem_rust::agentic::ExtendedGlobals {
+                options: ::std::vec![ #(#opts),* ],
+                flags: ::std::vec![ #(#flags),* ],
+            };
+            let mut __strict_ancestor_globals = ctx.inherited_globals().to_vec();
+            __strict_ancestor_globals.extend(
+                commands[0]
+                    .globals
+                    .options
+                    .iter()
+                    .cloned()
+                    .map(golem_rust::agentic::EffectiveCommandField::Option),
+            );
+            __strict_ancestor_globals.extend(
+                commands[0]
+                    .globals
+                    .flags
+                    .iter()
+                    .cloned()
+                    .map(golem_rust::agentic::EffectiveCommandField::Flag),
+            );
+            let __surviving_parent_globals = match golem_rust::agentic::reconcile_subtree_parent_globals(
+                __parent_globals.clone(),
+                &__strict_ancestor_globals,
+                #grafted_name,
+            ) {
+                ::std::result::Result::Ok(__globals) => __globals,
+                ::std::result::Result::Err(__err) => {
+                    if let ::std::result::Result::Err(__root_err @ golem_rust::agentic::ToolBuildError::SubtreeRootNameMismatch { .. }) = ctx.with_graft_root(
+                        #expected_name.to_string(),
+                        #override_name_for_ctx,
+                        |ctx| #call_path(ctx),
+                    ) {
+                        return ::std::result::Result::Err(__root_err);
+                    }
+                    return ::std::result::Result::Err(__err);
+                }
+            };
+            let mut __child_inherited_globals = __strict_ancestor_globals.clone();
+            __child_inherited_globals.extend(
+                __surviving_parent_globals
+                    .options
+                    .iter()
+                    .cloned()
+                    .map(golem_rust::agentic::EffectiveCommandField::Option),
+            );
+            __child_inherited_globals.extend(
+                __surviving_parent_globals
+                    .flags
+                    .iter()
+                    .cloned()
+                    .map(golem_rust::agentic::EffectiveCommandField::Flag),
+            );
+            let __child = ctx.with_graft_root(
+                #expected_name.to_string(),
+                #override_name_for_ctx,
+                |ctx| ctx.with_inherited_globals(__child_inherited_globals, |ctx| #call_path(ctx)),
+            )?;
+            let __graft = golem_rust::agentic::graft_subtree(
                 __child,
                 #expected_name,
+                __parent_globals,
+                &__strict_ancestor_globals,
                 #override_name,
                 #override_doc,
                 #override_aliases,
                 ::std::option::Option::None,
             )?;
-            // The subtree method's own params become propagating globals on the
-            // graft placeholder (index 0), prepended ahead of any globals the
-            // child root already carries. Reconciliation against inherited
-            // globals (root + ancestor subtree globals) happens once over the
-            // whole tree in `normalize_inherited_globals`.
-            {
-                let __placeholder = &mut __graft[0];
-                let mut __opts: ::std::vec::Vec<golem_rust::agentic::ExtendedOptionSpec> =
-                    ::std::vec![ #(#opts),* ];
-                let mut __flags: ::std::vec::Vec<golem_rust::agentic::FlagSpec> =
-                    ::std::vec![ #(#flags),* ];
-                __opts.append(&mut __placeholder.globals.options);
-                __placeholder.globals.options = __opts;
-                __flags.append(&mut __placeholder.globals.flags);
-                __placeholder.globals.flags = __flags;
-            }
             let __off = golem_rust::agentic::append_grafted_subtree(&mut commands, __graft);
             commands[0].subcommands.push(__off);
         }
@@ -399,12 +461,23 @@ fn build_command_node(
     let mut body_flags = Vec::new();
     let mut stdin: Option<TokenStream> = None;
     let mut stdout: Option<TokenStream> = None;
+    // (declaration index, long name) of every body option, in declaration order.
+    // Used to anchor a demoted tail's reconstructed option in declaration order at
+    // runtime (see `build_positional_plan` / `reinfer_body_tail`).
+    let mut body_option_decls: Vec<(usize, String)> = Vec::new();
 
     // The last *positional-eligible* parameter is the only one eligible to
     // become a tail positional by inference: `Vec<T>` at tail → tail positional,
-    // `Vec<T>` elsewhere → repeatable option (§5.8). Globals, options, flags,
-    // streams, and de-projected inherited globals are never positionals, so they
-    // must not block tail inference for a `Vec<T>` that precedes them.
+    // `Vec<T>` elsewhere → repeatable option (§5.8). Globals, options, flags, and
+    // streams are never positionals, so they don't block tail inference.
+    //
+    // Tail inference deliberately ignores `inherited_globals`: whether an
+    // inherited re-declaration actually survives de-projection depends on the
+    // composition this descriptor is grafted into (a child root global can itself
+    // be de-projected against a strict ancestor, possibly through an alias), which
+    // is only known at runtime. So the macro emits the natural declaration-order
+    // shape, and `normalize_inherited_globals` re-infers the tail
+    // (`reinfer_body_tail`) once the surviving inherited set is known.
     let last_value_idx = cmd
         .params
         .iter()
@@ -412,7 +485,32 @@ fn build_command_node(
         .rev()
         .find_map(|(idx, param)| {
             let arg = arg_for(cmd, &param.ident);
-            if is_positional_candidate(param, arg, is_root, inherited_globals) {
+            if is_positional_candidate(param, arg) {
+                Some(idx)
+            } else {
+                None
+            }
+        });
+
+    // The last positional-eligible parameter that is *not* a macro-known inherited
+    // re-declaration. When inherited re-declarations follow an inferred `Vec<T>`,
+    // they de-project at runtime (a value the runtime drops must not steal the
+    // tail slot), leaving that `Vec<T>` as the genuine tail. Emitting it as the
+    // tail directly — rather than as a repeatable-list option repaired afterwards
+    // — lets tail-only attributes (`separator`, occurrence `min`/`max`, ...)
+    // validate against the surface the parameter will actually have. The runtime
+    // finalizer (`reinfer_body_tail`) demotes it back to a repeatable-list option
+    // if a follower instead survives de-projection.
+    let last_non_inherited_idx = cmd
+        .params
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, param)| {
+            let arg = arg_for(cmd, &param.ident);
+            let is_inherited =
+                !is_root && repeats_inherited_global(&param.ident, arg, inherited_globals);
+            if is_positional_candidate(param, arg) && !is_inherited {
                 Some(idx)
             } else {
                 None
@@ -437,8 +535,16 @@ fn build_command_node(
         // not constrain (or be constrained by) the genuine body positionals.
         let is_inherited =
             !is_root && repeats_inherited_global(&param.ident, arg, inherited_globals);
-        let is_last_param = Some(idx) == last_value_idx;
-        match classify(&param.ident, &param.ty, arg, is_global, is_last_param)? {
+        // Emit this parameter as the tail when it is the last positional-eligible
+        // parameter, or — when only inherited re-declarations follow it — the last
+        // *non-inherited* `Vec<T>` whose tail form is representable. See
+        // `last_non_inherited_idx`.
+        let emit_as_tail = Some(idx) == last_value_idx
+            || (Some(idx) == last_non_inherited_idx
+                && last_non_inherited_idx != last_value_idx
+                && arg.and_then(|a| a.placement).is_none()
+                && vec_tail_representable(&param.ty, arg));
+        match classify(&param.ident, &param.ty, arg, is_global, emit_as_tail)? {
             Projection::Stdin(spec) => {
                 if stdin.is_some() {
                     return Err(Error::new(
@@ -461,6 +567,7 @@ fn build_command_node(
                 if is_global {
                     global_options.push(spec);
                 } else {
+                    body_option_decls.push((idx, to_kebab_case(&param.ident.to_string())));
                     body_options.push(spec);
                 }
             }
@@ -531,6 +638,7 @@ fn build_command_node(
                         )
                     })?;
                     let name = to_kebab_case(&param.ident.to_string());
+                    body_option_decls.push((idx, name.clone()));
                     body_options.push(inherited_tail_option_surrogate_tokens(&name, item, arg)?);
                     continue;
                 }
@@ -548,6 +656,7 @@ fn build_command_node(
     let constraints = build_constraints(cmd)?;
     let (result_spec, errors) = build_result(cmd)?;
     let annotations = build_annotations(cmd.annotations.as_ref());
+    let positional_plan = build_positional_plan(cmd, &body_option_decls)?;
 
     let tail_tokens = match tail {
         Some(t) => quote! { ::std::option::Option::Some(#t) },
@@ -576,6 +685,7 @@ fn build_command_node(
             result: #result_spec,
             errors: #errors,
             annotations: #annotations,
+            positional_plan: ::std::vec![ #(#positional_plan),* ],
         }
     };
 
@@ -594,20 +704,153 @@ fn build_command_node(
     })
 }
 
-/// Whether a parameter is eligible to become a positional (fixed or tail), and
-/// therefore participates in "last positional → tail" inference. Globals,
-/// options, flags, streams, and de-projected inherited globals are excluded
-/// because none of them can ever be a positional.
-fn is_positional_candidate(
-    param: &crate::tool::ir::ParamIr,
-    arg: Option<&ArgIr>,
-    is_root: bool,
-    inherited_globals: &BTreeSet<String>,
-) -> bool {
-    if is_stream_type(&param.ty) {
+/// Records every positional-eligible parameter, in declaration order, as a
+/// [`PositionalCandidate`] so the runtime can finalize the tail positional after
+/// inherited-global de-projection (see `reinfer_body_tail`).
+///
+/// Inherited re-declarations are deliberately *included*: whether one actually
+/// survives de-projection is only known at runtime (a child root global may
+/// itself be de-projected against a strict ancestor, possibly through an alias),
+/// so the plan describes the command exactly as authored and lets the runtime
+/// decide which candidates survive.
+///
+/// A scalar, or an explicit `positional`, can never be the tail and is a `Plain`
+/// candidate. A `Vec<T>` is a `VecCandidate` carrying the authored facts the
+/// runtime needs to repair the surface. An *inferred* candidate emits no alternate
+/// lowered spec — the runtime reconstructs the other surface from the in-body spec
+/// (the only surface Rust typechecks). An *explicit* tail additionally carries its
+/// full authored tail spec in `authored_tail_surrogate`: that spec is unambiguous
+/// (occurrence `min`/`max`, valid tail-only attrs) and already typechecks as a
+/// normal tail, so emitting it as data is safe and lets the runtime install it
+/// losslessly when the surrogate option is promoted back to the tail.
+///
+/// `body_option_decls` is the `(declaration index, long name)` of every body
+/// option, used to compute each `Vec<T>` candidate's `later_option_names` anchors
+/// for declaration-order re-insertion on demotion.
+fn build_positional_plan(
+    cmd: &CommandIr,
+    body_option_decls: &[(usize, String)],
+) -> Result<Vec<TokenStream>, Error> {
+    let mut plan = Vec::new();
+    for (idx, param) in cmd.params.iter().enumerate() {
+        let arg = arg_for(cmd, &param.ident);
+        // Eligibility uses the natural (no-inheritance) shape, matching the
+        // tail-inference candidate set in `build_command_node`.
+        if !is_positional_candidate(param, arg) {
+            continue;
+        }
+        let name = to_kebab_case(&param.ident.to_string());
+        // `Option<Vec<T>>` (an optional `Vec`) — never representable as a tail.
+        let optional_vec = unwrap_generic1(&param.ty, "Option")
+            .is_some_and(|inner| unwrap_generic1(inner, "Vec").is_some());
+        let base = unwrap_generic1(&param.ty, "Option").unwrap_or(&param.ty);
+        let vec_item = unwrap_generic1(base, "Vec");
+
+        // An explicit positional, or a non-`Vec<T>` scalar, can never be the tail;
+        // it is recorded only because, when it survives, it keeps an earlier
+        // `Vec<T>` out of tail position.
+        if arg.and_then(|a| a.placement) == Some(ArgPlacement::Positional) || vec_item.is_none() {
+            plan.push(quote! {
+                golem_rust::agentic::PositionalCandidate::Plain { name: #name.to_string() }
+            });
+            continue;
+        }
+        let explicit_tail = arg.and_then(|a| a.placement) == Some(ArgPlacement::Tail);
+        let has_min_or_max_attr = arg.is_some_and(|a| a.raw_min.is_some() || a.raw_max.is_some());
+        // Body options declared after this `Vec<T>`, in declaration order.
+        let later_option_names = body_option_decls
+            .iter()
+            .filter(|(decl_idx, _)| *decl_idx > idx)
+            .map(|(_, long)| quote! { #long.to_string() });
+
+        let explicit_tail_tok = if explicit_tail {
+            quote! { true }
+        } else {
+            quote! { false }
+        };
+        let optional_vec_tok = if optional_vec {
+            quote! { true }
+        } else {
+            quote! { false }
+        };
+        let has_min_or_max_tok = if has_min_or_max_attr {
+            quote! { true }
+        } else {
+            quote! { false }
+        };
+        // An explicit tail records its full authored spec so the runtime can
+        // install it verbatim if it was lowered to a surrogate option and later
+        // promoted back to the tail (the surrogate option cannot hold tail-only
+        // attrs). The spec is the same tokens `classify` emits for a normal tail
+        // and so is already known to typecheck. Inferred candidates carry `None`
+        // and use the reconstruct-from-spec path.
+        let authored_tail_surrogate_tok = match (explicit_tail, vec_item) {
+            (true, Some(item)) => {
+                let tail_spec = tail_tokens(&name, item, arg)?;
+                quote! { ::std::option::Option::Some(::std::boxed::Box::new(#tail_spec)) }
+            }
+            _ => quote! { ::std::option::Option::None },
+        };
+        plan.push(quote! {
+            golem_rust::agentic::PositionalCandidate::VecCandidate {
+                name: #name.to_string(),
+                explicit_tail: #explicit_tail_tok,
+                optional_vec: #optional_vec_tok,
+                has_min_or_max_attr: #has_min_or_max_tok,
+                authored_tail_surrogate: #authored_tail_surrogate_tok,
+                later_option_names: ::std::vec![ #(#later_option_names),* ],
+            }
+        });
+    }
+    Ok(plan)
+}
+
+/// Whether an inferred `Vec<T>` parameter can be represented as a tail positional
+/// (so the caller may emit it as the tail when only inherited re-declarations
+/// follow it). Mirrors the macro-time checks in [`vec_tail_spec`].
+fn vec_tail_representable(ty: &Type, arg: Option<&ArgIr>) -> bool {
+    if unwrap_generic1(ty, "Option").is_some() {
         return false;
     }
-    if !is_root && repeats_inherited_global(&param.ident, arg, inherited_globals) {
+    match unwrap_generic1(ty, "Vec") {
+        Some(item) => vec_tail_spec("__probe", item, false, arg).is_ok(),
+        None => false,
+    }
+}
+
+/// The tail-positional spec for a `Vec<T>` candidate, or the macro error
+/// explaining why it cannot be a tail (an `Option<Vec<T>>`, or option-only
+/// `#[arg]` attributes such as `short`).
+fn vec_tail_spec(
+    name: &str,
+    item: &Type,
+    optional: bool,
+    arg: Option<&ArgIr>,
+) -> Result<TokenStream, Error> {
+    if optional {
+        return Err(Error::new(
+            arg.map(|a| a.param.span())
+                .unwrap_or_else(proc_macro2::Span::call_site),
+            "a tail positional must not be `Option<_>`; use `Vec<T>` (an empty tail already means none supplied)",
+        ));
+    }
+    if let Some(arg) = arg {
+        reject_unconsumed_structural_attrs(arg, SurfaceKind::Tail)?;
+    }
+    tail_tokens(name, item, arg)
+}
+
+/// Whether a parameter is eligible to become a positional (fixed or tail) in the
+/// command's natural shape, and therefore participates in "last positional →
+/// tail" inference. Globals, options, flags, and streams are excluded because
+/// none of them can ever be a positional.
+///
+/// Inherited-global re-declarations are deliberately *not* excluded: whether one
+/// survives de-projection is only known at runtime, so the natural shape treats
+/// them like any other parameter and the runtime (`reinfer_body_tail`) decides
+/// which candidates survive.
+fn is_positional_candidate(param: &crate::tool::ir::ParamIr, arg: Option<&ArgIr>) -> bool {
+    if is_stream_type(&param.ty) {
         return false;
     }
     match arg.and_then(|a| a.placement) {
@@ -848,7 +1091,7 @@ fn classify(
     ty: &Type,
     arg: Option<&ArgIr>,
     is_global: bool,
-    is_last_param: bool,
+    emit_as_tail: bool,
 ) -> Result<Projection, Error> {
     let name = to_kebab_case(&ident.to_string());
 
@@ -972,9 +1215,13 @@ fn classify(
 
     // Tail positional: explicit `#[arg(... = "tail")]`, or — following the
     // uniform projection rule (§5.8) "`Vec<T>` at tail → tail positional,
-    // `Vec<T>` elsewhere → repeatable option" — an unmarked `Vec<T>` that is the
-    // last value parameter (streams and inherited globals don't count).
-    let infer_tail = surface.is_none() && !is_global && vec_item.is_some() && is_last_param;
+    // `Vec<T>` elsewhere → repeatable option" — an unmarked `Vec<T>` the caller
+    // asks to emit as the tail (`emit_as_tail`). The caller sets that for the last
+    // positional-eligible parameter, and for the last *non-inherited* `Vec<T>`
+    // when only inherited re-declarations follow it (they de-project at runtime,
+    // leaving this `Vec<T>` the genuine tail; the runtime finalizer demotes it
+    // back to a repeatable-list option if a follower instead survives).
+    let infer_tail = surface.is_none() && !is_global && vec_item.is_some() && emit_as_tail;
     if matches!(surface, Some(ArgPlacement::Tail)) || infer_tail {
         // A tail positional is inherently variadic (zero or more), and
         // `ExtendedTailPositional` (like the WIT `tail-positional`) has no
