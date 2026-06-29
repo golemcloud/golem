@@ -232,6 +232,53 @@ impl S3BlobStorage {
         Ok(result)
     }
 
+    /// Returns whether any object exists under the given prefix (treated as a
+    /// directory, i.e. with a trailing `/`). Used to detect implicit directories
+    /// that have children but no explicit `__dir_marker`.
+    async fn prefix_has_objects(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        bucket: &str,
+        prefix: &Path,
+    ) -> Result<bool, Error> {
+        let prefix_str = blob_path_to_string(prefix)?;
+        let prefix_with_slash = if prefix_str.ends_with('/') {
+            prefix_str.clone()
+        } else {
+            format!("{prefix_str}/")
+        };
+
+        let response = with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {prefix_str}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, prefix_with_slash),
+            |(client, bucket, prefix)| {
+                Box::pin(async move {
+                    client
+                        .list_objects_v2()
+                        .bucket(*bucket)
+                        .prefix(prefix.clone())
+                        // Only count objects strictly under the prefix, never an
+                        // object whose key is exactly `<prefix>/` (a degenerate
+                        // self-placeholder), so it is not mistaken for a child.
+                        .start_after(prefix.clone())
+                        .max_keys(1)
+                        .send()
+                        .await
+                })
+            },
+            Self::is_list_objects_v2_error_retriable,
+            Self::sdk_error_as_loggable_string,
+            false,
+        )
+        .await?;
+
+        Ok(!response.contents().is_empty())
+    }
+
     fn is_get_object_error_retriable(
         error: &SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
     ) -> bool {
@@ -987,7 +1034,23 @@ impl BlobStorage for S3BlobStorage {
                         Ok(_) => Ok(ExistsResult::Directory),
                         Err(SdkError::ServiceError(service_error)) => {
                             match service_error.into_err() {
-                                HeadObjectError::NotFound(_) => Ok(ExistsResult::DoesNotExist),
+                                HeadObjectError::NotFound(_) => {
+                                    // S3 has no real directories: an implicit
+                                    // directory can exist (because of nested
+                                    // objects or markers) without an explicit
+                                    // `__dir_marker` of its own. Match the
+                                    // filesystem and in-memory backends by
+                                    // reporting a directory whenever any object
+                                    // exists under this path's prefix.
+                                    if self
+                                        .prefix_has_objects(target_label, op_label, bucket, &key)
+                                        .await?
+                                    {
+                                        Ok(ExistsResult::Directory)
+                                    } else {
+                                        Ok(ExistsResult::DoesNotExist)
+                                    }
+                                }
                                 err => Err(err.into()),
                             }
                         }

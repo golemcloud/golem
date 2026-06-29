@@ -1387,8 +1387,28 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
 #[desert(evolution())]
 pub enum SerializableInvokeResult {
     Failed(String),
+    FailedClassified {
+        kind: SerializableHostFailureKind,
+        message: String,
+    },
     Pending,
     Completed(Result<SchemaValue, SerializableRpcError>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableHostFailureKind {
+    Transient,
+    Permanent,
 }
 
 #[derive(

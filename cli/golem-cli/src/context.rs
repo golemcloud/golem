@@ -25,9 +25,9 @@ use crate::config::{
 use crate::config::{ClientConfig, ProfileName, builtin_local_url};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{LogColorize, LogOutput, Output, log_action, set_log_output};
-use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app::{
-    ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
+    ApplicationConfig, ApplicationPreload, ApplicationSourceMode, ComponentPresetName,
+    ComponentPresetSelector, ResolvedLocalServer, WithSource,
 };
 use crate::model::app_raw::{
     BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker, Server,
@@ -68,6 +68,7 @@ pub struct Context {
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<SelectedManifestEnvironment>,
     manifest_environment_deployment_options: Option<DeploymentOptions>,
+    manifest_local_server: Option<ResolvedLocalServer>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
     http_parallelism: usize,
@@ -146,17 +147,19 @@ impl Context {
         }
 
         let app_source_mode = preloaded_app.source_mode;
-        let application_name_and_environments = preloaded_app.application_name_and_environments;
+        let manifest_local_server = preloaded_app.resolved_local_server;
+        let application_preload = preloaded_app.application_preload;
 
         let manifest_environment: Option<SelectedManifestEnvironment> = match &environment_reference
         {
             Some(environment_reference) => {
                 match environment_reference {
                     EnvironmentReference::Environment { environment_name } => {
-                        match &application_name_and_environments {
-                            Some(ApplicationNameAndEnvironments {
+                        match &application_preload {
+                            Some(ApplicationPreload {
                                 application_name,
                                 environments,
+                                ..
                             }) => match environments.get(environment_name) {
                                 Some(environment) => Some(SelectedManifestEnvironment {
                                     application_name: application_name.value.clone(),
@@ -188,10 +191,11 @@ impl Context {
                     EnvironmentReference::AccountApplicationEnvironment { .. } => None,
                 }
             }
-            None => match &application_name_and_environments {
-                Some(ApplicationNameAndEnvironments {
+            None => match &application_preload {
+                Some(ApplicationPreload {
                     application_name,
                     environments,
+                    ..
                 }) => environments
                     .iter()
                     .find(|(_, env)| env.default == Some(Marker))
@@ -283,34 +287,31 @@ impl Context {
         let file_download_client =
             new_raw_reqwest_client(&client_config.file_download_http_client_config)?;
 
-        let app_context_config = manifest_environment
-            .as_ref()
-            .zip(application_name_and_environments)
-            .map(
-                |(selected_environment, application_name_and_environments)| {
-                    ApplicationContextConfig::new(
-                        &global_flags,
-                        application_name_and_environments,
-                        ComponentPresetSelector {
-                            environment: selected_environment.environment_name.clone(),
-                            presets: {
-                                if global_flags.preset.is_empty() {
-                                    selected_environment
-                                        .environment
-                                        .component_presets
-                                        .clone()
-                                        .into_vec()
-                                        .into_iter()
-                                        .map(ComponentPresetName)
-                                        .collect::<Vec<_>>()
-                                } else {
-                                    global_flags.preset.clone()
-                                }
-                            },
+        let app_context_config = manifest_environment.as_ref().zip(application_preload).map(
+            |(selected_environment, application_preload)| {
+                ApplicationContextConfig::new(
+                    &global_flags,
+                    application_preload,
+                    ComponentPresetSelector {
+                        environment: selected_environment.environment_name.clone(),
+                        presets: {
+                            if global_flags.preset.is_empty() {
+                                selected_environment
+                                    .environment
+                                    .component_presets
+                                    .clone()
+                                    .into_vec()
+                                    .into_iter()
+                                    .map(ComponentPresetName)
+                                    .collect::<Vec<_>>()
+                            } else {
+                                global_flags.preset.clone()
+                            }
                         },
-                    )
-                },
-            );
+                    },
+                )
+            },
+        );
 
         Ok(Self {
             config_dir: global_flags.config_dir(),
@@ -325,6 +326,7 @@ impl Context {
             environment_reference,
             manifest_environment,
             manifest_environment_deployment_options,
+            manifest_local_server,
             yes,
             dev_mode: global_flags.dev_mode,
             show_secrets: global_flags.show_secrets,
@@ -411,6 +413,10 @@ impl Context {
     pub fn manifest_environment_deployment_options(&self) -> Option<&DeploymentOptions> {
         self.log_context_selection_once();
         self.manifest_environment_deployment_options.as_ref()
+    }
+
+    pub fn manifest_local_server(&self) -> Option<&ResolvedLocalServer> {
+        self.manifest_local_server.as_ref()
     }
 
     pub fn caches(&self) -> &Caches {
@@ -675,6 +681,7 @@ struct ApplicationContextConfig {
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
+    local_server: Option<WithSource<crate::model::app_raw::LocalServer>>,
     component_presets: ComponentPresetSelector,
     wasm_rpc_client_build_offline: bool,
     dev_mode: bool,
@@ -684,14 +691,15 @@ struct ApplicationContextConfig {
 impl ApplicationContextConfig {
     pub fn new(
         global_flags: &GolemCliGlobalFlags,
-        application_name_and_environments: ApplicationNameAndEnvironments,
+        application_preload: ApplicationPreload,
         component_presets: ComponentPresetSelector,
     ) -> Self {
         Self {
             app_manifest_path: global_flags.app_manifest_path.clone(),
             disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,
-            application_name: application_name_and_environments.application_name,
-            environments: application_name_and_environments.environments,
+            application_name: application_preload.application_name,
+            environments: application_preload.environments,
+            local_server: application_preload.local_server,
             component_presets,
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
@@ -781,6 +789,7 @@ impl ApplicationContextState {
                 app_config,
                 config.application_name.clone(),
                 config.environments.clone(),
+                config.local_server.clone(),
                 config.component_presets.clone(),
                 file_download_client.clone(),
             )

@@ -23,7 +23,7 @@ The agent type **must** be deployed via an HTTP API mount (`mount` on `@agent()`
 | Skill | When to Load |
 |---|---|
 | `golem-add-http-endpoint-ts` | Setting up the HTTP mount and endpoint decorators required before using webhooks |
-| `golem-configure-api-domain` | Configuring `httpApi` in `golem.yaml` |
+| `golem-configure-api-domain` | Configuring `httpApi` in `golem.yaml`, including `subdomain` versus `domain` |
 | `golem-wait-for-external-input-ts` | Lower-level promise API if you need more control than webhooks provide |
 
 ## API
@@ -58,7 +58,7 @@ https://<domain>/<prefix>/<suffix>/<id>
   httpApi:
     deployments:
       local:
-      - domain: my-app.localhost:9006
+      - subdomain: my-app  # resolves to my-app.localhost:9006 by default
         webhookUrl: "/my-custom-webhooks/"
         agents:
           OrderAgent: {}

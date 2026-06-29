@@ -82,7 +82,7 @@ Edit the relevant `.wit` file in the root `wit/` directory (e.g., `wit/host.wit`
 cargo make wit
 ```
 
-This removes all `wit/deps/` directories in sub-projects and re-copies the correct subset from the root.
+This mirrors the correct subset of the root `wit/deps/` into each sub-project, idempotently (it rewrites only files whose bytes changed, so unchanged files keep their mtime — avoiding needless rebuilds).
 
 ### Step 3: Verify synchronization
 
@@ -90,7 +90,7 @@ This removes all `wit/deps/` directories in sub-projects and re-copies the corre
 cargo make check-wit
 ```
 
-This re-runs the sync and then `git diff --exit-code wit golem-common/wit` to ensure the committed WIT files match what the sync produces. If this fails in CI, you forgot to run `cargo make wit` (or you hand-edited a generated sub-project copy).
+This re-runs the sync and then `git status` over every per-crate `wit/deps` copy (golem-common, golem-cli, and all four SDKs) to ensure the committed WIT files match what the sync produces. CI runs this; if it fails, you forgot to run `cargo make wit` (or you hand-edited a generated sub-project copy).
 
 ### Step 4: Build and verify
 
@@ -110,10 +110,11 @@ truth — there is no `deps.toml` and nothing is fetched.
 
 ### Step 2: Wire it into the sync tasks
 
-Edit `Makefile.toml` so the new package is copied where it's needed. The
-`wit-sdks` task copies **all** root deps to every SDK automatically, but the
-`wit-golem-common` and `wit-golem-cli` tasks copy an explicit subset — add a
-`cp wit/deps/<package> <target>/wit/deps` line there if those crates need it.
+Edit `Makefile.toml` so the new package is mirrored where it's needed. The
+`wit-sdks` task mirrors **all** root deps to every SDK automatically, but the
+`wit-golem-common` and `wit-golem-cli` tasks mirror an explicit subset — add a
+`wit/deps/<package> <target>/wit/deps/<package>` source/target pair to the
+`dir-mirror` args there if those crates need it.
 
 ### Step 3: Sync and verify
 
