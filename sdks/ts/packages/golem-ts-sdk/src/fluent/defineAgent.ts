@@ -24,6 +24,9 @@ import { ParsedAgentId } from '../agentId';
 import { Principal } from '../principal';
 import { Uuid } from '../uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
+import { ConfigSpec } from './config';
+
+export type { ConfigSpec } from './config';
 
 export type IdRecord = Record<string, StandardSchemaV1>;
 export type MethodsRecord = Record<string, MethodSpec>;
@@ -39,6 +42,7 @@ export interface AgentMetadataSpec {
   readonly mode?: 'durable' | 'ephemeral';
   readonly dependencies?: readonly string[];
   readonly snapshotting?: SnapshottingSpec;
+  readonly config?: ConfigSpec;
 }
 
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {
@@ -58,12 +62,20 @@ export interface FluentAgentThis {
   getId(): ParsedAgentId;
   getPhantomId(): Uuid | undefined;
   getPrincipal(): Principal;
+  /**
+   * The agent's config accessor: one fresh-reading getter per declared
+   * `local`/`secret` field. Loosely typed for now — proper per-agent typing
+   * can come later.
+   */
+  readonly config: Record<string, unknown>;
 }
 
 export interface InitContext<Id extends IdRecord> {
   readonly id: InferRecord<Id>;
   readonly principal: Principal;
   readonly phantomId: Uuid | undefined;
+  /** The agent's config accessor (see {@link FluentAgentThis.config}). */
+  readonly config: Record<string, unknown>;
 }
 
 export interface AgentImplementation<
@@ -120,6 +132,12 @@ export interface AgentSpec<Id extends IdRecord, Methods extends MethodsRecord> {
   dependencies?: AgentDefinition<any, any>[];
   /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
   snapshotting?: SnapshottingSpec;
+  /**
+   * Named `local` / `secret` config fields. Each is a Standard Schema value;
+   * `secret` fields describe the inner (revealed) value and are declared to the
+   * host as `secret<inner>`. Surfaced as `agent-type.config`.
+   */
+  config?: ConfigSpec;
 }
 
 /**
@@ -155,6 +173,7 @@ export function defineAgent<Id extends IdRecord, Methods extends MethodsRecord>(
     mode: spec.mode,
     dependencies: (spec.dependencies ?? []).map((d) => d.name),
     snapshotting: spec.snapshotting,
+    config: spec.config,
   });
   return {
     name: spec.name,

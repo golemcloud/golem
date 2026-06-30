@@ -16,8 +16,13 @@
 // built on Standard Schema. Temporary and unstable: it will eventually replace
 // the `@agent()` decorator surface.
 
-// Register the built-in Zod walker as a module-load side effect.
+// Register the built-in schema walkers as module-load side effects. The vendor
+// walkers duck-type the schema's runtime structure and never import the vendor
+// library, so none of zod/valibot/arktype/effect is baked into the WASM bundle.
 import './schema/zod';
+import './schema/valibot';
+import './schema/arktype';
+import './schema/effect';
 
 export { defineAgent } from './defineAgent';
 export type {
@@ -25,6 +30,7 @@ export type {
   AgentImpl,
   AgentImplementation,
   AgentSpec,
+  ConfigSpec,
   FluentAgentThis,
   IdRecord,
   InitContext,
@@ -38,3 +44,12 @@ export type { StandardSchemaV1 } from './schema/standardSchema';
 export { s } from './schema/markers';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { FluentCodec, SchemaWalker } from './schema/codec';
+
+// wasm-RPC client for calling other agents.
+export { clientFor, RemoteCallError } from './client';
+export type { RemoteClient } from './client';
+
+// Typed host surfaces (plain async).
+export * from './keyvalue';
+export * from './blobstore';
+export * from './websocket';

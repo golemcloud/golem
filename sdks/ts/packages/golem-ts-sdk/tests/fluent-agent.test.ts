@@ -14,7 +14,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { defineAgent, method } from '../src/fluent';
+import { defineAgent } from '../src/fluent/defineAgent';
+import { method } from '../src/fluent/method';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 

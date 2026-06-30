@@ -14,7 +14,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { defineAgent, method } from '../src/fluent';
+import { defineAgent } from '../src/fluent/defineAgent';
+import { method } from '../src/fluent/method';
 import { compileSchema } from '../src/fluent/schema/adapter';
 import { s } from '../src/fluent/schema/markers';
 import { AgentClassName } from '../src/agentClassName';

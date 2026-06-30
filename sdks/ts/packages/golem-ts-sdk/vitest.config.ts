@@ -28,6 +28,26 @@ export default defineConfig({
         __dirname,
         'types/wasi_clocks_0_2_3_wall_clock.d.ts',
       ),
+      // Host bindings used by the fluent typed surfaces. Type-only at test time —
+      // the surfaces only call them inside functions, so importing the package
+      // barrel resolves without the live WASM host. (fluent-io.test.ts vi.mocks
+      // these with in-memory fakes for its runtime tests.)
+      'wasi:keyvalue/eventual@0.1.0': path.resolve(
+        __dirname,
+        'types/wasi_keyvalue_0_1_0_eventual.d.ts',
+      ),
+      'wasi:keyvalue/eventual-batch@0.1.0': path.resolve(
+        __dirname,
+        'types/wasi_keyvalue_0_1_0_eventual_batch.d.ts',
+      ),
+      'wasi:keyvalue/types@0.1.0': path.resolve(__dirname, 'types/wasi_keyvalue_0_1_0_types.d.ts'),
+      'wasi:blobstore/blobstore': path.resolve(__dirname, 'types/wasi_blobstore_blobstore.d.ts'),
+      'wasi:blobstore/container': path.resolve(__dirname, 'types/wasi_blobstore_container.d.ts'),
+      'wasi:blobstore/types': path.resolve(__dirname, 'types/wasi_blobstore_types.d.ts'),
+      'golem:websocket/client@1.5.0': path.resolve(
+        __dirname,
+        'types/golem_websocket_1_5_0_client.d.ts',
+      ),
     },
   },
 });

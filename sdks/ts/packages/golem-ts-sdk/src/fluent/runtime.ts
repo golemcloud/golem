@@ -67,6 +67,7 @@ import type {
   SnapshottingSpec,
 } from './defineAgent';
 import { MethodSpec } from './method';
+import { buildConfigAccessor, compileConfig, ConfigDeclaration } from './config';
 
 /** A named parameter and its compiled codec, in declaration order. */
 interface NamedCodec {
@@ -90,6 +91,7 @@ export interface RegisteredAgent {
   agentType: AgentType;
   idCodecs: NamedCodec[];
   methodCodecs: Map<string, MethodCodec>;
+  configDeclarations: ConfigDeclaration[];
 }
 
 function errorMessage(e: unknown): string {
@@ -131,10 +133,12 @@ export function registerAgentType(
     });
   }
 
-  const agentType = assembleAgentType(name, idCodecs, methodCodecs, metadata);
+  const configDeclarations = compileConfig(metadata.config);
+
+  const agentType = assembleAgentType(name, idCodecs, methodCodecs, configDeclarations, metadata);
   AgentTypeRegistry.register(className, agentType);
 
-  return { name, className, agentType, idCodecs, methodCodecs };
+  return { name, className, agentType, idCodecs, methodCodecs, configDeclarations };
 }
 
 /**
@@ -182,6 +186,7 @@ function assembleAgentType(
   name: string,
   idCodecs: NamedCodec[],
   methodCodecs: Map<string, MethodCodec>,
+  configDeclarations: ConfigDeclaration[],
   metadata: AgentMetadataSpec,
 ): AgentType {
   const graphs: SchemaGraph[] = [];
@@ -190,6 +195,9 @@ function assembleAgentType(
     for (const ic of mc.inputCodecs) graphs.push(ic.codec.graph);
     if (mc.output.tag === 'single') graphs.push(mc.output.codec.graph);
   }
+  // Pool each config field's *declaration* graph (inner for local,
+  // `secret<inner>` for secret) so the shared GraphEncoder includes it.
+  for (const d of configDeclarations) graphs.push(d.graph);
 
   const encoder = new GraphEncoder(mergeGraphDefs(graphs));
 
@@ -249,7 +257,11 @@ function assembleAgentType(
     mode: metadata.mode ?? 'durable',
     httpMount: undefined,
     snapshotting: toWitSnapshotting(metadata.snapshotting),
-    config: [],
+    config: configDeclarations.map((d) => ({
+      source: d.source,
+      path: d.path,
+      valueType: encoder.encodeType(d.graph.root),
+    })),
   };
 }
 
@@ -438,12 +450,22 @@ export function registerAgentInitiator(
       const [, , phantomId] = agentId.parsed();
       const sdkPrincipal = sdkPrincipalFromHost(principal);
 
+      // Fresh-reading config accessor; shared by `init` (via context) and the
+      // handler `this`. Each getter re-fetches on access (config may change
+      // between invocations).
+      const config = buildConfigAccessor(reg.configDeclarations);
+
       // `init` may be synchronous or async (return a Promise); awaiting a plain
       // value is a no-op, so both forms work. The guest `initialize`/load-snapshot
       // paths await the initiate result.
       let state: object;
       try {
-        state = await impl.init({ id: idRecord as never, principal: sdkPrincipal, phantomId });
+        state = await impl.init({
+          id: idRecord as never,
+          principal: sdkPrincipal,
+          phantomId,
+          config,
+        });
       } catch (e) {
         return {
           tag: 'err',
@@ -455,6 +477,7 @@ export function registerAgentInitiator(
       instance.getId = () => agentId;
       instance.getPhantomId = () => phantomId;
       instance.getPrincipal = () => sdkPrincipal;
+      instance.config = config;
 
       return {
         tag: 'ok',
