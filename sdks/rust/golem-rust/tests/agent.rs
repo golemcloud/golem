@@ -1492,7 +1492,7 @@ mod tests {
                 (
                     AgentConfigSource::Local,
                     vec!["port".to_string()],
-                    "SchemaTypeBody::U32Type".to_string()
+                    "SchemaTypeBody::U32Type(None)".to_string()
                 ),
                 (
                     AgentConfigSource::Local,
@@ -1502,7 +1502,7 @@ mod tests {
                 (
                     AgentConfigSource::Local,
                     vec!["nested".to_string(), "bar".to_string(),],
-                    "SchemaTypeBody::S32Type".to_string()
+                    "SchemaTypeBody::S32Type(None)".to_string()
                 ),
                 (
                     AgentConfigSource::Secret,

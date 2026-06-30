@@ -48,6 +48,12 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   private val textFull = TextRestrictions(Some(List("en", "hu")), Some(1), Some(99), Some("a.*z"))
   private val textNone = TextRestrictions.empty
 
+  private val numericFull = NumericRestrictions(
+    min = Some(NumericBound.Unsigned(-2L)),
+    max = Some(NumericBound.Unsigned(-1L)),
+    unit = Some("bytes")
+  )
+
   private val binFull = BinaryRestrictions(Some(List("image/png")), Some(0), Some(1024))
   private val binNone = BinaryRestrictions.empty
 
@@ -83,16 +89,16 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   private val typeBodies: Vector[WitSchemaTypeBody] = Vector(
     RefType(0),
     BoolType,
-    S8Type,
-    S16Type,
-    S32Type,
-    S64Type,
-    U8Type,
-    U16Type,
-    U32Type,
-    U64Type,
-    F32Type,
-    F64Type,
+    S8Type(),
+    S16Type(),
+    S32Type(),
+    S64Type(),
+    U8Type(),
+    U16Type(),
+    U32Type(Some(NumericRestrictions(min = Some(NumericBound.Unsigned(1L)), unit = Some("items")))),
+    U64Type(Some(numericFull)),
+    F32Type(Some(NumericRestrictions(max = Some(NumericBound.FloatBits(java.lang.Double.doubleToRawLongBits(1.5d)))))),
+    F64Type(Some(NumericRestrictions(min = Some(NumericBound.FloatBits(0L)), unit = Some("seconds")))),
     CharType,
     StringType,
     RecordType(Vector(WitNamedFieldType("x", 1, mdFull), WitNamedFieldType("y", 2, md0))),
@@ -358,6 +364,20 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
         val ctorName = pay("bytes").asInstanceOf[js.Dynamic].constructor.name.asInstanceOf[String]
         val bytes    = pay("bytes").asInstanceOf[Uint8Array]
         assertTrue(ctorName == "Uint8Array", bytes.length == 3, bytes(0).toInt == 1, bytes(2).toInt == 3)
+      },
+      test("raw JS shape: numeric restrictions carry bigint bounds") {
+        val body = singleTypeBodyJs(U64Type(Some(numericFull)))
+        val r    = valDict(body)
+        val min  = r("min").asInstanceOf[js.Dynamic]
+        val max  = r("max").asInstanceOf[js.Dynamic]
+        assertTrue(
+          body.tag == "u64-type",
+          min.selectDynamic("tag").asInstanceOf[String] == "unsigned",
+          max.selectDynamic("tag").asInstanceOf[String] == "unsigned",
+          js.typeOf(min.selectDynamic("val")) == "bigint",
+          js.typeOf(max.selectDynamic("val")) == "bigint",
+          r("unit").asInstanceOf[String] == "bytes"
+        )
       },
       test("raw JS shape: s64/u64 carry JS bigint, u32 carries JS number") {
         val s64 = rawVal(singleValueNodeJs(S64Value(-64L)))

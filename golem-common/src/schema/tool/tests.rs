@@ -20,7 +20,10 @@ use crate::schema::metadata::TypeId;
 use crate::schema::proptest_strategies::{
     schema_graph_strategy, transportable_schema_value_strategy,
 };
-use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
+use crate::schema::schema_type::{
+    DiscriminatorRule, NamedFieldType, NumericBound, NumericRestrictions, SchemaType, UnionBranch,
+    UnionSpec, VariantCaseType,
+};
 use crate::schema::schema_value::SchemaValue;
 use proptest::prelude::*;
 use test_r::test;
@@ -131,6 +134,7 @@ fn kitchen_sink_tool() -> Tool {
             type_: color_ref.clone(),
             default: Some(SchemaValue::Enum { case: 0 }),
             required: true,
+            accepts_stdio: false,
         }],
         tail: Some(TailPositional {
             name: "rest".to_string(),
@@ -141,6 +145,7 @@ fn kitchen_sink_tool() -> Tool {
             max: Some(3),
             separator: Some("--".to_string()),
             verbatim: true,
+            accepts_stdio: true,
         }),
     };
     body.options = vec![
@@ -161,9 +166,24 @@ fn kitchen_sink_tool() -> Tool {
             aliases: Vec::new(),
             doc: Doc::default(),
             value_name: None,
-            shape: OptionShape::Repeatable(RepeatableShape {
+            shape: OptionShape::RepeatableList(RepeatableListShape {
                 repetition: Repetition::Either(','),
-                type_: SchemaType::string(),
+                item_type: SchemaType::string(),
+            }),
+            default: None,
+            required: false,
+            env_var: None,
+        },
+        OptionSpec {
+            long: "config".to_string(),
+            short: Some('c'),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: Some("KEY=VALUE".to_string()),
+            shape: OptionShape::RepeatableMap(RepeatableMapShape {
+                repetition: Repetition::Repeated,
+                map_type: SchemaType::map(SchemaType::string(), SchemaType::string()),
+                duplicate_key_policy: DuplicateKeyPolicy::LastWins,
             }),
             default: None,
             required: false,
@@ -302,6 +322,143 @@ fn rich_tool_without_input_variant_is_valid() {
     let mut node = root("tool");
     node.body = Some(body);
 
+    let tool = tool_with_root(node);
+    assert_eq!(validate_tool(&tool), Ok(()));
+}
+
+#[test]
+fn repeatable_map_value_is_uses_resolved_map_value_type() {
+    let map_id = TypeId::new("config-map");
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::ref_to(map_id.clone()),
+        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+    });
+
+    let mut body = empty_body();
+    body.options = vec![cfg];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "config".to_string(),
+        value: SchemaValue::U32(1),
+    })])];
+
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![SchemaTypeDef {
+        id: map_id,
+        name: Some("ConfigMap".to_string()),
+        body: SchemaType::map(SchemaType::string(), SchemaType::u32()),
+    }];
+
+    assert_eq!(validate_tool(&tool), Ok(()));
+}
+
+#[test]
+fn value_is_one_item_literal_on_repeatable_list_option_is_accepted() {
+    // A repeatable-list option collecting `list<u32>` items: a value-is matches
+    // one occurrence (a `list<u32>`) exactly.
+    let mut inc = scalar_option("inc", SchemaType::string());
+    inc.shape = OptionShape::RepeatableList(RepeatableListShape {
+        repetition: Repetition::Repeated,
+        item_type: SchemaType::list(SchemaType::u32()),
+    });
+    let mut body = empty_body();
+    body.options = vec![inc];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "inc".to_string(),
+        value: SchemaValue::List {
+            elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)],
+        },
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    assert_eq!(validate_tool(&tool), Ok(()));
+}
+
+#[test]
+fn value_is_into_nested_element_of_repeatable_list_option_is_rejected() {
+    // A repeatable-list option collecting `list<u32>` items is a collecting
+    // surface: its comparand is one occurrence (`list<u32>`), matched exactly. A
+    // bare `u32` would be a nested element of one occurrence, which must NOT be
+    // accepted (no element relaxation on a collecting surface).
+    let mut inc = scalar_option("inc", SchemaType::string());
+    inc.shape = OptionShape::RepeatableList(RepeatableListShape {
+        repetition: Repetition::Repeated,
+        item_type: SchemaType::list(SchemaType::u32()),
+    });
+    let mut body = empty_body();
+    body.options = vec![inc];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "inc".to_string(),
+        value: SchemaValue::U32(1),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { name, .. } if name == "inc"
+        )),
+        "expected value-is mismatch for nested element of repeatable list, got {errors:?}"
+    );
+}
+
+#[test]
+fn value_is_whole_list_literal_on_tail_positional_is_rejected() {
+    // A tail positional collects items into a list; its comparand is one item
+    // (`string`), matched exactly. A whole-list literal must NOT be accepted.
+    let mut body = empty_body();
+    body.positionals.tail = Some(TailPositional {
+        name: "args".to_string(),
+        doc: Doc::default(),
+        value_name: None,
+        item_type: SchemaType::string(),
+        min: 0,
+        max: None,
+        separator: None,
+        verbatim: false,
+        accepts_stdio: false,
+    });
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "args".to_string(),
+        value: SchemaValue::List {
+            elements: vec![SchemaValue::String("prod".to_string())],
+        },
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { name, .. } if name == "args"
+        )),
+        "expected value-is mismatch for whole-list literal on tail, got {errors:?}"
+    );
+}
+
+#[test]
+fn value_is_into_map_value_of_scalar_option_is_accepted() {
+    // A scalar option whose declared type is a map is a non-collecting value
+    // surface: a value-is matches the whole map, or — under the one-level
+    // relaxation — a single map value.
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "cfg",
+        SchemaType::map(SchemaType::string(), SchemaType::u32()),
+    )];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "cfg".to_string(),
+        value: SchemaValue::U32(1),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
     let tool = tool_with_root(node);
     assert_eq!(validate_tool(&tool), Ok(()));
 }
@@ -506,6 +663,7 @@ fn verbatim_tail_without_separator_is_rejected() {
             max: None,
             separator: None,
             verbatim: true,
+            accepts_stdio: false,
         }),
     };
     let mut node = root("tool");
@@ -530,6 +688,7 @@ fn variant_in_input_position_is_rejected() {
             type_: SchemaType::variant(vec![variant_case("ok", None)]),
             default: None,
             required: true,
+            accepts_stdio: false,
         }],
         tail: None,
     };
@@ -637,6 +796,7 @@ fn positional_default_type_mismatch_is_rejected() {
             type_: SchemaType::s64(),
             default: Some(SchemaValue::String("nope".to_string())),
             required: false,
+            accepts_stdio: false,
         }],
         tail: None,
     };
@@ -655,9 +815,9 @@ fn repeatable_scalar_default_is_rejected() {
     // A repeatable option's default must be a list of element values, not a
     // bare element.
     let mut inc = scalar_option("inc", SchemaType::string());
-    inc.shape = OptionShape::Repeatable(RepeatableShape {
+    inc.shape = OptionShape::RepeatableList(RepeatableListShape {
         repetition: Repetition::Repeated,
-        type_: SchemaType::string(),
+        item_type: SchemaType::string(),
     });
     inc.default = Some(SchemaValue::String("x".to_string()));
     let mut body = empty_body();
@@ -675,15 +835,165 @@ fn repeatable_scalar_default_is_rejected() {
 #[test]
 fn repeatable_list_default_is_accepted() {
     let mut inc = scalar_option("inc", SchemaType::string());
-    inc.shape = OptionShape::Repeatable(RepeatableShape {
+    inc.shape = OptionShape::RepeatableList(RepeatableListShape {
         repetition: Repetition::Repeated,
-        type_: SchemaType::string(),
+        item_type: SchemaType::string(),
     });
     inc.default = Some(SchemaValue::List {
         elements: vec![SchemaValue::String("x".to_string())],
     });
     let mut body = empty_body();
     body.options = vec![inc];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    assert_eq!(validate_tool(&tool), Ok(()));
+}
+
+#[test]
+fn repeatable_map_default_must_be_a_map() {
+    // A repeatable-map option's default must be the collected map value, not a
+    // bare element.
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::map(SchemaType::string(), SchemaType::string()),
+        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+    });
+    cfg.default = Some(SchemaValue::String("x".to_string()));
+    let mut body = empty_body();
+    body.options = vec![cfg];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(errors.iter().any(|e| matches!(
+        e,
+        ToolValidationError::DefaultTypeMismatch { name, .. } if name == "config"
+    )));
+}
+
+#[test]
+fn repeatable_map_type_must_be_a_map() {
+    // A repeatable-map option whose stored `map_type` is not a Map node is
+    // rejected: the collected key-value value must be a map.
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::string(),
+        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+    });
+    let mut body = empty_body();
+    body.options = vec![cfg];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(errors.iter().any(|e| matches!(
+        e,
+        ToolValidationError::RepeatableMapTypeNotMap { name, .. } if name == "config"
+    )));
+}
+
+#[test]
+fn dangling_ref_inside_non_map_repeatable_map_type_does_not_hide_not_map_error() {
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::record(vec![record_field(
+            "missing",
+            SchemaType::ref_to(TypeId::new("missing")),
+        )]),
+        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+    });
+
+    let mut body = empty_body();
+    body.options = vec![cfg];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "tool" && position == "config" && id == "missing"
+        )),
+        "expected unresolved ref at config, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::RepeatableMapTypeNotMap { command, name }
+                if command == "tool" && name == "config"
+        )),
+        "expected repeatable-map not-map error at config, got {errors:?}"
+    );
+}
+
+#[test]
+fn ill_formed_numeric_input_schema_is_rejected() {
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "count",
+        SchemaType::U32 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(10)),
+                max: Some(NumericBound::Unsigned(1)),
+                unit: None,
+            }),
+            metadata: Default::default(),
+        },
+    )];
+
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn global_repeatable_map_validates_map_key_refs() {
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::map(
+            SchemaType::ref_to(TypeId::new("missing-key")),
+            SchemaType::string(),
+        ),
+        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+    });
+
+    let mut node = root("tool");
+    node.globals.options = vec![cfg];
+    let tool = tool_with_root(node);
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(errors.iter().any(|e| matches!(
+        e,
+        ToolValidationError::UnresolvedTypeRef { id, .. } if id == "missing-key"
+    )));
+}
+
+#[test]
+fn repeatable_map_default_is_accepted() {
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::map(SchemaType::string(), SchemaType::string()),
+        duplicate_key_policy: DuplicateKeyPolicy::LastWins,
+    });
+    cfg.default = Some(SchemaValue::Map {
+        entries: vec![(
+            SchemaValue::String("a".to_string()),
+            SchemaValue::String("1".to_string()),
+        )],
+    });
+    let mut body = empty_body();
+    body.options = vec![cfg];
     let mut node = root("tool");
     node.body = Some(body);
     let tool = tool_with_root(node);
@@ -709,6 +1019,577 @@ fn dangling_type_ref_is_rejected() {
 }
 
 #[test]
+fn pure_recursive_alias_input_type_is_rejected() {
+    let id = TypeId::new("cycle");
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(id.clone()))];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![SchemaTypeDef {
+        id: id.clone(),
+        name: Some("Cycle".to_string()),
+        body: SchemaType::ref_to(id),
+    }];
+
+    assert!(
+        validate_tool(&tool).is_err(),
+        "a pure recursive alias never resolves to a concrete input type and must be rejected"
+    );
+}
+
+#[test]
+fn pure_recursive_alias_input_type_is_reported_once_at_input_position() {
+    let id = TypeId::new("cycle");
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(id.clone()))];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![SchemaTypeDef {
+        id: id.clone(),
+        name: Some("Cycle".to_string()),
+        body: SchemaType::ref_to(id),
+    }];
+
+    let errors = validate_tool(&tool).expect_err("recursive alias must be rejected");
+    let recursive_alias_errors = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                ToolValidationError::IllFormedSchema { detail, .. }
+                    if detail.contains("reference cycle with no concrete type")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recursive_alias_errors,
+        vec![&ToolValidationError::IllFormedSchema {
+            command: "tool".to_string(),
+            position: "arg".to_string(),
+            detail: "type reference `cycle` forms a reference cycle with no concrete type"
+                .to_string(),
+        }],
+        "recursive alias should be reported once at the input that uses it, got {errors:?}"
+    );
+}
+
+#[test]
+fn value_is_on_pure_recursive_alias_is_not_suppressed_like_dangling_ref() {
+    let id = TypeId::new("cycle");
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(id.clone()))];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "arg".to_string(),
+        value: SchemaValue::String("x".to_string()),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![SchemaTypeDef {
+        id: id.clone(),
+        name: Some("Cycle".to_string()),
+        body: SchemaType::ref_to(id),
+    }];
+
+    let errors = validate_tool(&tool).expect_err("recursive alias must be rejected");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::IllFormedSchema { position, detail, .. }
+                if position == "arg" && detail.contains("reference cycle with no concrete type")
+        )),
+        "expected the structural recursive-alias error, got {errors:?}"
+    );
+    // A reference cycle never resolves to a concrete type, so no literal can ever
+    // satisfy it: unlike a *dangling* ref (which is suppressed in favor of the
+    // separate `UnresolvedTypeRef`), the recursive comparand is a genuine
+    // `value-is` mismatch and is reported alongside the structural error.
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { name, .. } if name == "arg"
+        )),
+        "value-is mismatch on a recursive alias must not be suppressed, got {errors:?}"
+    );
+}
+
+#[test]
+fn mutual_recursive_alias_input_type_is_reported_once_at_input_position() {
+    let a = TypeId::new("a");
+    let b = TypeId::new("b");
+
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(a.clone()))];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![
+        SchemaTypeDef {
+            id: a.clone(),
+            name: Some("A".to_string()),
+            body: SchemaType::ref_to(b.clone()),
+        },
+        SchemaTypeDef {
+            id: b,
+            name: Some("B".to_string()),
+            body: SchemaType::ref_to(a),
+        },
+    ];
+
+    let errors = validate_tool(&tool).expect_err("recursive alias must be rejected");
+    let recursive_alias_errors = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                ToolValidationError::IllFormedSchema { detail, .. }
+                    if detail.contains("reference cycle with no concrete type")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recursive_alias_errors,
+        vec![&ToolValidationError::IllFormedSchema {
+            command: "tool".to_string(),
+            position: "arg".to_string(),
+            detail: "type reference `a` forms a reference cycle with no concrete type".to_string(),
+        }],
+        "mutual recursive alias should be reported once at the input that uses it, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_type_ref_with_default_reports_only_unresolved_type_ref() {
+    let mut opt = scalar_option("out", SchemaType::ref_to(TypeId::new("missing")));
+    opt.default = Some(SchemaValue::String("x".to_string()));
+
+    let mut body = empty_body();
+    body.options = vec![opt];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    assert_eq!(
+        validate_tool(&tool),
+        Err(vec![ToolValidationError::UnresolvedTypeRef {
+            command: "tool".to_string(),
+            position: "out".to_string(),
+            id: "missing".to_string(),
+        }])
+    );
+}
+
+#[test]
+fn dangling_type_ref_does_not_hide_independent_default_type_mismatch() {
+    let mut opt = scalar_option(
+        "arg",
+        SchemaType::record(vec![record_field(
+            "missing",
+            SchemaType::ref_to(TypeId::new("missing")),
+        )]),
+    );
+    opt.default = Some(SchemaValue::String("not-a-record".to_string()));
+
+    let mut body = empty_body();
+    body.options = vec![opt];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "tool" && position == "arg" && id == "missing"
+        )),
+        "expected unresolved ref at arg, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::DefaultTypeMismatch { command, name }
+                if command == "tool" && name == "arg"
+        )),
+        "expected independent default mismatch at arg, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_type_ref_with_value_is_reports_only_unresolved_type_ref() {
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "out",
+        SchemaType::ref_to(TypeId::new("missing")),
+    )];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "out".to_string(),
+        value: SchemaValue::String("x".to_string()),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    assert_eq!(
+        validate_tool(&tool),
+        Err(vec![ToolValidationError::UnresolvedTypeRef {
+            command: "tool".to_string(),
+            position: "out".to_string(),
+            id: "missing".to_string(),
+        }])
+    );
+}
+
+#[test]
+fn dangling_ref_while_peeling_value_is_option_list_reports_only_unresolved_type_ref() {
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "out",
+        SchemaType::option(SchemaType::ref_to(TypeId::new("missing-list"))),
+    )];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "out".to_string(),
+        value: SchemaValue::String("x".to_string()),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    assert_eq!(
+        validate_tool(&tool),
+        Err(vec![ToolValidationError::UnresolvedTypeRef {
+            command: "tool".to_string(),
+            position: "out".to_string(),
+            id: "missing-list".to_string(),
+        }])
+    );
+}
+
+#[test]
+fn recursive_ref_while_peeling_value_is_option_is_not_suppressed_as_dangling() {
+    let cycle_id = TypeId::new("cycle");
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "out",
+        SchemaType::option(SchemaType::ref_to(cycle_id.clone())),
+    )];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "out".to_string(),
+        value: SchemaValue::String("x".to_string()),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![SchemaTypeDef {
+        id: cycle_id.clone(),
+        name: Some("Cycle".to_string()),
+        body: SchemaType::ref_to(cycle_id),
+    }];
+
+    let errors = validate_tool(&tool).expect_err("recursive alias must not suppress value-is");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { command, name }
+                if command == "tool" && name == "out"
+        )),
+        "expected value-is mismatch for recursive option alias, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_type_ref_does_not_hide_independent_value_is_type_mismatch() {
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "arg",
+        SchemaType::record(vec![record_field(
+            "missing",
+            SchemaType::ref_to(TypeId::new("missing")),
+        )]),
+    )];
+    body.constraints = vec![Constraint::RequiresAll(vec![Ref::ValueIs(ValueIsRef {
+        name: "arg".to_string(),
+        value: SchemaValue::String("not-a-record".to_string()),
+    })])];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "tool" && position == "arg" && id == "missing"
+        )),
+        "expected unresolved ref at arg, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::ValueIsTypeMismatch { command, name }
+                if command == "tool" && name == "arg"
+        )),
+        "expected independent value-is mismatch at arg, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_type_ref_does_not_hide_independent_inline_schema_error() {
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "arg",
+        SchemaType::record(vec![
+            record_field("missing", SchemaType::ref_to(TypeId::new("missing"))),
+            record_field(
+                "bad",
+                SchemaType::U32 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Unsigned(10)),
+                        max: Some(NumericBound::Unsigned(1)),
+                        unit: None,
+                    }),
+                    metadata: Default::default(),
+                },
+            ),
+        ]),
+    )];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "tool" && position == "arg" && id == "missing"
+        )),
+        "expected unresolved ref at arg, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::IllFormedSchema { command, position, detail }
+                if command == "tool"
+                    && position == "arg"
+                    && detail.contains("numeric min bound is greater than max bound")
+        )),
+        "expected independent invalid numeric restriction at arg, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_type_ref_does_not_hide_independent_map_key_schema_error() {
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "arg",
+        SchemaType::record(vec![
+            record_field("missing", SchemaType::ref_to(TypeId::new("missing"))),
+            record_field(
+                "bad-map",
+                SchemaType::map(
+                    SchemaType::record(vec![record_field("key", SchemaType::string())]),
+                    SchemaType::string(),
+                ),
+            ),
+        ]),
+    )];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "tool" && position == "arg" && id == "missing"
+        )),
+        "expected unresolved ref at arg, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::IllFormedSchema { command, position, detail }
+                if command == "tool"
+                    && position == "arg"
+                    && detail.contains("map key must be a primitive type")
+        )),
+        "expected independent non-primitive map key error at arg, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_union_branch_body_reports_only_unresolved_type_ref() {
+    let mut body = empty_body();
+    body.options = vec![scalar_option(
+        "arg",
+        SchemaType::union(UnionSpec {
+            branches: vec![UnionBranch {
+                tag: "text".to_string(),
+                body: SchemaType::ref_to(TypeId::new("missing")),
+                discriminator: DiscriminatorRule::Prefix {
+                    prefix: "x".to_string(),
+                },
+                metadata: Default::default(),
+            }],
+        }),
+    )];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    assert_eq!(
+        validate_tool(&tool),
+        Err(vec![ToolValidationError::UnresolvedTypeRef {
+            command: "tool".to_string(),
+            position: "arg".to_string(),
+            id: "missing".to_string(),
+        }])
+    );
+}
+
+#[test]
+fn dangling_ref_in_definition_does_not_hide_independent_definition_schema_error() {
+    let mut schema = SchemaGraph::empty();
+    schema.defs = vec![SchemaTypeDef {
+        id: TypeId::new("outer"),
+        name: None,
+        body: SchemaType::record(vec![
+            record_field("missing", SchemaType::ref_to(TypeId::new("missing"))),
+            record_field(
+                "bad",
+                SchemaType::U32 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Unsigned(10)),
+                        max: Some(NumericBound::Unsigned(1)),
+                        unit: None,
+                    }),
+                    metadata: Default::default(),
+                },
+            ),
+        ]),
+    }];
+    let tool = Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree {
+            nodes: vec![root("tool")],
+        },
+        schema,
+    };
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "<def outer>" && position == "outer" && id == "missing"
+        )),
+        "expected unresolved ref in def outer, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::IllFormedSchema { command, position, detail }
+                if command == "<def outer>"
+                    && position == "outer"
+                    && detail.contains("numeric min bound is greater than max bound")
+        )),
+        "expected independent invalid numeric restriction in def outer, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_repeatable_map_type_reports_only_unresolved_type_ref() {
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::ref_to(TypeId::new("missing-map")),
+        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+    });
+
+    let mut body = empty_body();
+    body.options = vec![cfg];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let tool = tool_with_root(node);
+
+    assert_eq!(
+        validate_tool(&tool),
+        Err(vec![ToolValidationError::UnresolvedTypeRef {
+            command: "tool".to_string(),
+            position: "config".to_string(),
+            id: "missing-map".to_string(),
+        }])
+    );
+}
+
+#[test]
+fn repeatable_map_recursive_alias_type_is_rejected() {
+    let map_id = TypeId::new("config-map");
+    let mut cfg = scalar_option("config", SchemaType::string());
+    cfg.shape = OptionShape::RepeatableMap(RepeatableMapShape {
+        repetition: Repetition::Repeated,
+        map_type: SchemaType::ref_to(map_id.clone()),
+        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+    });
+
+    let mut body = empty_body();
+    body.options = vec![cfg];
+    let mut node = root("tool");
+    node.body = Some(body);
+    let mut tool = tool_with_root(node);
+    tool.schema.defs = vec![SchemaTypeDef {
+        id: map_id.clone(),
+        name: Some("ConfigMap".to_string()),
+        body: SchemaType::ref_to(map_id),
+    }];
+
+    let errors = validate_tool(&tool).expect_err("recursive alias is not a map type");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::RepeatableMapTypeNotMap { command, name }
+                if command == "tool" && name == "config"
+        )),
+        "expected repeatable-map not-map error for recursive alias, got {errors:?}"
+    );
+}
+
+#[test]
+fn duplicate_type_ids_in_tool_schema_are_rejected() {
+    let mut schema = SchemaGraph::empty();
+    schema.defs = vec![
+        SchemaTypeDef {
+            id: TypeId::new("dup"),
+            name: Some("First".to_string()),
+            body: SchemaType::string(),
+        },
+        SchemaTypeDef {
+            id: TypeId::new("dup"),
+            name: Some("Second".to_string()),
+            body: SchemaType::u32(),
+        },
+    ];
+
+    let tool = Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree {
+            nodes: vec![root("tool")],
+        },
+        schema,
+    };
+
+    assert!(
+        validate_tool(&tool).is_err(),
+        "tool validation must reject duplicate schema definition ids before wire encoding fails"
+    );
+}
+
+#[test]
 fn dangling_ref_in_definition_is_rejected() {
     // A definition body references a type id that is not in the graph; this is
     // caught even though no command position references the definition.
@@ -730,6 +1611,251 @@ fn dangling_ref_in_definition_is_rejected() {
         e,
         ToolValidationError::UnresolvedTypeRef { id, .. } if id == "inner-missing"
     )));
+}
+
+#[test]
+fn constructor_def_nested_alias_dangling_ref_is_reported_once_at_constructor_def() {
+    let outer = TypeId::new("outer");
+    let alias = TypeId::new("alias");
+    let missing = TypeId::new("missing");
+
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(outer.clone()))];
+    let mut node = root("tool");
+    node.body = Some(body);
+
+    let mut schema = SchemaGraph::empty();
+    schema.defs = vec![
+        SchemaTypeDef {
+            id: outer.clone(),
+            name: None,
+            body: SchemaType::record(vec![record_field(
+                "field",
+                SchemaType::ref_to(alias.clone()),
+            )]),
+        },
+        SchemaTypeDef {
+            id: alias,
+            name: None,
+            body: SchemaType::ref_to(missing),
+        },
+    ];
+
+    let tool = Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree { nodes: vec![node] },
+        schema,
+    };
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| matches!(e, ToolValidationError::UnresolvedTypeRef { id, .. } if id == "missing"))
+            .collect::<Vec<_>>(),
+        vec![&ToolValidationError::UnresolvedTypeRef {
+            command: "<def outer>".to_string(),
+            position: "outer".to_string(),
+            id: "missing".to_string(),
+        }],
+        "nested alias failure should be reported once at the constructor def, got {errors:?}"
+    );
+}
+
+#[test]
+fn repeated_alias_dangling_ref_in_one_constructor_def_is_reported_once() {
+    let outer = TypeId::new("outer");
+    let alias = TypeId::new("alias");
+    let missing = TypeId::new("missing");
+
+    let mut schema = SchemaGraph::empty();
+    schema.defs = vec![
+        SchemaTypeDef {
+            id: outer.clone(),
+            name: None,
+            body: SchemaType::record(vec![
+                record_field("first", SchemaType::ref_to(alias.clone())),
+                record_field("second", SchemaType::ref_to(alias.clone())),
+            ]),
+        },
+        SchemaTypeDef {
+            id: alias,
+            name: None,
+            body: SchemaType::ref_to(missing),
+        },
+    ];
+
+    let tool = Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree {
+            nodes: vec![root("tool")],
+        },
+        schema,
+    };
+
+    let errors = validate_tool(&tool).unwrap_err();
+    let unresolved = errors
+        .iter()
+        .filter(
+            |e| matches!(e, ToolValidationError::UnresolvedTypeRef { id, .. } if id == "missing"),
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unresolved,
+        vec![&ToolValidationError::UnresolvedTypeRef {
+            command: "<def outer>".to_string(),
+            position: "outer".to_string(),
+            id: "missing".to_string(),
+        }],
+        "the same alias-chain failure should be reported once at the outer constructor def, got {errors:?}"
+    );
+}
+
+#[test]
+fn covered_alias_id_does_not_skip_later_duplicate_def_body_validation() {
+    let dup = TypeId::new("dup");
+    let ok = TypeId::new("ok");
+    let missing = TypeId::new("missing");
+
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(dup.clone()))];
+    let mut node = root("tool");
+    node.body = Some(body);
+
+    let mut schema = SchemaGraph::empty();
+    schema.defs = vec![
+        SchemaTypeDef {
+            id: dup.clone(),
+            name: Some("FirstDup".to_string()),
+            body: SchemaType::ref_to(ok.clone()),
+        },
+        SchemaTypeDef {
+            id: ok,
+            name: Some("Ok".to_string()),
+            body: SchemaType::string(),
+        },
+        SchemaTypeDef {
+            id: dup,
+            name: Some("SecondDup".to_string()),
+            body: SchemaType::record(vec![record_field("bad", SchemaType::ref_to(missing))]),
+        },
+    ];
+
+    let tool = Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree { nodes: vec![node] },
+        schema,
+    };
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ToolValidationError::DuplicateTypeId { id } if id == "dup")),
+        "expected duplicate type id to be reported, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "<def dup>" && position == "dup" && id == "missing"
+        )),
+        "covered alias id should not suppress validation of a later duplicate definition body, got {errors:?}"
+    );
+}
+
+#[test]
+fn covered_alias_id_does_not_skip_later_duplicate_pure_alias_body_validation() {
+    let dup = TypeId::new("dup");
+    let ok = TypeId::new("ok");
+    let missing = TypeId::new("missing");
+
+    let mut body = empty_body();
+    body.options = vec![scalar_option("arg", SchemaType::ref_to(dup.clone()))];
+    let mut node = root("tool");
+    node.body = Some(body);
+
+    let mut schema = SchemaGraph::empty();
+    schema.defs = vec![
+        SchemaTypeDef {
+            id: dup.clone(),
+            name: Some("FirstDup".to_string()),
+            body: SchemaType::ref_to(ok.clone()),
+        },
+        SchemaTypeDef {
+            id: ok,
+            name: Some("Ok".to_string()),
+            body: SchemaType::string(),
+        },
+        SchemaTypeDef {
+            id: dup,
+            name: Some("SecondDup".to_string()),
+            body: SchemaType::ref_to(missing),
+        },
+    ];
+
+    let tool = Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree { nodes: vec![node] },
+        schema,
+    };
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ToolValidationError::DuplicateTypeId { id } if id == "dup")),
+        "expected duplicate type id to be reported, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "<def dup>" && position == "dup" && id == "missing"
+        )),
+        "covered alias id should not suppress validation of a later duplicate pure-alias definition body, got {errors:?}"
+    );
+}
+
+#[test]
+fn unused_dangling_def_is_not_suppressed_by_same_missing_ref_at_input_position() {
+    let missing = TypeId::new("missing");
+
+    let mut body = empty_body();
+    body.options = vec![scalar_option("out", SchemaType::ref_to(missing.clone()))];
+    let mut node = root("tool");
+    node.body = Some(body);
+
+    let mut schema = SchemaGraph::empty();
+    schema.defs = vec![SchemaTypeDef {
+        id: TypeId::new("unused"),
+        name: None,
+        body: SchemaType::list(SchemaType::ref_to(missing.clone())),
+    }];
+
+    let tool = Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree { nodes: vec![node] },
+        schema,
+    };
+
+    let errors = validate_tool(&tool).unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "tool" && position == "out" && id == "missing"
+        )),
+        "expected unresolved ref at input position, got {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ToolValidationError::UnresolvedTypeRef { command, position, id }
+                if command == "<def unused>" && position == "unused" && id == "missing"
+        )),
+        "expected same missing ref in unused definition to still be reported, got {errors:?}"
+    );
 }
 
 #[test]
@@ -996,13 +2122,36 @@ fn arb_command_annotations() -> impl Strategy<Value = CommandAnnotations> {
     )
 }
 
+fn arb_duplicate_key_policy() -> impl Strategy<Value = DuplicateKeyPolicy> {
+    prop_oneof![
+        Just(DuplicateKeyPolicy::Reject),
+        Just(DuplicateKeyPolicy::LastWins)
+    ]
+}
+
 fn arb_option_shape() -> impl Strategy<Value = OptionShape> {
     prop_oneof![
         arb_schema_type().prop_map(OptionShape::Scalar),
         arb_schema_type().prop_map(OptionShape::OptionalScalar),
-        (arb_repetition(), arb_schema_type()).prop_map(|(repetition, type_)| {
-            OptionShape::Repeatable(RepeatableShape { repetition, type_ })
+        (arb_repetition(), arb_schema_type()).prop_map(|(repetition, item_type)| {
+            OptionShape::RepeatableList(RepeatableListShape {
+                repetition,
+                item_type,
+            })
         }),
+        (
+            arb_repetition(),
+            arb_schema_type(),
+            arb_schema_type(),
+            arb_duplicate_key_policy()
+        )
+            .prop_map(|(repetition, key, value, duplicate_key_policy)| {
+                OptionShape::RepeatableMap(RepeatableMapShape {
+                    repetition,
+                    map_type: SchemaType::map(key, value),
+                    duplicate_key_policy,
+                })
+            }),
     ]
 }
 
@@ -1043,15 +2192,17 @@ fn arb_positional() -> impl Strategy<Value = Positional> {
         arb_schema_type(),
         prop::option::of(transportable_schema_value_strategy()),
         any::<bool>(),
+        any::<bool>(),
     )
         .prop_map(
-            |(name, doc, value_name, type_, default, required)| Positional {
+            |(name, doc, value_name, type_, default, required, accepts_stdio)| Positional {
                 name,
                 doc,
                 value_name,
                 type_,
                 default,
                 required,
+                accepts_stdio,
             },
         )
 }
@@ -1066,17 +2217,21 @@ fn arb_tail_positional() -> impl Strategy<Value = TailPositional> {
         prop::option::of(any::<u32>()),
         prop::option::of(arb_ident()),
         any::<bool>(),
+        any::<bool>(),
     )
         .prop_map(
-            |(name, doc, value_name, item_type, min, max, separator, verbatim)| TailPositional {
-                name,
-                doc,
-                value_name,
-                item_type,
-                min,
-                max,
-                separator,
-                verbatim,
+            |(name, doc, value_name, item_type, min, max, separator, verbatim, accepts_stdio)| {
+                TailPositional {
+                    name,
+                    doc,
+                    value_name,
+                    item_type,
+                    min,
+                    max,
+                    separator,
+                    verbatim,
+                    accepts_stdio,
+                }
             },
         )
 }
@@ -1444,6 +2599,7 @@ proptest! {
             type_,
             default: None,
             required: true,
+            accepts_stdio: false,
         }];
         let mut node = root("root");
         node.body = Some(body);

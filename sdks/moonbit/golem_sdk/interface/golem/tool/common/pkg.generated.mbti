@@ -78,6 +78,13 @@ pub(all) struct Doc {
   examples : Array[Example]
 } derive(Eq, Show)
 
+pub(all) enum DuplicateKeyPolicy {
+  REJECT
+  LAST_WINS
+} derive(Eq, Show)
+pub fn DuplicateKeyPolicy::from(Int) -> Self
+pub fn DuplicateKeyPolicy::ordinal(Self) -> Int
+
 pub(all) struct ErrorCase {
   name : String
   doc : Doc
@@ -136,7 +143,8 @@ pub(all) struct InvocationResult {
 pub(all) enum OptionShape {
   Scalar(Int)
   OptionalScalar(Int)
-  Repeatable(RepeatableShape)
+  RepeatableList(RepeatableListShape)
+  RepeatableMap(RepeatableMapShape)
 } derive(Eq, Show)
 
 pub(all) struct OptionSpec {
@@ -158,6 +166,7 @@ pub(all) struct Positional {
   type_ : Int
   default : @types.SchemaValueTree?
   required : Bool
+  accepts_stdio : Bool
 } derive(Eq, Show)
 
 pub(all) struct Positionals {
@@ -181,9 +190,15 @@ pub(all) struct RefGroup {
   refs : Array[Ref]
 } derive(Eq, Show)
 
-pub(all) struct RepeatableShape {
+pub(all) struct RepeatableListShape {
   repetition : Repetition
-  type_ : Int
+  item_type : Int
+} derive(Eq, Show)
+
+pub(all) struct RepeatableMapShape {
+  repetition : Repetition
+  map_type : Int
+  duplicate_key_policy : DuplicateKeyPolicy
 } derive(Eq, Show)
 
 pub(all) enum Repetition {
@@ -214,6 +229,7 @@ pub(all) struct TailPositional {
   max : UInt?
   separator : String?
   verbatim : Bool
+  accepts_stdio : Bool
 } derive(Eq, Show)
 
 pub(all) struct Tool {

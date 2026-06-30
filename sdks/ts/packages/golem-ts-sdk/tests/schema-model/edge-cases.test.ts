@@ -488,7 +488,7 @@ describe('flat-carrier DAG sharing (decode expands shared nodes)', () => {
     const m = emptyMetadata();
     const wit: WitSchemaGraph = {
       typeNodes: [
-        { body: { tag: 's32-type' }, metadata: m },
+        { body: { tag: 's32-type', val: undefined }, metadata: m },
         {
           body: {
             tag: 'record-type',

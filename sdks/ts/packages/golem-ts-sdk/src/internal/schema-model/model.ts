@@ -28,6 +28,7 @@
 import type {
   TypeId,
   MetadataEnvelope,
+  NumericRestrictions,
   TextRestrictions,
   BinaryRestrictions,
   PathSpec,
@@ -47,6 +48,7 @@ import { GuestQuotaTokenHandle } from './quotaTokenHandle';
 export type {
   TypeId,
   MetadataEnvelope,
+  NumericRestrictions,
   TextRestrictions,
   BinaryRestrictions,
   PathSpec,
@@ -64,7 +66,13 @@ export type {
 // These are part of the schema-model public surface but are only ever re-exported
 // (never referenced in a local declaration), so re-export them directly to avoid
 // an "unused external import" bundling warning.
-export type { Role, PathDirection, PathKind, FieldDiscriminator } from 'golem:core/types@2.0.0';
+export type {
+  NumericBound,
+  Role,
+  PathDirection,
+  PathKind,
+  FieldDiscriminator,
+} from 'golem:core/types@2.0.0';
 
 // ============================================================
 // Schema type (recursive)
@@ -81,16 +89,16 @@ export type SchemaTypeBody =
   | { tag: 'ref'; id: TypeId }
   // Primitives
   | { tag: 'bool' }
-  | { tag: 's8' }
-  | { tag: 's16' }
-  | { tag: 's32' }
-  | { tag: 's64' }
-  | { tag: 'u8' }
-  | { tag: 'u16' }
-  | { tag: 'u32' }
-  | { tag: 'u64' }
-  | { tag: 'f32' }
-  | { tag: 'f64' }
+  | { tag: 's8'; restrictions?: NumericRestrictions }
+  | { tag: 's16'; restrictions?: NumericRestrictions }
+  | { tag: 's32'; restrictions?: NumericRestrictions }
+  | { tag: 's64'; restrictions?: NumericRestrictions }
+  | { tag: 'u8'; restrictions?: NumericRestrictions }
+  | { tag: 'u16'; restrictions?: NumericRestrictions }
+  | { tag: 'u32'; restrictions?: NumericRestrictions }
+  | { tag: 'u64'; restrictions?: NumericRestrictions }
+  | { tag: 'f32'; restrictions?: NumericRestrictions }
+  | { tag: 'f64'; restrictions?: NumericRestrictions }
   | { tag: 'char' }
   | { tag: 'string' }
   // Structural composites
@@ -242,16 +250,16 @@ export function schemaType(
 export const t = {
   ref: (id: TypeId): SchemaType => schemaType({ tag: 'ref', id }),
   bool: (): SchemaType => schemaType({ tag: 'bool' }),
-  s8: (): SchemaType => schemaType({ tag: 's8' }),
-  s16: (): SchemaType => schemaType({ tag: 's16' }),
-  s32: (): SchemaType => schemaType({ tag: 's32' }),
-  s64: (): SchemaType => schemaType({ tag: 's64' }),
-  u8: (): SchemaType => schemaType({ tag: 'u8' }),
-  u16: (): SchemaType => schemaType({ tag: 'u16' }),
-  u32: (): SchemaType => schemaType({ tag: 'u32' }),
-  u64: (): SchemaType => schemaType({ tag: 'u64' }),
-  f32: (): SchemaType => schemaType({ tag: 'f32' }),
-  f64: (): SchemaType => schemaType({ tag: 'f64' }),
+  s8: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 's8', restrictions }),
+  s16: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 's16', restrictions }),
+  s32: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 's32', restrictions }),
+  s64: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 's64', restrictions }),
+  u8: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'u8', restrictions }),
+  u16: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'u16', restrictions }),
+  u32: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'u32', restrictions }),
+  u64: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'u64', restrictions }),
+  f32: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'f32', restrictions }),
+  f64: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'f64', restrictions }),
   char: (): SchemaType => schemaType({ tag: 'char' }),
   string: (): SchemaType => schemaType({ tag: 'string' }),
   record: (fields: NamedFieldType[]): SchemaType => schemaType({ tag: 'record', fields }),

@@ -43,6 +43,39 @@ object TextRestrictions {
   val empty: TextRestrictions = TextRestrictions()
 }
 
+sealed trait NumericBound extends Product with Serializable
+object NumericBound {
+  final case class Signed(value: Long)    extends NumericBound
+  final case class Unsigned(value: Long)  extends NumericBound
+  final case class FloatBits(value: Long) extends NumericBound
+}
+
+final case class NumericRestrictions(
+  min: Option[NumericBound] = None,
+  max: Option[NumericBound] = None,
+  unit: Option[String] = None
+) {
+  def normalize: Option[NumericRestrictions] = {
+    val normalized = copy(
+      min = min.map(NumericRestrictions.canonicalizeBound),
+      max = max.map(NumericRestrictions.canonicalizeBound),
+      unit = unit.filter(_.nonEmpty)
+    )
+    if (normalized.min.isEmpty && normalized.max.isEmpty && normalized.unit.isEmpty) None else Some(normalized)
+  }
+}
+
+object NumericRestrictions {
+  val empty: NumericRestrictions = NumericRestrictions()
+
+  private def canonicalizeBound(bound: NumericBound): NumericBound =
+    bound match {
+      case NumericBound.FloatBits(bits) if java.lang.Double.longBitsToDouble(bits) == 0.0d =>
+        NumericBound.FloatBits(0L)
+      case other => other
+    }
+}
+
 final case class BinaryRestrictions(
   mimeTypes: Option[List[String]] = None,
   minBytes: Option[Int] = None,

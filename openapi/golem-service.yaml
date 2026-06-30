@@ -11601,6 +11601,61 @@ components:
       - body
     NormalizedJsonValue:
       type: object
+    NumericBound:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - signed
+          value:
+            type: integer
+            format: int64
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - unsigned
+          value:
+            type: integer
+            format: uint64
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - float-bits
+          value:
+            type: integer
+            format: uint64
+        required:
+        - kind
+        - value
+    NumericRestrictions:
+      type: object
+      properties:
+        min:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/NumericBound'
+          - nullable: true
+        max:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/NumericBound'
+          - nullable: true
+        unit:
+          nullable: true
+          type: string
     OplogCursor:
       title: OplogCursor
       type: object
@@ -13327,6 +13382,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13341,6 +13401,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13355,6 +13420,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13369,6 +13439,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13383,6 +13458,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13397,6 +13477,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13411,6 +13496,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13425,6 +13515,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13439,6 +13534,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13453,6 +13553,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:

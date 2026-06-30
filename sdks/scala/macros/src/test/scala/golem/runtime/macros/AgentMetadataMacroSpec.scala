@@ -130,7 +130,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
         assertTrue(
           params.map(_.name) == List("left", "right"),
           rootBody(params.head.graph) == SchemaTypeBody.StringType,
-          rootBody(params(1).graph) == SchemaTypeBody.S32Type
+          rootBody(params(1).graph) == SchemaTypeBody.S32Type()
         )
       },
       test("Agent metadata captures trait-level mode annotation") {

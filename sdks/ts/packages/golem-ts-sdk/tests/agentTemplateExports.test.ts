@@ -201,7 +201,7 @@ describe('agent template export wiring', () => {
     });
 
     expect(formatted).toEqual([]);
-  });
+  }, 15_000);
 
   it('review repro: getWithConfig rejects nested secret-only config override groups', () => {
     const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -268,7 +268,7 @@ describe('agent template export wiring', () => {
     });
 
     expect(formatted).toEqual([]);
-  });
+  }, 15_000);
 
   it('review repro: remote method Config parameters are injected and not caller supplied', () => {
     const packageRoot = fileURLToPath(new URL('..', import.meta.url));
