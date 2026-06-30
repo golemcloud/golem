@@ -23,6 +23,7 @@
 // they are `unimplemented!` in the Golem host and trap the worker.
 
 import * as KvBatch from 'wasi:keyvalue/eventual-batch@0.1.0';
+import { strictTextDecoder } from './strictTextDecoder';
 import * as KvEventual from 'wasi:keyvalue/eventual@0.1.0';
 import * as KvTypes from 'wasi:keyvalue/types@0.1.0';
 import { compileSchema } from './schema/adapter';
@@ -86,7 +87,7 @@ const wrap = <A>(operation: string, fn: () => A): A => {
 // value to UTF-8 bytes. Validation/JSON failures throw {@link KeyValueError}.
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder('utf-8', { fatal: true });
+const textDecoder = strictTextDecoder();
 
 const validateSync = <T>(schema: StandardSchemaV1, value: unknown): T => {
   const result = schema['~standard'].validate(value);

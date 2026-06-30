@@ -19,6 +19,7 @@
 // failing an Effect.
 
 import * as Blob from 'wasi:blobstore/blobstore';
+import { strictTextDecoder } from './strictTextDecoder';
 import * as ContainerNS from 'wasi:blobstore/container';
 import * as Types from 'wasi:blobstore/types';
 import { compileSchema } from './schema/adapter';
@@ -70,7 +71,7 @@ const wrap = <A>(operation: string, fn: () => A): A => {
 // ---------------------------------------------------------------------------
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder('utf-8', { fatal: true });
+const textDecoder = strictTextDecoder();
 
 const validateSync = <T>(schema: StandardSchemaV1, value: unknown): T => {
   const result = schema['~standard'].validate(value);
