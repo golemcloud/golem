@@ -381,11 +381,12 @@ object JsUnionSpec {
 
 @js.native
 sealed trait JsSecretSpec extends js.Object {
+  def inner: Int                   = js.native
   def category: js.UndefOr[String] = js.native
 }
 object JsSecretSpec {
-  def apply(category: js.UndefOr[String]): JsSecretSpec = {
-    val o = js.Dynamic.literal()
+  def apply(inner: Int, category: js.UndefOr[String]): JsSecretSpec = {
+    val o = js.Dynamic.literal("inner" -> inner)
     category.foreach(v => o.updateDynamic("category")(v))
     o.asInstanceOf[JsSecretSpec]
   }
@@ -573,15 +574,6 @@ object JsUnionValuePayload {
     js.Dynamic.literal("tag" -> tag, "body" -> body).asInstanceOf[JsUnionValuePayload]
 }
 
-@js.native
-sealed trait JsSecretValuePayload extends js.Object {
-  def secretRef: String = js.native
-}
-object JsSecretValuePayload {
-  def apply(secretRef: String): JsSecretValuePayload =
-    js.Dynamic.literal("secretRef" -> secretRef).asInstanceOf[JsSecretValuePayload]
-}
-
 // === Schema value node / tree / typed value ===
 
 @js.native
@@ -637,8 +629,8 @@ object JsSchemaValueNode {
 
   def unionValue(p: JsUnionValuePayload): JsSchemaValueNode = JsShape.tagged[JsSchemaValueNode]("union-value", p)
 
-  def secretValue(p: JsSecretValuePayload): JsSchemaValueNode =
-    JsShape.tagged[JsSchemaValueNode]("secret-value", p)
+  def secretValue(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("secret-value", resource)
 
   /**
    * `schema-value-node :: quota-token-handle(own<quota-token>)`. The `val`

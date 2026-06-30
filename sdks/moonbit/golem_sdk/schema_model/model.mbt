@@ -70,7 +70,7 @@ pub(all) enum SchemaTypeBody {
   // Discriminated union (closed, inferred-tag)
   Union(Array[UnionBranch])
   // Capability nodes
-  Secret(@types.SecretSpec)
+  Secret(SecretSpec)
   QuotaToken(@types.QuotaTokenSpec)
   // WASI P3 stubs (parseable only; no semantics yet)
   Future(SchemaType?)
@@ -98,6 +98,13 @@ pub(all) struct UnionBranch {
   body : SchemaType
   discriminator : @types.DiscriminatorRule
   metadata : @types.MetadataEnvelope
+} derive(Show, Eq)
+
+///|
+pub(all) struct SecretSpec {
+  /// Revealed payload type carried by this secret handle.
+  inner : SchemaType
+  category : String?
 } derive(Show, Eq)
 
 // ============================================================
@@ -174,8 +181,8 @@ pub(all) enum SchemaValue {
   Quantity(@types.QuantityValue)
   // discriminator literal tag, body
   Union(String, SchemaValue)
-  // opaque secret reference
-  Secret(String)
+  // owned `secret` resource carried as an opaque, affine handle
+  Secret(GuestSecretHandle)
   // owned `quota-token` resource carried as an opaque, affine handle
   QuotaToken(GuestQuotaTokenHandle)
 } derive(Show, Eq)

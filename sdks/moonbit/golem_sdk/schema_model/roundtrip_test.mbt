@@ -174,10 +174,15 @@ test "composite types round-trip" {
     ]),
   )
   assert_eq(rt_type(inner), inner)
+
+  let secret = schema_type(
+    Secret({ inner: schema_type(String), category: Some("api-key") }),
+  )
+  assert_eq(rt_type(secret), secret)
 }
 
 ///|
-test "values round-trip (primitives, composites, semantic, capability)" {
+test "values round-trip (primitives, composites, semantic)" {
   let v : SchemaValue = Tuple([
     Bool(true),
     S8(-5),
@@ -216,7 +221,6 @@ test "values round-trip (primitives, composites, semantic, capability)" {
     Duration(-123_456L),
     Quantity({ mantissa: 1234L, scale: 2, unit: "kg" }),
     Union("circle", S32(42)),
-    Secret("secret-ref-abc"),
   ])
   assert_eq(rt_value(v), v)
 }
@@ -444,7 +448,10 @@ test "semantic and capability types round-trip" {
     min: None,
     max: None,
   }
-  let secret_s : @types.SecretSpec = { category: Some("api-key") }
+  let secret_s : SecretSpec = {
+    inner: schema_type(String),
+    category: Some("api-key"),
+  }
   let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu") }
   let branch_a : UnionBranch = {
     tag: "a",
@@ -590,6 +597,42 @@ test "narrow integer values are range-checked on decode" {
       fail("expected DecodeError for out-of-range value, got \{r}")
     }
   }
+}
+
+///|
+/// Build an opaque secret handle wrapping a fake owned resource. The generated
+/// `@types.Secret` is a plain index wrapper, so a handle can be fabricated for
+/// codec tests without a host call — as long as the resource is never dropped or
+/// passed to a host import.
+fn fake_secret_handle(index : Int) -> GuestSecretHandle {
+  GuestSecretHandle::new(@types.Secret::Secret(index))
+}
+
+///|
+test "secret value encodes to a handle node and decodes to a fresh handle" {
+  let handle = fake_secret_handle(6)
+  let v : SchemaValue = Secret(handle)
+  let wit = schema_value_to_wit(v)
+  assert_false(handle.is_present())
+  guard wit.value_nodes[wit.root] is @types.SecretValue(_) else {
+    fail("expected a secret-value wire node")
+  }
+  guard schema_value_from_wit(wit) is Secret(decoded) else {
+    fail("expected a decoded secret value")
+  }
+  assert_true(decoded.is_present())
+}
+
+///|
+test "encode preflight rejects the same secret handle used twice" {
+  let handle = fake_secret_handle(8)
+  let v : SchemaValue = Tuple([Secret(handle), Secret(handle)])
+  let r = try? schema_value_to_wit(v)
+  guard r is Err(EncodeError(em)) else {
+    fail("expected EncodeError, got \{r}")
+  }
+  assert_true(em.contains("secret"))
+  assert_true(handle.is_present())
 }
 
 ///|

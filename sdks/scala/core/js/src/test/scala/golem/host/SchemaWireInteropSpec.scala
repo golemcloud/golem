@@ -20,7 +20,7 @@ import golem.schema._
 import golem.schema.wire._
 import golem.schema.wire.WitSchemaTypeBody._
 import golem.schema.wire.WitSchemaValueNode._
-import golem.host.js.schema.{JsSchemaTypeBody, JsSchemaValueNode}
+import golem.host.js.schema.{JsSchemaTypeBody, JsSchemaValueNode, JsSchemaValueTree}
 import zio.test._
 
 import scala.scalajs.js
@@ -128,8 +128,8 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     QuantityType(quantFull),
     QuantityType(quantNone),
     UnionType(unionSpec),
-    SecretType(SecretSpec(Some("api-key"))),
-    SecretType(SecretSpec(None)),
+    SecretType(WitSecretSpec(0, Some("api-key"))),
+    SecretType(WitSecretSpec(0, None)),
     QuotaTokenType(QuotaTokenSpec(Some("res"))),
     QuotaTokenType(QuotaTokenSpec(None)),
     FutureType(Some(11)),
@@ -197,7 +197,6 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     DurationValue(WitDurationValuePayload(987654321L)),
     QuantityValueNode(qvalue),
     UnionValue(WitUnionValuePayload("branch0", 1)),
-    SecretValue(WitSecretValuePayload("secret-ref-1")),
     // --- numeric / boundary samples -----------------------------------------
     CharValue(0x1f600),    // astral-plane code point (emoji), needs surrogate pair
     U32Value(4294967295L), // u32 max
@@ -236,6 +235,60 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
           SchemaWireInterop.valueTreeFromJs(SchemaWireInterop.valueTreeToJs(v)) == v
         }
         assertTrue(results.forall(identity))
+      },
+      test("secret handle: encode moves the owned resource and consumes the handle") {
+        val raw    = js.Dynamic.literal(marker = 43).asInstanceOf[js.Any]
+        val handle = GuestSecretHandle.fromRaw(raw)
+        val jsNode =
+          SchemaWireInterop.valueTreeToJs(WitSchemaValueTree(Vector(SecretValue(handle)), 0)).valueNodes(0)
+        assertTrue(
+          jsNode.tag == "secret-value",
+          rawVal(jsNode).asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef],
+          !handle.isPresent
+        )
+      },
+      test("secret handle: decode wraps the owned resource in a fresh present handle") {
+        val raw    = js.Dynamic.literal(marker = 8).asInstanceOf[js.Any]
+        val jsTree = SchemaWireInterop.valueTreeToJs(
+          WitSchemaValueTree(Vector(SecretValue(GuestSecretHandle.fromRaw(raw))), 0)
+        )
+        val decoded = SchemaWireInterop.valueTreeFromJs(jsTree)
+        decoded.valueNodes(0) match {
+          case SecretValue(h) =>
+            assertTrue(h.isPresent, h.take().exists(_.asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef]))
+          case other => assertTrue(false).label(s"expected SecretValue, got $other")
+        }
+      },
+      test("secret handle: inbound decode rejects two nodes carrying the same raw resource") {
+        val raw = js.Dynamic.literal(marker = 44).asInstanceOf[js.Any]
+        val jsTree = JsSchemaValueTree(
+          js.Array(
+            JsSchemaValueNode.recordValue(js.Array(1, 2)),
+            JsSchemaValueNode.secretValue(raw),
+            JsSchemaValueNode.secretValue(raw)
+          ),
+          0
+        )
+        val wit    = SchemaWireInterop.valueTreeFromJs(jsTree)
+        val result = scala.util.Try(SchemaWire.schemaValueFromWit(wit))
+        result match {
+          case scala.util.Failure(_: SchemaDecodeError) => assertTrue(true)
+          case other                                    => assertTrue(false).label(s"expected SchemaDecodeError, got $other")
+        }
+      },
+      test("secret handle: encode is atomic — a sibling that fails leaves the handle untouched") {
+        val raw    = js.Dynamic.literal(marker = 100).asInstanceOf[js.Any]
+        val handle = GuestSecretHandle.fromRaw(raw)
+        val tree   = WitSchemaValueTree(
+          Vector(
+            TupleValue(Vector(1, 2)),
+            SecretValue(handle),
+            DatetimeValue(Datetime(0L, -1))
+          ),
+          0
+        )
+        val result = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree))
+        assertTrue(result.isFailure, handle.isPresent)
       },
       test("quota-token handle: encode moves the owned resource and consumes the handle") {
         val raw    = js.Dynamic.literal(marker = 42).asInstanceOf[js.Any]

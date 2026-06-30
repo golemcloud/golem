@@ -265,6 +265,7 @@ message FieldDiscriminator {
 
 message SecretSpec {
   optional string category = 1;
+  SchemaType inner = 2;
 }
 
 message QuotaTokenSpec {
@@ -408,7 +409,11 @@ message UnionValue {
 }
 
 message SecretValue {
-  string secret_ref = 1;
+  golem.common.UUID secret_id = 1;
+  StringList config_key = 2;
+  uint64 version = 3;
+  DatetimeValue resolved_at = 4;
+  optional string category = 5;
 }
 
 message QuotaTokenValue {

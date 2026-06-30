@@ -14,7 +14,9 @@
 
 use async_trait::async_trait;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -40,6 +42,16 @@ impl EnvironmentStateService for DisabledEnvironmentStateService {
         _environment_id: EnvironmentId,
     ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
         Ok(HashMap::new())
+    }
+
+    async fn get_agent_secret_revision(
+        &self,
+        _environment_id: EnvironmentId,
+        _agent_secret_id: AgentSecretId,
+        _path: CanonicalAgentSecretPath,
+        _revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
+        Ok(None)
     }
 
     async fn get_retry_policies(
@@ -73,6 +85,16 @@ impl EnvironmentStateService for ConfiguredRetryPoliciesEnvironmentStateService 
         _environment_id: EnvironmentId,
     ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
         Ok(HashMap::new())
+    }
+
+    async fn get_agent_secret_revision(
+        &self,
+        _environment_id: EnvironmentId,
+        _agent_secret_id: AgentSecretId,
+        _path: CanonicalAgentSecretPath,
+        _revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
+        Ok(None)
     }
 
     async fn get_retry_policies(

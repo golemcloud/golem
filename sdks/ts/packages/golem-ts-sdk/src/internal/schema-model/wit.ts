@@ -46,6 +46,8 @@ import {
   type NumericBound,
   emptyMetadata,
 } from './model';
+import { GuestSecretHandle } from './secretHandle';
+import { SECRET_INTERNAL } from './secretInternal';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
 import { QUOTA_INTERNAL } from './quotaInternal';
 import { SchemaDecodeError, SchemaEncodeError } from './errors';
@@ -251,7 +253,7 @@ export class GraphEncoder {
           },
         };
       case 'secret':
-        return { tag: 'secret-type', val: body.spec };
+        return { tag: 'secret-type', val: { ...body.spec, inner: this.encodeType(body.inner) } };
       case 'quota-token':
         return { tag: 'quota-token-type', val: body.spec };
       case 'future':
@@ -418,7 +420,11 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
           })),
         };
       case 'secret-type':
-        return { tag: 'secret', spec: body.val };
+        return {
+          tag: 'secret',
+          spec: { category: body.val.category },
+          inner: fromType(body.val.inner),
+        };
       case 'quota-token-type':
         return { tag: 'quota-token', spec: body.val };
       case 'future-type':
@@ -528,7 +534,28 @@ function preflightValue(value: SchemaValue): void {
         }
         return;
       }
+      case 'secret': {
+        if (!(v.handle instanceof GuestSecretHandle)) {
+          throw new SchemaEncodeError('secret value contains an invalid secret handle');
+        }
+        const raw = v.handle.withHandle((r) => r);
+        if (raw === undefined) {
+          throw new SchemaEncodeError(
+            'secret handle was already transferred; an owned secret can only be sent once',
+          );
+        }
+        if (seen.has(raw)) {
+          throw new SchemaEncodeError(
+            'the same secret handle appeared more than once in one value tree',
+          );
+        }
+        seen.add(raw);
+        return;
+      }
       case 'quota-token': {
+        if (!(v.handle instanceof GuestQuotaTokenHandle)) {
+          throw new SchemaEncodeError('quota-token value contains an invalid quota-token handle');
+        }
         // Peek the underlying owned resource without consuming it, so two
         // distinct holders wrapping the same raw resource are also rejected, not
         // only the same holder used twice.
@@ -588,7 +615,6 @@ function preflightValue(value: SchemaValue): void {
       case 'url':
       case 'duration':
       case 'quantity':
-      case 'secret':
         return;
       default:
         throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
@@ -691,8 +717,15 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: 'quantity-value-node', val: v.value };
       case 'union':
         return { tag: 'union-value', val: { tag: v.unionTag, body: emit(v.body) } };
-      case 'secret':
-        return { tag: 'secret-value', val: { secretRef: v.secretRef } };
+      case 'secret': {
+        const raw = v.handle.take();
+        if (raw === undefined) {
+          throw new SchemaEncodeError(
+            'secret handle was already transferred; an owned secret can only be sent once',
+          );
+        }
+        return { tag: 'secret-value', val: raw };
+      }
       case 'quota-token': {
         // Move the owned `own<quota-token>` resource out of the take-once cell.
         // The preflight above guarantees the handle is present and unique, so
@@ -726,8 +759,9 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
  * be kept in sync (a new node kind must be handled in both, or it will be
  * reported as an unknown tag here).
  */
-function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNodeIndex): void {
+export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNodeIndex): void {
   const onPath = new Uint8Array(nodes.length);
+  const secretReached = new Set<number>();
   // Indices of `quota-token-handle` nodes already reached. An owned handle is
   // affine, so reaching one twice (e.g. via an aliased node) is rejected.
   const quotaReached = new Set<number>();
@@ -773,8 +807,22 @@ function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNodeIndex
       case 'datetime-value':
       case 'duration-value':
       case 'quantity-value-node':
-      case 'secret-value':
         return;
+      case 'secret-value': {
+        if (secretReached.has(idx)) {
+          throw new SchemaDecodeError('secret handle referenced more than once');
+        }
+        const raw = n.val;
+        if (raw === undefined) {
+          throw new SchemaDecodeError('secret handle was already transferred');
+        }
+        if (seenRaw.has(raw)) {
+          throw new SchemaDecodeError('the same secret resource appeared more than once');
+        }
+        seenRaw.add(raw);
+        secretReached.add(idx);
+        return;
+      }
       case 'record-value':
         n.val.forEach(walk);
         return;
@@ -841,6 +889,9 @@ function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNodeIndex
   // Every owned handle must be reachable from the root exactly once; an
   // unreferenced one makes the tree malformed.
   for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].tag === 'secret-value' && !secretReached.has(i)) {
+      throw new SchemaDecodeError(`secret handle not referenced from the root: ${i}`);
+    }
     if (nodes[i].tag === 'quota-token-handle' && !quotaReached.has(i)) {
       throw new SchemaDecodeError(`quota-token handle not referenced from the root: ${i}`);
     }
@@ -857,12 +908,13 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   // released. Preflighting first guarantees the lifting walk below cannot fail,
   // so a handle is only ever lifted into the value that is actually returned.
   //
-  // Drop policy: any owned handle that is NOT lifted into the returned value
-  // (because the tree is rejected here, or because a handle node is unreachable
-  // from the root) is released by clearing its reference in the wire tree
-  // (`drainUnconsumedQuotaHandles`). JS has no synchronous resource drop, so
-  // clearing the last reference is what makes the underlying host resource
-  // eligible for finalization.
+  // Drop policy: any owned quota-token handle that is NOT lifted into the
+  // returned value (because the tree is rejected here, or because a handle node
+  // is unreachable from the root) is released by clearing its reference in the
+  // wire tree (`drainUnconsumedQuotaHandles`). JS has no synchronous resource
+  // drop, so clearing the last reference is what makes the underlying host
+  // resource eligible for finalization. Secret handles are caller-owned on
+  // rejected trees and must remain present so the caller can still release them.
   try {
     preflightWitValueTree(nodes, wit.root);
   } catch (e) {
@@ -879,6 +931,7 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   // thrown error the whole decode is aborted and this local array is discarded,
   // so leaving stale `1`s during unwinding is harmless.
   const onPath = new Uint8Array(nodes.length);
+  const liftedSecrets: { node: { val: unknown }; raw: unknown }[] = [];
 
   function fromIdx(idx: ValueNodeIndex): SchemaValue {
     if (idx < 0 || idx >= nodes.length) {
@@ -981,8 +1034,15 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
         return { tag: 'quantity', value: n.val };
       case 'union-value':
         return { tag: 'union', unionTag: n.val.tag, body: fromIdx(n.val.body) };
-      case 'secret-value':
-        return { tag: 'secret', secretRef: n.val.secretRef };
+      case 'secret-value': {
+        const raw = n.val as typeof n.val | undefined;
+        if (raw === undefined) {
+          throw new SchemaDecodeError('secret handle referenced more than once');
+        }
+        (n as { val: unknown }).val = undefined;
+        liftedSecrets.push({ node: n as { val: unknown }, raw });
+        return { tag: 'secret', handle: GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw) };
+      }
       case 'quota-token-handle': {
         // Lift the owned `own<quota-token>` resource into an opaque take-once
         // handle. Take-once on the wire node as well, so a malformed tree that
@@ -1007,6 +1067,9 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   try {
     result = fromIdx(wit.root);
   } catch (e) {
+    for (const lifted of liftedSecrets) {
+      lifted.node.val = lifted.raw;
+    }
     // On failure, release any handles still owned by the wire tree so a caught
     // error cannot leave live owned `quota-token` resources dangling in the
     // caller's object. (JS has no RAII drop; clearing the reference is the best
@@ -1020,7 +1083,7 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   // unreachable from the root and is rejected as malformed (after clearing it).
   const leftover = drainUnconsumedQuotaHandles(nodes);
   if (leftover !== undefined) {
-    throw new SchemaDecodeError(`quota-token handle not referenced from the root: ${leftover}`);
+    throw new SchemaDecodeError(`owned handle not referenced from the root: ${leftover}`);
   }
   return result;
 }
@@ -1030,7 +1093,7 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
  * moved out during decode) and return the index of the first one found, or
  * `undefined` if none remained.
  */
-function drainUnconsumedQuotaHandles(nodes: WitSchemaValueNode[]): number | undefined {
+export function drainUnconsumedQuotaHandles(nodes: WitSchemaValueNode[]): number | undefined {
   let first: number | undefined;
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];

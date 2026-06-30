@@ -221,6 +221,7 @@ fn check_type(
     Text(restrictions) => check_text_restrictions(restrictions, errors)
     Binary(restrictions) => check_binary_restrictions(restrictions, errors)
     Union(branches) => validate_union(graph, branches, known, errors)
+    Secret(spec) => check_type(graph, spec.inner, known, errors)
     Future(inner) =>
       match inner {
         Some(t) => check_type(graph, t, known, errors)
@@ -232,7 +233,7 @@ fn check_type(
         None => ()
       }
     // Leaves with no structural constraints: primitives, Char, String,
-    // Datetime, Duration, Path, Url, Secret, QuotaToken.
+    // Datetime, Duration, Path, Url, QuotaToken.
     _ => ()
   }
 }

@@ -21,8 +21,8 @@ use crate::schema::agent::{
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
-use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
-use crate::schema::schema_value::{SchemaValue, VariantValuePayload};
+use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, VariantCaseType};
+use crate::schema::schema_value::{SchemaValue, SecretValuePayload, VariantValuePayload};
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -615,6 +615,28 @@ fn projected_helper_keeps_only_reachable_defs_and_sets_root() {
         typed.value(),
     )
     .expect("projected carrier must validate against its own graph");
+}
+
+#[test]
+fn projected_helper_keeps_defs_reachable_from_secret_inner() {
+    let graph = registry(vec![proj_def("SecretInner", SchemaType::string())]);
+    let root = SchemaType::secret(SecretSpec {
+        inner: Box::new(SchemaType::ref_to(TypeId::new("SecretInner"))),
+        category: None,
+    });
+    let value = SchemaValue::Secret(SecretValuePayload {
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        category: None,
+    });
+
+    let typed = typed_schema_value_with_projected_defs(&graph, root, value);
+
+    assert_eq!(proj_ids(&typed), vec!["SecretInner".to_string()]);
+    crate::schema::validation::validate_graph(typed.graph())
+        .expect("projected carrier must keep refs from SecretSpec.inner self-contained");
 }
 
 #[test]

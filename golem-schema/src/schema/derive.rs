@@ -29,8 +29,8 @@ pub mod __private {
     pub use crate::schema::conversion::{
         DecodeError, FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, binary_from_value,
         binary_to_value, default_type_id_from, normalize_type_path, path_from_value, path_to_value,
-        secret_from_value, secret_to_value, text_from_value, text_to_value, type_id_with_args,
-        url_from_value, url_to_value, value_kind,
+        text_from_value, text_to_value, type_id_with_args, url_from_value, url_to_value,
+        value_kind,
     };
     pub use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
     pub use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};

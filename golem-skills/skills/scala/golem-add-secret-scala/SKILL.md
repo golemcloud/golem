@@ -7,7 +7,7 @@ description: "Adding secrets to Scala Golem agents. Use when the user asks to ad
 
 ## Overview
 
-**Secrets** are sensitive configuration values (API keys, passwords, tokens) stored per-environment and accessed via `Secret[T]` from `golem.config`. They are declared inside config case classes alongside regular config fields.
+**Secrets** are sensitive configuration values (API keys, passwords, tokens) stored per-environment and accessed via `Secret[T]` from `golem.config`. They are declared inside config case classes alongside regular config fields, but the config value carries an opaque secret handle; plaintext is revealed only when agent code calls `.get`.
 
 ## Declaring Secrets
 
@@ -40,7 +40,7 @@ object MyAppConfig {
 
 ## Reading Secrets
 
-`Secret[T]` is lazy — call `.get` to fetch the current value:
+`Secret[T]` is lazy — call `.get` to explicitly reveal the current value:
 
 ```scala
 import golem.runtime.annotations.agentImplementation
@@ -87,7 +87,8 @@ secretDefaults:
 
 ## Key Constraints
 
-- `Secret[T]` is lazy — call `.get` to retrieve the actual value
+- `Secret[T]` is lazy — call `.get` to reveal the actual value
+- Each reveal pins the resolved secret revision for deterministic retries and replay; fresh `.get` calls can observe runtime updates
 - Secret values are stored per-environment, not per-agent-instance
 - The `Secret[T]` companion provides an implicit `Schema` so `Schema.derived` works on parent case classes
 - Missing required secrets cause agent creation to fail

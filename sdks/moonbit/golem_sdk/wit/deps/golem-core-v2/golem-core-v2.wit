@@ -120,6 +120,11 @@ interface types {
     /// representation at the boundary.
     resource quota-token;
 
+    /// An unforgeable handle to sensitive material held by the runtime. The
+    /// handle is opaque to guests: components can pass it through schema values
+    /// and reveal it only through capability-gated host interfaces.
+    resource secret;
+
     // ============================================================
     // Schema graph (self-contained type carrier)
     // ============================================================
@@ -445,6 +450,8 @@ interface types {
     // --- Capability nodes ---
 
     record secret-spec {
+        /// Revealed payload type carried by this secret handle.
+        inner: type-node-index,
         /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
         category: option<string>,
     }
@@ -515,7 +522,7 @@ interface types {
         union-value(union-value-payload),
 
         // Capability nodes
-        secret-value(secret-value-payload),
+        secret-value(own<secret>),
         quota-token-handle(own<quota-token>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
@@ -565,15 +572,6 @@ interface types {
         /// type and (by construction) satisfies the branch's discriminator
         /// rule.
         body: value-node-index,
-    }
-
-    /// Capability value: secret transport is **by reference**. The schema side
-    /// declares the secret; the value side carries an opaque reference that the
-    /// authority resolves on read. The literal secret material never crosses
-    /// this carrier.
-    record secret-value-payload {
-        /// Opaque, authority-resolved reference.
-        secret-ref: string,
     }
 
     // ============================================================

@@ -18,6 +18,7 @@ use golem_worker_executor_test_utils::{
     test_component,
 };
 use std::fmt::Debug;
+use std::sync::Once;
 use test_r::{sequential_suite, tag_suite, test_dep};
 
 pub mod agent;
@@ -117,13 +118,23 @@ sequential_suite!(oplog_blob_archive);
 #[derive(Debug)]
 pub struct Tracing;
 
+static TRACING_INIT: Once = Once::new();
+
+impl Tracing {
+    pub fn init() -> Self {
+        TRACING_INIT.call_once(|| {
+            init_tracing_with_default_debug_env_filter(
+                &TracingConfig::test_pretty_without_time("worker-executor-tests")
+                    .with_env_overrides(),
+            );
+        });
+        Self
+    }
+}
+
 #[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
-    init_tracing_with_default_debug_env_filter(
-        &TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides(),
-    );
-
-    Tracing
+    Tracing::init()
 }
 
 // `WorkerExecutorTestDependencies` is a Hosted dep so workers

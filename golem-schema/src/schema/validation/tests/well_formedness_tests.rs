@@ -18,7 +18,7 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
     NumericRestrictionError, NumericRestrictions, QuantitySpec, QuantityValue, SchemaType,
-    TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
+    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
 use crate::schema::validation::well_formedness::{SchemaError, validate_graph, validate_root_type};
 use proptest::prelude::*;
@@ -160,6 +160,17 @@ fn legitimate_recursive_type_through_constructor_is_accepted() {
         validate_graph(&graph).is_ok(),
         "a recursive type whose cycle passes through a constructor is well-formed"
     );
+}
+
+#[test]
+fn dangling_ref_in_secret_inner_is_reported() {
+    let missing = TypeId::new("missing-secret-inner");
+    let graph = SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
+        inner: Box::new(SchemaType::ref_to(missing.clone())),
+        category: None,
+    }));
+    let errors = validate_graph(&graph).expect_err("should fail");
+    assert!(errors.contains(&SchemaError::DanglingRef(missing)));
 }
 
 #[test]

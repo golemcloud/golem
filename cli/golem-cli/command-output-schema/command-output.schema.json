@@ -5546,7 +5546,11 @@
     },
     "SecretSpec": {
       "type": "object",
-      "properties": { "category": { "type": "string" } },
+      "required": ["inner"],
+      "properties": {
+        "inner": { "$ref": "#/definitions/SchemaType" },
+        "category": { "type": "string" }
+      },
       "additionalProperties": false
     },
     "QuotaTokenSpec": {
@@ -5796,8 +5800,14 @@
     },
     "SecretValuePayload": {
       "type": "object",
-      "required": ["secretRef"],
-      "properties": { "secretRef": { "type": "string" } },
+      "required": ["secretId", "version", "resolvedAt"],
+      "properties": {
+        "secretId": { "type": "string" },
+        "configKey": { "type": "array", "items": { "type": "string" } },
+        "version": { "type": "integer", "minimum": 0 },
+        "resolvedAt": { "type": "string" },
+        "category": { "type": "string" }
+      },
       "additionalProperties": false
     },
     "QuotaTokenValuePayload": {

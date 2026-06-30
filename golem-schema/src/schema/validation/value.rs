@@ -19,16 +19,18 @@ use crate::schema::graph::{GraphIndex, SchemaGraph};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, NumericBound, NumericRepr, NumericRestrictionError,
-    NumericRestrictions, PathSpec, QuantitySpec, QuantityValue, SchemaType, SecretSpec,
-    TextRestrictions, UnionBranch, UrlRestrictions, numeric_bound_cmp,
+    NumericRestrictions, PathSpec, QuantitySpec, QuantityValue, SchemaType, TextRestrictions,
+    UnionBranch, UrlRestrictions, numeric_bound_cmp,
 };
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+use crate::schema::schema_value::SecretValuePayload;
 use crate::schema::schema_value::{
-    BinaryValuePayload, ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
+    BinaryValuePayload, ResultValuePayload, SchemaValue, TextValuePayload,
 };
 // Only the host (and feature-neutral) build inspects a quota-token's snapshot
 // fields; on a guest the value is an opaque owned handle.
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
-use crate::schema::schema_type::QuotaTokenSpec;
+use crate::schema::schema_type::{QuotaTokenSpec, SecretSpec};
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
 use crate::schema::schema_value::QuotaTokenValuePayload;
 use std::cmp::Ordering;
@@ -244,8 +246,10 @@ pub enum ValueError {
         path: ValuePath,
         reason: String,
     },
-    SecretRefEmpty {
+    SecretCategoryMismatch {
         path: ValuePath,
+        expected: String,
+        found: Option<String>,
     },
     QuotaTokenResourceMismatch {
         path: ValuePath,
@@ -429,9 +433,15 @@ impl Display for ValueError {
             ValueError::NumericOutOfRange { path, reason } => {
                 write!(f, "numeric value at {path} is out of range ({reason})")
             }
-            ValueError::SecretRefEmpty { path } => {
-                write!(f, "secret value at {path} has an empty `secret_ref`")
-            }
+            ValueError::SecretCategoryMismatch {
+                path,
+                expected,
+                found,
+            } => write!(
+                f,
+                "secret value at {path} expected category `{expected}`, found `{}`",
+                found.as_deref().unwrap_or("<none>")
+            ),
             ValueError::QuotaTokenResourceMismatch {
                 path,
                 expected,
@@ -786,7 +796,13 @@ fn check<'a>(
             check_quantity(spec, value, path, errors);
         }
         (SchemaType::Secret { spec, .. }, SchemaValue::Secret(payload)) => {
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             check_secret(spec, payload, path, errors);
+            // On a guest the secret value is an opaque owned handle with no
+            // readable fields; category constraints are enforced host-side when
+            // the handle is lifted to its trusted snapshot.
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            let _ = (spec, payload);
         }
         (SchemaType::QuotaToken { spec, .. }, SchemaValue::QuotaToken(payload)) => {
             #[cfg(not(all(feature = "guest", not(feature = "host"))))]
@@ -1260,15 +1276,20 @@ fn check_quantity(
     }
 }
 
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
 fn check_secret(
-    _spec: &SecretSpec,
+    spec: &SecretSpec,
     payload: &SecretValuePayload,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
-    if payload.secret_ref.is_empty() {
-        errors.push(ValueError::SecretRefEmpty {
+    if let Some(expected) = &spec.category
+        && payload.category.as_ref() != Some(expected)
+    {
+        errors.push(ValueError::SecretCategoryMismatch {
             path: path.snapshot(),
+            expected: expected.clone(),
+            found: payload.category.clone(),
         });
     }
 }

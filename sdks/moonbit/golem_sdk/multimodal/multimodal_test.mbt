@@ -9,12 +9,12 @@ enum TextOrImage {
 } derive(Eq, Show)
 
 ///|
-pub impl MultimodalModality for TextOrImage with multimodal_type_id() {
+pub impl MultimodalModality for TextOrImage with fn multimodal_type_id() {
   "test.TextOrImage"
 }
 
 ///|
-pub impl MultimodalModality for TextOrImage with multimodal_cases(b) {
+pub impl MultimodalModality for TextOrImage with fn multimodal_cases(b) {
   [
     @model.variant_case(
       "Text",
@@ -34,7 +34,7 @@ pub impl MultimodalModality for TextOrImage with multimodal_cases(b) {
 }
 
 ///|
-pub impl MultimodalModality for TextOrImage with to_modality_value(self) {
+pub impl MultimodalModality for TextOrImage with fn to_modality_value(self) {
   match self {
     Text(v) => (0, @schema.to_value_as(v))
     Image(v) => (1, @schema.to_value_as(v))
@@ -42,7 +42,7 @@ pub impl MultimodalModality for TextOrImage with to_modality_value(self) {
 }
 
 ///|
-pub impl MultimodalModality for TextOrImage with from_modality_value(
+pub impl MultimodalModality for TextOrImage with fn from_modality_value(
   case,
   payload,
 ) {

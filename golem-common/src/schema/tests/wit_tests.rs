@@ -16,11 +16,12 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::TypeId;
 use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
-use crate::schema::schema_value::{QuotaTokenValuePayload, SchemaValue};
+use crate::schema::schema_value::{QuotaTokenValuePayload, SchemaValue, SecretValuePayload};
 use crate::schema::wit::{
-    DecodeError, EncodeError, QuotaTokenHandleRep, QuotaTokenResolver, decode_graph, decode_typed,
-    decode_typed_rejecting_quota_with, decode_value, decode_value_rejecting_quota_with,
-    decode_value_with, encode_graph, encode_typed, encode_value, encode_value_with, wire,
+    DecodeError, EncodeError, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleRep,
+    SecretResolver, decode_graph, decode_typed, decode_typed_rejecting_quota_with, decode_value,
+    decode_value_rejecting_quota_with, decode_value_with, encode_graph, encode_typed, encode_value,
+    encode_value_with, wire,
 };
 use chrono::{TimeZone, Utc};
 use golem_schema::model::EnvironmentId;
@@ -256,6 +257,16 @@ fn sample_snapshot() -> QuotaTokenValuePayload {
     }
 }
 
+fn sample_secret_snapshot() -> SecretValuePayload {
+    SecretValuePayload {
+        secret_id: uuid::Uuid::from_u64_pair(3, 4),
+        config_key: Some(vec!["db".to_string(), "password".to_string()]),
+        version: 7,
+        resolved_at: Utc.timestamp_opt(1_700_000_010, 0).single().unwrap(),
+        category: Some("api-key".to_string()),
+    }
+}
+
 /// A minimal [`QuotaTokenResolver`] backed by a real [`ResourceTable`], storing
 /// the trusted snapshot as the boxed payload of each handle. Mirrors what the
 /// executor does, without any of the live-lease machinery.
@@ -289,6 +300,15 @@ impl TableResolver {
             fail_create_after: Some(n),
             ..Self::new()
         }
+    }
+
+    fn secret_handle(&mut self) -> Resource<SecretHandleRep> {
+        let handle = self
+            .table
+            .push(SecretHandleRep::new(sample_secret_snapshot()))
+            .unwrap();
+        self.live += 1;
+        handle
     }
 }
 
@@ -331,6 +351,36 @@ impl QuotaTokenResolver for TableResolver {
     }
 }
 
+impl SecretResolver for TableResolver {
+    type Error = anyhow::Error;
+
+    fn snapshot_secret_handle(
+        &mut self,
+        handle: Resource<SecretHandleRep>,
+    ) -> Result<SecretValuePayload, Self::Error> {
+        let rep = self.table.delete(handle)?;
+        self.live -= 1;
+        rep.downcast_ref::<SecretValuePayload>()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("secret handle payload was not a snapshot"))
+    }
+
+    fn secret_handle_from_snapshot(
+        &mut self,
+        snapshot: &SecretValuePayload,
+    ) -> Result<Resource<SecretHandleRep>, Self::Error> {
+        let handle = self.table.push(SecretHandleRep::new(snapshot.clone()))?;
+        self.live += 1;
+        Ok(handle)
+    }
+
+    fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>) {
+        if self.table.delete(handle).is_ok() {
+            self.live -= 1;
+        }
+    }
+}
+
 #[test]
 fn quota_token_round_trips_through_resolver() {
     let value = SchemaValue::QuotaToken(sample_snapshot());
@@ -339,6 +389,16 @@ fn quota_token_round_trips_through_resolver() {
     let back = decode_value_with(wire, &mut resolver).expect("decode_with");
     assert_eq!(value, back);
     // The lowered handle was consumed by decoding; nothing leaks.
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn secret_round_trips_through_resolver() {
+    let value = SchemaValue::Secret(sample_secret_snapshot());
+    let mut resolver = TableResolver::new();
+    let wire = encode_value_with(&value, &mut resolver).expect("encode_with");
+    let back = decode_value_with(wire, &mut resolver).expect("decode_with");
+    assert_eq!(value, back);
     assert_eq!(resolver.live, 0);
 }
 
@@ -381,6 +441,22 @@ fn pure_decode_rejects_quota_handle() {
         encode_value_with(&SchemaValue::QuotaToken(sample_snapshot()), &mut resolver).unwrap();
     let err = decode_value(&wire).expect_err("pure decode must reject handles");
     assert!(matches!(err, DecodeError::QuotaTokenRequiresResolver));
+}
+
+#[test]
+fn pure_decode_rejects_unreferenced_secret_handle() {
+    let mut resolver = TableResolver::new();
+    let secret = resolver.secret_handle();
+    let tree = wire::SchemaValueTree {
+        value_nodes: vec![
+            wire::SchemaValueNode::SecretValue(secret),
+            wire::SchemaValueNode::BoolValue(false),
+        ],
+        root: 1,
+    };
+
+    let err = decode_value(&tree).expect_err("pure decode must reject secret transport");
+    assert!(matches!(err, DecodeError::SecretRequiresResolver));
 }
 
 #[test]
@@ -561,4 +637,89 @@ fn typed_reject_decoder_drains_handle_before_decoding_invalid_graph() {
         .expect_err("must reject before reaching the invalid graph");
     assert!(matches!(err, DecodeError::QuotaTokenNotPermitted(0)));
     assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn secrets_types_and_reveal_interfaces_are_imported_by_host_and_sdk_worlds() {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("golem-common is a workspace member");
+    let world_files = [
+        "wit/host.wit",
+        "sdks/rust/golem-rust/wit/golem-rust.wit",
+        "sdks/ts/wit/main.wit",
+        "sdks/scala/wit/main.wit",
+        "sdks/moonbit/golem_sdk/wit/main.wit",
+    ];
+
+    let missing_types = world_files
+        .iter()
+        .filter(|path| {
+            let contents = std::fs::read_to_string(workspace_root.join(path))
+                .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+            !contents.contains("import golem:secrets/types@0.1.0;")
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    let missing_reveal = world_files
+        .iter()
+        .filter(|path| {
+            let contents = std::fs::read_to_string(workspace_root.join(path))
+                .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+            !contents.contains("import golem:secrets/reveal@0.1.0;")
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    // `golem:secrets/create@0.1.0` is not implemented; the interface must not be
+    // imported by any host/SDK world (it is removed from the WIT deps entirely).
+    let imported_create = world_files
+        .iter()
+        .filter(|path| {
+            let contents = std::fs::read_to_string(workspace_root.join(path))
+                .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+            contents.contains("golem:secrets/create")
+        })
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing_types.is_empty(),
+        "golem:secrets/types@0.1.0 is missing from these host/SDK worlds: {missing_types:?}"
+    );
+    assert!(
+        missing_reveal.is_empty(),
+        "golem:secrets/reveal@0.1.0 is missing from these host/SDK worlds: {missing_reveal:?}"
+    );
+    assert!(
+        imported_create.is_empty(),
+        "golem:secrets/create is not implemented and must not be referenced by these host/SDK worlds: {imported_create:?}"
+    );
+}
+
+#[test]
+fn agent_error_reject_decoder_drains_secret_handle() {
+    let mut resolver = TableResolver::new();
+    let valid = encode_typed(&TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::bool()),
+        SchemaValue::Bool(false),
+    ))
+    .expect("encode valid typed");
+    let secret = resolver.secret_handle();
+    let wire_err =
+        crate::schema::agent::wit::wire::AgentError::CustomError(wire::TypedSchemaValue {
+            graph: valid.graph,
+            value: wire::SchemaValueTree {
+                value_nodes: vec![wire::SchemaValueNode::SecretValue(secret)],
+                root: 0,
+            },
+        });
+
+    let err =
+        crate::schema::agent::wit::decode_agent_error_rejecting_quota_with(wire_err, &mut resolver)
+            .expect_err("custom errors must not carry secret handles");
+    assert!(err.to_string().contains("secret"));
+    assert_eq!(
+        resolver.live, 0,
+        "secret handle was rejected but not drained"
+    );
 }

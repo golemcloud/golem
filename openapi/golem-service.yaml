@@ -14359,16 +14359,35 @@ components:
     SecretSpec:
       type: object
       properties:
+        inner:
+          $ref: '#/components/schemas/SchemaType'
         category:
           nullable: true
           type: string
     SecretValuePayload:
       type: object
       properties:
-        secretRef:
+        secretId:
+          type: string
+          format: uuid
+        configKey:
+          nullable: true
+          type: array
+          items:
+            type: string
+        version:
+          type: integer
+          format: uint64
+        resolvedAt:
+          type: string
+          format: date-time
+        category:
+          nullable: true
           type: string
       required:
-      - secretRef
+      - secretId
+      - version
+      - resolvedAt
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object

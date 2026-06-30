@@ -427,12 +427,15 @@ fn check_type(
             }
         }
 
+        SchemaType::Secret { spec, .. } => {
+            check_type(graph, &spec.inner, known, errors);
+        }
+
         SchemaType::Bool { .. }
         | SchemaType::Char { .. }
         | SchemaType::String { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
-        | SchemaType::Secret { .. }
         | SchemaType::QuotaToken { .. } => {}
     }
 }

@@ -98,7 +98,7 @@ object SchemaModelSpec extends ZIOSpecDefault {
           )
         )
       ),
-      NamedFieldType("secret", SchemaType(SecretType(SecretSpec(Some("api-key"))))),
+      NamedFieldType("secret", SchemaType(SecretType(SecretSpec(t.string, Some("api-key"))))),
       NamedFieldType("quotaToken", SchemaType(QuotaTokenType(QuotaTokenSpec(Some("tokens"))))),
       NamedFieldType("future", SchemaType(FutureType(Some(t.s32)))),
       NamedFieldType("stream", SchemaType(StreamType(None)))
@@ -146,7 +146,7 @@ object SchemaModelSpec extends ZIOSpecDefault {
         DurationValue(-123456789L),
         QuantityValueNode(QuantityValue(1500L, 3, "kg")),
         UnionValue("ssh", StringValue("ssh://host")),
-        SecretValue("secret-ref-1"),
+        SecretValue(GuestSecretHandle.fromRaw("secret-handle-1")),
         QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw("quota-token-handle-1"))
       )
     )

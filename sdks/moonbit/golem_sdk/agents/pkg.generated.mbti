@@ -125,11 +125,11 @@ pub(all) enum SnapshotFormat {
 
 // Traits
 pub(open) trait RawAgent {
-  invoke(Self, String, @types.SchemaValueTree, @common.Principal) -> Result[@types.SchemaValueTree?, @common.AgentError]
+  fn invoke(Self, String, @types.SchemaValueTree, @common.Principal) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }
 
 pub(open) trait Snapshottable {
-  save_snapshot(Self) -> Bytes
-  load_snapshot(Self, Bytes) -> Result[Unit, String]
+  fn save_snapshot(Self) -> Bytes
+  fn load_snapshot(Self, Bytes) -> Result[Unit, String]
 }
 

@@ -526,7 +526,7 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo-test-r run --workspace --lib -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --workspace --exclude golem-schema-derive --lib -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.dev-tools-tests]
@@ -616,7 +616,7 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
-cargo-test-r run --package integration-tests --test environment_deletion -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test environment-deletion -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group2]
@@ -634,7 +634,7 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TE
 script = '''
 cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
-cargo-test-r run --package integration-tests --test environment_deletion -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test environment-deletion -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4]

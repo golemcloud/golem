@@ -2,17 +2,17 @@
 struct TestBytesUnit {} derive(Show, Eq)
 
 ///|
-impl QuantityUnit for TestBytesUnit with type_id() {
+impl QuantityUnit for TestBytesUnit with fn type_id() {
   "test.BytesUnit"
 }
 
 ///|
-impl QuantityUnit for TestBytesUnit with base_unit() {
+impl QuantityUnit for TestBytesUnit with fn base_unit() {
   "bytes"
 }
 
 ///|
-impl QuantityUnit for TestBytesUnit with allowed_suffixes() {
+impl QuantityUnit for TestBytesUnit with fn allowed_suffixes() {
   ["kb", "mb"]
 }
 
