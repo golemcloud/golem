@@ -45,8 +45,7 @@ const value = await c1.increment()
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
-use counter_agent_client::CounterAgent;
-use golem_client::bridge::GolemServer;
+use counter_agent_client::{CounterAgent, GolemServer};
 
 CounterAgent::configure(GolemServer::Local, "bridgetest", "local");
 let c1 = CounterAgent::get("c1").await?;

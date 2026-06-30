@@ -126,6 +126,91 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
 }
 
 #[test]
+fn bridge_rust_external_consumer_can_configure_with_only_generated_dependency() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "CounterAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    );
+    let package_dir = target_dir.join(bridge_client_directory_name(&agent_type.type_name));
+    let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
+    generator.generate().unwrap();
+
+    let consumer_dir = target_dir.join("consumer");
+    std::fs::create_dir_all(consumer_dir.join("src")).unwrap();
+    std::fs::write(
+        consumer_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "generated-bridge-consumer"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+counter-agent-client = {{ path = {package_dir:?} }}
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        consumer_dir.join("src/main.rs"),
+        r#"fn main() {
+    counter_agent_client::configure(counter_agent_client::GolemServer::Local, "app", "local");
+}
+"#,
+    )
+    .unwrap();
+
+    let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
+    let output = std::process::Command::new("cargo")
+        .arg("check")
+        .arg("--target-dir")
+        .arg(&shared_target_dir)
+        .current_dir(&consumer_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generated bridge consumer failed to compile with only the generated crate dependency\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn bridge_rust_agent_named_golem_server_still_compiles() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "GolemServer",
+        "rust",
+        vec![],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    );
+
+    generate_and_compile(agent_type, target_dir);
+}
+
+#[test]
+fn bridge_rust_agent_named_bridge_still_compiles() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent("bridge", "", vec![], vec![], vec![], AgentMode::Durable);
+
+    generate_and_compile(agent_type, target_dir);
+}
+
+#[test]
 fn test_type_naming_rust_foo_agent() {
     test_type_naming::<RustTypeName>(GuestLanguage::Rust, "FooAgent");
 }

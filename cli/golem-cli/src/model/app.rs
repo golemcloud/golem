@@ -4080,13 +4080,9 @@ mod test {
                 crate::model::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
-            app_tmp_dir
-                .path()
-                .join("bridge-sdk/rust-guest")
-                .join(bridge_client_directory_name_for_mode(
-                    &alpha_agent,
-                    BridgeMode::Guest
-                ))
+            app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
+                bridge_client_directory_name_for_mode(&alpha_agent, BridgeMode::Guest)
+            )
         );
     }
 

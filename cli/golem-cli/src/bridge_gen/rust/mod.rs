@@ -66,18 +66,35 @@ pub enum RustBridgeMode {
 #[derive(Clone, Copy, Debug)]
 struct RustRuntimeConfig {
     mode: RustBridgeMode,
+    reexport_golem_server_at_root: bool,
 }
 
 impl RustRuntimeConfig {
     fn new(mode: RustBridgeMode) -> Self {
-        Self { mode }
+        Self {
+            mode,
+            reexport_golem_server_at_root: false,
+        }
+    }
+
+    fn with_root_golem_server_reexport(mut self, reexport: bool) -> Self {
+        self.reexport_golem_server_at_root = reexport;
+        self
     }
 
     fn generated_prelude(&self) -> TokenStream {
         match self.mode {
-            RustBridgeMode::ExternalRest => quote! {
-                mod __golem_bridge_runtime {
+            RustBridgeMode::ExternalRest => {
+                let root_golem_server_reexport = self
+                    .reexport_golem_server_at_root
+                    .then(|| quote! { pub use golem_client::bridge::GolemServer; });
+
+                quote! {
+                    #root_golem_server_reexport
+
+                    pub mod __golem_bridge_runtime {
                     pub use golem_client::bridge::ClientError;
+                    pub use golem_client::bridge::GolemServer;
 
                     pub mod schema {
                         pub use golem_common::schema::*;
@@ -87,7 +104,8 @@ impl RustRuntimeConfig {
                         pub use golem_common::agentic::*;
                     }
                 }
-            },
+                }
+            }
             RustBridgeMode::GuestWasmRpc => quote! {
                 #[derive(Debug, Clone)]
                 pub enum ClientError {
@@ -380,7 +398,9 @@ impl RustBridgeGenerator {
         let multimodals = self.multimodals()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
-        let runtime_prelude = RustRuntimeConfig::new(self.mode).generated_prelude();
+        let runtime_prelude = RustRuntimeConfig::new(self.mode)
+            .with_root_golem_server_reexport(!self.root_type_name_conflicts("GolemServer"))
+            .generated_prelude();
 
         let tokens = quote! {
             #![allow(unused)]
@@ -2156,6 +2176,13 @@ impl RustBridgeGenerator {
             }
         }
     }
+
+    fn root_type_name_conflicts(&self, name: &str) -> bool {
+        self.agent_type.type_name.0 == name
+            || self.type_naming.types().any(|(_, type_name)| {
+                matches!(type_name, RustTypeName::Derived(type_name) if type_name == name)
+            })
+    }
 }
 
 #[cfg(test)]
@@ -2195,10 +2222,65 @@ mod tests {
         let rendered = generator.generate_lib_rs_tokens().unwrap().to_string();
 
         assert!(rendered.contains("pub use golem_client :: bridge :: ClientError"));
+        assert!(rendered.contains("pub mod __golem_bridge_runtime"));
+        assert!(rendered.contains("pub use golem_client :: bridge :: GolemServer"));
         assert!(rendered.contains("pub use golem_common :: schema :: *"));
         assert!(rendered.contains("pub use golem_common :: agentic :: *"));
         assert!(rendered.contains("golem_client :: api :: AgentClient :: create_agent"));
         assert!(rendered.contains("reqwest_middleware :: ClientWithMiddleware"));
+    }
+
+    #[test]
+    fn external_generation_preserves_rest_cargo_dependencies_and_api_shape() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        let mut generator = RustBridgeGenerator::new(agent_type, &target_path, true).unwrap();
+
+        generator.generate().unwrap();
+
+        let cargo_toml = std::fs::read_to_string(target_path.join("Cargo.toml")).unwrap();
+        assert!(cargo_toml.contains("name = \"alpha-agent-client\""));
+        for dependency in [
+            "chrono",
+            "golem-client",
+            "golem-common",
+            "reqwest",
+            "reqwest-middleware",
+            "serde_json",
+            "uuid",
+        ] {
+            assert!(
+                cargo_toml.contains(&format!("{dependency} = ")),
+                "missing external REST dependency {dependency}:\n{cargo_toml}"
+            );
+        }
+        assert!(!cargo_toml.contains("golem-rust"));
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        for rest_shape in [
+            "pub async fn get(",
+            "pub async fn get_phantom(",
+            "pub async fn new_phantom(",
+            "pub fn configure(",
+            "server: golem_client::bridge::GolemServer",
+            "pub mod __golem_bridge_runtime",
+            "pub use golem_client::bridge::GolemServer",
+            "pub use golem_client::bridge::ClientError",
+            "pub use golem_common::schema::*",
+            "pub use golem_common::agentic::*",
+            "golem_client::api::AgentClient::create_agent",
+            "golem_client::api::AgentClient::invoke_agent",
+            "reqwest_middleware::ClientWithMiddleware",
+        ] {
+            assert!(
+                lib_rs.contains(rest_shape),
+                "missing external REST API shape {rest_shape}:\n{lib_rs}"
+            );
+        }
+        assert!(!lib_rs.contains("golem_rust"));
     }
 
     #[test]

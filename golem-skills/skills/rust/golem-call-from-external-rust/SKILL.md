@@ -50,17 +50,12 @@ my-agent-client = { path = "../path/to/bridge-sdk/rust/my-agent-client" }
 Then use the generated client:
 
 ```rust
-use my_agent_client::{MyAgent, global_config};
-use golem_client::bridge::{Configuration, GolemServer};
+use my_agent_client::{GolemServer, MyAgent};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure the Golem server connection
-    global_config(Configuration {
-        app_name: "my-app".to_string(),
-        env_name: "local".to_string(),
-        server: GolemServer::Local,
-    });
+    my_agent_client::configure(GolemServer::Local, "my-app", "local");
 
     // Get or create an agent instance
     let agent = MyAgent::get("my-instance".to_string()).await?;
@@ -86,7 +81,7 @@ GolemServer::Cloud { token: "your-api-token".to_string() }
 
 // Custom deployment
 GolemServer::Custom {
-    url: reqwest::Url::parse("https://my-golem.example.com")?,
+    url: "https://my-golem.example.com".parse()?,
     token: "your-token".to_string(),
 }
 ```
