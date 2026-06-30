@@ -218,18 +218,31 @@ Validation:
 
 Direct Agents Provider Foundation was explored, then reverted.
 
+Async TUI blocking-boundary cleanup:
+
+- Replaced blocking terminal event reading with `crossterm::event::EventStream`.
+- Kept `portable-pty` as the nested interactive backend, but isolated remaining blocking calls behind named PTY adapter helpers.
+- Changed nested CLI runtime control operations so key handling, resize handling, and stop/kill actions queue bounded control messages instead of calling PTY write/resize/kill methods inline.
+- Documented that `spawn_blocking` is allowed only for explicit blocking-library adapters, not normal TUI orchestration or direct ops/provider work.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli --lib -- tui:: --report-time`
+
 Decisions recorded:
 
 - Ops/resource exploration should use direct typed calls by default.
 - Nested CLI remains appropriate for dev/interactive workflows where PTY behavior matters.
 - Remaining ops nested CLI uses, including Agent inspect oplog/stream, are transitional debt until direct streaming providers exist.
 - A central `TuiOpsProvider`/`TuiDataProvider` is the wrong shape if it absorbs every view's request and event mapping.
-- The next direct-call foundation should be a smaller context executor: context snapshot selection, target generation, background async execution, logging scope, and completion delivery.
+- The next direct-call foundation should be a smaller context executor: selected context ownership, launch context cloning, target generation, background async execution, logging scope, and completion delivery.
 - Views should keep request-specific logic. For Agents, the view/app state should own mode selection, local mapping to rows, stale result handling, filtering, details, and events.
 - Command handlers should not grow TUI-specific methods such as `list_agents_for_tui`. Extract or expose neutral data-returning helpers and keep CLI rendering at the CLI edge.
 - Proper logging context is required before broad direct handler use. Thread-local logging alone is insufficient because existing `LogIndent` scopes commonly cross `.await` and TUI work may run concurrently.
 - Logging context should be explicit and async-aware: a scoped `LogContext` owns output mode, indentation, buffers, and captured lines; lookup can use tracing span extensions and Tokio task-local scope before falling back to global CLI logging.
-- Future environment switching should replace context snapshots instead of mutating a live `Context`.
+- Future environment switching should replace selected `Arc<Context>` values instead of mutating a live `Context`.
 
 Current status:
 
@@ -239,7 +252,7 @@ Current status:
 
 Research notes:
 
-- `Context` contains lazy clients, app context state, and caches; it should be treated as a context snapshot rather than a mutable global target.
+- `Context` contains lazy clients, app context state, and caches; selected contexts should be treated as immutable launch inputs rather than mutable global targets.
 - `Context::new` and environment/app resolution can have side effects such as manifest upgrades, app context initialization, component selection mutation, and server-side environment/app creation.
 - Global or static state that matters for TUI concurrency includes CLI logging state, buffered logging, terminal width caching, program lookup caching, cargo target-dir caching, SDK override caching, and per-application agent type caches.
 - Existing CLI logging uses global `LOG_STATE` and `LOG_STATE_BUFFER`; `LogIndent` and `LogOutput` mutate global state on construction/drop.
@@ -283,5 +296,28 @@ Validation:
 
 - `cargo fmt --package golem-cli`
 - `cargo test -p golem-cli --lib -- log --report-time`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli --lib -- tui:: --report-time`
+
+Context executor foundation implemented.
+
+Current status:
+
+- Added a small concrete TUI context executor module for `Arc<Context>` with an initial launch context, stable context id, active Tokio runtime handle reuse, scoped log capture, and generic completion event mapping.
+- Kept the TUI runtime path async: `tui::run` is awaited from command dispatch, events are delivered through bounded Tokio MPSC, and spinner/auto-refresh ticks run as Tokio tasks.
+- Added bounded-event backpressure behavior: important events await or blocking-send into the queue, while spinner/auto-refresh ticks are best-effort and dropped when the queue is full.
+- Switched the temporary nested Agents refresh subprocess from `spawn_blocking` plus `std::process::Command` to `tokio::process::Command`.
+- Isolated truly blocking terminal and PTY reads to Tokio blocking workers while feeding the same async TUI event loop; TUI-owned raw PTY threads were removed.
+- Factored nested CLI target-to-event mapping helpers with focused tests.
+- Wired production TUI startup to create one executor from the initial `Arc<Context>` without creating a nested runtime.
+- Removed the executor spawn counter and kept tests focused on delivered completion events.
+- Kept request construction and `TuiEvent` mapping outside the executor so it does not become a central provider.
+- Kept Agents refresh on the existing nested JSON CLI path for this slice.
+- Added executor tests with real CLI contexts for launch context delivery, captured logs, separate concurrent log buffers, error delivery, and active runtime reuse.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib -- context_executor --report-time`
 - `cargo check -p golem-cli`
 - `cargo test -p golem-cli --lib -- tui:: --report-time`

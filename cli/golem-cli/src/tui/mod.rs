@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod app;
+mod context_executor;
 mod input;
 mod nested_cli;
 mod terminal;

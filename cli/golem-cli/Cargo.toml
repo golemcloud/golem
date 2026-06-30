@@ -49,7 +49,7 @@ clap-verbosity-flag = { workspace = true }
 clap_complete = { workspace = true }
 colored = { workspace = true }
 crossbeam-channel = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
 dotenvy = { workspace = true }

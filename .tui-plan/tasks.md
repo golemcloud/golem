@@ -25,9 +25,17 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [x] Make `LogIndent` and `LogOutput` restore the context they were created against, including across `.await`.
 - [x] Add async capture and spawn helpers that propagate logging context and tracing span.
 - [x] Add focused logging tests for two concurrent captures, indentation across `.await`, scoped output mode, and global fallback behavior.
-- [ ] Replace the temporary provider shape with a smaller context executor that owns context generation, background execution, and logging scope only.
-- [ ] Keep view-specific request building and `TuiEvent` mapping in the views or app state, not in the executor.
-- [ ] Remove TUI-specific handler APIs and extract neutral data-returning helpers only when they are useful for both CLI and TUI call paths.
+- [x] Keep the TUI event loop async and use Tokio event delivery instead of blocking the CLI runtime on a sync event receiver.
+- [x] Use a bounded TUI event channel with explicit tick-drop behavior under backpressure.
+- [x] Run non-interactive nested Agents refresh with async subprocess APIs instead of `spawn_blocking`.
+- [x] Move TUI PTY reader/wait workers from raw threads to Tokio blocking tasks.
+- [x] Use async terminal input streams instead of blocking `crossterm::event::read`.
+- [x] Queue PTY write/resize/kill control requests through a bounded channel so TUI event handlers do not call `portable-pty` control methods inline.
+- [x] Replace the temporary provider shape with a smaller context executor that owns context generation, background execution, and logging scope only.
+- [x] Make the context executor reuse the active Tokio runtime handle instead of creating or blocking on its own runtime.
+- [x] Remove executor spawn counters and test through observable completion events.
+- [x] Keep view-specific request building and `TuiEvent` mapping in the views or app state, not in the executor.
+- [x] Remove TUI-specific handler APIs and extract neutral data-returning helpers only when they are useful for both CLI and TUI call paths.
 
 ## Next Planned Goals
 

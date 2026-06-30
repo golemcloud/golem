@@ -24,7 +24,7 @@ impl TuiCommandHandler {
         Self { ctx }
     }
 
-    pub fn cmd_tui(&self) -> anyhow::Result<()> {
-        crate::tui::run(self.ctx.clone())
+    pub async fn cmd_tui(&self) -> anyhow::Result<()> {
+        crate::tui::run(self.ctx.clone()).await
     }
 }

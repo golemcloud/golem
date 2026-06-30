@@ -15,6 +15,7 @@
 use crate::context::Context;
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::tui::TuiEvent;
+use crate::tui::context_executor::TuiContextExecutor;
 use crate::tui::input::encode_key_for_pty;
 use crate::tui::nested_cli::{
     CommandExit, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
@@ -23,8 +24,9 @@ use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
 use ansi_to_tui::IntoText;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
+use futures_util::StreamExt;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::Frame;
@@ -37,23 +39,32 @@ use ratatui::widgets::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::thread;
-use std::time::Duration;
+use tokio::process::Command;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{self, Sender};
+use tokio::time::{Duration, sleep};
 
-pub fn run(ctx: Arc<Context>) -> anyhow::Result<()> {
+const TUI_EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+type TuiEventSender = Sender<TuiEvent>;
+
+pub async fn run(ctx: Arc<Context>) -> anyhow::Result<()> {
+    let context_executor = Arc::new(TuiContextExecutor::new(ctx.clone()));
     let mut app = TuiApp::from_context(ctx.as_ref());
+    app.context_executor = Some(context_executor);
     let mut terminal = TerminalGuard::enter()?;
-    let (event_tx, event_rx) = mpsc::channel::<TuiEvent>();
+    let (event_tx, mut event_rx) = mpsc::channel::<TuiEvent>(TUI_EVENT_CHANNEL_CAPACITY);
     spawn_terminal_event_reader(event_tx.clone());
 
     terminal.draw(|frame| render(frame, &app))?;
 
     while !app.should_quit {
-        let event = event_rx.recv()?;
+        let Some(event) = event_rx.recv().await else {
+            break;
+        };
         app.handle_event(event, &event_tx);
         terminal.draw(|frame| render(frame, &app))?;
     }
@@ -62,64 +73,66 @@ pub fn run(ctx: Arc<Context>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn spawn_terminal_event_reader(event_tx: Sender<TuiEvent>) {
-    thread::spawn(move || {
-        loop {
-            match event::read() {
+fn spawn_terminal_event_reader(event_tx: TuiEventSender) {
+    tokio::spawn(async move {
+        let mut reader = EventStream::new();
+        while let Some(event) = reader.next().await {
+            match event {
                 Ok(event) => {
-                    if event_tx.send(TuiEvent::Terminal(event)).is_err() {
-                        return;
+                    if event_tx.send(TuiEvent::Terminal(event)).await.is_err() {
+                        break;
                     }
                 }
-                Err(_) => return,
+                Err(_) => break,
             }
         }
     });
 }
 
-fn spawn_command_spinner(command_id: u64, event_tx: Sender<TuiEvent>, stop: Arc<AtomicBool>) {
-    thread::spawn(move || {
+fn spawn_command_spinner(command_id: u64, event_tx: TuiEventSender, stop: Arc<AtomicBool>) {
+    tokio::spawn(async move {
         while !stop.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(120));
+            sleep(Duration::from_millis(120)).await;
             if stop.load(Ordering::Relaxed) {
                 return;
             }
-            if event_tx.send(TuiEvent::SpinnerTick(command_id)).is_err() {
-                return;
-            }
-        }
-    });
-}
-
-fn spawn_server_spinner(server_id: u64, event_tx: Sender<TuiEvent>, stop: Arc<AtomicBool>) {
-    thread::spawn(move || {
-        while !stop.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(120));
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
-            if event_tx
-                .send(TuiEvent::ServerSpinnerTick(server_id))
-                .is_err()
-            {
+            if event_channel_closed(event_tx.try_send(TuiEvent::SpinnerTick(command_id))) {
                 return;
             }
         }
     });
 }
 
-fn spawn_agent_auto_refresh(event_tx: Sender<TuiEvent>, stop: Arc<AtomicBool>) {
-    thread::spawn(move || {
+fn spawn_server_spinner(server_id: u64, event_tx: TuiEventSender, stop: Arc<AtomicBool>) {
+    tokio::spawn(async move {
         while !stop.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_secs(5));
+            sleep(Duration::from_millis(120)).await;
             if stop.load(Ordering::Relaxed) {
                 return;
             }
-            if event_tx.send(TuiEvent::AgentRefreshTick).is_err() {
+            if event_channel_closed(event_tx.try_send(TuiEvent::ServerSpinnerTick(server_id))) {
                 return;
             }
         }
     });
+}
+
+fn spawn_agent_auto_refresh(event_tx: TuiEventSender, stop: Arc<AtomicBool>) {
+    tokio::spawn(async move {
+        while !stop.load(Ordering::Relaxed) {
+            sleep(Duration::from_secs(5)).await;
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            if event_channel_closed(event_tx.try_send(TuiEvent::AgentRefreshTick)) {
+                return;
+            }
+        }
+    });
+}
+
+fn event_channel_closed(result: Result<(), TrySendError<TuiEvent>>) -> bool {
+    matches!(result, Err(TrySendError::Closed(_)))
 }
 
 struct TuiApp {
@@ -134,6 +147,7 @@ struct TuiApp {
     agents: AgentsState,
     next_command_id: u64,
     context: TuiContextInfo,
+    context_executor: Option<Arc<TuiContextExecutor>>,
 }
 
 impl TuiApp {
@@ -150,10 +164,11 @@ impl TuiApp {
             agents: AgentsState::default(),
             next_command_id: 1,
             context: TuiContextInfo::from_context(ctx),
+            context_executor: None,
         }
     }
 
-    fn handle_event(&mut self, event: TuiEvent, event_tx: &Sender<TuiEvent>) {
+    fn handle_event(&mut self, event: TuiEvent, event_tx: &TuiEventSender) {
         match event {
             TuiEvent::Terminal(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                 self.handle_key_with_events(key, Some(event_tx));
@@ -223,7 +238,7 @@ impl TuiApp {
         self.handle_key_with_events(key, None);
     }
 
-    fn handle_key_with_events(&mut self, key: KeyEvent, event_tx: Option<&Sender<TuiEvent>>) {
+    fn handle_key_with_events(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
         match self.mode {
             TuiMode::Normal => self.handle_global_key(key, event_tx),
             TuiMode::LeaderNormal => self.handle_leader_key(key, event_tx, TuiMode::Normal),
@@ -236,7 +251,7 @@ impl TuiApp {
         }
     }
 
-    fn handle_global_key(&mut self, key: KeyEvent, event_tx: Option<&Sender<TuiEvent>>) {
+    fn handle_global_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
         if self.active_view == TuiView::Agents && self.agents.view_mode == AgentsViewMode::Inspect {
             if key.code == KeyCode::Char('?') {
                 self.mode = TuiMode::Help;
@@ -312,7 +327,7 @@ impl TuiApp {
         }
     }
 
-    fn handle_palette_key(&mut self, key: KeyEvent, event_tx: Option<&Sender<TuiEvent>>) {
+    fn handle_palette_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
         match key.code {
             KeyCode::Esc => self.close_palette(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -354,7 +369,7 @@ impl TuiApp {
         }
     }
 
-    fn handle_agent_filter_key(&mut self, key: KeyEvent, event_tx: Option<&Sender<TuiEvent>>) {
+    fn handle_agent_filter_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
         match key.code {
             KeyCode::Esc | KeyCode::Enter => self.mode = TuiMode::Normal,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -386,7 +401,7 @@ impl TuiApp {
     fn handle_leader_key(
         &mut self,
         key: KeyEvent,
-        event_tx: Option<&Sender<TuiEvent>>,
+        event_tx: Option<&TuiEventSender>,
         return_mode: TuiMode,
     ) {
         match key.code {
@@ -458,7 +473,7 @@ impl TuiApp {
         }
     }
 
-    fn execute_action(&mut self, action: TuiActionKind, event_tx: Option<&Sender<TuiEvent>>) {
+    fn execute_action(&mut self, action: TuiActionKind, event_tx: Option<&TuiEventSender>) {
         match action {
             TuiActionKind::SelectView(view) => {
                 self.close_palette();
@@ -584,7 +599,7 @@ impl TuiApp {
         );
     }
 
-    fn open_agents_view(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn open_agents_view(&mut self, event_tx: Option<&TuiEventSender>) {
         self.active_view = TuiView::Agents;
         if self.agents.agents.is_empty() && !self.agents.refresh_running {
             self.refresh_agents(event_tx);
@@ -606,7 +621,7 @@ impl TuiApp {
         self.agents.filtered_agents()
     }
 
-    fn refresh_agents(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn refresh_agents(&mut self, event_tx: Option<&TuiEventSender>) {
         if self.agents.refresh_running {
             return;
         }
@@ -620,9 +635,13 @@ impl TuiApp {
             return;
         };
         let mode = self.agents.mode;
-        thread::spawn(move || {
-            let result = run_agent_refresh(mode).map_err(|error| format!("{error:#}"));
-            let _ = event_tx.send(TuiEvent::AgentRefreshFinished { generation, result });
+        tokio::spawn(async move {
+            let result = run_agent_refresh(mode)
+                .await
+                .map_err(|error| format!("{error:#}"));
+            let _ = event_tx
+                .send(TuiEvent::AgentRefreshFinished { generation, result })
+                .await;
         });
     }
 
@@ -649,7 +668,7 @@ impl TuiApp {
         }
     }
 
-    fn toggle_agent_auto_refresh(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn toggle_agent_auto_refresh(&mut self, event_tx: Option<&TuiEventSender>) {
         self.agents.auto_refresh = !self.agents.auto_refresh;
         if self.agents.auto_refresh {
             if self.agents.auto_refresh_stop.is_none() {
@@ -665,7 +684,7 @@ impl TuiApp {
         }
     }
 
-    fn cycle_agent_mode(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn cycle_agent_mode(&mut self, event_tx: Option<&TuiEventSender>) {
         self.agents.mode = self.agents.mode.next();
         self.agents.selected = 0;
         self.refresh_agents(event_tx);
@@ -686,7 +705,7 @@ impl TuiApp {
         }
     }
 
-    fn open_agent_inspect(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn open_agent_inspect(&mut self, event_tx: Option<&TuiEventSender>) {
         let Some(agent_name) = self
             .filtered_agents()
             .get(self.agents.selected)
@@ -725,7 +744,7 @@ impl TuiApp {
         self.start_agent_inspect_job(AgentInspectPane::Stream, event_tx);
     }
 
-    fn start_agent_inspect_job(&mut self, pane: AgentInspectPane, event_tx: &Sender<TuiEvent>) {
+    fn start_agent_inspect_job(&mut self, pane: AgentInspectPane, event_tx: &TuiEventSender) {
         let args = self.agent_inspect_job(pane).args.clone();
         let spec = match self.command_spec(args) {
             Ok(spec) => spec,
@@ -844,7 +863,7 @@ impl TuiApp {
         }
     }
 
-    fn start_command(&mut self, kind: CommandKind, event_tx: Option<&Sender<TuiEvent>>) {
+    fn start_command(&mut self, kind: CommandKind, event_tx: Option<&TuiEventSender>) {
         if self.command_is_running() {
             self.append_local_command_line("command already running");
             self.active_view = TuiView::Output;
@@ -1082,7 +1101,7 @@ impl TuiApp {
         }
     }
 
-    fn toggle_server(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn toggle_server(&mut self, event_tx: Option<&TuiEventSender>) {
         if self.server.run.is_running() {
             self.stop_server();
         } else {
@@ -1090,12 +1109,12 @@ impl TuiApp {
         }
     }
 
-    fn open_and_toggle_server(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn open_and_toggle_server(&mut self, event_tx: Option<&TuiEventSender>) {
         self.active_view = TuiView::Server;
         self.toggle_server(event_tx);
     }
 
-    fn start_server(&mut self, mode: ServerStartMode, event_tx: Option<&Sender<TuiEvent>>) {
+    fn start_server(&mut self, mode: ServerStartMode, event_tx: Option<&TuiEventSender>) {
         if self.server.run.is_running() {
             self.server
                 .run
@@ -1206,7 +1225,7 @@ impl TuiApp {
         }
     }
 
-    fn restart_server(&mut self, mode: ServerStartMode, event_tx: Option<&Sender<TuiEvent>>) {
+    fn restart_server(&mut self, mode: ServerStartMode, event_tx: Option<&TuiEventSender>) {
         if self.server.run.is_running() {
             self.server.run.restart_after_stop = Some(mode);
             self.stop_server();
@@ -1215,7 +1234,7 @@ impl TuiApp {
         }
     }
 
-    fn finish_server(&mut self, exit: CommandExit, event_tx: &Sender<TuiEvent>) {
+    fn finish_server(&mut self, exit: CommandExit, event_tx: &TuiEventSender) {
         let pending_restart = self.server.run.restart_after_stop.take();
         self.server.run.runtime = None;
         self.server.run.stop_spinner();
@@ -1269,7 +1288,7 @@ impl TuiApp {
         self.server.run.output.scroll_down(amount);
     }
 
-    fn start_or_focus_repl(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn start_or_focus_repl(&mut self, event_tx: Option<&TuiEventSender>) {
         self.active_view = TuiView::Repl;
         if self.repl.is_running() {
             self.mode = TuiMode::Repl;
@@ -1279,7 +1298,7 @@ impl TuiApp {
         self.start_repl(event_tx);
     }
 
-    fn start_repl(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn start_repl(&mut self, event_tx: Option<&TuiEventSender>) {
         let args = vec!["repl".to_string()];
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (screen_rows, screen_cols) = repl_screen_size_for_terminal(cols, rows);
@@ -1423,7 +1442,7 @@ impl TuiApp {
         }
     }
 
-    fn restart_repl(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+    fn restart_repl(&mut self, event_tx: Option<&TuiEventSender>) {
         if let Some(runtime) = self.repl.run.runtime.as_mut() {
             let _ = runtime.kill();
         }
@@ -2041,7 +2060,7 @@ fn server_args(clean: bool) -> Vec<String> {
     args
 }
 
-fn run_agent_refresh(mode: AgentModeFilter) -> anyhow::Result<String> {
+async fn run_agent_refresh(mode: AgentModeFilter) -> anyhow::Result<String> {
     let output = Command::new(crate::binary_path_to_string()?)
         .args([
             "agent",
@@ -2054,7 +2073,8 @@ fn run_agent_refresh(mode: AgentModeFilter) -> anyhow::Result<String> {
         .current_dir(crate::fs::current_dir_lexical()?)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()?;
+        .output()
+        .await?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -4709,7 +4729,7 @@ mod tests {
     #[test]
     fn inspect_events_route_to_separate_buffers() {
         let mut app = inspect_app();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = test_event_channel();
 
         app.handle_event(TuiEvent::AgentOplogOutput(b"oplog event\n".to_vec()), &tx);
         app.handle_event(TuiEvent::AgentStreamOutput(b"stream event\n".to_vec()), &tx);
@@ -4746,7 +4766,7 @@ mod tests {
     #[test]
     fn agent_refresh_result_updates_agents() {
         let mut app = test_app();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = test_event_channel();
         app.agents.refresh_generation = 1;
         app.agents.refresh_running = true;
 
@@ -5150,7 +5170,7 @@ mod tests {
     #[test]
     fn spinner_tick_advances_running_command() {
         let mut app = test_app();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = test_event_channel();
 
         app.handle_key(key(KeyCode::Char('b')));
         assert_eq!(
@@ -5171,6 +5191,14 @@ mod tests {
                 || frame.contains("/ running"),
             "{frame}"
         );
+    }
+
+    #[test]
+    fn full_tick_channel_is_not_treated_as_closed() {
+        let (tx, _rx) = mpsc::channel(1);
+        tx.try_send(TuiEvent::SpinnerTick(1)).expect("first tick");
+
+        assert!(!event_channel_closed(tx.try_send(TuiEvent::SpinnerTick(2))));
     }
 
     #[test]
@@ -5313,7 +5341,7 @@ mod tests {
     #[test]
     fn repl_output_is_rendered_as_terminal_screen() {
         let mut app = test_app();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = test_event_channel();
 
         app.handle_key(key(KeyCode::Char('r')));
         app.handle_event(TuiEvent::ReplOutput(b"hello\x1b[2DXY".to_vec()), &tx);
@@ -5325,7 +5353,7 @@ mod tests {
     #[test]
     fn repl_focus_sets_cursor_from_terminal_screen() {
         let mut app = test_app();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = test_event_channel();
 
         app.handle_key(key(KeyCode::Char('r')));
         app.handle_event(TuiEvent::ReplOutput(b"abc".to_vec()), &tx);
@@ -5372,7 +5400,12 @@ mod tests {
                 server: "local".to_string(),
                 config_dir: "/tmp/golem-config".to_string(),
             },
+            context_executor: None,
         }
+    }
+
+    fn test_event_channel() -> (TuiEventSender, mpsc::Receiver<TuiEvent>) {
+        mpsc::channel(16)
     }
 
     fn sample_agents() -> Vec<AgentListItem> {

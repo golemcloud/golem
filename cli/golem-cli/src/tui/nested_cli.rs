@@ -18,8 +18,9 @@ use portable_pty::{ChildKiller, CommandBuilder, PtyPair, PtySize, native_pty_sys
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
-use std::thread;
+use tokio::sync::mpsc::{self, Sender};
+
+const PTY_CONTROL_CHANNEL_CAPACITY: usize = 128;
 
 pub struct NestedCliSpec {
     pub program: PathBuf,
@@ -44,34 +45,43 @@ pub struct CommandExit {
 }
 
 pub struct NestedCliRuntime {
-    writer: Box<dyn Write + Send>,
-    killer: Box<dyn ChildKiller + Send + Sync>,
-    pty_pair: PtyPair,
+    control_tx: mpsc::Sender<NestedCliControl>,
 }
 
 impl NestedCliRuntime {
     pub fn write_all(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
-        self.writer.write_all(bytes)?;
-        self.writer.flush()?;
-        Ok(())
+        self.send_control(NestedCliControl::Write(bytes.to_vec()))
     }
 
     pub fn send_ctrl_c(&mut self) -> anyhow::Result<()> {
-        self.write_all(&[3])
+        self.send_control(NestedCliControl::Write(vec![3]))
     }
 
     pub fn kill(&mut self) -> anyhow::Result<()> {
-        self.killer.kill().context("Failed to kill nested CLI")
+        self.send_control(NestedCliControl::Kill)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.pty_pair.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
+        self.send_control(NestedCliControl::Resize { cols, rows })
     }
+
+    fn send_control(&self, command: NestedCliControl) -> anyhow::Result<()> {
+        self.control_tx
+            .try_send(command)
+            .context("Failed to queue nested CLI control command")
+    }
+}
+
+enum NestedCliControl {
+    Write(Vec<u8>),
+    Kill,
+    Resize { cols: u16, rows: u16 },
+}
+
+struct NestedCliControlRuntime {
+    writer: Box<dyn Write + Send>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    pty_pair: PtyPair,
 }
 
 pub fn spawn_nested_cli(
@@ -111,62 +121,29 @@ pub fn spawn_nested_cli(
         .take_writer()
         .context("Failed to take nested CLI PTY writer")?;
 
-    thread::spawn({
+    let (control_tx, control_rx) = mpsc::channel::<NestedCliControl>(PTY_CONTROL_CHANNEL_CAPACITY);
+
+    spawn_blocking_pty_reader({
         let event_tx = event_tx.clone();
         move || {
             let mut buffer = [0_u8; 4096];
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => {
-                        let _ = event_tx.send(match target {
-                            NestedCliTarget::Command => TuiEvent::CommandOutputClosed(None),
-                            NestedCliTarget::Server => TuiEvent::ServerOutputClosed(None),
-                            NestedCliTarget::Repl => TuiEvent::ReplOutputClosed(None),
-                            NestedCliTarget::AgentOplog => TuiEvent::AgentOplogOutputClosed(None),
-                            NestedCliTarget::AgentStream => TuiEvent::AgentStreamOutputClosed(None),
-                        });
+                        let _ = event_tx.blocking_send(output_closed_event(target, None));
                         return;
                     }
                     Ok(n) => {
                         if event_tx
-                            .send(match target {
-                                NestedCliTarget::Command => {
-                                    TuiEvent::CommandOutput(buffer[..n].to_vec())
-                                }
-                                NestedCliTarget::Server => {
-                                    TuiEvent::ServerOutput(buffer[..n].to_vec())
-                                }
-                                NestedCliTarget::Repl => TuiEvent::ReplOutput(buffer[..n].to_vec()),
-                                NestedCliTarget::AgentOplog => {
-                                    TuiEvent::AgentOplogOutput(buffer[..n].to_vec())
-                                }
-                                NestedCliTarget::AgentStream => {
-                                    TuiEvent::AgentStreamOutput(buffer[..n].to_vec())
-                                }
-                            })
+                            .blocking_send(output_event(target, buffer[..n].to_vec()))
                             .is_err()
                         {
                             return;
                         }
                     }
                     Err(error) => {
-                        let _ = event_tx.send(match target {
-                            NestedCliTarget::Command => {
-                                TuiEvent::CommandOutputClosed(Some(error.to_string()))
-                            }
-                            NestedCliTarget::Server => {
-                                TuiEvent::ServerOutputClosed(Some(error.to_string()))
-                            }
-                            NestedCliTarget::Repl => {
-                                TuiEvent::ReplOutputClosed(Some(error.to_string()))
-                            }
-                            NestedCliTarget::AgentOplog => {
-                                TuiEvent::AgentOplogOutputClosed(Some(error.to_string()))
-                            }
-                            NestedCliTarget::AgentStream => {
-                                TuiEvent::AgentStreamOutputClosed(Some(error.to_string()))
-                            }
-                        });
+                        let _ = event_tx
+                            .blocking_send(output_closed_event(target, Some(error.to_string())));
                         return;
                     }
                 }
@@ -174,26 +151,207 @@ pub fn spawn_nested_cli(
         }
     });
 
-    thread::spawn(move || {
+    spawn_blocking_pty_waiter(move || {
         if let Ok(status) = child.wait() {
             let code = Some(status.exit_code() as i32);
             let exit = CommandExit {
                 code,
                 success: code == Some(0),
             };
-            let _ = event_tx.send(match target {
-                NestedCliTarget::Command => TuiEvent::CommandExited(exit),
-                NestedCliTarget::Server => TuiEvent::ServerExited(exit),
-                NestedCliTarget::Repl => TuiEvent::ReplExited(exit),
-                NestedCliTarget::AgentOplog => TuiEvent::AgentOplogExited(exit),
-                NestedCliTarget::AgentStream => TuiEvent::AgentStreamExited(exit),
-            });
+            let _ = event_tx.blocking_send(exit_event(target, exit));
         }
     });
 
-    Ok(NestedCliRuntime {
-        writer,
-        killer,
-        pty_pair: pair,
-    })
+    spawn_blocking_pty_control(
+        NestedCliControlRuntime {
+            writer,
+            killer,
+            pty_pair: pair,
+        },
+        control_rx,
+    );
+
+    Ok(NestedCliRuntime { control_tx })
+}
+
+fn spawn_blocking_pty_reader(read_loop: impl FnOnce() + Send + 'static) {
+    tokio::task::spawn_blocking(read_loop);
+}
+
+fn spawn_blocking_pty_waiter(wait_loop: impl FnOnce() + Send + 'static) {
+    tokio::task::spawn_blocking(wait_loop);
+}
+
+fn spawn_blocking_pty_control(
+    mut runtime: NestedCliControlRuntime,
+    mut control_rx: mpsc::Receiver<NestedCliControl>,
+) {
+    tokio::task::spawn_blocking(move || {
+        while let Some(command) = control_rx.blocking_recv() {
+            match command {
+                NestedCliControl::Write(bytes) => {
+                    let _ = runtime.writer.write_all(&bytes);
+                    let _ = runtime.writer.flush();
+                }
+                NestedCliControl::Kill => {
+                    let _ = runtime.killer.kill();
+                }
+                NestedCliControl::Resize { cols, rows } => {
+                    let _ = runtime.pty_pair.master.resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
+            }
+        }
+    });
+}
+
+fn output_event(target: NestedCliTarget, bytes: Vec<u8>) -> TuiEvent {
+    match target {
+        NestedCliTarget::Command => TuiEvent::CommandOutput(bytes),
+        NestedCliTarget::Server => TuiEvent::ServerOutput(bytes),
+        NestedCliTarget::Repl => TuiEvent::ReplOutput(bytes),
+        NestedCliTarget::AgentOplog => TuiEvent::AgentOplogOutput(bytes),
+        NestedCliTarget::AgentStream => TuiEvent::AgentStreamOutput(bytes),
+    }
+}
+
+fn output_closed_event(target: NestedCliTarget, error: Option<String>) -> TuiEvent {
+    match target {
+        NestedCliTarget::Command => TuiEvent::CommandOutputClosed(error),
+        NestedCliTarget::Server => TuiEvent::ServerOutputClosed(error),
+        NestedCliTarget::Repl => TuiEvent::ReplOutputClosed(error),
+        NestedCliTarget::AgentOplog => TuiEvent::AgentOplogOutputClosed(error),
+        NestedCliTarget::AgentStream => TuiEvent::AgentStreamOutputClosed(error),
+    }
+}
+
+fn exit_event(target: NestedCliTarget, exit: CommandExit) -> TuiEvent {
+    match target {
+        NestedCliTarget::Command => TuiEvent::CommandExited(exit),
+        NestedCliTarget::Server => TuiEvent::ServerExited(exit),
+        NestedCliTarget::Repl => TuiEvent::ReplExited(exit),
+        NestedCliTarget::AgentOplog => TuiEvent::AgentOplogExited(exit),
+        NestedCliTarget::AgentStream => TuiEvent::AgentStreamExited(exit),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn maps_output_events_by_target() {
+        assert!(matches!(
+            output_event(NestedCliTarget::Command, b"cmd".to_vec()),
+            TuiEvent::CommandOutput(bytes) if bytes == b"cmd"
+        ));
+        assert!(matches!(
+            output_event(NestedCliTarget::Server, b"server".to_vec()),
+            TuiEvent::ServerOutput(bytes) if bytes == b"server"
+        ));
+        assert!(matches!(
+            output_event(NestedCliTarget::Repl, b"repl".to_vec()),
+            TuiEvent::ReplOutput(bytes) if bytes == b"repl"
+        ));
+        assert!(matches!(
+            output_event(NestedCliTarget::AgentOplog, b"oplog".to_vec()),
+            TuiEvent::AgentOplogOutput(bytes) if bytes == b"oplog"
+        ));
+        assert!(matches!(
+            output_event(NestedCliTarget::AgentStream, b"stream".to_vec()),
+            TuiEvent::AgentStreamOutput(bytes) if bytes == b"stream"
+        ));
+    }
+
+    #[test]
+    fn maps_closed_events_by_target() {
+        assert!(matches!(
+            output_closed_event(NestedCliTarget::Command, Some("closed".to_string())),
+            TuiEvent::CommandOutputClosed(Some(error)) if error == "closed"
+        ));
+        assert!(matches!(
+            output_closed_event(NestedCliTarget::Server, None),
+            TuiEvent::ServerOutputClosed(None)
+        ));
+        assert!(matches!(
+            output_closed_event(NestedCliTarget::Repl, None),
+            TuiEvent::ReplOutputClosed(None)
+        ));
+        assert!(matches!(
+            output_closed_event(NestedCliTarget::AgentOplog, None),
+            TuiEvent::AgentOplogOutputClosed(None)
+        ));
+        assert!(matches!(
+            output_closed_event(NestedCliTarget::AgentStream, None),
+            TuiEvent::AgentStreamOutputClosed(None)
+        ));
+    }
+
+    #[test]
+    fn maps_exit_events_by_target() {
+        let exit = CommandExit {
+            code: Some(0),
+            success: true,
+        };
+
+        assert!(matches!(
+            exit_event(NestedCliTarget::Command, exit),
+            TuiEvent::CommandExited(value) if value == exit
+        ));
+        assert!(matches!(
+            exit_event(NestedCliTarget::Server, exit),
+            TuiEvent::ServerExited(value) if value == exit
+        ));
+        assert!(matches!(
+            exit_event(NestedCliTarget::Repl, exit),
+            TuiEvent::ReplExited(value) if value == exit
+        ));
+        assert!(matches!(
+            exit_event(NestedCliTarget::AgentOplog, exit),
+            TuiEvent::AgentOplogExited(value) if value == exit
+        ));
+        assert!(matches!(
+            exit_event(NestedCliTarget::AgentStream, exit),
+            TuiEvent::AgentStreamExited(value) if value == exit
+        ));
+    }
+
+    #[test]
+    fn runtime_queues_write_control_commands() {
+        let (control_tx, mut control_rx) = mpsc::channel(1);
+        let mut runtime = NestedCliRuntime { control_tx };
+
+        runtime.write_all(b"input").expect("queue write");
+
+        assert!(matches!(
+            control_rx.try_recv().expect("control command"),
+            NestedCliControl::Write(bytes) if bytes == b"input"
+        ));
+    }
+
+    #[test]
+    fn runtime_queues_kill_and_resize_control_commands() {
+        let (control_tx, mut control_rx) = mpsc::channel(2);
+        let mut runtime = NestedCliRuntime { control_tx };
+
+        runtime.kill().expect("queue kill");
+        runtime.resize(120, 40).expect("queue resize");
+
+        assert!(matches!(
+            control_rx.try_recv().expect("kill command"),
+            NestedCliControl::Kill
+        ));
+        assert!(matches!(
+            control_rx.try_recv().expect("resize command"),
+            NestedCliControl::Resize {
+                cols: 120,
+                rows: 40
+            }
+        ));
+    }
 }

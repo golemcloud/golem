@@ -2240,6 +2240,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "futures-core",
  "mio 1.1.1",
  "parking_lot",
  "rustix 1.1.4",
