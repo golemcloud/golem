@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { StandardSchemaV1 } from './schema/standardSchema';
+import { HttpEndpointSpec } from './http';
 
 export type InputRecord = Record<string, StandardSchemaV1>;
 
@@ -34,6 +35,12 @@ export interface MethodSpec<Input extends InputRecord = InputRecord, Output = un
   readonly promptHint?: string;
   /** When `true`, marks the method as read-only (surfaced as `agent-method.read-only`). */
   readonly readOnly?: boolean;
+  /**
+   * HTTP endpoint(s) exposing this method. Each is compiled to one
+   * `agent-method.http-endpoint` (`http-endpoint-details`) record. Requires the
+   * agent to declare a `http` mount on `defineAgent`.
+   */
+  readonly http?: HttpEndpointSpec | HttpEndpointSpec[];
 }
 
 /**
@@ -55,6 +62,7 @@ export function method<Input extends InputRecord, Output>(spec: {
   description?: string;
   promptHint?: string;
   readOnly?: boolean;
+  http?: HttpEndpointSpec | HttpEndpointSpec[];
 }): MethodSpec<Input, Output> {
   return {
     input: spec.input,
@@ -62,5 +70,6 @@ export function method<Input extends InputRecord, Output>(spec: {
     description: spec.description,
     promptHint: spec.promptHint,
     readOnly: spec.readOnly,
+    http: spec.http,
   };
 }

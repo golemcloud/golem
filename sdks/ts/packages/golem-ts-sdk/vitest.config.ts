@@ -48,6 +48,10 @@ export default defineConfig({
         __dirname,
         'types/golem_websocket_1_5_0_client.d.ts',
       ),
+      'golem:rdbms/postgres@1.5.0': path.resolve(__dirname, 'types/golem_rdbms_1_5_0_postgres.d.ts'),
+      'golem:rdbms/mysql@1.5.0': path.resolve(__dirname, 'types/golem_rdbms_1_5_0_mysql.d.ts'),
+      'golem:rdbms/ignite2@1.5.0': path.resolve(__dirname, 'types/golem_rdbms_1_5_0_ignite2.d.ts'),
+      'golem:rdbms/types@1.5.0': path.resolve(__dirname, 'types/golem_rdbms_1_5_0_types.d.ts'),
     },
   },
 });

@@ -25,6 +25,7 @@ import { Principal } from '../principal';
 import { Uuid } from '../uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
 import { ConfigSpec } from './config';
+import { HttpMountSpec } from './http';
 
 export type { ConfigSpec } from './config';
 
@@ -43,6 +44,8 @@ export interface AgentMetadataSpec {
   readonly dependencies?: readonly string[];
   readonly snapshotting?: SnapshottingSpec;
   readonly config?: ConfigSpec;
+  /** HTTP mount declaration; surfaced as `agent-type.http-mount`. */
+  readonly http?: HttpMountSpec;
 }
 
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {
@@ -138,6 +141,12 @@ export interface AgentSpec<Id extends IdRecord, Methods extends MethodsRecord> {
    * host as `secret<inner>`. Surfaced as `agent-type.config`.
    */
   config?: ConfigSpec;
+  /**
+   * HTTP mount for the agent: a path prefix (`{var}` template or path-segment
+   * builders) plus optional auth / CORS / webhook-suffix. Required if any
+   * method declares an `http` endpoint. Surfaced as `agent-type.http-mount`.
+   */
+  http?: HttpMountSpec;
 }
 
 /**
@@ -174,6 +183,7 @@ export function defineAgent<Id extends IdRecord, Methods extends MethodsRecord>(
     dependencies: (spec.dependencies ?? []).map((d) => d.name),
     snapshotting: spec.snapshotting,
     config: spec.config,
+    http: spec.http,
   });
   return {
     name: spec.name,

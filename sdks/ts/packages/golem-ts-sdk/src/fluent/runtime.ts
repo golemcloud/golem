@@ -68,6 +68,8 @@ import type {
 } from './defineAgent';
 import { MethodSpec } from './method';
 import { buildConfigAccessor, compileConfig, ConfigDeclaration } from './config';
+import { compileEndpoint, compileMount, pathVariableNames } from './http';
+import { HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@2.0.0';
 
 /** A named parameter and its compiled codec, in declaration order. */
 interface NamedCodec {
@@ -82,6 +84,8 @@ interface MethodCodec {
   output: { tag: 'unit' } | { tag: 'single'; codec: FluentCodec };
   /** Method-level metadata (description / promptHint / readOnly). */
   meta: Pick<MethodSpec, 'description' | 'promptHint' | 'readOnly'>;
+  /** Compiled WIT HTTP endpoints declared on this method (empty if none). */
+  httpEndpoints: HttpEndpointDetails[];
 }
 
 /** Compiled agent: the assembled `AgentType` plus the per-schema codecs. */
@@ -121,6 +125,18 @@ export function registerAgentType(
     const output: MethodCodec['output'] = returnsCodec.isUnit
       ? { tag: 'unit' }
       : { tag: 'single', codec: returnsCodec };
+
+    const httpSpecs = spec.http === undefined ? [] : Array.isArray(spec.http) ? spec.http : [spec.http];
+    const httpEndpoints = httpSpecs.map((ep) => {
+      try {
+        return compileEndpoint(ep);
+      } catch (e) {
+        throw new Error(
+          `Agent "${name}" method "${methodName}" has an invalid HTTP endpoint: ${errorMessage(e)}`,
+        );
+      }
+    });
+
     methodCodecs.set(methodName, {
       name: methodName,
       inputCodecs,
@@ -130,6 +146,7 @@ export function registerAgentType(
         promptHint: spec.promptHint,
         readOnly: spec.readOnly,
       },
+      httpEndpoints,
     });
   }
 
@@ -182,6 +199,81 @@ function resolveDependencies(name: string, depNames: readonly string[]): AgentDe
   });
 }
 
+/** Compile the agent's HTTP mount, wrapping parse failures with the agent name. */
+function compileHttpMount(name: string, http: NonNullable<AgentMetadataSpec['http']>): HttpMountDetails {
+  try {
+    return compileMount(http);
+  } catch (e) {
+    throw new Error(`Agent "${name}" has an invalid HTTP mount: ${errorMessage(e)}`);
+  }
+}
+
+/**
+ * Registry-free consistency checks for the fluent HTTP surface:
+ *  - a method declaring endpoints requires the agent to have a mount;
+ *  - every `{var}` in the mount prefix must be an id-record field;
+ *  - every path/query/header variable in an endpoint must be a method input
+ *    parameter (mount path vars are also accepted, since the host resolves them
+ *    from the constructor-supplied id).
+ */
+function validateHttpConsistency(
+  name: string,
+  httpMount: HttpMountDetails | undefined,
+  idCodecs: NamedCodec[],
+  methodCodecs: Map<string, MethodCodec>,
+): void {
+  const idNames = new Set(idCodecs.map((c) => c.name));
+  const mountVars = httpMount ? pathVariableNames(httpMount.pathPrefix) : new Set<string>();
+
+  if (httpMount) {
+    for (const v of mountVars) {
+      if (!idNames.has(v)) {
+        throw new Error(
+          `Agent "${name}" HTTP mount references path variable "${v}", but it is not a field of ` +
+            `the agent id. Mount path variables must match id fields.`,
+        );
+      }
+    }
+  }
+
+  for (const mc of methodCodecs.values()) {
+    if (mc.httpEndpoints.length === 0) continue;
+    if (!httpMount) {
+      throw new Error(
+        `Agent "${name}" method "${mc.name}" declares HTTP endpoint(s) but the agent has no HTTP ` +
+          `mount. Add an "http" mount to defineAgent.`,
+      );
+    }
+    const inputNames = new Set(mc.inputCodecs.map((c) => c.name));
+    for (const ep of mc.httpEndpoints) {
+      for (const v of pathVariableNames(ep.pathSuffix)) {
+        assertEndpointVar(name, mc.name, v, 'path', inputNames, mountVars);
+      }
+      for (const q of ep.queryVars) {
+        assertEndpointVar(name, mc.name, q.variableName, 'query', inputNames, mountVars);
+      }
+      for (const h of ep.headerVars) {
+        assertEndpointVar(name, mc.name, h.variableName, 'header', inputNames, mountVars);
+      }
+    }
+  }
+}
+
+function assertEndpointVar(
+  name: string,
+  methodName: string,
+  variable: string,
+  location: 'path' | 'query' | 'header',
+  inputNames: Set<string>,
+  mountVars: Set<string>,
+): void {
+  if (inputNames.has(variable) || mountVars.has(variable)) return;
+  throw new Error(
+    `Agent "${name}" method "${methodName}" HTTP ${location} variable "${variable}" is not a ` +
+      `parameter of the method (nor a mount path variable).`,
+  );
+}
+
 function assembleAgentType(
   name: string,
   idCodecs: NamedCodec[],
@@ -213,6 +305,14 @@ function assembleAgentType(
 
   const constructorInput = encodeInput(idCodecs);
 
+  // Compile the HTTP mount (if any), then validate mount + endpoint variable
+  // consistency against the id record / method inputs (registry-free checks;
+  // the decorator-era validators are param-registry coupled and unusable here).
+  const httpMount: HttpMountDetails | undefined = metadata.http
+    ? compileHttpMount(name, metadata.http)
+    : undefined;
+  validateHttpConsistency(name, httpMount, idCodecs, methodCodecs);
+
   const methods: AgentMethod[] = [];
   for (const mc of methodCodecs.values()) {
     const outputSchema: OutputSchema =
@@ -223,7 +323,7 @@ function assembleAgentType(
       name: mc.name,
       description: mc.meta.description ?? '',
       promptHint: mc.meta.promptHint,
-      httpEndpoint: [],
+      httpEndpoint: mc.httpEndpoints,
       // A simple `readOnly: true` maps to a non-caching, principal-agnostic
       // `read-only-config`; omitted/`false` leaves the WIT field unset.
       readOnly: mc.meta.readOnly ? { cachePolicy: { tag: 'no-cache' }, usesPrincipal: false } : undefined,
@@ -255,7 +355,7 @@ function assembleAgentType(
     methods,
     dependencies: resolveDependencies(name, metadata.dependencies ?? []),
     mode: metadata.mode ?? 'durable',
-    httpMount: undefined,
+    httpMount,
     snapshotting: toWitSnapshotting(metadata.snapshotting),
     config: configDeclarations.map((d) => ({
       source: d.source,

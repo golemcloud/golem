@@ -53,3 +53,7 @@ export type { RemoteClient } from './client';
 export * from './keyvalue';
 export * from './blobstore';
 export * from './websocket';
+export * from './rdbms';
+
+// HTTP mount + endpoint declaration helpers.
+export * as http from './http';
