@@ -45,24 +45,24 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [x] Preserve manual refresh, auto-refresh, mode cycle, fuzzy filtering, details, and stale result protection.
 - [x] Remove production JSON parsing fallback for the Agents list.
 
-## Current Goal: TUI Design System Discovery
+## Completed Goal: TUI Design System Discovery
 
 - [x] Interview the user about the TUI's intended workflows, navigation model, dev workspace, ops explorer, layouts, and interaction rules.
 - [x] Reconcile interview answers with the current implementation: modes, views, actions, jobs, context execution, logging, and remaining nested ops debt.
 - [x] Create the initial design system document only after the important open questions are answered.
 - [x] Interview the user about shortcut notation, navigation, leader grammar, focus, text input, list navigation, and shortcut conflict rules.
 - [x] Add initial interaction and shortcut rules to the design system document.
-- [ ] Review the document with the user, revise through additional interview/review passes, and repeat until the design system is accepted.
-- [ ] Keep implementation work paused while the design system is still being discovered.
+- [x] Review the document, defer non-blocking open questions, and accept the design system for workspace-shell planning.
+- [x] Keep major implementation work paused until the design-system review is accepted; only low-risk metadata cleanup happened before acceptance.
 
 ## Milestone Backlog
 
 ### Milestone 0: Design Review
 
-- [ ] Review `ui-system.md` with the user.
-- [ ] Revise the design-system document through additional interview/review passes.
-- [ ] Accept the design system before major workspace or navigation reshaping starts.
-- [ ] Allow only low-risk metadata/alignment cleanup before the review is accepted.
+- [x] Review `ui-system.md` and record section status.
+- [x] Revise the design-system document through interview/review passes.
+- [x] Accept the design system before major workspace or navigation reshaping starts.
+- [x] Allow only low-risk metadata/alignment cleanup before the review is accepted.
 
 ### Milestone 1: Interaction Metadata Cleanup
 

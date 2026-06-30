@@ -393,3 +393,24 @@ Validation:
 - `cargo fmt --package golem-cli`
 - `cargo test -p golem-cli --lib -- tui::`
 - `cargo check -p golem-cli`
+
+Design-system review pass completed.
+
+Current status:
+
+- Reviewed `ui-system.md` section by section and accepted it as the planning
+  baseline for the Home, Dev, and Ops workspace shell remap.
+- Recorded the accepted sections directly in the design-system document:
+  core model, global shell, workspaces, layout/navigation,
+  interaction/shortcuts, jobs/output, context/environments, actions/help, Ops
+  data rules, implementation audit, roadmap, and accessibility/stability.
+- Reclassified the remaining open questions as non-blocking deferred decisions.
+  They should be resolved by the milestone that owns them, not before the first
+  workspace-shell remap can be planned.
+- Marked the design discovery goal and Milestone 0 review gate complete in the
+  TUI backlog.
+- Left Rust code unchanged for this pass.
+
+Validation:
+
+- `git diff --check -- .tui-plan/ui-system.md .tui-plan/tasks.md .tui-plan/progress.md`

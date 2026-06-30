@@ -361,16 +361,40 @@ Agents list refresh already uses a direct typed context-executor call.
 Agent inspect oplog and stream still use nested CLI. That is transitional Ops
 debt and should move to direct streaming providers.
 
+## Review Status
+
+This document is accepted as the planning baseline for the Home, Dev, and Ops
+workspace shell remap.
+
+Accepted sections:
+
+- Core Model;
+- Global Shell;
+- Workspaces;
+- Layout And Navigation;
+- Interaction And Shortcuts;
+- Jobs And Output;
+- Context And Environments;
+- Actions And Help;
+- Ops Data Rules;
+- Current Implementation Audit;
+- Roadmap;
+- Accessibility And Stability.
+
+The remaining open questions are non-blocking deferred decisions. They should
+be answered when their owning milestone is planned or when implementation hits
+the decision directly. They must not block the first workspace-shell remap.
+
 ## Roadmap
 
-Milestone 0: review and accept this design-system document. Major workspace or
-navigation reshaping should wait for review. Before acceptance, only low-risk
-metadata and wording cleanup should proceed.
+Milestone 0: review and accept this design-system document. This is complete.
+Major workspace or navigation reshaping may now be planned from this baseline.
 
 Milestone 1: align interaction metadata with the design-system vocabulary. Fix
 shortcut notation, action metadata drift, execution kind drift, availability
 reasons, and help wording. This milestone should be behavior-preserving except
-for clearer unavailable-action handling and help/metadata text.
+for clearer unavailable-action handling and help/metadata text. This is
+complete.
 
 Milestone 2: implement the Home, Dev, and Ops workspace shell full remap.
 Dashboard should become Home. Output, Server, and REPL should become Dev panels
@@ -396,13 +420,20 @@ workspace.
 
 ## Open Questions
 
-- Final Ops dashboard group names and boundaries.
-- Which Dev layout presets should ship first.
-- Whether Home should eventually support configurable dashboard sections.
+These questions are deferred and non-blocking:
+
+- Final Ops dashboard group names and boundaries. Use the placeholder groups
+  for planning, then rename or regroup during Ops dashboard implementation.
+- Which Dev layout presets should ship first. Start from the existing Output,
+  Server, REPL, and Agents workflows during the workspace-shell remap, then
+  refine presets once the panels exist in the new model.
+- Whether Home should eventually support configurable dashboard sections. Keep
+  the first Home static and curated.
 - How much customization local and production contexts should get after the
-  shared model is implemented.
+  shared model is implemented. Keep the shared model first; revisit during the
+  selected-context UX milestone.
 - Which action/help documentation artifacts should be generated during DX/UX
-  hardening.
+  hardening. Defer until the action and workspace model has settled.
 
 ## Accessibility And Stability
 
