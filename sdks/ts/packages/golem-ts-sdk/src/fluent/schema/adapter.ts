@@ -24,6 +24,7 @@
 
 import { FluentCodec, SchemaWalker } from './codec';
 import { isStandardSchema } from './standardSchema';
+import { isMarkerSchema, WIT_MARKER } from './markers';
 
 const walkers = new Map<string, SchemaWalker>();
 
@@ -41,6 +42,12 @@ export function registeredVendors(): string[] {
  * walker. Recursive entry point: walkers call it for child schemas.
  */
 export function compileSchema(schema: unknown): FluentCodec {
+  // Markers carry a hidden `WIT_MARKER` brand (a `FluentCodec`-builder) so users
+  // can express WIT kinds Standard Schema can't. Intercept them BEFORE the
+  // vendor dispatch; non-markers fall through to the per-vendor walker path.
+  if (isMarkerSchema(schema)) {
+    return schema[WIT_MARKER](compileSchema);
+  }
   if (!isStandardSchema(schema)) {
     throw new Error(
       'Expected a Standard Schema value (a schema with a `~standard` property, e.g. from Zod / Valibot / ArkType / Effect Schema)',

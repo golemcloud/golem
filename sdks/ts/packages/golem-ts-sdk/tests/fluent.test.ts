@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { defineAgent, method } from '../src/fluent';
 import { compileSchema } from '../src/fluent/schema/adapter';
+import { s } from '../src/fluent/schema/markers';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
@@ -116,6 +117,121 @@ describe('fluent Zod walker', () => {
 
   it('rejects non-Standard-Schema values', () => {
     expect(() => compileSchema({} as never)).toThrow(/Standard Schema/);
+  });
+});
+
+describe('fluent schema markers', () => {
+  it('pins integer numerics to their WIT width and round-trips', () => {
+    const small: { name: 'u8' | 'u16' | 'u32' | 's8' | 's16' | 's32'; make: () => unknown; sample: number }[] = [
+      { name: 'u8', make: () => s.u8(), sample: 200 },
+      { name: 'u16', make: () => s.u16(), sample: 40000 },
+      { name: 'u32', make: () => s.u32(), sample: 4000000000 },
+      { name: 's8', make: () => s.s8(), sample: -100 },
+      { name: 's16', make: () => s.s16(), sample: -30000 },
+      { name: 's32', make: () => s.s32(), sample: -2000000000 },
+    ];
+    for (const { name, make, sample } of small) {
+      const codec = compileSchema(make());
+      expect(codec.graph.root.body.tag).toBe(name);
+      expect(codec.fromValue(codec.toValue(sample))).toBe(sample);
+    }
+  });
+
+  it('pins 64-bit numerics (bigint) and round-trips', () => {
+    const big: { name: 'u64' | 's64'; make: () => unknown; sample: bigint }[] = [
+      { name: 'u64', make: () => s.u64(), sample: 12345678901234567890n },
+      { name: 's64', make: () => s.s64(), sample: -1234567890123456789n },
+    ];
+    for (const { name, make, sample } of big) {
+      const codec = compileSchema(make());
+      expect(codec.graph.root.body.tag).toBe(name);
+      expect(codec.fromValue(codec.toValue(sample))).toBe(sample);
+    }
+  });
+
+  it('pins f32 and round-trips', () => {
+    const codec = compileSchema(s.f32());
+    expect(codec.graph.root.body.tag).toBe('f32');
+    expect(codec.fromValue(codec.toValue(1.5))).toBe(1.5);
+  });
+
+  it('maps char to a char node and round-trips', () => {
+    const codec = compileSchema(s.char());
+    expect(codec.graph.root.body.tag).toBe('char');
+    expect(codec.fromValue(codec.toValue('x'))).toBe('x');
+  });
+
+  it('maps datetime to a datetime node and round-trips', () => {
+    const codec = compileSchema(s.datetime());
+    expect(codec.graph.root.body.tag).toBe('datetime');
+    const dt = { seconds: 1700000000n, nanoseconds: 500 };
+    expect(codec.fromValue(codec.toValue(dt))).toEqual(dt);
+  });
+
+  it('maps duration to a duration node and round-trips', () => {
+    const codec = compileSchema(s.duration());
+    expect(codec.graph.root.body.tag).toBe('duration');
+    expect(codec.fromValue(codec.toValue(42n))).toBe(42n);
+  });
+
+  it('maps url to a url node and round-trips', () => {
+    const codec = compileSchema(s.url());
+    expect(codec.graph.root.body.tag).toBe('url');
+    expect(codec.fromValue(codec.toValue('https://golem.cloud'))).toBe('https://golem.cloud');
+  });
+
+  it('maps bytes to a list<u8> node and round-trips', () => {
+    const codec = compileSchema(s.bytes());
+    expect(codec.graph.root.body).toMatchObject({ tag: 'list', element: { body: { tag: 'u8' } } });
+    const bytes = new Uint8Array([1, 2, 3, 255]);
+    expect(codec.fromValue(codec.toValue(bytes))).toEqual(bytes);
+  });
+
+  it('wraps an inner schema in a secret capability node', () => {
+    const codec = compileSchema(s.secret(z.string()));
+    expect(codec.graph.root.body.tag).toBe('secret');
+    expect((codec.graph.root.body as { tag: 'secret'; inner: { body: { tag: string } } }).inner.body.tag).toBe(
+      'string',
+    );
+  });
+
+  it('maps quotaToken to a quota-token capability node', () => {
+    const codec = compileSchema(s.quotaToken());
+    expect(codec.graph.root.body.tag).toBe('quota-token');
+  });
+
+  it('maps unstructuredText to a role-tagged variant and round-trips', () => {
+    const codec = compileSchema(s.unstructuredText());
+    expect(codec.graph.root.body.tag).toBe('variant');
+    expect(codec.graph.root.metadata.role).toMatchObject({ tag: 'unstructured-text' });
+    const url = { tag: 'url' as const, val: 'https://x' };
+    const inline = { tag: 'inline' as const, val: 'hello', languageCode: 'en' };
+    expect(codec.fromValue(codec.toValue(url))).toEqual(url);
+    expect(codec.fromValue(codec.toValue(inline))).toEqual(inline);
+  });
+
+  it('maps unstructuredBinary to a role-tagged variant and round-trips', () => {
+    const codec = compileSchema(s.unstructuredBinary());
+    expect(codec.graph.root.body.tag).toBe('variant');
+    expect(codec.graph.root.metadata.role).toMatchObject({ tag: 'unstructured-binary' });
+    const inline = { tag: 'inline' as const, val: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
+    expect(codec.fromValue(codec.toValue(inline))).toEqual(inline);
+  });
+
+  it('maps multimodal to a role-tagged list<variant> and round-trips', () => {
+    const codec = compileSchema(
+      s.multimodal([
+        { name: 'text', schema: s.unstructuredText() },
+        { name: 'image', schema: s.unstructuredBinary() },
+      ]),
+    );
+    expect(codec.graph.root.body.tag).toBe('list');
+    expect(codec.graph.root.metadata.role).toMatchObject({ tag: 'multimodal' });
+    const value = [
+      { tag: 'text', value: { tag: 'inline', val: 'hi' } },
+      { tag: 'image', value: { tag: 'url', val: 'https://img' } },
+    ];
+    expect(codec.fromValue(codec.toValue(value))).toEqual(value);
   });
 });
 

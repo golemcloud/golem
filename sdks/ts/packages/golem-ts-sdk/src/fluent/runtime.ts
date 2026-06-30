@@ -20,12 +20,14 @@
 
 import {
   AgentConstructor,
+  AgentDependency,
   AgentError,
   AgentMethod,
   AgentType,
   InputSchema,
   OutputSchema,
   Principal as HostPrincipal,
+  Snapshotting,
 } from 'golem:agent/common@2.0.0';
 import { Result } from 'golem:agent/host@2.0.0';
 import { SchemaValueTree } from 'golem:core/types@2.0.0';
@@ -57,7 +59,14 @@ import {
 import { decodeMultipart, encodeMultipart, MultipartPart } from '../internal/multipart';
 import { compileSchema } from './schema/adapter';
 import { FluentCodec } from './schema/codec';
-import type { AgentImplementation, IdRecord, MethodsRecord } from './defineAgent';
+import type {
+  AgentImplementation,
+  AgentMetadataSpec,
+  IdRecord,
+  MethodsRecord,
+  SnapshottingSpec,
+} from './defineAgent';
+import { MethodSpec } from './method';
 
 /** A named parameter and its compiled codec, in declaration order. */
 interface NamedCodec {
@@ -65,11 +74,13 @@ interface NamedCodec {
   codec: FluentCodec;
 }
 
-/** A compiled method: ordered input codecs + a unit-or-single output. */
+/** A compiled method: ordered input codecs + a unit-or-single output + metadata. */
 interface MethodCodec {
   name: string;
   inputCodecs: NamedCodec[];
   output: { tag: 'unit' } | { tag: 'single'; codec: FluentCodec };
+  /** Method-level metadata (description / promptHint / readOnly). */
+  meta: Pick<MethodSpec, 'description' | 'promptHint' | 'readOnly'>;
 }
 
 /** Compiled agent: the assembled `AgentType` plus the per-schema codecs. */
@@ -90,6 +101,7 @@ export function registerAgentType(
   name: string,
   id: IdRecord,
   methods: MethodsRecord,
+  metadata: AgentMetadataSpec = {},
 ): RegisteredAgent {
   const className = new AgentClassName(name);
 
@@ -107,10 +119,19 @@ export function registerAgentType(
     const output: MethodCodec['output'] = returnsCodec.isUnit
       ? { tag: 'unit' }
       : { tag: 'single', codec: returnsCodec };
-    methodCodecs.set(methodName, { name: methodName, inputCodecs, output });
+    methodCodecs.set(methodName, {
+      name: methodName,
+      inputCodecs,
+      output,
+      meta: {
+        description: spec.description,
+        promptHint: spec.promptHint,
+        readOnly: spec.readOnly,
+      },
+    });
   }
 
-  const agentType = assembleAgentType(name, idCodecs, methodCodecs);
+  const agentType = assembleAgentType(name, idCodecs, methodCodecs, metadata);
   AgentTypeRegistry.register(className, agentType);
 
   return { name, className, agentType, idCodecs, methodCodecs };
@@ -121,10 +142,47 @@ export function registerAgentType(
  * into one pool and encode each root into a shared `schema-graph` via
  * `GraphEncoder`. The decorator-SDK analog is `buildAgentType`.
  */
+/** Map the fluent {@link SnapshottingSpec} to the WIT `snapshotting` variant. */
+function toWitSnapshotting(spec: SnapshottingSpec | undefined): Snapshotting {
+  if (spec === undefined || spec === 'disabled') return { tag: 'disabled' };
+  if (spec === 'default') return { tag: 'enabled', val: { tag: 'default' } };
+  if ('periodicSeconds' in spec) {
+    // WIT `periodic` takes a `duration` (u64 nanoseconds).
+    const seconds = spec.periodicSeconds < 0 ? 0 : spec.periodicSeconds;
+    return { tag: 'enabled', val: { tag: 'periodic', val: BigInt(Math.round(seconds * 1e9)) } };
+  }
+  return { tag: 'enabled', val: { tag: 'every-n-invocation', val: spec.everyNInvocations } };
+}
+
+/**
+ * Resolve the declared dependency type-names into WIT `agent-dependency`
+ * records, reusing each dependency's already-registered `AgentType`. Throws a
+ * clear error if a dependency has not been registered yet.
+ */
+function resolveDependencies(name: string, depNames: readonly string[]): AgentDependency[] {
+  return depNames.map((depName) => {
+    const dep = AgentTypeRegistry.get(new AgentClassName(depName));
+    if (dep === undefined) {
+      throw new Error(
+        `Agent "${name}" declares a dependency on "${depName}", but "${depName}" has not been ` +
+          `registered yet. Define the dependency agent before the agent that depends on it.`,
+      );
+    }
+    return {
+      typeName: dep.typeName,
+      description: dep.description,
+      schema: dep.schema,
+      constructor: dep.constructor,
+      methods: dep.methods,
+    };
+  });
+}
+
 function assembleAgentType(
   name: string,
   idCodecs: NamedCodec[],
   methodCodecs: Map<string, MethodCodec>,
+  metadata: AgentMetadataSpec,
 ): AgentType {
   const graphs: SchemaGraph[] = [];
   for (const ic of idCodecs) graphs.push(ic.codec.graph);
@@ -155,36 +213,42 @@ function assembleAgentType(
         : { tag: 'single', val: encoder.encodeType(mc.output.codec.graph.root) };
     methods.push({
       name: mc.name,
-      description: '',
-      promptHint: undefined,
+      description: mc.meta.description ?? '',
+      promptHint: mc.meta.promptHint,
       httpEndpoint: [],
-      readOnly: undefined,
+      // A simple `readOnly: true` maps to a non-caching, principal-agnostic
+      // `read-only-config`; omitted/`false` leaves the WIT field unset.
+      readOnly: mc.meta.readOnly ? { cachePolicy: { tag: 'no-cache' }, usesPrincipal: false } : undefined,
       inputSchema: encodeInput(mc.inputCodecs),
       outputSchema,
     });
   }
 
-  const description = `Constructs the agent ${name}`;
+  // `agent-type.description` carries the agent's own description; the
+  // constructor keeps its generated "Constructs the agent ..." description.
+  const ctorDescription = `Constructs the agent ${name}`;
   const constructor: AgentConstructor = {
     name: undefined,
-    description,
-    promptHint: idCodecs.length
-      ? `Enter the following parameters: ${idCodecs.map((c) => c.name).join(', ')}`
-      : undefined,
+    description: ctorDescription,
+    promptHint:
+      metadata.promptHint ??
+      (idCodecs.length
+        ? `Enter the following parameters: ${idCodecs.map((c) => c.name).join(', ')}`
+        : undefined),
     inputSchema: constructorInput,
   };
 
   return {
     typeName: name,
-    description,
+    description: metadata.description ?? ctorDescription,
     sourceLanguage: 'typescript',
     schema: encoder.finish(),
     constructor,
     methods,
-    dependencies: [],
-    mode: 'durable',
+    dependencies: resolveDependencies(name, metadata.dependencies ?? []),
+    mode: metadata.mode ?? 'durable',
     httpMount: undefined,
-    snapshotting: { tag: 'disabled' },
+    snapshotting: toWitSnapshotting(metadata.snapshotting),
     config: [],
   };
 }

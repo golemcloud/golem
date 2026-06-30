@@ -28,6 +28,19 @@ import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './ru
 export type IdRecord = Record<string, StandardSchemaV1>;
 export type MethodsRecord = Record<string, MethodSpec>;
 
+/**
+ * Resolved, name-only agent-level metadata handed to {@link registerAgentType}.
+ * `dependencies` is a list of dependency agent-type *names* (resolved against
+ * the {@link AgentTypeRegistry} when the WIT `AgentType` is assembled).
+ */
+export interface AgentMetadataSpec {
+  readonly description?: string;
+  readonly promptHint?: string;
+  readonly mode?: 'durable' | 'ephemeral';
+  readonly dependencies?: readonly string[];
+  readonly snapshotting?: SnapshottingSpec;
+}
+
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
 };
@@ -75,11 +88,38 @@ export interface AgentDefinition<Id extends IdRecord, Methods extends MethodsRec
   implement<State extends object>(impl: AgentImplementation<Id, Methods, State>): AgentImpl;
 }
 
+/**
+ * Snapshotting policy for an agent, mapped to the WIT `snapshotting` variant:
+ * - `'disabled'` → `disabled`
+ * - `'default'` → `enabled(default)`
+ * - `{ periodicSeconds }` → `enabled(periodic(duration))`
+ * - `{ everyNInvocations }` → `enabled(every-n-invocation(u16))`
+ */
+export type SnapshottingSpec =
+  | 'disabled'
+  | 'default'
+  | { periodicSeconds: number }
+  | { everyNInvocations: number };
+
 export interface AgentSpec<Id extends IdRecord, Methods extends MethodsRecord> {
   /** The wire-level agent type name. */
   name: string;
   id: Id;
   methods: Methods;
+  /** Human-readable description, surfaced as `agent-type.description`. */
+  description?: string;
+  /** Optional `prompt-hint`, surfaced as `agent-constructor.prompt-hint`. */
+  promptHint?: string;
+  /** Execution mode; defaults to `'durable'`. Surfaced as `agent-type.mode`. */
+  mode?: 'durable' | 'ephemeral';
+  /**
+   * Other agent definitions this agent depends on. Each is emitted as an
+   * `agent-dependency` record built from the dependency's already-registered
+   * `AgentType`. The dependency MUST have been `defineAgent`-ed before this one.
+   */
+  dependencies?: AgentDefinition<any, any>[];
+  /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
+  snapshotting?: SnapshottingSpec;
 }
 
 /**
@@ -109,7 +149,13 @@ export interface AgentSpec<Id extends IdRecord, Methods extends MethodsRecord> {
 export function defineAgent<Id extends IdRecord, Methods extends MethodsRecord>(
   spec: AgentSpec<Id, Methods>,
 ): AgentDefinition<Id, Methods> {
-  const registered: RegisteredAgent = registerAgentType(spec.name, spec.id, spec.methods);
+  const registered: RegisteredAgent = registerAgentType(spec.name, spec.id, spec.methods, {
+    description: spec.description,
+    promptHint: spec.promptHint,
+    mode: spec.mode,
+    dependencies: (spec.dependencies ?? []).map((d) => d.name),
+    snapshotting: spec.snapshotting,
+  });
   return {
     name: spec.name,
     id: spec.id,
