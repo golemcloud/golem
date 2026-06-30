@@ -104,11 +104,56 @@ fn unknown_ref_is_rejected_on_encode() {
     assert!(matches!(err, EncodeError::UnknownTypeId(_)));
 }
 
+/// Deterministic numeric-restriction vectors round-trip through the WIT codec
+/// exactly.
+#[test]
+fn numeric_restrictions_wit_golden_round_trip() {
+    for (label, ty) in crate::schema::tests::golden_numeric_schema_types() {
+        let graph = SchemaGraph::anonymous(ty);
+        let wire = encode_graph(&graph).expect("encode");
+        let back = decode_graph(&wire).expect("decode");
+        assert_eq!(graph, back, "wit numeric golden mismatch: {label}");
+    }
+}
+
+/// A `some(empty)` numeric restriction on the WIT wire normalizes to `None` when
+/// decoded, both through the native encode path and a hand-built wire payload
+/// carrying an empty-string `unit`.
+#[test]
+fn numeric_empty_restrictions_normalize_to_none_wit() {
+    use crate::schema::schema_type::{NumericRestrictions, SchemaType};
+
+    // Native Some(empty) encodes as some(empty wire) and decodes back to None.
+    let graph = SchemaGraph::anonymous(SchemaType::U32 {
+        restrictions: Some(NumericRestrictions::default()),
+        metadata: Default::default(),
+    });
+    let wire = encode_graph(&graph).expect("encode");
+    let back = decode_graph(&wire).expect("decode");
+    assert_eq!(back.root.numeric_restrictions(), None);
+
+    // A hand-built wire payload with an empty-string unit also normalizes away.
+    let wire_graph = wire::SchemaGraph {
+        type_nodes: vec![wire::SchemaTypeNode {
+            body: wire::SchemaTypeBody::U32Type(Some(wire::NumericRestrictions {
+                min: None,
+                max: None,
+                unit: Some(String::new()),
+            })),
+            metadata: empty_metadata(),
+        }],
+        defs: vec![],
+        root: 0,
+    };
+    let back = decode_graph(&wire_graph).expect("decode");
+    assert_eq!(back.root.numeric_restrictions(), None);
+}
+
 #[test]
 fn duplicate_def_id_is_rejected_on_decode() {
     let graph = wire::SchemaGraph {
         type_nodes: vec![wire::SchemaTypeNode {
-            body: wire::SchemaTypeBody::S32Type,
+            body: wire::SchemaTypeBody::S32Type(None),
             metadata: empty_metadata(),
         }],
         defs: vec![

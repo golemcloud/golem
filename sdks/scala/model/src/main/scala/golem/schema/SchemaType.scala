@@ -59,19 +59,19 @@ object SchemaTypeBody {
   final case class RefType(id: String) extends SchemaTypeBody
 
   // Primitives
-  case object BoolType   extends SchemaTypeBody
-  case object S8Type     extends SchemaTypeBody
-  case object S16Type    extends SchemaTypeBody
-  case object S32Type    extends SchemaTypeBody
-  case object S64Type    extends SchemaTypeBody
-  case object U8Type     extends SchemaTypeBody
-  case object U16Type    extends SchemaTypeBody
-  case object U32Type    extends SchemaTypeBody
-  case object U64Type    extends SchemaTypeBody
-  case object F32Type    extends SchemaTypeBody
-  case object F64Type    extends SchemaTypeBody
-  case object CharType   extends SchemaTypeBody
-  case object StringType extends SchemaTypeBody
+  case object BoolType                                                       extends SchemaTypeBody
+  final case class S8Type(restrictions: Option[NumericRestrictions] = None)  extends SchemaTypeBody
+  final case class S16Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  final case class S32Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  final case class S64Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  final case class U8Type(restrictions: Option[NumericRestrictions] = None)  extends SchemaTypeBody
+  final case class U16Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  final case class U32Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  final case class U64Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  final case class F32Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  final case class F64Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
+  case object CharType                                                       extends SchemaTypeBody
+  case object StringType                                                     extends SchemaTypeBody
 
   // Structural composites
   final case class RecordType(fields: List[NamedFieldType])                    extends SchemaTypeBody
@@ -115,20 +115,30 @@ object t {
 
   private def st(body: SchemaTypeBody): SchemaType = SchemaType(body)
 
-  def ref(id: String): SchemaType = st(RefType(id))
-  def bool: SchemaType            = st(BoolType)
-  def s8: SchemaType              = st(S8Type)
-  def s16: SchemaType             = st(S16Type)
-  def s32: SchemaType             = st(S32Type)
-  def s64: SchemaType             = st(S64Type)
-  def u8: SchemaType              = st(U8Type)
-  def u16: SchemaType             = st(U16Type)
-  def u32: SchemaType             = st(U32Type)
-  def u64: SchemaType             = st(U64Type)
-  def f32: SchemaType             = st(F32Type)
-  def f64: SchemaType             = st(F64Type)
-  def char: SchemaType            = st(CharType)
-  def string: SchemaType          = st(StringType)
+  def ref(id: String): SchemaType                                = st(RefType(id))
+  def bool: SchemaType                                           = st(BoolType)
+  def s8: SchemaType                                             = s8(None)
+  def s8(restrictions: Option[NumericRestrictions]): SchemaType  = st(S8Type(restrictions.flatMap(_.normalize)))
+  def s16: SchemaType                                            = s16(None)
+  def s16(restrictions: Option[NumericRestrictions]): SchemaType = st(S16Type(restrictions.flatMap(_.normalize)))
+  def s32: SchemaType                                            = s32(None)
+  def s32(restrictions: Option[NumericRestrictions]): SchemaType = st(S32Type(restrictions.flatMap(_.normalize)))
+  def s64: SchemaType                                            = s64(None)
+  def s64(restrictions: Option[NumericRestrictions]): SchemaType = st(S64Type(restrictions.flatMap(_.normalize)))
+  def u8: SchemaType                                             = u8(None)
+  def u8(restrictions: Option[NumericRestrictions]): SchemaType  = st(U8Type(restrictions.flatMap(_.normalize)))
+  def u16: SchemaType                                            = u16(None)
+  def u16(restrictions: Option[NumericRestrictions]): SchemaType = st(U16Type(restrictions.flatMap(_.normalize)))
+  def u32: SchemaType                                            = u32(None)
+  def u32(restrictions: Option[NumericRestrictions]): SchemaType = st(U32Type(restrictions.flatMap(_.normalize)))
+  def u64: SchemaType                                            = u64(None)
+  def u64(restrictions: Option[NumericRestrictions]): SchemaType = st(U64Type(restrictions.flatMap(_.normalize)))
+  def f32: SchemaType                                            = f32(None)
+  def f32(restrictions: Option[NumericRestrictions]): SchemaType = st(F32Type(restrictions.flatMap(_.normalize)))
+  def f64: SchemaType                                            = f64(None)
+  def f64(restrictions: Option[NumericRestrictions]): SchemaType = st(F64Type(restrictions.flatMap(_.normalize)))
+  def char: SchemaType                                           = st(CharType)
+  def string: SchemaType                                         = st(StringType)
 
   def record(fields: List[NamedFieldType]): SchemaType                       = st(RecordType(fields))
   def variant(cases: List[VariantCaseType]): SchemaType                      = st(VariantType(cases))

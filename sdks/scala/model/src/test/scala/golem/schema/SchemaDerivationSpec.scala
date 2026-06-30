@@ -128,12 +128,12 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
 
         assertTrue(
           fields("b") == BoolType,
-          fields("i8") == S8Type,
-          fields("i16") == S16Type,
-          fields("i32") == S32Type,
-          fields("i64") == S64Type,
-          fields("f") == F32Type,
-          fields("d") == F64Type,
+          fields("i8") == S8Type(),
+          fields("i16") == S16Type(),
+          fields("i32") == S32Type(),
+          fields("i64") == S64Type(),
+          fields("f") == F32Type(),
+          fields("d") == F64Type(),
           fields("c") == CharType,
           fields("s") == StringType,
           fields("bd") == StringType,
@@ -286,10 +286,10 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
       },
       test("unsigned wrappers derive u8/u16/u32/u64 and round-trip (incl. boundary)") {
         assertTrue(
-          rootBody[UByte] == U8Type,
-          rootBody[UShort] == U16Type,
-          rootBody[UInt] == U32Type,
-          rootBody[ULong] == U64Type
+          rootBody[UByte] == U8Type(),
+          rootBody[UShort] == U16Type(),
+          rootBody[UInt] == U32Type(),
+          rootBody[ULong] == U64Type()
         ) &&
         assert(roundTrip(UByte(255)))(isRight(equalTo(UByte(255)))) &&
         assert(roundTrip(UShort(65535)))(isRight(equalTo(UShort(65535)))) &&

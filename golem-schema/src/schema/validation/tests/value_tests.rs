@@ -16,9 +16,10 @@ use crate::model::EnvironmentId;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, NamedFieldType, PathDirection, PathKind, PathSpec,
-    QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec,
-    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, NamedFieldType, NumericBound, NumericRestrictions,
+    PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec,
+    SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
@@ -1103,5 +1104,148 @@ fn dangling_ref_is_reported() {
             .iter()
             .any(|e| matches!(e, ValueError::DanglingRef { .. })),
         "expected DanglingRef, got {errors:?}"
+    );
+}
+
+// --- Numeric restrictions (value range) ---
+
+fn u32_with(min: Option<u64>, max: Option<u64>) -> SchemaType {
+    SchemaType::U32 {
+        restrictions: NumericRestrictions {
+            min: min.map(NumericBound::Unsigned),
+            max: max.map(NumericBound::Unsigned),
+            unit: None,
+        }
+        .normalize(),
+        metadata: Default::default(),
+    }
+}
+
+#[test]
+fn numeric_unconstrained_accepts_any_value() {
+    let ty = SchemaType::u32();
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &SchemaValue::U32(0)).expect("0 is valid");
+    validate_value(&graph, &ty, &SchemaValue::U32(u32::MAX)).expect("max is valid");
+}
+
+#[test]
+fn numeric_in_range_is_accepted() {
+    let ty = u32_with(Some(1), Some(100));
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &SchemaValue::U32(1)).expect("min boundary is inclusive");
+    validate_value(&graph, &ty, &SchemaValue::U32(50)).expect("mid is valid");
+    validate_value(&graph, &ty, &SchemaValue::U32(100)).expect("max boundary is inclusive");
+}
+
+#[test]
+fn numeric_below_min_is_rejected() {
+    let ty = u32_with(Some(1), None);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &SchemaValue::U32(0)).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::NumericOutOfRange { .. })),
+        "expected NumericOutOfRange, got {errors:?}"
+    );
+}
+
+#[test]
+fn numeric_above_max_is_rejected() {
+    let ty = u32_with(None, Some(100));
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &SchemaValue::U32(101)).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::NumericOutOfRange { .. })),
+        "expected NumericOutOfRange, got {errors:?}"
+    );
+}
+
+#[test]
+fn numeric_u64_near_max_bound_is_enforced() {
+    let ty = SchemaType::U64 {
+        restrictions: NumericRestrictions {
+            min: Some(NumericBound::Unsigned(u64::MAX - 1)),
+            max: Some(NumericBound::Unsigned(u64::MAX)),
+            unit: None,
+        }
+        .normalize(),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &SchemaValue::U64(u64::MAX)).expect("u64::MAX is in range");
+    let errors =
+        validate_value(&graph, &ty, &SchemaValue::U64(u64::MAX - 2)).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::NumericOutOfRange { .. })),
+        "expected NumericOutOfRange, got {errors:?}"
+    );
+}
+
+#[test]
+fn numeric_f64_min_is_enforced() {
+    let ty = SchemaType::F64 {
+        restrictions: NumericRestrictions {
+            min: Some(NumericBound::float(0.0).unwrap()),
+            max: None,
+            unit: Some("seconds".to_string()),
+        }
+        .normalize(),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &SchemaValue::F64(0.0)).expect("0.0 is inclusive");
+    validate_value(&graph, &ty, &SchemaValue::F64(3.5)).expect("positive is valid");
+    let errors = validate_value(&graph, &ty, &SchemaValue::F64(-0.5)).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::NumericOutOfRange { .. })),
+        "expected NumericOutOfRange, got {errors:?}"
+    );
+}
+
+#[test]
+fn numeric_unit_is_not_checked_at_value_level() {
+    // `unit` is schema metadata only; a value carrying no unit must still pass
+    // an in-range check against a unit-annotated numeric type.
+    let ty = SchemaType::U32 {
+        restrictions: NumericRestrictions {
+            min: Some(NumericBound::Unsigned(0)),
+            max: Some(NumericBound::Unsigned(10)),
+            unit: Some("items".to_string()),
+        }
+        .normalize(),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &SchemaValue::U32(5)).expect("unit is not a value-level check");
+}
+
+#[test]
+fn numeric_inverted_min_max_is_rejected() {
+    // An inverted (unsatisfiable) `min > max` is comparable to the repr, so the
+    // value validator must enforce it rather than silently skipping, matching the
+    // behavior of the text/binary range validators.
+    let ty = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(10)),
+            max: Some(NumericBound::Unsigned(1)),
+            unit: None,
+        }),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &SchemaValue::U32(5)).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::NumericOutOfRange { .. })),
+        "expected NumericOutOfRange, got {errors:?}"
     );
 }

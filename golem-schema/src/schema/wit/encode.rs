@@ -16,9 +16,9 @@ use super::wire;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, NamedFieldType, PathDirection, PathKind, PathSpec,
-    QuantitySpec, QuantityValue, SchemaType, TextRestrictions, UnionBranch, UrlRestrictions,
-    VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, NamedFieldType, NumericBound, NumericRestrictions,
+    PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, SchemaType, TextRestrictions,
+    UnionBranch, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
     QuotaTokenVariantValue, ResultValuePayload, SchemaValue, SecretVariantValue,
@@ -430,16 +430,36 @@ impl GraphCtx {
                 wire::SchemaTypeBody::RefType(def_idx)
             }
             SchemaType::Bool { .. } => wire::SchemaTypeBody::BoolType,
-            SchemaType::S8 { .. } => wire::SchemaTypeBody::S8Type,
-            SchemaType::S16 { .. } => wire::SchemaTypeBody::S16Type,
-            SchemaType::S32 { .. } => wire::SchemaTypeBody::S32Type,
-            SchemaType::S64 { .. } => wire::SchemaTypeBody::S64Type,
-            SchemaType::U8 { .. } => wire::SchemaTypeBody::U8Type,
-            SchemaType::U16 { .. } => wire::SchemaTypeBody::U16Type,
-            SchemaType::U32 { .. } => wire::SchemaTypeBody::U32Type,
-            SchemaType::U64 { .. } => wire::SchemaTypeBody::U64Type,
-            SchemaType::F32 { .. } => wire::SchemaTypeBody::F32Type,
-            SchemaType::F64 { .. } => wire::SchemaTypeBody::F64Type,
+            SchemaType::S8 { restrictions, .. } => {
+                wire::SchemaTypeBody::S8Type(encode_numeric(restrictions))
+            }
+            SchemaType::S16 { restrictions, .. } => {
+                wire::SchemaTypeBody::S16Type(encode_numeric(restrictions))
+            }
+            SchemaType::S32 { restrictions, .. } => {
+                wire::SchemaTypeBody::S32Type(encode_numeric(restrictions))
+            }
+            SchemaType::S64 { restrictions, .. } => {
+                wire::SchemaTypeBody::S64Type(encode_numeric(restrictions))
+            }
+            SchemaType::U8 { restrictions, .. } => {
+                wire::SchemaTypeBody::U8Type(encode_numeric(restrictions))
+            }
+            SchemaType::U16 { restrictions, .. } => {
+                wire::SchemaTypeBody::U16Type(encode_numeric(restrictions))
+            }
+            SchemaType::U32 { restrictions, .. } => {
+                wire::SchemaTypeBody::U32Type(encode_numeric(restrictions))
+            }
+            SchemaType::U64 { restrictions, .. } => {
+                wire::SchemaTypeBody::U64Type(encode_numeric(restrictions))
+            }
+            SchemaType::F32 { restrictions, .. } => {
+                wire::SchemaTypeBody::F32Type(encode_numeric(restrictions))
+            }
+            SchemaType::F64 { restrictions, .. } => {
+                wire::SchemaTypeBody::F64Type(encode_numeric(restrictions))
+            }
             SchemaType::Char { .. } => wire::SchemaTypeBody::CharType,
             SchemaType::String { .. } => wire::SchemaTypeBody::StringType,
             SchemaType::Record { fields, .. } => {
@@ -601,6 +621,22 @@ pub fn encode_metadata(m: &MetadataEnvelope) -> wire::MetadataEnvelope {
             Role::UnstructuredBinary => wire::Role::UnstructuredBinary,
             Role::Other(s) => wire::Role::Other(s.clone()),
         }),
+    }
+}
+
+fn encode_numeric(r: &Option<NumericRestrictions>) -> Option<wire::NumericRestrictions> {
+    r.as_ref().map(|r| wire::NumericRestrictions {
+        min: r.min.map(encode_numeric_bound),
+        max: r.max.map(encode_numeric_bound),
+        unit: r.unit.clone(),
+    })
+}
+
+fn encode_numeric_bound(b: NumericBound) -> wire::NumericBound {
+    match b {
+        NumericBound::Signed(v) => wire::NumericBound::Signed(v),
+        NumericBound::Unsigned(v) => wire::NumericBound::Unsigned(v),
+        NumericBound::FloatBits(bits) => wire::NumericBound::FloatBits(bits),
     }
 }
 

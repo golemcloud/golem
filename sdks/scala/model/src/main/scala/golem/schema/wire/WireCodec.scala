@@ -28,6 +28,11 @@ import scala.collection.mutable
 // Unflattening walks indices back into the recursive form, guarding against
 // out-of-range and cyclic indices. Mirrors the TS SDK's `wit.ts`.
 
+private object NumericRestrictionCodec {
+  def normalize(restrictions: Option[NumericRestrictions]): Option[NumericRestrictions] =
+    restrictions.flatMap(_.normalize)
+}
+
 /**
  * Incremental encoder for a single flat [[WitSchemaGraph]] holding several
  * independent root types in one shared `typeNodes` pool. Mirrors the Rust
@@ -73,16 +78,16 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
           case None     => throw SchemaEncodeError(s"schema graph references unknown type id '$id'")
         }
       case BoolType           => W.BoolType
-      case S8Type             => W.S8Type
-      case S16Type            => W.S16Type
-      case S32Type            => W.S32Type
-      case S64Type            => W.S64Type
-      case U8Type             => W.U8Type
-      case U16Type            => W.U16Type
-      case U32Type            => W.U32Type
-      case U64Type            => W.U64Type
-      case F32Type            => W.F32Type
-      case F64Type            => W.F64Type
+      case S8Type(r)          => W.S8Type(NumericRestrictionCodec.normalize(r))
+      case S16Type(r)         => W.S16Type(NumericRestrictionCodec.normalize(r))
+      case S32Type(r)         => W.S32Type(NumericRestrictionCodec.normalize(r))
+      case S64Type(r)         => W.S64Type(NumericRestrictionCodec.normalize(r))
+      case U8Type(r)          => W.U8Type(NumericRestrictionCodec.normalize(r))
+      case U16Type(r)         => W.U16Type(NumericRestrictionCodec.normalize(r))
+      case U32Type(r)         => W.U32Type(NumericRestrictionCodec.normalize(r))
+      case U64Type(r)         => W.U64Type(NumericRestrictionCodec.normalize(r))
+      case F32Type(r)         => W.F32Type(NumericRestrictionCodec.normalize(r))
+      case F64Type(r)         => W.F64Type(NumericRestrictionCodec.normalize(r))
       case CharType           => W.CharType
       case StringType         => W.StringType
       case RecordType(fields) =>
@@ -168,16 +173,16 @@ object SchemaWire {
       body match {
         case WitSchemaTypeBody.RefType(di)        => S.RefType(idByDefIndex(di))
         case WitSchemaTypeBody.BoolType           => S.BoolType
-        case WitSchemaTypeBody.S8Type             => S.S8Type
-        case WitSchemaTypeBody.S16Type            => S.S16Type
-        case WitSchemaTypeBody.S32Type            => S.S32Type
-        case WitSchemaTypeBody.S64Type            => S.S64Type
-        case WitSchemaTypeBody.U8Type             => S.U8Type
-        case WitSchemaTypeBody.U16Type            => S.U16Type
-        case WitSchemaTypeBody.U32Type            => S.U32Type
-        case WitSchemaTypeBody.U64Type            => S.U64Type
-        case WitSchemaTypeBody.F32Type            => S.F32Type
-        case WitSchemaTypeBody.F64Type            => S.F64Type
+        case WitSchemaTypeBody.S8Type(r)          => S.S8Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.S16Type(r)         => S.S16Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.S32Type(r)         => S.S32Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.S64Type(r)         => S.S64Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.U8Type(r)          => S.U8Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.U16Type(r)         => S.U16Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.U32Type(r)         => S.U32Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.U64Type(r)         => S.U64Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.F32Type(r)         => S.F32Type(NumericRestrictionCodec.normalize(r))
+        case WitSchemaTypeBody.F64Type(r)         => S.F64Type(NumericRestrictionCodec.normalize(r))
         case WitSchemaTypeBody.CharType           => S.CharType
         case WitSchemaTypeBody.StringType         => S.StringType
         case WitSchemaTypeBody.RecordType(fields) =>

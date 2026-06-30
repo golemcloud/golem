@@ -150,6 +150,38 @@ object SchemaWireInterop {
   // Specs
   // ===========================================================================
 
+  private def numericBoundToJs(b: NumericBound): JsNumericBound =
+    b match {
+      case NumericBound.Signed(v)    => JsNumericBound.signed(js.BigInt(v.toString))
+      case NumericBound.Unsigned(v)  => JsNumericBound.unsigned(js.BigInt(U64.fromRawBits(v).toString))
+      case NumericBound.FloatBits(v) => JsNumericBound.floatBits(js.BigInt(U64.fromRawBits(v).toString))
+    }
+
+  private def numericBoundFromJs(j: JsNumericBound): NumericBound =
+    j.tag match {
+      case "signed"     => NumericBound.Signed(BigInt(valOf(j).asInstanceOf[js.BigInt].toString).toLong)
+      case "unsigned"   => NumericBound.Unsigned(U64.toRawBits(BigInt(valOf(j).asInstanceOf[js.BigInt].toString)))
+      case "float-bits" => NumericBound.FloatBits(U64.toRawBits(BigInt(valOf(j).asInstanceOf[js.BigInt].toString)))
+      case other        => throw new IllegalArgumentException(s"Unknown numeric-bound tag: $other")
+    }
+
+  private def numericRToJs(r: NumericRestrictions): JsNumericRestrictions =
+    JsNumericRestrictions(
+      r.min.map(numericBoundToJs).orUndefined,
+      r.max.map(numericBoundToJs).orUndefined,
+      r.unit.orUndefined
+    )
+
+  private def numericRFromJs(j: JsNumericRestrictions): NumericRestrictions =
+    NumericRestrictions(j.min.toOption.map(numericBoundFromJs), j.max.toOption.map(numericBoundFromJs), j.unit.toOption)
+
+  private def optNumericVal(o: js.Object): Option[NumericRestrictions] =
+    o.asInstanceOf[js.Dynamic]
+      .selectDynamic("val")
+      .asInstanceOf[js.UndefOr[JsNumericRestrictions]]
+      .toOption
+      .map(numericRFromJs)
+
   private def textRToJs(t: TextRestrictions): JsTextRestrictions =
     JsTextRestrictions(
       t.languages.map(_.toJSArray).orUndefined,
@@ -317,16 +349,16 @@ object SchemaWireInterop {
     b match {
       case RefType(i)        => JsSchemaTypeBody.refType(i)
       case BoolType          => JsSchemaTypeBody.boolType
-      case S8Type            => JsSchemaTypeBody.s8Type
-      case S16Type           => JsSchemaTypeBody.s16Type
-      case S32Type           => JsSchemaTypeBody.s32Type
-      case S64Type           => JsSchemaTypeBody.s64Type
-      case U8Type            => JsSchemaTypeBody.u8Type
-      case U16Type           => JsSchemaTypeBody.u16Type
-      case U32Type           => JsSchemaTypeBody.u32Type
-      case U64Type           => JsSchemaTypeBody.u64Type
-      case F32Type           => JsSchemaTypeBody.f32Type
-      case F64Type           => JsSchemaTypeBody.f64Type
+      case S8Type(r)         => JsSchemaTypeBody.s8Type(r.map(numericRToJs).orUndefined)
+      case S16Type(r)        => JsSchemaTypeBody.s16Type(r.map(numericRToJs).orUndefined)
+      case S32Type(r)        => JsSchemaTypeBody.s32Type(r.map(numericRToJs).orUndefined)
+      case S64Type(r)        => JsSchemaTypeBody.s64Type(r.map(numericRToJs).orUndefined)
+      case U8Type(r)         => JsSchemaTypeBody.u8Type(r.map(numericRToJs).orUndefined)
+      case U16Type(r)        => JsSchemaTypeBody.u16Type(r.map(numericRToJs).orUndefined)
+      case U32Type(r)        => JsSchemaTypeBody.u32Type(r.map(numericRToJs).orUndefined)
+      case U64Type(r)        => JsSchemaTypeBody.u64Type(r.map(numericRToJs).orUndefined)
+      case F32Type(r)        => JsSchemaTypeBody.f32Type(r.map(numericRToJs).orUndefined)
+      case F64Type(r)        => JsSchemaTypeBody.f64Type(r.map(numericRToJs).orUndefined)
       case CharType          => JsSchemaTypeBody.charType
       case StringType        => JsSchemaTypeBody.stringType
       case RecordType(fs)    => JsSchemaTypeBody.recordType(fs.map(namedFieldToJs).toJSArray)
@@ -359,16 +391,16 @@ object SchemaWireInterop {
     j.tag match {
       case "ref-type"    => RefType(valOf(j).asInstanceOf[Int])
       case "bool-type"   => BoolType
-      case "s8-type"     => S8Type
-      case "s16-type"    => S16Type
-      case "s32-type"    => S32Type
-      case "s64-type"    => S64Type
-      case "u8-type"     => U8Type
-      case "u16-type"    => U16Type
-      case "u32-type"    => U32Type
-      case "u64-type"    => U64Type
-      case "f32-type"    => F32Type
-      case "f64-type"    => F64Type
+      case "s8-type"     => S8Type(optNumericVal(j))
+      case "s16-type"    => S16Type(optNumericVal(j))
+      case "s32-type"    => S32Type(optNumericVal(j))
+      case "s64-type"    => S64Type(optNumericVal(j))
+      case "u8-type"     => U8Type(optNumericVal(j))
+      case "u16-type"    => U16Type(optNumericVal(j))
+      case "u32-type"    => U32Type(optNumericVal(j))
+      case "u64-type"    => U64Type(optNumericVal(j))
+      case "f32-type"    => F32Type(optNumericVal(j))
+      case "f64-type"    => F64Type(optNumericVal(j))
       case "char-type"   => CharType
       case "string-type" => StringType
       case "record-type" =>

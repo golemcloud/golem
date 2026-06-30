@@ -14,11 +14,11 @@
 
 //! Structural well-formedness checks for a [`SchemaGraph`].
 
-use crate::schema::graph::SchemaGraph;
+use crate::schema::graph::{RefResolutionError, SchemaGraph};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathSpec, QuantitySpec, QuantityValue, SchemaType,
-    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    BinaryRestrictions, DiscriminatorRule, NumericRestrictionError, PathSpec, QuantitySpec,
+    QuantityValue, SchemaType, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
 };
 use std::collections::HashSet;
 use std::error::Error;
@@ -29,6 +29,10 @@ use std::fmt::{self, Display, Formatter};
 pub enum SchemaError {
     DuplicateTypeId(TypeId),
     DanglingRef(TypeId),
+    /// A named reference whose alias chain is a pure cycle
+    /// (`A -> B -> ... -> A`) that never bottoms out in a concrete type, so it
+    /// can never resolve to a usable `SchemaType`.
+    RecursiveAlias(TypeId),
     EmptyVariant,
     EmptyEnum,
     EmptyUnion,
@@ -86,6 +90,10 @@ pub enum SchemaError {
     },
     TextLengthRangeInverted,
     BinaryByteRangeInverted,
+    /// A numeric type's inline restrictions are not well-formed.
+    InvalidNumericRestriction {
+        error: NumericRestrictionError,
+    },
     /// An `Option<X>` was declared where `X` is itself nullable on the
     /// canonical JSON wire (option-of-option, option-of-union-with-nullable-
     /// branch, option-of-ref-resolving-to-nullable). The canonical JSON
@@ -101,6 +109,12 @@ impl Display for SchemaError {
         match self {
             SchemaError::DuplicateTypeId(id) => write!(f, "duplicate type id `{id}`"),
             SchemaError::DanglingRef(id) => write!(f, "dangling type reference `{id}`"),
+            SchemaError::RecursiveAlias(id) => {
+                write!(
+                    f,
+                    "type reference `{id}` forms a reference cycle with no concrete type"
+                )
+            }
             SchemaError::EmptyVariant => write!(f, "variant has no cases"),
             SchemaError::EmptyEnum => write!(f, "enum has no cases"),
             SchemaError::EmptyUnion => write!(f, "union has no branches"),
@@ -181,6 +195,9 @@ impl Display for SchemaError {
             SchemaError::TextLengthRangeInverted => {
                 write!(f, "text min-length is greater than max-length")
             }
+            SchemaError::InvalidNumericRestriction { error } => {
+                write!(f, "invalid numeric restriction: {error}")
+            }
             SchemaError::BinaryByteRangeInverted => {
                 write!(f, "binary min-bytes is greater than max-bytes")
             }
@@ -224,6 +241,27 @@ pub fn validate_graph(graph: &SchemaGraph) -> Result<(), Vec<SchemaError>> {
     }
 }
 
+/// Validate a single [`SchemaType`] as a root against an existing graph's
+/// definitions for structural well-formedness.
+///
+/// Unlike [`validate_graph`], this does not validate the graph's own
+/// [`SchemaGraph::root`] or its definition bodies; only `ty` is walked, with
+/// [`SchemaType::Ref`]s resolved against `graph.defs`. This is for callers (such
+/// as the tool validator) that embed many bare `SchemaType` roots which share a
+/// single definitions carrier whose own `root` is an unused placeholder.
+///
+/// Errors are returned in deterministic discovery order.
+pub fn validate_root_type(graph: &SchemaGraph, ty: &SchemaType) -> Result<(), Vec<SchemaError>> {
+    let known_ids: HashSet<TypeId> = graph.defs.iter().map(|d| d.id.clone()).collect();
+    let mut errors = Vec::new();
+    check_type(graph, ty, &known_ids, &mut errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 fn check_type(
     graph: &SchemaGraph,
     ty: &SchemaType,
@@ -234,6 +272,25 @@ fn check_type(
         SchemaType::Ref { id, .. } => {
             if !known.contains(id) {
                 errors.push(SchemaError::DanglingRef(id.clone()));
+            } else {
+                match graph.resolve_ref(ty) {
+                    Ok(_) => {}
+                    // The id exists, but its alias chain is a pure cycle that
+                    // never resolves to a concrete type. A legitimate recursive
+                    // type (whose cycle passes through a value-shrinking
+                    // constructor such as `list`/`record`) resolves to that
+                    // constructor at the top-level alias step and is unaffected.
+                    Err(RefResolutionError::RecursiveRef(cycle_id)) => {
+                        errors.push(SchemaError::RecursiveAlias(cycle_id));
+                    }
+                    // The id exists, but following its alias chain reaches a
+                    // reference to a definition that is absent from the graph.
+                    // Report the dangling target so a root alias chain ending in
+                    // a missing definition is rejected at the chain's tail.
+                    Err(RefResolutionError::DanglingRef(target)) => {
+                        errors.push(SchemaError::DanglingRef(target));
+                    }
+                }
             }
         }
 
@@ -301,7 +358,13 @@ fn check_type(
             check_type(graph, element, known, errors);
         }
         SchemaType::Map { key, value, .. } => {
-            if !is_primitive_key_resolved(graph, key) {
+            // A key that resolves to a concrete non-primitive type is rejected.
+            // A key that does not resolve to a concrete type (a dangling
+            // reference or a pure alias cycle) is *not* reported here: that
+            // failure is reported by the `check_type(key, ...)` recursion below,
+            // and a `MapKeyNotPrimitive` on top of it would be misleading cascade
+            // noise.
+            if let MapKeyKind::NonPrimitive = classify_map_key(graph, key) {
                 errors.push(SchemaError::MapKeyNotPrimitive);
             }
             check_type(graph, key, known, errors);
@@ -346,21 +409,29 @@ fn check_type(
             }
         }
 
+        SchemaType::S8 { restrictions, .. }
+        | SchemaType::S16 { restrictions, .. }
+        | SchemaType::S32 { restrictions, .. }
+        | SchemaType::S64 { restrictions, .. }
+        | SchemaType::U8 { restrictions, .. }
+        | SchemaType::U16 { restrictions, .. }
+        | SchemaType::U32 { restrictions, .. }
+        | SchemaType::U64 { restrictions, .. }
+        | SchemaType::F32 { restrictions, .. }
+        | SchemaType::F64 { restrictions, .. } => {
+            if let Some(restrictions) = restrictions {
+                let repr = ty.numeric_repr().expect("numeric variant => numeric repr");
+                if let Err(error) = restrictions.validate_for_repr(repr) {
+                    errors.push(SchemaError::InvalidNumericRestriction { error });
+                }
+            }
+        }
+
         SchemaType::Secret { spec, .. } => {
             check_type(graph, &spec.inner, known, errors);
         }
 
         SchemaType::Bool { .. }
-        | SchemaType::S8 { .. }
-        | SchemaType::S16 { .. }
-        | SchemaType::S32 { .. }
-        | SchemaType::S64 { .. }
-        | SchemaType::U8 { .. }
-        | SchemaType::U16 { .. }
-        | SchemaType::U32 { .. }
-        | SchemaType::U64 { .. }
-        | SchemaType::F32 { .. }
-        | SchemaType::F64 { .. }
         | SchemaType::Char { .. }
         | SchemaType::String { .. }
         | SchemaType::Datetime { .. }
@@ -369,23 +440,46 @@ fn check_type(
     }
 }
 
-/// Whether `ty` is one of the primitive types accepted as a map key. Refs are
-/// resolved through one chain (with cycle detection) before deciding.
-fn is_primitive_key_resolved(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+/// Classification of a map key type after resolving named references (with
+/// cycle detection).
+enum MapKeyKind {
+    /// The key resolves to a primitive type and is valid.
+    Primitive,
+    /// The key resolves to a concrete non-primitive type (or a reference
+    /// cycle, which can never be primitive) and is invalid.
+    NonPrimitive,
+    /// The key is (or resolves through) a dangling reference, so its
+    /// primitiveness cannot be determined; the dangling reference is reported
+    /// separately.
+    Unresolved,
+}
+
+fn classify_map_key(graph: &SchemaGraph, ty: &SchemaType) -> MapKeyKind {
     let mut visited: HashSet<TypeId> = HashSet::new();
     let mut current = ty;
     loop {
         match current {
             SchemaType::Ref { id, .. } => {
                 if !visited.insert(id.clone()) {
-                    return false;
+                    // A pure alias cycle never resolves to a concrete type, so
+                    // its primitiveness is unknown. It is reported as a
+                    // `RecursiveAlias` by the `check_type(key, ...)` recursion; a
+                    // `MapKeyNotPrimitive` on top of that would be misleading
+                    // cascade noise.
+                    return MapKeyKind::Unresolved;
                 }
                 match graph.lookup(id) {
                     Some(def) => current = &def.body,
-                    None => return false,
+                    None => return MapKeyKind::Unresolved,
                 }
             }
-            other => return is_primitive_key(other),
+            other => {
+                return if is_primitive_key(other) {
+                    MapKeyKind::Primitive
+                } else {
+                    MapKeyKind::NonPrimitive
+                };
+            }
         }
     }
 }
@@ -527,18 +621,23 @@ fn validate_union(
 
 fn check_union_branch(graph: &SchemaGraph, branch: &UnionBranch, errors: &mut Vec<SchemaError>) {
     let shape = resolved_shape(graph, &branch.body, &mut HashSet::new());
+    // The branch body is a dangling/recursive ref: its shape is unknown, so any
+    // shape-vs-discriminator mismatch would be misleading noise on top of the
+    // unresolved-reference error `check_type` already reports. Body-shape-
+    // independent problems (an invalid regex) are still checked below.
+    let shape_known = !matches!(shape, BodyShape::Unresolved);
     match &branch.discriminator {
         DiscriminatorRule::Prefix { .. }
         | DiscriminatorRule::Suffix { .. }
         | DiscriminatorRule::Contains { .. } => {
-            if !matches!(shape, BodyShape::String) {
+            if shape_known && !matches!(shape, BodyShape::String) {
                 errors.push(SchemaError::UnionStringRuleOnNonStringBody {
                     tag: branch.tag.clone(),
                 });
             }
         }
         DiscriminatorRule::Regex { regex } => {
-            if !matches!(shape, BodyShape::String) {
+            if shape_known && !matches!(shape, BodyShape::String) {
                 errors.push(SchemaError::UnionStringRuleOnNonStringBody {
                     tag: branch.tag.clone(),
                 });
@@ -565,11 +664,9 @@ fn check_union_branch(graph: &SchemaGraph, branch: &UnionBranch, errors: &mut Ve
                         field_name: field_disc.field_name.clone(),
                     }),
                     Some((_, ty)) => {
+                        let field_shape = resolved_shape(graph, ty, &mut HashSet::new());
                         if field_disc.literal.is_some()
-                            && !matches!(
-                                resolved_shape(graph, ty, &mut HashSet::new()),
-                                BodyShape::String
-                            )
+                            && !matches!(field_shape, BodyShape::String | BodyShape::Unresolved)
                         {
                             errors.push(SchemaError::UnionFieldEqualsLiteralOnNonStringField {
                                 tag: branch.tag.clone(),
@@ -579,6 +676,7 @@ fn check_union_branch(graph: &SchemaGraph, branch: &UnionBranch, errors: &mut Ve
                     }
                 }
             }
+            BodyShape::Unresolved => {}
             _ => errors.push(SchemaError::UnionFieldRuleOnNonRecordBody {
                 tag: branch.tag.clone(),
             }),
@@ -592,6 +690,7 @@ fn check_union_branch(graph: &SchemaGraph, branch: &UnionBranch, errors: &mut Ve
                     });
                 }
             }
+            BodyShape::Unresolved => {}
             _ => errors.push(SchemaError::UnionFieldRuleOnNonRecordBody {
                 tag: branch.tag.clone(),
             }),
@@ -741,6 +840,11 @@ enum BodyShape<'a> {
     String,
     Record(Vec<(String, &'a SchemaType)>),
     Other,
+    /// The body is a [`SchemaType::Ref`] that does not resolve to a concrete
+    /// type (a dangling reference or a pure alias cycle). The shape is unknown,
+    /// so shape-dependent discriminator checks are skipped; the unresolved
+    /// reference itself is reported separately by [`check_type`].
+    Unresolved,
 }
 
 fn resolved_shape<'a>(
@@ -751,11 +855,11 @@ fn resolved_shape<'a>(
     match ty {
         SchemaType::Ref { id, .. } => {
             if !visited.insert(id.clone()) {
-                return BodyShape::Other;
+                return BodyShape::Unresolved;
             }
             match graph.lookup(id) {
                 Some(def) => resolved_shape(graph, &def.body, visited),
-                None => BodyShape::Other,
+                None => BodyShape::Unresolved,
             }
         }
         SchemaType::String { .. }

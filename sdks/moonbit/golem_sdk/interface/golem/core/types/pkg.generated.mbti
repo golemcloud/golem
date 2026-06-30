@@ -93,6 +93,18 @@ pub(all) struct NamedFieldType {
   metadata : MetadataEnvelope
 } derive(Eq, Show)
 
+pub(all) enum NumericBound {
+  Signed(Int64)
+  Unsigned(UInt64)
+  FloatBits(UInt64)
+} derive(Eq, Show)
+
+pub(all) struct NumericRestrictions {
+  min : NumericBound?
+  max : NumericBound?
+  unit : String?
+} derive(Eq, Show)
+
 pub(all) enum PathDirection {
   INPUT
   OUTPUT
@@ -167,16 +179,16 @@ pub(all) struct SchemaGraph {
 pub(all) enum SchemaTypeBody {
   RefType(Int)
   BoolType
-  S8Type
-  S16Type
-  S32Type
-  S64Type
-  U8Type
-  U16Type
-  U32Type
-  U64Type
-  F32Type
-  F64Type
+  S8Type(NumericRestrictions?)
+  S16Type(NumericRestrictions?)
+  S32Type(NumericRestrictions?)
+  S64Type(NumericRestrictions?)
+  U8Type(NumericRestrictions?)
+  U16Type(NumericRestrictions?)
+  U32Type(NumericRestrictions?)
+  U64Type(NumericRestrictions?)
+  F32Type(NumericRestrictions?)
+  F64Type(NumericRestrictions?)
   CharType
   StringType
   RecordType(Array[NamedFieldType])
