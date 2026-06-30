@@ -22,6 +22,8 @@ import {
   field,
   mergeGraphDefs,
   NamedFieldType,
+  type NumericBound,
+  type NumericRestrictions,
   SchemaType,
   SchemaValue,
   t,
@@ -30,6 +32,40 @@ import {
   VariantCaseType,
 } from '../../internal/schema-model';
 import { FluentCodec, SchemaWalker } from './codec';
+
+const F64_BITS_VIEW = new DataView(new ArrayBuffer(8));
+function f64Bits(x: number): bigint {
+  // Canonicalize -0.0 to +0.0 so equal bounds compare equal (mirrors the codec).
+  F64_BITS_VIEW.setFloat64(0, x === 0 ? 0 : x);
+  return F64_BITS_VIEW.getBigUint64(0);
+}
+
+/**
+ * Read min/max bounds off a Zod number schema (v3 `_def.checks` / v4
+ * `_zod.def.checks`) into f64 `NumericRestrictions` (the bound is the inclusive
+ * value; the model carries no inclusivity flag). `undefined` when unconstrained.
+ */
+function numberRestrictions(schema: any): NumericRestrictions | undefined {
+  const def = schema?._zod?.def ?? schema?._def;
+  const checks: any[] = def?.checks ?? [];
+  let min: number | undefined;
+  let max: number | undefined;
+  for (const c of checks) {
+    const cd = c?._zod?.def ?? c?._def ?? c;
+    const kind = cd?.check ?? cd?.kind;
+    const value = cd?.value;
+    if (typeof value !== 'number') continue;
+    if (kind === 'greater_than' || kind === 'min') min = value;
+    else if (kind === 'less_than' || kind === 'max') max = value;
+  }
+  if (min === undefined && max === undefined) return undefined;
+  const bound = (x: number): NumericBound => ({ tag: 'float-bits', val: f64Bits(x) });
+  return {
+    min: min !== undefined ? bound(min) : undefined,
+    max: max !== undefined ? bound(max) : undefined,
+    unit: undefined,
+  };
+}
 import { registerSchemaWalker } from './adapter';
 
 interface NormalizedDef {
@@ -183,7 +219,7 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
     case 'int':
     case 'float':
       return leaf(
-        t.f64(),
+        t.f64(numberRestrictions(schema)),
         (value) => v.f64(value as number),
         (sv) => (sv as Extract<SchemaValue, { tag: 'f64' }>).value,
       );

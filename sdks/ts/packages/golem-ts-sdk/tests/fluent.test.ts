@@ -319,3 +319,48 @@ describe('fluent defineAgent', () => {
     expect(AgentInitiatorRegistry.exists('asyncCounter')).toBe(true);
   });
 });
+
+describe('fluent numeric restrictions', () => {
+  it('s.u8({ min, max }) carries unsigned restrictions and round-trips', () => {
+    const c = compileSchema(s.u8({ min: 1, max: 200 }));
+    const body = c.graph.root.body as {
+      tag: 'u8';
+      restrictions?: { min?: { tag: string; val: bigint }; max?: { tag: string; val: bigint } };
+    };
+    expect(body.tag).toBe('u8');
+    expect(body.restrictions?.min).toEqual({ tag: 'unsigned', val: 1n });
+    expect(body.restrictions?.max).toEqual({ tag: 'unsigned', val: 200n });
+    expect(c.fromValue(c.toValue(50))).toBe(50);
+  });
+
+  it('s.s16({ min, max }) carries signed restrictions', () => {
+    const body = compileSchema(s.s16({ min: -10, max: 10 })).graph.root.body as {
+      restrictions?: { min?: { tag: string }; max?: { tag: string } };
+    };
+    expect(body.restrictions?.min).toEqual({ tag: 'signed', val: -10n });
+    expect(body.restrictions?.max).toEqual({ tag: 'signed', val: 10n });
+  });
+
+  it('s.u8() with no opts has no restrictions', () => {
+    const body = compileSchema(s.u8()).graph.root.body as { tag: 'u8'; restrictions?: unknown };
+    expect(body.tag).toBe('u8');
+    expect(body.restrictions).toBeUndefined();
+  });
+
+  it('z.number().min().max() maps to f64 float-bits restrictions', () => {
+    const c = compileSchema(z.number().min(2).max(9));
+    const body = c.graph.root.body as {
+      tag: 'f64';
+      restrictions?: { min?: { tag: string }; max?: { tag: string } };
+    };
+    expect(body.tag).toBe('f64');
+    expect(body.restrictions?.min?.tag).toBe('float-bits');
+    expect(body.restrictions?.max?.tag).toBe('float-bits');
+    expect(c.fromValue(c.toValue(5))).toBe(5);
+  });
+
+  it('plain z.number() has no restrictions', () => {
+    const body = compileSchema(z.number()).graph.root.body as { restrictions?: unknown };
+    expect(body.restrictions).toBeUndefined();
+  });
+});

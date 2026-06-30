@@ -41,6 +41,8 @@ import {
   variantCase,
   VariantCaseType,
   type Datetime,
+  type NumericBound,
+  type NumericRestrictions,
   type Role,
 } from '../../internal/schema-model';
 import { GuestSecretHandle } from '../../internal/schema-model/secretHandle';
@@ -115,6 +117,43 @@ function fail(message: string): StandardSchemaV1.FailureResult {
 }
 
 // ============================================================
+// Numeric restrictions (inline min/max/unit bounds)
+// ============================================================
+
+/** Options for pinning a numeric with inline min/max/unit restrictions. */
+export interface NumericOpts {
+  min?: number | bigint;
+  max?: number | bigint;
+  unit?: string;
+}
+
+const F64_BITS_VIEW = new DataView(new ArrayBuffer(8));
+/** Canonical IEEE-754 f64 bits of `x` as a u64 (the `float-bits` bound payload). */
+function f64Bits(x: number): bigint {
+  // Canonicalize -0.0 to +0.0 so equal bounds compare equal (mirrors the codec).
+  F64_BITS_VIEW.setFloat64(0, x === 0 ? 0 : x);
+  return F64_BITS_VIEW.getBigUint64(0);
+}
+
+type BoundKind = 'unsigned' | 'signed' | 'float-bits';
+
+function makeBound(kind: BoundKind, x: number | bigint): NumericBound {
+  return kind === 'float-bits'
+    ? { tag: 'float-bits', val: f64Bits(Number(x)) }
+    : { tag: kind, val: BigInt(x) };
+}
+
+/** Build `NumericRestrictions` from user opts, or `undefined` when empty (= unconstrained). */
+function buildRestrictions(kind: BoundKind, opts?: NumericOpts): NumericRestrictions | undefined {
+  if (!opts || (opts.min === undefined && opts.max === undefined && !opts.unit)) return undefined;
+  return {
+    min: opts.min !== undefined ? makeBound(kind, opts.min) : undefined,
+    max: opts.max !== undefined ? makeBound(kind, opts.max) : undefined,
+    unit: opts.unit,
+  };
+}
+
+// ============================================================
 // Scalar pins
 // ============================================================
 
@@ -127,25 +166,30 @@ interface IntPin {
   big: boolean;
 }
 
-function intMarker(pin: IntPin): MarkerSchema<number | bigint> {
-  const { tag, min, max, big } = pin;
+function intMarker(pin: IntPin, opts?: NumericOpts): MarkerSchema<number | bigint> {
+  const { tag, min: typeMin, max: typeMax, big } = pin;
+  const kind: BoundKind = tag.startsWith('s') ? 'signed' : 'unsigned';
+  const restrictions = buildRestrictions(kind, opts);
+  // Effective bounds tighten the type range with the user's min/max.
+  const lo = opts?.min !== undefined && BigInt(opts.min) > typeMin ? BigInt(opts.min) : typeMin;
+  const hi = opts?.max !== undefined && BigInt(opts.max) < typeMax ? BigInt(opts.max) : typeMax;
   const validate: Validator<number | bigint> = (value) => {
     if (big) {
       const n = typeof value === 'bigint' ? value : typeof value === 'number' ? BigInt(value) : undefined;
       if (n === undefined) return fail(`Expected a bigint or number for WIT ${tag}`);
-      if (n < min || n > max) return fail(`Value ${n} out of range for WIT ${tag}`);
+      if (n < lo || n > hi) return fail(`Value ${n} out of range for WIT ${tag}`);
       return ok(n);
     }
     if (typeof value !== 'number' || !Number.isInteger(value)) {
       return fail(`Expected an integer for WIT ${tag}`);
     }
-    if (BigInt(value) < min || BigInt(value) > max) {
+    if (BigInt(value) < lo || BigInt(value) > hi) {
       return fail(`Value ${value} out of range for WIT ${tag}`);
     }
     return ok(value);
   };
   const descriptor: MarkerDescriptor = () => ({
-    graph: { defs: new Map(), root: t[tag]() },
+    graph: { defs: new Map(), root: t[tag](restrictions) },
     toValue: (value) =>
       big
         ? (v[tag] as (x: bigint) => SchemaValue)(typeof value === 'bigint' ? value : BigInt(value as number))
@@ -155,11 +199,16 @@ function intMarker(pin: IntPin): MarkerSchema<number | bigint> {
   return marker(validate, descriptor);
 }
 
-function f32Marker(): MarkerSchema<number> {
-  const validate: Validator<number> = (value) =>
-    typeof value === 'number' ? ok(value) : fail('Expected a number for WIT f32');
+function f32Marker(opts?: NumericOpts): MarkerSchema<number> {
+  const restrictions = buildRestrictions('float-bits', opts);
+  const validate: Validator<number> = (value) => {
+    if (typeof value !== 'number') return fail('Expected a number for WIT f32');
+    if (opts?.min !== undefined && value < Number(opts.min)) return fail(`Value ${value} below min for WIT f32`);
+    if (opts?.max !== undefined && value > Number(opts.max)) return fail(`Value ${value} above max for WIT f32`);
+    return ok(value);
+  };
   const descriptor: MarkerDescriptor = () => ({
-    graph: { defs: new Map(), root: t.f32() },
+    graph: { defs: new Map(), root: t.f32(restrictions) },
     toValue: (value) => v.f32(value as number),
     fromValue: (sv) => (sv as { tag: 'f32'; value: number }).value,
   });
@@ -483,15 +532,18 @@ function multimodalMarker(cases: MultimodalCase[]): MarkerSchema<MultimodalEleme
  */
 export const s = {
   // Numeric pins (f64 is the default `number`, so it is intentionally absent).
-  u8: () => intMarker({ tag: 'u8', min: 0n, max: 255n, big: false }),
-  u16: () => intMarker({ tag: 'u16', min: 0n, max: 65535n, big: false }),
-  u32: () => intMarker({ tag: 'u32', min: 0n, max: 4294967295n, big: false }),
-  u64: () => intMarker({ tag: 'u64', min: 0n, max: 18446744073709551615n, big: true }),
-  s8: () => intMarker({ tag: 's8', min: -128n, max: 127n, big: false }),
-  s16: () => intMarker({ tag: 's16', min: -32768n, max: 32767n, big: false }),
-  s32: () => intMarker({ tag: 's32', min: -2147483648n, max: 2147483647n, big: false }),
-  s64: () => intMarker({ tag: 's64', min: -9223372036854775808n, max: 9223372036854775807n, big: true }),
-  f32: () => f32Marker(),
+  u8: (opts?: NumericOpts) => intMarker({ tag: 'u8', min: 0n, max: 255n, big: false }, opts),
+  u16: (opts?: NumericOpts) => intMarker({ tag: 'u16', min: 0n, max: 65535n, big: false }, opts),
+  u32: (opts?: NumericOpts) => intMarker({ tag: 'u32', min: 0n, max: 4294967295n, big: false }, opts),
+  u64: (opts?: NumericOpts) =>
+    intMarker({ tag: 'u64', min: 0n, max: 18446744073709551615n, big: true }, opts),
+  s8: (opts?: NumericOpts) => intMarker({ tag: 's8', min: -128n, max: 127n, big: false }, opts),
+  s16: (opts?: NumericOpts) => intMarker({ tag: 's16', min: -32768n, max: 32767n, big: false }, opts),
+  s32: (opts?: NumericOpts) =>
+    intMarker({ tag: 's32', min: -2147483648n, max: 2147483647n, big: false }, opts),
+  s64: (opts?: NumericOpts) =>
+    intMarker({ tag: 's64', min: -9223372036854775808n, max: 9223372036854775807n, big: true }, opts),
+  f32: (opts?: NumericOpts) => f32Marker(opts),
 
   // Scalars Standard Schema can't pin.
   char: () => charMarker(),
