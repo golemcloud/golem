@@ -37,11 +37,18 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [x] Keep view-specific request building and `TuiEvent` mapping in the views or app state, not in the executor.
 - [x] Remove TUI-specific handler APIs and extract neutral data-returning helpers only when they are useful for both CLI and TUI call paths.
 
+## Completed Goal: Direct Typed Agents Refresh
+
+- [x] Extract a neutral data-returning worker list request/helper.
+- [x] Keep existing CLI `agent list` rendering on top of the typed helper.
+- [x] Move TUI Agents list refresh from nested JSON CLI output to a typed context-executor call.
+- [x] Preserve manual refresh, auto-refresh, mode cycle, fuzzy filtering, details, and stale result protection.
+- [x] Remove production JSON parsing fallback for the Agents list.
+
 ## Next Planned Goals
 
 - [ ] Add action availability reasons and show unavailable actions consistently.
 - [ ] Introduce selected TUI context and immutable job launch context.
-- [ ] Move Agents list refresh from nested JSON CLI output to a direct typed call using the context executor and a neutral worker-list helper.
 - [ ] Replace Agent inspect oplog/stream nested CLI with direct streaming providers.
 - [ ] Split stable action/help/test-driver pieces out of `app.rs` after the rules settle.
 - [ ] DX/UX hardening: design a lightweight documentation system for TUI actions, shortcuts, help surfaces, and interaction conventions after logging/context execution and direct ops refresh fundamentals are stable.

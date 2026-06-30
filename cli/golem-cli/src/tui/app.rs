@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::model::app_raw::{BuiltinServer, Server};
+use crate::model::worker::{
+    AgentListMode, AgentListRequest, AgentMetadataView, AgentsMetadataResponseView,
+};
 use crate::tui::TuiEvent;
-use crate::tui::context_executor::TuiContextExecutor;
+use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextTaskResult};
 use crate::tui::input::encode_key_for_pty;
 use crate::tui::nested_cli::{
     CommandExit, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
@@ -39,10 +43,8 @@ use ratatui::widgets::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::process::Command;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::{Duration, sleep};
@@ -634,36 +636,54 @@ impl TuiApp {
         let Some(event_tx) = event_tx.cloned() else {
             return;
         };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.agents.refresh_running = false;
+            self.agents.last_error = Some("TUI context executor is not available".to_string());
+            return;
+        };
+        self.agents.refresh_context_id = Some(context_executor.current_context_id());
         let mode = self.agents.mode;
-        tokio::spawn(async move {
-            let result = run_agent_refresh(mode)
-                .await
-                .map_err(|error| format!("{error:#}"));
-            let _ = event_tx
-                .send(TuiEvent::AgentRefreshFinished { generation, result })
-                .await;
-        });
+        context_executor.spawn(
+            event_tx,
+            move |launch_context| async move {
+                let request = AgentListRequest {
+                    mode: mode.agent_list_mode(),
+                    stable_sort: true,
+                    ..AgentListRequest::default()
+                };
+                launch_context
+                    .context()
+                    .worker_handler()
+                    .list_agent_metadata(request)
+                    .await
+            },
+            move |result| TuiEvent::AgentRefreshFinished { generation, result },
+        );
     }
 
-    fn finish_agent_refresh(&mut self, generation: u64, result: Result<String, String>) {
+    fn finish_agent_refresh(
+        &mut self,
+        generation: u64,
+        result: TuiContextTaskResult<AgentsMetadataResponseView>,
+    ) {
         if generation != self.agents.refresh_generation {
+            return;
+        }
+
+        let (context_id, result, logs) = result.into_parts();
+        if Some(context_id) != self.agents.refresh_context_id {
             return;
         }
 
         self.agents.refresh_running = false;
         match result {
-            Ok(output) => match parse_agent_list_output(&output) {
-                Ok(agents) => {
-                    self.agents.agents = agents;
-                    self.agents.last_error = None;
-                    self.agents.clamp_selection();
-                }
-                Err(error) => {
-                    self.agents.last_error = Some(format!("{error:#}"));
-                }
-            },
+            Ok(response) => {
+                self.agents.agents = agent_items_from_metadata_response(response);
+                self.agents.last_error = None;
+                self.agents.clamp_selection();
+            }
             Err(error) => {
-                self.agents.last_error = Some(error);
+                self.agents.last_error = Some(agent_refresh_error(error, logs));
             }
         }
     }
@@ -1569,6 +1589,7 @@ struct AgentsState {
     auto_refresh: bool,
     refresh_running: bool,
     refresh_generation: u64,
+    refresh_context_id: Option<TuiContextId>,
     auto_refresh_stop: Option<Arc<AtomicBool>>,
     last_error: Option<String>,
     agents: Vec<AgentListItem>,
@@ -1586,6 +1607,7 @@ impl Default for AgentsState {
             auto_refresh: false,
             refresh_running: false,
             refresh_generation: 0,
+            refresh_context_id: None,
             auto_refresh_stop: None,
             last_error: None,
             agents: Vec::new(),
@@ -1751,6 +1773,14 @@ impl AgentModeFilter {
             Self::Durable => "durable",
             Self::Ephemeral => "ephemeral",
             Self::All => "all",
+        }
+    }
+
+    fn agent_list_mode(self) -> AgentListMode {
+        match self {
+            Self::Durable => AgentListMode::Durable,
+            Self::Ephemeral => AgentListMode::Ephemeral,
+            Self::All => AgentListMode::All,
         }
     }
 
@@ -2060,108 +2090,43 @@ fn server_args(clean: bool) -> Vec<String> {
     args
 }
 
-async fn run_agent_refresh(mode: AgentModeFilter) -> anyhow::Result<String> {
-    let output = Command::new(crate::binary_path_to_string()?)
-        .args([
-            "agent",
-            "list",
-            "--format",
-            "json",
-            "--mode",
-            mode.as_cli_value(),
-        ])
-        .current_dir(crate::fs::current_dir_lexical()?)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let message = if stderr.trim().is_empty() {
-            stdout
-        } else {
-            stderr
-        };
-        anyhow::bail!(message.trim().to_string())
-    }
+fn agent_items_from_metadata_response(response: AgentsMetadataResponseView) -> Vec<AgentListItem> {
+    response
+        .agents
+        .into_iter()
+        .map(agent_item_from_metadata)
+        .collect()
 }
 
-fn parse_agent_list_output(output: &str) -> anyhow::Result<Vec<AgentListItem>> {
-    let value: Value = serde_json::from_str(output.trim())?;
-    let values = match &value {
-        Value::Array(values) => values.as_slice(),
-        Value::Object(object) => object
-            .get("values")
-            .or_else(|| object.get("agents"))
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
-        _ => &[],
-    };
-
-    Ok(values.iter().map(agent_item_from_value).collect())
-}
-
-fn agent_item_from_value(value: &Value) -> AgentListItem {
-    let name = first_string_value(
-        value,
-        &[
-            &["name"],
-            &["agentName"],
-            &["agentId"],
-            &["id"],
-            &["agent", "name"],
-            &["agent", "id"],
-        ],
-    )
-    .unwrap_or_else(|| "<unknown>".to_string());
-    let component = first_string_value(
-        value,
-        &[
-            &["component"],
-            &["componentName"],
-            &["componentId"],
-            &["agent", "component"],
-        ],
-    );
-    let agent_type = first_string_value(
-        value,
-        &[
-            &["agentType"],
-            &["agentTypeName"],
-            &["type"],
-            &["typeName"],
-            &["agent", "type"],
-        ],
-    );
-    let status = first_string_value(value, &[&["status"], &["state"], &["agent", "status"]]);
+fn agent_item_from_metadata(agent: AgentMetadataView) -> AgentListItem {
+    let name = agent.agent_name.0.clone();
+    let component = Some(agent.component_name.0.clone());
+    let agent_type = agent_type_from_agent_name(&name);
+    let status = Some(format!("{:?}", agent.status));
+    let raw = serde_json::to_value(agent).unwrap_or(Value::Null);
 
     AgentListItem {
         name,
         component,
         agent_type,
         status,
-        raw: value.clone(),
+        raw,
     }
 }
 
-fn first_string_value(value: &Value, paths: &[&[&str]]) -> Option<String> {
-    paths.iter().find_map(|path| {
-        let mut current = value;
-        for segment in *path {
-            current = current.get(*segment)?;
-        }
-        match current {
-            Value::String(value) => Some(value.clone()),
-            Value::Number(value) => Some(value.to_string()),
-            Value::Bool(value) => Some(value.to_string()),
-            _ => None,
-        }
-    })
+fn agent_type_from_agent_name(name: &str) -> Option<String> {
+    name.split_once('(')
+        .map(|(agent_type, _)| agent_type.trim())
+        .filter(|agent_type| !agent_type.is_empty())
+        .map(ToString::to_string)
+}
+
+fn agent_refresh_error(error: String, logs: Vec<String>) -> String {
+    if logs.is_empty() {
+        error
+    } else {
+        format!("{error}\n{}", logs.join("\n"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4348,7 +4313,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
     use test_r::test;
 
     #[test]
@@ -4630,6 +4595,19 @@ mod tests {
     }
 
     #[test]
+    fn agent_mode_maps_to_worker_list_mode() {
+        assert_eq!(
+            AgentModeFilter::Durable.agent_list_mode(),
+            AgentListMode::Durable
+        );
+        assert_eq!(
+            AgentModeFilter::Ephemeral.agent_list_mode(),
+            AgentListMode::Ephemeral
+        );
+        assert_eq!(AgentModeFilter::All.agent_list_mode(), AgentListMode::All);
+    }
+
+    #[test]
     fn agent_details_panel_toggles() {
         let mut app = test_app();
         app.active_view = TuiView::Agents;
@@ -4747,20 +4725,20 @@ mod tests {
     }
 
     #[test]
-    fn agent_json_parsing_handles_values_and_plain_arrays() {
-        let values = parse_agent_list_output(
-            r#"{"values":[{"name":"cart-1","status":"Running","agentTypeName":"CartAgent"}]}"#,
-        )
-        .unwrap();
-        assert_eq!(values[0].name, "cart-1");
-        assert_eq!(values[0].status.as_deref(), Some("Running"));
+    fn typed_agent_metadata_maps_to_agent_list_item() {
+        let response = sample_agents_metadata_response(vec![sample_agent_metadata_view(
+            "cart",
+            "CartAgent(\"cart-1\")",
+            golem_common::model::AgentStatus::Running,
+        )]);
 
-        let array = parse_agent_list_output(
-            r#"[{"agentName":"order-1","componentName":"orders","type":"OrderAgent"}]"#,
-        )
-        .unwrap();
-        assert_eq!(array[0].name, "order-1");
-        assert_eq!(array[0].component.as_deref(), Some("orders"));
+        let items = agent_items_from_metadata_response(response);
+
+        assert_eq!(items[0].name, "CartAgent(\"cart-1\")");
+        assert_eq!(items[0].component.as_deref(), Some("cart"));
+        assert_eq!(items[0].agent_type.as_deref(), Some("CartAgent"));
+        assert_eq!(items[0].status.as_deref(), Some("Running"));
+        assert_eq!(items[0].raw["agentName"], "CartAgent(\"cart-1\")");
     }
 
     #[test]
@@ -4768,12 +4746,20 @@ mod tests {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
         app.agents.refresh_generation = 1;
+        app.agents.refresh_context_id = Some(TuiContextId::new(1));
         app.agents.refresh_running = true;
 
         app.handle_event(
             TuiEvent::AgentRefreshFinished {
                 generation: 1,
-                result: Ok(r#"[{"name":"cart-1"}]"#.to_string()),
+                result: agent_refresh_success(
+                    1,
+                    sample_agents_metadata_response(vec![sample_agent_metadata_view(
+                        "cart",
+                        "cart-1",
+                        golem_common::model::AgentStatus::Idle,
+                    )]),
+                ),
             },
             &tx,
         );
@@ -4781,6 +4767,60 @@ mod tests {
         assert!(!app.agents.refresh_running);
         assert_eq!(app.agents.agents.len(), 1);
         assert_eq!(app.agents.agents[0].name, "cart-1");
+    }
+
+    #[test]
+    fn stale_agent_refresh_context_is_ignored() {
+        let mut app = test_app();
+        let (tx, _rx) = test_event_channel();
+        app.agents.refresh_generation = 1;
+        app.agents.refresh_context_id = Some(TuiContextId::new(1));
+        app.agents.refresh_running = true;
+
+        app.handle_event(
+            TuiEvent::AgentRefreshFinished {
+                generation: 1,
+                result: agent_refresh_success(
+                    2,
+                    sample_agents_metadata_response(vec![sample_agent_metadata_view(
+                        "cart",
+                        "cart-1",
+                        golem_common::model::AgentStatus::Idle,
+                    )]),
+                ),
+            },
+            &tx,
+        );
+
+        assert!(app.agents.refresh_running);
+        assert!(app.agents.agents.is_empty());
+    }
+
+    #[test]
+    fn agent_refresh_error_sets_error_state_with_logs() {
+        let mut app = test_app();
+        let (tx, _rx) = test_event_channel();
+        app.agents.refresh_generation = 1;
+        app.agents.refresh_context_id = Some(TuiContextId::new(1));
+        app.agents.refresh_running = true;
+
+        app.handle_event(
+            TuiEvent::AgentRefreshFinished {
+                generation: 1,
+                result: TuiContextTaskResult::new(
+                    TuiContextId::new(1),
+                    Err("refresh failed".to_string()),
+                    vec!["captured log".to_string()],
+                ),
+            },
+            &tx,
+        );
+
+        assert!(!app.agents.refresh_running);
+        assert_eq!(
+            app.agents.last_error.as_deref(),
+            Some("refresh failed\ncaptured log")
+        );
     }
 
     #[test]
@@ -5406,6 +5446,53 @@ mod tests {
 
     fn test_event_channel() -> (TuiEventSender, mpsc::Receiver<TuiEvent>) {
         mpsc::channel(16)
+    }
+
+    fn agent_refresh_success(
+        context_id: u64,
+        response: AgentsMetadataResponseView,
+    ) -> TuiContextTaskResult<AgentsMetadataResponseView> {
+        TuiContextTaskResult::new(TuiContextId::new(context_id), Ok(response), Vec::new())
+    }
+
+    fn sample_agents_metadata_response(
+        agents: Vec<AgentMetadataView>,
+    ) -> AgentsMetadataResponseView {
+        AgentsMetadataResponseView {
+            agents,
+            cursors: BTreeMap::new(),
+        }
+    }
+
+    fn sample_agent_metadata_view(
+        component_name: &str,
+        agent_name: &str,
+        status: golem_common::model::AgentStatus,
+    ) -> AgentMetadataView {
+        AgentMetadataView {
+            component_name: golem_common::model::component::ComponentName(
+                component_name.to_string(),
+            ),
+            agent_name: crate::model::worker::RawAgentId(agent_name.to_string()),
+            created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
+            environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+            env: BTreeMap::new().into_iter().collect(),
+            default_env: BTreeMap::new().into_iter().collect(),
+            config: Vec::new(),
+            default_config: Vec::new(),
+            status,
+            component_revision: golem_common::model::component::ComponentRevision::new(1).unwrap(),
+            retry_count: 0,
+            pending_invocation_count: 0,
+            updates: Vec::new(),
+            created_at: "2024-01-01T00:00:00Z".parse().unwrap(),
+            last_error: None,
+            component_size: 0,
+            total_linear_memory_size: 0,
+            exported_resource_instances: BTreeMap::new().into_iter().collect(),
+            source_language: crate::agent_id_display::SourceLanguage::default(),
+            secret_config_paths: BTreeSet::new(),
+        }
     }
 
     fn sample_agents() -> Vec<AgentListItem> {

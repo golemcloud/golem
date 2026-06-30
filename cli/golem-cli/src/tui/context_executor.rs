@@ -26,6 +26,10 @@ pub(crate) struct TuiContextId(u64);
 
 #[allow(dead_code)]
 impl TuiContextId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     fn value(self) -> u64 {
         self.0
     }
@@ -63,6 +67,18 @@ pub(crate) struct TuiContextTaskResult<T> {
 
 #[allow(dead_code)]
 impl<T> TuiContextTaskResult<T> {
+    pub(crate) fn new(
+        context_id: TuiContextId,
+        result: Result<T, String>,
+        logs: Vec<String>,
+    ) -> Self {
+        Self {
+            context_id,
+            result,
+            logs,
+        }
+    }
+
     pub(crate) fn into_parts(self) -> (TuiContextId, Result<T, String>, Vec<String>) {
         (self.context_id, self.result, self.logs)
     }
@@ -91,7 +107,7 @@ impl TuiContextExecutor {
     }
 
     #[allow(dead_code)]
-    fn current_context_id(&self) -> TuiContextId {
+    pub(crate) fn current_context_id(&self) -> TuiContextId {
         self.launch_context().id
     }
 
@@ -307,17 +323,28 @@ mod tests {
             TestEvent,
         );
 
-        let first_event = rx.recv().await.expect("first event");
-        let second_event = rx.recv().await.expect("second event");
+        let events = [
+            rx.recv().await.expect("first event"),
+            rx.recv().await.expect("second event"),
+        ];
         first.abort();
         second.abort();
 
         assert_eq!(executor.current_context_id(), TuiContextId(1));
-        assert_eq!(first_event.0.context_id, TuiContextId(1));
-        assert_eq!(second_event.0.context_id, TuiContextId(1));
-        assert_eq!(
-            second_event.0.result,
-            Ok(format!("context:{:p}", Arc::as_ptr(&context)))
+        assert!(
+            events
+                .iter()
+                .all(|event| event.0.context_id == TuiContextId(1))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.0.result == Ok("id:1".to_string()))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.0.result == Ok(format!("context:{:p}", Arc::as_ptr(&context))))
         );
     }
 }

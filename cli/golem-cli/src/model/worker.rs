@@ -22,6 +22,7 @@ use crate::model::masking::{Masked, MaskingConfig, mask_agent_config_entries, ma
 use clap::ValueEnum;
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
+use golem_client::model::ScanCursor;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
@@ -113,6 +114,24 @@ impl Display for AgentListMode {
             AgentListMode::All => write!(f, "all"),
         }
     }
+}
+
+impl Default for AgentListMode {
+    fn default() -> Self {
+        Self::Durable
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AgentListRequest {
+    pub agent_type_name: Option<AgentTypeName>,
+    pub component_name: Option<ComponentName>,
+    pub filters: Vec<String>,
+    pub mode: AgentListMode,
+    pub scan_cursor: Option<ScanCursor>,
+    pub max_count: Option<u64>,
+    pub precise: bool,
+    pub stable_sort: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

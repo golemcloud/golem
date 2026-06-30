@@ -231,6 +231,22 @@ Validation:
 - `cargo check -p golem-cli`
 - `cargo test -p golem-cli --lib -- tui:: --report-time`
 
+Direct typed Agents refresh:
+
+- Added a neutral `AgentListRequest` and `WorkerCommandHandler::list_agent_metadata` that returns `AgentsMetadataResponseView`.
+- Kept CLI `agent list` rendering/logging at the CLI edge while sharing the typed listing helper.
+- Changed the TUI Agents refresh to run through `TuiContextExecutor`, carrying generation plus launch context identity into `AgentRefreshFinished`.
+- Mapped `AgentsMetadataResponseView` into `AgentListItem` directly and kept details backed by serialized typed metadata.
+- Removed production JSON parsing and nested `golem agent list --format json` subprocess refresh from the Agents view.
+- Made the context-executor reuse-id test order-independent because concurrent requests can complete in either order.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli --lib -- tui:: --report-time`
+- `cargo test -p golem-cli --lib -- command_handler::worker --report-time`
+
 Decisions recorded:
 
 - Ops/resource exploration should use direct typed calls by default.

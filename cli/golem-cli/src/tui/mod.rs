@@ -19,6 +19,8 @@ mod nested_cli;
 mod terminal;
 pub(crate) mod terminal_screen;
 
+use crate::model::worker::AgentsMetadataResponseView;
+use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use nested_cli::CommandExit;
 
@@ -46,6 +48,6 @@ enum TuiEvent {
     AgentRefreshTick,
     AgentRefreshFinished {
         generation: u64,
-        result: Result<String, String>,
+        result: TuiContextTaskResult<AgentsMetadataResponseView>,
     },
 }

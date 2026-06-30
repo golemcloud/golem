@@ -54,8 +54,8 @@ use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::worker::{
-    AgentListMode, AgentMetadata, AgentMetadataView, AgentNameMatch, AgentUpdateMode,
-    AgentsMetadataResponseView, RawAgentId,
+    AgentListMode, AgentListRequest, AgentMetadata, AgentMetadataView, AgentNameMatch,
+    AgentUpdateMode, AgentsMetadataResponseView, RawAgentId,
 };
 use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
@@ -860,12 +860,11 @@ impl WorkerCommandHandler {
             bail!("Refresh mode is only supported with --format text");
         }
 
-        let filters = apply_list_mode_filter(filters, mode);
-        let (components, filters) = self
-            .resolve_list_components(agent_type_name, component_name, filters)
-            .await?;
-
         if let Some(interval_ms) = refresh {
+            let filters = apply_list_mode_filter(filters, mode);
+            let (components, filters) = self
+                .resolve_list_components(agent_type_name, component_name, filters)
+                .await?;
             self.list_with_refresh(
                 &components,
                 &filters,
@@ -877,18 +876,40 @@ impl WorkerCommandHandler {
             .await
         } else {
             let view = self
-                .list_agents(
-                    &components,
-                    &filters,
-                    scan_cursor.as_ref(),
+                .list_agent_metadata(AgentListRequest {
+                    agent_type_name,
+                    component_name,
+                    filters,
+                    mode,
+                    scan_cursor,
                     max_count,
                     precise,
-                    false,
-                )
+                    stable_sort: false,
+                })
                 .await?;
             self.ctx.log_handler().log_output(view)?;
             Ok(())
         }
+    }
+
+    pub async fn list_agent_metadata(
+        &self,
+        request: AgentListRequest,
+    ) -> anyhow::Result<AgentsMetadataResponseView> {
+        let filters = apply_list_mode_filter(request.filters, request.mode);
+        let (components, filters) = self
+            .resolve_list_components(request.agent_type_name, request.component_name, filters)
+            .await?;
+
+        self.list_agents(
+            &components,
+            &filters,
+            request.scan_cursor.as_ref(),
+            request.max_count,
+            request.precise,
+            request.stable_sort,
+        )
+        .await
     }
 
     async fn list_with_refresh(
