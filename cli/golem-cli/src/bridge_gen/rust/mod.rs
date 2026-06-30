@@ -36,12 +36,14 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+    typed_schema_value_with_projected_defs,
 };
 use golem_common::schema::graph::SchemaTypeDef;
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
 };
+use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::unstructured::{
     unstructured_binary_restrictions, unstructured_text_restrictions,
 };
@@ -641,9 +643,14 @@ impl RustBridgeGenerator {
                 .collect();
             let value_encode =
                 self.emit_encode_expr(quote! { value }, &config.value_type, false, 0)?;
-            let schema_graph_json = serde_json::to_string(
-                &golem_common::schema::SchemaGraph::anonymous(config.value_type.clone()),
-            )?;
+            let config_graph = typed_schema_value_with_projected_defs(
+                &self.agent_type.schema,
+                config.value_type.clone(),
+                SchemaValue::Bool(false),
+            )
+            .graph()
+            .clone();
+            let schema_graph_json = serde_json::to_string(&config_graph)?;
             config_encode_stmts.push(quote! {
                 if let Some(value) = #param_name {
                     let __config_value: crate::__golem_bridge_runtime::schema::SchemaValue = (|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
@@ -2886,7 +2893,11 @@ mod tests {
     use super::*;
     use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
-    use golem_common::schema::{AgentConstructorSchema, NamedField, SchemaGraph, SchemaType};
+    use golem_common::schema::metadata::TypeId;
+    use golem_common::schema::{
+        AgentConstructorSchema, MetadataEnvelope, NamedField, NamedFieldType, SchemaGraph,
+        SchemaType,
+    };
     use test_r::test;
 
     #[test]
@@ -3663,6 +3674,69 @@ pub fn decode_text(
         assert!(
             output.status.success(),
             "generated guest crate with constructor parameter matching local config parameter failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_emits_self_contained_typed_config_schema_values() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        let config_type_id = TypeId::new("config-shared");
+        agent_type.schema = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: config_type_id.clone(),
+                name: Some("ConfigShared".to_string()),
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "label".to_string(),
+                    body: SchemaType::string(),
+                    metadata: MetadataEnvelope::default(),
+                }]),
+            }],
+            root: SchemaType::record(vec![]),
+        };
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["shared".to_string()],
+            value_type: SchemaType::ref_to(config_type_id),
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        assert!(
+            lib_rs.contains("config-shared"),
+            "generated typed config schema graph must include referenced definitions:\n{lib_rs}"
+        );
+        assert!(
+            lib_rs.contains("TypedSchemaValue::new"),
+            "generated typed config encoding must build a typed value:\n{lib_rs}"
+        );
+        assert!(
+            lib_rs.contains("golem_rust::encode_typed_schema_value"),
+            "generated typed config encoding must use guest golem-rust wire encoding:\n{lib_rs}"
+        );
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with referenced local config type failed cargo check\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
