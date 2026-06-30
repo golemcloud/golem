@@ -68,20 +68,9 @@ export { Path, Duration, Quantity } from './richTypes';
 // Standard Schema. Exported from the main entry so it is part of the bundle
 // baked into `agent_guest.wasm` (and thus shares the runtime registries).
 // Unstable; will eventually replace the `@agent()` decorator surface.
-export { defineAgent, method, registerSchemaWalker } from './fluent';
-export type {
-  AgentDefinition,
-  AgentImplementation,
-  AgentSpec,
-  IdRecord,
-  InitContext,
-  MethodsRecord,
-  MethodSpec,
-  InputRecord,
-  StandardSchemaV1,
-  FluentCodec,
-  SchemaWalker,
-} from './fluent';
+// Re-export the full fluent surface (defineAgent/method, markers `s`, clientFor,
+// the typed host surfaces keyvalue/blobstore/websocket/rdbms, and the `http` helpers).
+export * from './fluent';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
