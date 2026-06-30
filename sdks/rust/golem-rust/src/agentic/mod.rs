@@ -25,6 +25,7 @@ pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use tool_client::*;
 pub use tool_literal::*;
 pub use tool_refinement::*;
 pub use tool_registry::{
@@ -49,6 +50,7 @@ mod principal_serde;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
+mod tool_client;
 mod tool_impl;
 mod tool_literal;
 mod tool_refinement;

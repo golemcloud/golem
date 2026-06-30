@@ -3679,6 +3679,92 @@ impl BadTool for BadToolImpl {
     }
 
     #[test]
+    fn tool_client_accepts_public_wasip2_stdin_stream() {
+        let output = cargo_check_tool_crate(
+            "tool-client-wasip2-stdin",
+            r#"
+use golem_rust::agentic::invoke_and_await_infallible;
+use golem_rust::bindings::golem::tool::host::ToolRpc;
+use golem_rust::wasip2::io::streams::InputStream;
+
+fn forward_stdin(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue, stdin: InputStream) {
+    let _ = invoke_and_await_infallible(rpc, &[], input, Some(stdin));
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "tool client helpers must accept the same public wasip2 stream type that tool definitions use, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn agentic_world_tool_rpc_is_accepted_by_tool_client_helpers() {
+        let output = cargo_check_tool_crate(
+            "agentic-world-tool-rpc-client-helper",
+            r#"
+use golem_rust::agentic::invoke_and_await_infallible;
+use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
+
+fn call_tool(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue) {
+    let _ = invoke_and_await_infallible(rpc, &[], input, None);
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "tool client helpers must accept the ToolRpc type exposed by the exported agentic world, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn exported_agentic_world_uses_public_wasip2_streams() {
+        let output = cargo_check_tool_crate(
+            "agentic-world-wasip2-streams",
+            r#"
+use golem_rust::golem_agentic::exports::golem::tool::guest::{Guest, InvocationResult, Tool, ToolError, TypedSchemaValue};
+use golem_rust::golem_agentic::golem::agent::common::Principal;
+use golem_rust::wasip2::io::streams::InputStream;
+
+struct Component;
+
+impl Guest for Component {
+    fn discover_tools() -> Result<Vec<Tool>, ToolError> {
+        unimplemented!()
+    }
+
+    fn get_tool(_name: String) -> Result<Tool, ToolError> {
+        unimplemented!()
+    }
+
+    fn invoke(
+        _tool_name: String,
+        _command_path: Vec<String>,
+        _input: TypedSchemaValue,
+        _stdin: Option<InputStream>,
+        _principal: Principal,
+    ) -> Result<InvocationResult, ToolError> {
+        unimplemented!()
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "the exported agentic world should expose the same public wasip2 stream types as tool definitions and tool clients, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
     fn delim_without_delimited_repeatable_mode_is_rejected() {
         let output = cargo_check_tool_crate(
             "delim-without-mode",

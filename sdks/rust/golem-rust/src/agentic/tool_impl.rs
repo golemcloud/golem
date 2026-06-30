@@ -18,7 +18,7 @@ use crate::golem_agentic::exports::golem::tool::guest::{
     Guest, InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::wasi::io::streams::InputStream;
+use crate::wasip2::io::streams::InputStream;
 
 impl Guest for Component {
     fn discover_tools() -> Result<Vec<Tool>, ToolError> {
