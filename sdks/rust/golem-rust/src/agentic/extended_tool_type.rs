@@ -3105,11 +3105,11 @@ fn schema_types_match(
         // Rust type — e.g. `Quantity<Meters>` vs `Quantity<Seconds>`, which
         // share the `Quantity` discriminant but are not interchangeable values.
         // Identity here means the parts of the spec derived from the Rust type
-        // (not overlaid by `#[arg]`): the quantity unit set, the secret category,
-        // the quota-token resource, and the unstructured text languages / binary
-        // MIME sets. Pure validation restrictions (numeric/text/url bounds, path
-        // direction/kind — all `#[arg]`-refinable) stay ignored per this
-        // function's contract.
+        // (not overlaid by `#[arg]`): the quantity unit set, the secret payload
+        // type and category, the quota-token resource, and the unstructured text
+        // languages / binary MIME sets. Pure validation restrictions
+        // (numeric/text/url bounds, path direction/kind — all `#[arg]`-refinable)
+        // stay ignored per this function's contract.
         (SchemaType::Quantity { spec: sa, .. }, SchemaType::Quantity { spec: sb, .. }) => {
             sa.base_unit == sb.base_unit
                 && str_sets_match(
@@ -3119,6 +3119,7 @@ fn schema_types_match(
         }
         (SchemaType::Secret { spec: sa, .. }, SchemaType::Secret { spec: sb, .. }) => {
             sa.category == sb.category
+                && schema_types_match(a_graph, &sa.inner, b_graph, &sb.inner, next, visiting)
         }
         (SchemaType::QuotaToken { spec: sa, .. }, SchemaType::QuotaToken { spec: sb, .. }) => {
             sa.resource_name == sb.resource_name
