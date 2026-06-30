@@ -89,6 +89,7 @@ Load these skills for guided workflows on complex tasks:
 | `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
+| `golem-cli-development` | General `cli/golem-cli` command handler, command wiring, TUI integration, or CLI refactor work |
 | `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
 | `modifying-cli-output-schema` | Adding or changing structured `golem-cli` output, `CliOutput` types, or the command output JSON schema |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
