@@ -58,12 +58,27 @@ fn resolve_ifs_entry(
     })
 }
 
+#[derive(Debug)]
 enum ComponentDiff {
     All,
     Diff { diff: diff::ComponentDiff },
 }
 
 impl ComponentDiff {
+    pub fn new(diff: Option<&diff::DiffForHashOf<diff::Component>>) -> anyhow::Result<Self> {
+        Ok(match diff {
+            None => ComponentDiff::All,
+            Some(diff::DiffForHashOf::HashDiff { .. }) => {
+                return Err(anyhow!(
+                    "Cannot stage component update from a hash-only diff; component details were not loaded"
+                ));
+            }
+            Some(diff::DiffForHashOf::ValueDiff { diff }) => {
+                ComponentDiff::Diff { diff: diff.clone() }
+            }
+        })
+    }
+
     pub fn wasm_changed(&self) -> bool {
         match self {
             ComponentDiff::All => true,
@@ -151,19 +166,14 @@ impl<'a> ComponentStager<'a> {
         plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
         // NOTE: none means ALL changed (e.g. new component)
         diff: Option<&diff::DiffForHashOf<diff::Component>>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             ctx,
             component_deploy_properties,
-            diff: match diff {
-                Some(diff::DiffForHashOf::HashDiff { .. }) | None => ComponentDiff::All,
-                Some(diff::DiffForHashOf::ValueDiff { diff }) => {
-                    ComponentDiff::Diff { diff: diff.clone() }
-                }
-            },
+            diff: ComponentDiff::new(diff)?,
             plugin_grants,
             manifest_files_by_agent: OnceCell::new(),
-        }
+        })
     }
 
     pub async fn open_wasm(&self) -> anyhow::Result<File> {
@@ -240,11 +250,9 @@ impl<'a> ComponentStager<'a> {
 
     async fn changed_manifest_files(&self) -> anyhow::Result<Vec<InitialComponentFile>> {
         match self.diff.changed_agent_types() {
-            None => self.all_manifest_files().await, // all changed (new component or hash-diff)
+            None => self.all_manifest_files().await, // all changed (new component)
             Some(changed) if changed.is_empty() => Ok(Vec::new()),
             Some(changed) => {
-                // Only include files that have content changes — skip permissions-only
-                let content_changed_paths = self.content_changed_file_paths();
                 let mut result = Vec::new();
                 for (agent_type_name, _) in self
                     .component_deploy_properties
@@ -252,40 +260,47 @@ impl<'a> ComponentStager<'a> {
                     .iter()
                     .filter(|(name, _)| changed.contains(name.0.as_str()))
                 {
-                    result.extend(
-                        self.manifest_files_for_agent(agent_type_name)
-                            .await?
-                            .into_iter()
-                            .filter(|file| {
-                                // If we have fine-grained diff, skip permissions-only files.
-                                content_changed_paths.is_empty()
-                                    || content_changed_paths.contains(file.target.path.as_abs_str())
-                            }),
-                    );
+                    let Some(agent_change) = self.agent_change(agent_type_name) else {
+                        continue;
+                    };
+
+                    match agent_change {
+                        diff::BTreeMapDiffValue::Create => {
+                            result.extend(self.manifest_files_for_agent(agent_type_name).await?);
+                        }
+                        diff::BTreeMapDiffValue::Delete => {}
+                        diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
+                            ..
+                        }) => {
+                            return Err(anyhow!(
+                                "Cannot determine changed file contents for agent type {} from a hash-only provision config diff; component details were not loaded",
+                                agent_type_name.0.log_color_highlight()
+                            ));
+                        }
+                        diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
+                            diff,
+                        }) => {
+                            let content_changed_paths = content_changed_file_paths(diff);
+                            if content_changed_paths.is_empty() {
+                                continue;
+                            }
+
+                            result.extend(
+                                self.manifest_files_for_agent(agent_type_name)
+                                    .await?
+                                    .into_iter()
+                                    .filter(|file| {
+                                        content_changed_paths
+                                            .contains(file.target.path.as_abs_str())
+                                    }),
+                            );
+                        }
+                    }
                 }
 
                 Ok(result)
             }
         }
-    }
-
-    fn content_changed_file_paths(&self) -> BTreeSet<String> {
-        self.diff
-            .file_changes_per_agent()
-            .into_iter()
-            .flat_map(|(_, agent_diff)| {
-                agent_diff
-                    .file_changes
-                    .iter()
-                    .filter_map(|(path, change)| match change {
-                        diff::BTreeMapDiffValue::Create => Some(path.clone()),
-                        diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
-                            diff,
-                        }) if diff.content_changed => Some(path.clone()),
-                        _ => None,
-                    })
-            })
-            .collect()
     }
 
     pub async fn all_files(&self) -> anyhow::Result<Option<ComponentFilesArchive>> {
@@ -481,45 +496,38 @@ impl<'a> ComponentStager<'a> {
         &self,
         agent_type_name: &AgentTypeName,
         files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
-    ) -> BTreeMap<ArchiveFilePath, AgentFileOptions> {
+    ) -> anyhow::Result<BTreeMap<ArchiveFilePath, AgentFileOptions>> {
         match &self.diff {
-            ComponentDiff::All => files,
+            ComponentDiff::All => Ok(files),
             ComponentDiff::Diff { diff } => {
                 let Some(agent_change) = diff
                     .agent_type_provision_config_changes
                     .get(agent_type_name.0.as_str())
                 else {
-                    return BTreeMap::new();
+                    return Ok(BTreeMap::new());
                 };
 
                 match agent_change {
-                    diff::BTreeMapDiffValue::Create
-                    | diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff { .. }) => {
-                        files
+                    diff::BTreeMapDiffValue::Create => Ok(files),
+                    diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff { .. }) => {
+                        Err(anyhow!(
+                            "Cannot determine files to add or update for agent type {} from a hash-only provision config diff; component details were not loaded",
+                            agent_type_name.0.log_color_highlight()
+                        ))
                     }
-                    diff::BTreeMapDiffValue::Delete => BTreeMap::new(),
+                    diff::BTreeMapDiffValue::Delete => Ok(BTreeMap::new()),
                     diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff }) => {
-                        let changed_content_paths: BTreeSet<&str> = diff
-                            .file_changes
-                            .iter()
-                            .filter_map(|(path, change)| match change {
-                                diff::BTreeMapDiffValue::Create => Some(path.as_str()),
-                                diff::BTreeMapDiffValue::Update(
-                                    diff::DiffForHashOf::ValueDiff { diff },
-                                ) if diff.content_changed => Some(path.as_str()),
-                                _ => None,
-                            })
-                            .collect();
+                        let changed_content_paths = content_changed_file_paths(diff);
 
                         if changed_content_paths.is_empty() {
-                            BTreeMap::new()
+                            Ok(BTreeMap::new())
                         } else {
-                            files
+                            Ok(files
                                 .into_iter()
                                 .filter(|(_, options)| {
                                     changed_content_paths.contains(options.target_path.as_abs_str())
                                 })
-                                .collect()
+                                .collect())
                         }
                     }
                 }
@@ -601,7 +609,7 @@ impl<'a> ComponentStager<'a> {
                             env: Some(creation.env),
                             config: Some(creation.config),
                             files_to_add_or_update: self
-                                .files_to_add_or_update_for_agent(name, creation.files),
+                                .files_to_add_or_update_for_agent(name, creation.files)?,
                             files_to_remove,
                             file_permission_updates,
                             plugin_updates: creation
@@ -639,61 +647,8 @@ impl<'a> ComponentStager<'a> {
                 .resolve_archive_files_for_agent(name, &changed_files.archive_paths_by_source)
                 .await?;
 
-            let plugin_updates: Vec<PluginInstallationAction> = match &self.diff {
-                ComponentDiff::All => creation
-                    .plugin_installations
-                    .into_iter()
-                    .map(PluginInstallationAction::Install)
-                    .collect(),
-                ComponentDiff::Diff { diff } => match diff
-                    .agent_type_provision_config_changes
-                    .get(name.0.as_str())
-                {
-                    Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
-                        diff,
-                    })) if !diff.plugin_changes.is_empty() => {
-                        let resolved_by_grant: HashMap<uuid::Uuid, &PluginInstallation> = creation
-                            .plugin_installations
-                            .iter()
-                            .map(|p| (p.environment_plugin_grant_id.0, p))
-                            .collect();
-                        diff.plugin_changes
-                            .iter()
-                            .filter_map(|(grant_id, change)| match change {
-                                diff::BTreeMapDiffValue::Create => resolved_by_grant
-                                    .get(grant_id)
-                                    .map(|&p| PluginInstallationAction::Install(p.clone())),
-                                diff::BTreeMapDiffValue::Delete => Some(
-                                    PluginInstallationAction::Uninstall(PluginUninstallation {
-                                        environment_plugin_grant_id: EnvironmentPluginGrantId(
-                                            *grant_id,
-                                        ),
-                                    }),
-                                ),
-                                diff::BTreeMapDiffValue::Update(plugin_diff) => {
-                                    resolved_by_grant.get(grant_id).map(|&p| {
-                                        PluginInstallationAction::Update(PluginInstallationUpdate {
-                                            environment_plugin_grant_id: p
-                                                .environment_plugin_grant_id,
-                                            new_priority: plugin_diff
-                                                .priority_changed
-                                                .then_some(p.priority),
-                                            new_parameters: plugin_diff
-                                                .parameters_changed
-                                                .then_some(p.parameters.clone()),
-                                        })
-                                    })
-                                }
-                            })
-                            .collect()
-                    }
-                    _ => creation
-                        .plugin_installations
-                        .into_iter()
-                        .map(PluginInstallationAction::Install)
-                        .collect(),
-                },
-            };
+            let plugin_updates =
+                self.plugin_updates_for_agent(name, &creation.plugin_installations)?;
 
             let files_to_remove = changed_files
                 .removed_per_agent
@@ -709,11 +664,11 @@ impl<'a> ComponentStager<'a> {
                 name.clone(),
                 AgentTypeProvisionConfigUpdate {
                     initial_permissions: self
-                        .initial_permission_update_for(name, creation.initial_permissions),
+                        .initial_permission_update_for(name, creation.initial_permissions)?,
                     env: Some(creation.env),
                     config: Some(creation.config),
                     files_to_add_or_update: self
-                        .files_to_add_or_update_for_agent(name, creation.files),
+                        .files_to_add_or_update_for_agent(name, creation.files)?,
                     files_to_remove,
                     file_permission_updates,
                     plugin_updates,
@@ -740,24 +695,317 @@ impl<'a> ComponentStager<'a> {
         &self,
         name: &AgentTypeName,
         initial_permissions: AgentTypeInitialPermissions,
-    ) -> Option<AgentTypeInitialPermissions> {
+    ) -> anyhow::Result<Option<AgentTypeInitialPermissions>> {
         match &self.diff {
-            ComponentDiff::All => Some(initial_permissions),
+            ComponentDiff::All => Ok(Some(initial_permissions)),
             ComponentDiff::Diff { diff } => {
                 match diff
                     .agent_type_provision_config_changes
                     .get(name.0.as_str())
                 {
-                    Some(diff::BTreeMapDiffValue::Create)
-                    | Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
+                    Some(diff::BTreeMapDiffValue::Create) => Ok(Some(initial_permissions)),
+                    Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
                         ..
-                    })) => Some(initial_permissions),
+                    })) => Err(anyhow!(
+                        "Cannot determine initial permission update for agent type {} from a hash-only provision config diff; component details were not loaded",
+                        name.0.log_color_highlight()
+                    )),
                     Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
                         diff,
-                    })) if diff.initial_permission_changed => Some(initial_permissions),
-                    _ => None,
+                    })) if diff.initial_permission_changed => Ok(Some(initial_permissions)),
+                    _ => Ok(None),
                 }
             }
         }
+    }
+
+    fn agent_change(
+        &self,
+        agent_type_name: &AgentTypeName,
+    ) -> Option<&diff::BTreeMapDiffValue<diff::DiffForHashOf<diff::AgentTypeProvisionConfig>>> {
+        match &self.diff {
+            ComponentDiff::All => None,
+            ComponentDiff::Diff { diff } => diff
+                .agent_type_provision_config_changes
+                .get(agent_type_name.0.as_str()),
+        }
+    }
+
+    fn plugin_updates_for_agent(
+        &self,
+        name: &AgentTypeName,
+        plugin_installations: &[PluginInstallation],
+    ) -> anyhow::Result<Vec<PluginInstallationAction>> {
+        Self::plugin_updates_for_agent_change(name, self.agent_change(name), plugin_installations)
+    }
+
+    fn plugin_updates_for_agent_change(
+        name: &AgentTypeName,
+        agent_change: Option<
+            &diff::BTreeMapDiffValue<diff::DiffForHashOf<diff::AgentTypeProvisionConfig>>,
+        >,
+        plugin_installations: &[PluginInstallation],
+    ) -> anyhow::Result<Vec<PluginInstallationAction>> {
+        let Some(agent_change) = agent_change else {
+            return Ok(Vec::new());
+        };
+
+        match agent_change {
+            diff::BTreeMapDiffValue::Create => Ok(plugin_installations
+                .iter()
+                .cloned()
+                .map(PluginInstallationAction::Install)
+                .collect()),
+            diff::BTreeMapDiffValue::Delete => Ok(Vec::new()),
+            diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff { .. }) => Err(anyhow!(
+                "Cannot determine plugin installation actions for agent type {} from a hash-only provision config diff; component details were not loaded",
+                name.0.log_color_highlight()
+            )),
+            diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff }) => {
+                if diff.plugin_changes.is_empty() {
+                    return Ok(Vec::new());
+                }
+
+                let resolved_by_grant: HashMap<uuid::Uuid, &PluginInstallation> =
+                    plugin_installations
+                        .iter()
+                        .map(|p| (p.environment_plugin_grant_id.0, p))
+                        .collect();
+                Ok(diff
+                    .plugin_changes
+                    .iter()
+                    .filter_map(|(grant_id, change)| match change {
+                        diff::BTreeMapDiffValue::Create => resolved_by_grant
+                            .get(grant_id)
+                            .map(|&p| PluginInstallationAction::Install(p.clone())),
+                        diff::BTreeMapDiffValue::Delete => {
+                            Some(PluginInstallationAction::Uninstall(PluginUninstallation {
+                                environment_plugin_grant_id: EnvironmentPluginGrantId(*grant_id),
+                            }))
+                        }
+                        diff::BTreeMapDiffValue::Update(plugin_diff) => {
+                            resolved_by_grant.get(grant_id).map(|&p| {
+                                PluginInstallationAction::Update(PluginInstallationUpdate {
+                                    environment_plugin_grant_id: p.environment_plugin_grant_id,
+                                    new_priority: plugin_diff
+                                        .priority_changed
+                                        .then_some(p.priority),
+                                    new_parameters: plugin_diff
+                                        .parameters_changed
+                                        .then_some(p.parameters.clone()),
+                                })
+                            })
+                        }
+                    })
+                    .collect())
+            }
+        }
+    }
+}
+
+fn content_changed_file_paths(diff: &AgentTypeProvisionConfigDiff) -> BTreeSet<String> {
+    diff.file_changes
+        .iter()
+        .filter_map(|(path, change)| match change {
+            diff::BTreeMapDiffValue::Create => Some(path.clone()),
+            diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff })
+                if diff.content_changed =>
+            {
+                Some(path.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::diff::Hash;
+    use test_r::test;
+
+    fn agent_name() -> AgentTypeName {
+        AgentTypeName("Cart".to_string())
+    }
+
+    fn empty_agent_diff() -> AgentTypeProvisionConfigDiff {
+        AgentTypeProvisionConfigDiff {
+            env_changes: BTreeMap::new(),
+            file_changes: BTreeMap::new(),
+            plugin_changes: BTreeMap::new(),
+            config_changes: BTreeMap::new(),
+            initial_permission_changed: false,
+        }
+    }
+
+    fn plugin_installation(grant_id: uuid::Uuid) -> PluginInstallation {
+        PluginInstallation {
+            environment_plugin_grant_id: EnvironmentPluginGrantId(grant_id),
+            priority: PluginPriority(10),
+            parameters: BTreeMap::from([("key".to_string(), "value".to_string())]),
+        }
+    }
+
+    #[test]
+    fn component_hash_diff_is_not_treated_as_all_changed() {
+        let diff = diff::DiffForHashOf::<diff::Component>::HashDiff {
+            new_hash: Hash::empty(),
+            current_hash: Hash::new(blake3::hash(b"current")),
+        };
+
+        let result = ComponentDiff::new(Some(&diff));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("hash-only diff"));
+    }
+
+    #[test]
+    fn value_diff_without_plugin_changes_emits_no_plugin_actions() {
+        let agent_name = agent_name();
+        let agent_diff = empty_agent_diff();
+        let agent_change =
+            diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff: agent_diff });
+        let grant_id = uuid::Uuid::from_u128(1);
+        let plugins = vec![plugin_installation(grant_id)];
+
+        let updates = ComponentStager::plugin_updates_for_agent_change(
+            &agent_name,
+            Some(&agent_change),
+            &plugins,
+        )
+        .unwrap();
+
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn create_provision_config_installs_manifest_plugins() {
+        let agent_name = agent_name();
+        let grant_id = uuid::Uuid::from_u128(1);
+        let plugins = vec![plugin_installation(grant_id)];
+
+        let updates = ComponentStager::plugin_updates_for_agent_change(
+            &agent_name,
+            Some(&diff::BTreeMapDiffValue::Create),
+            &plugins,
+        )
+        .unwrap();
+
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(
+            &updates[0],
+            PluginInstallationAction::Install(plugin)
+                if plugin.environment_plugin_grant_id == EnvironmentPluginGrantId(grant_id)
+        ));
+    }
+
+    #[test]
+    fn plugin_hash_diff_error_names_plugin_action_context() {
+        let agent_name = agent_name();
+        let agent_change = diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
+            new_hash: Hash::empty(),
+            current_hash: Hash::new(blake3::hash(b"current")),
+        });
+
+        let err =
+            ComponentStager::plugin_updates_for_agent_change(&agent_name, Some(&agent_change), &[])
+                .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Cannot determine plugin installation actions")
+        );
+        assert!(err.to_string().contains("Cart"));
+    }
+
+    #[test]
+    fn plugin_diff_emits_targeted_actions() {
+        let agent_name = agent_name();
+        let install_grant_id = uuid::Uuid::from_u128(1);
+        let uninstall_grant_id = uuid::Uuid::from_u128(2);
+        let update_grant_id = uuid::Uuid::from_u128(3);
+
+        let mut agent_diff = empty_agent_diff();
+        agent_diff
+            .plugin_changes
+            .insert(install_grant_id, diff::BTreeMapDiffValue::Create);
+        agent_diff
+            .plugin_changes
+            .insert(uninstall_grant_id, diff::BTreeMapDiffValue::Delete);
+        agent_diff.plugin_changes.insert(
+            update_grant_id,
+            diff::BTreeMapDiffValue::Update(diff::PluginInstallationDiff {
+                priority_changed: true,
+                parameters_changed: true,
+            }),
+        );
+        let agent_change =
+            diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff: agent_diff });
+        let plugins = vec![
+            plugin_installation(install_grant_id),
+            plugin_installation(update_grant_id),
+        ];
+
+        let updates = ComponentStager::plugin_updates_for_agent_change(
+            &agent_name,
+            Some(&agent_change),
+            &plugins,
+        )
+        .unwrap();
+
+        assert_eq!(updates.len(), 3);
+        assert!(matches!(
+            &updates[0],
+            PluginInstallationAction::Install(plugin)
+                if plugin.environment_plugin_grant_id == EnvironmentPluginGrantId(install_grant_id)
+        ));
+        assert!(matches!(
+            &updates[1],
+            PluginInstallationAction::Uninstall(plugin)
+                if plugin.environment_plugin_grant_id == EnvironmentPluginGrantId(uninstall_grant_id)
+        ));
+        assert!(matches!(
+            &updates[2],
+            PluginInstallationAction::Update(plugin)
+                if plugin.environment_plugin_grant_id == EnvironmentPluginGrantId(update_grant_id)
+                    && plugin.new_priority == Some(PluginPriority(10))
+                    && plugin.new_parameters == Some(BTreeMap::from([("key".to_string(), "value".to_string())]))
+        ));
+    }
+
+    #[test]
+    fn content_changed_file_paths_ignores_permission_only_updates_and_deletes() {
+        let mut agent_diff = empty_agent_diff();
+        agent_diff
+            .file_changes
+            .insert("/created.txt".to_string(), diff::BTreeMapDiffValue::Create);
+        agent_diff.file_changes.insert(
+            "/content.txt".to_string(),
+            diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
+                diff: AgentFileDiff {
+                    content_changed: true,
+                    permissions_changed: false,
+                },
+            }),
+        );
+        agent_diff.file_changes.insert(
+            "/permissions.txt".to_string(),
+            diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
+                diff: AgentFileDiff {
+                    content_changed: false,
+                    permissions_changed: true,
+                },
+            }),
+        );
+        agent_diff
+            .file_changes
+            .insert("/deleted.txt".to_string(), diff::BTreeMapDiffValue::Delete);
+
+        let paths = content_changed_file_paths(&agent_diff);
+
+        assert_eq!(
+            paths,
+            BTreeSet::from(["/content.txt".to_string(), "/created.txt".to_string()])
+        );
     }
 }
