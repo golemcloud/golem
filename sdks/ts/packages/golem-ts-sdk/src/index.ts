@@ -463,11 +463,19 @@ export const golemAgent200Guest: GolemAgentGuest = {
   getDefinition,
 };
 
+// The current wasm-rquickjs wrapper looks up the guest export by the WIT interface
+// short name (`guest.discoverAgentTypes` of golem:agent/guest@2.0.0). Export `guest`
+// as an alias of golemAgent200Guest so the generated wrapper finds it.
+export const guest: GolemAgentGuest = golemAgent200Guest;
+
 export const golemTool010Guest: GolemToolGuest = {
   discoverTools,
   getTool,
   invoke: invokeTool,
 };
+
+// Likewise expose the tool guest by its short interface name.
+export const tool: GolemToolGuest = golemTool010Guest;
 
 export const saveSnapshot: SaveSnapshotGuest = {
   save,
