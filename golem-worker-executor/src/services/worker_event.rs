@@ -211,6 +211,8 @@ fn label(event: &InternalWorkerEvent) -> &'static str {
         InternalWorkerEvent::InvocationStart { .. } => "invocation_start",
         InternalWorkerEvent::InvocationFinished { .. } => "invocation_finished",
         InternalWorkerEvent::PluginError { .. } => "plugin_error",
+        InternalWorkerEvent::SnapshotRecoverySucceeded { .. } => "snapshot_recovery_succeeded",
+        InternalWorkerEvent::SnapshotRecoveryFailed { .. } => "snapshot_recovery_failed",
     }
 }
 
