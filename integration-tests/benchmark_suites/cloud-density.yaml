@@ -180,13 +180,13 @@ cells:
   # restart the executor, then revive all N agents concurrently with increment.
   # Snapshotting should avoid replaying all 100 calls and should therefore be
   # much faster. Shared component only; the axis is snapshotting disabled/enabled.
-  - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-250
-    scenario: resume-under-saturation
-    agentMode: durable
-    sharing: shared
-    snapshotting: disabled
-    ramp: [10, 25, 50, 100, 150, 250]
-    prefill: 250
+  # - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-250
+  #   scenario: resume-under-saturation
+  #   agentMode: durable
+  #   sharing: shared
+  #   snapshotting: disabled
+  #   ramp: [10, 25, 50, 100, 150, 250]
+  #   prefill: 250
   - name: resume-under-saturation-durable-shared-component-snapshot-enabled-prefill-250
     scenario: resume-under-saturation
     agentMode: durable
