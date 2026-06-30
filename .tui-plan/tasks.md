@@ -19,7 +19,7 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [x] Make Agent inspect help reachable.
 - [x] Add focused action/help drift tests and a small test driver.
 
-## Current Goal: Scoped Logging And Context Executor Foundation
+## Completed Goal: Scoped Logging And Context Executor Foundation
 
 - [x] Introduce a scoped `LogContext` that can capture output without changing global logging for unrelated work.
 - [x] Make `LogIndent` and `LogOutput` restore the context they were created against, including across `.await`.
@@ -45,24 +45,74 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [x] Preserve manual refresh, auto-refresh, mode cycle, fuzzy filtering, details, and stale result protection.
 - [x] Remove production JSON parsing fallback for the Agents list.
 
-## Next Planned Goals
+## Current Goal: TUI Design System Discovery
 
+- [x] Interview the user about the TUI's intended workflows, navigation model, dev workspace, ops explorer, layouts, and interaction rules.
+- [x] Reconcile interview answers with the current implementation: modes, views, actions, jobs, context execution, logging, and remaining nested ops debt.
+- [x] Create the initial design system document only after the important open questions are answered.
+- [x] Interview the user about shortcut notation, navigation, leader grammar, focus, text input, list navigation, and shortcut conflict rules.
+- [x] Add initial interaction and shortcut rules to the design system document.
+- [ ] Review the document with the user, revise through additional interview/review passes, and repeat until the design system is accepted.
+- [ ] Keep implementation work paused while the design system is still being discovered.
+
+## Milestone Backlog
+
+### Milestone 0: Design Review
+
+- [ ] Review `ui-system.md` with the user.
+- [ ] Revise the design-system document through additional interview/review passes.
+- [ ] Accept the design system before major workspace or navigation reshaping starts.
+- [ ] Allow only low-risk metadata/alignment cleanup before the review is accepted.
+
+### Milestone 1: Interaction Metadata Cleanup
+
+- [ ] Standardize user-facing shortcut notation on lowercase forms such as `ctrl+x`, `ctrl+p`, `esc`, `enter`, and `tab`.
+- [ ] Fix action metadata drift, including execution kind drift for direct typed Agents refresh.
 - [ ] Add action availability reasons and show unavailable actions consistently.
-- [ ] Introduce selected TUI context and immutable job launch context.
-- [ ] Replace Agent inspect oplog/stream nested CLI with direct streaming providers.
-- [ ] Split stable action/help/test-driver pieces out of `app.rs` after the rules settle.
-- [ ] DX/UX hardening: design a lightweight documentation system for TUI actions, shortcuts, help surfaces, and interaction conventions after logging/context execution and direct ops refresh fundamentals are stable.
-- [ ] Design environment switching and non-manifest modes.
-- [ ] Define dev/ops workspace navigation and context-help behavior.
+- [ ] Align help, footer, leader hints, and palette wording with workspace/panel/focus/job vocabulary.
+- [ ] Keep this milestone behavior-preserving except for clearer disabled-state and help/metadata text.
+
+### Milestone 2: Workspace Shell Full Remap
+
+- [ ] Introduce Home, Dev, and Ops as the only top-level workspaces.
+- [ ] Remap Dashboard into Home.
+- [ ] Remap Output, Server, and REPL into Dev panels and jobs.
+- [ ] Remap Agents into the new workspace model, preserving its current list, filter, details, refresh, and inspect behavior during the transition.
+- [ ] Retain the initial TUI context for this milestone; full selected-context switching comes later.
+
+### Milestone 3: Selected Context UX
+
+- [ ] Add global selected-context display and picker.
+- [ ] Add immutable launch-context display for jobs and provider requests.
+- [ ] Add confirmation for context switches that affect running context-bound jobs.
+- [ ] Hide or disable local-server actions with reasons when the selected context does not use a local server.
+
+### Milestone 4: Direct Streaming Ops Providers
+
+- [ ] Replace Agent inspect oplog nested CLI with a direct streaming provider.
+- [ ] Replace Agent inspect stream nested CLI with a direct streaming provider.
+- [ ] Keep view-owned request construction, stale result handling, focus, and event mapping.
+- [ ] Track any remaining Ops nested CLI use as transitional debt.
+
+### Milestone 5: Module Split
+
+- [ ] Split stable action metadata and availability logic out of `app.rs`.
+- [ ] Split help derivation and interaction documentation helpers out of `app.rs`.
+- [ ] Split selected context, job lifecycle, layout, and Ops view state modules only after behavior has settled.
+
+### Milestone 6: Local Observability
+
 - [ ] Plan the TUI role for local observability from issue #3456.
+- [ ] Decide how local/server metrics fit into Dev and Ops Monitor dashboard surfaces.
+- [ ] Keep observability as workspace panels and dashboard content, not as a new top-level workspace.
 
 ## Deferred Goal: DX/UX Hardening
 
-- [ ] Define the source-of-truth format for documenting actions, shortcuts, scopes, availability rules, and help text.
+- [ ] Define the source-of-truth format for documenting actions, shortcuts, scopes, availability rules, and help text after the broader design system settles.
 - [ ] Decide which user-facing surfaces are generated from that source: help, palette metadata, footer hints, docs, and test expectations.
 - [ ] Add drift checks so shortcut/action documentation cannot silently diverge from the registered TUI actions.
-- [ ] Review interaction conventions for leader actions, raw controls, focus modes, details panels, and refresh-heavy ops views.
-- [ ] Keep this behind the current fundamentals: scoped logging/context execution, selected context handling, and the first direct typed ops provider.
+- [ ] Review interaction conventions for leader actions, raw controls, focus modes, details panels, refresh-heavy ops views, tabs, and splits.
+- [ ] Keep this behind the current fundamentals and the accepted TUI design system.
 
 ## Ongoing Validation
 

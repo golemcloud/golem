@@ -337,3 +337,37 @@ Validation:
 - `cargo test -p golem-cli --lib -- context_executor --report-time`
 - `cargo check -p golem-cli`
 - `cargo test -p golem-cli --lib -- tui:: --report-time`
+
+## 2026-06-30
+
+TUI design system discovery started.
+
+Decisions recorded:
+
+- Pause further implementation slicing until the TUI itself has a stronger design system.
+- Do not write the initial design system document immediately.
+- First run an interview with the user to settle the important product and interaction questions.
+- Create the initial document only after the current implementation, desired dev workflow, desired ops explorer, navigation model, and layout rules are clear enough.
+- Review the document with the user and repeat the interview/revision loop until the design system is accepted.
+
+Current status:
+
+- Updated the TUI backlog so the current goal is interview-driven design system discovery.
+- Marked the existing `ui-system.md` as a lightweight snapshot, not the authoritative final design system.
+- Kept implementation goals such as selected context, action availability, direct streaming providers, and module splitting behind the design-system review loop.
+- Rewrote `ui-system.md` as the initial authoritative design-system document.
+- Added interaction and shortcut rules after a second interview pass.
+- Standardized shortcut notation on lowercase forms such as `ctrl+x`, `ctrl+p`,
+  `esc`, `enter`, and `tab`; uppercase letters must not imply `shift` unless
+  `shift` is explicitly part of the shortcut.
+- Recorded the target interaction grammar: few globals, number-based workspace
+  jumps, `ctrl+x` as a visible transient leader menu, leader-based run actions,
+  `tab` for panel focus, `esc` for step-out, `q` for quit with confirmation,
+  explicit REPL raw-input focus, text input ownership of printable keys, and
+  arrow-first list/table navigation.
+- Reordered the TUI backlog around the accepted design direction: design review
+  remains blocking for major redesign; the next meaningful product slice is the
+  Home/Dev/Ops workspace shell full remap; low-risk interaction metadata cleanup
+  may happen before the shell; selected context UX follows the first shell
+  remap; direct streaming providers, module splitting, and local observability
+  follow afterward.
