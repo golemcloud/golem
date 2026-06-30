@@ -349,7 +349,7 @@ impl TuiApp {
                     .get(self.palette.selected)
                     .copied()
                 {
-                    self.execute_action(action.kind, event_tx);
+                    self.execute_palette_action(action.kind, event_tx);
                 }
             }
             KeyCode::Char(character)
@@ -568,6 +568,35 @@ impl TuiApp {
                 self.close_palette();
                 self.should_quit = true;
             }
+        }
+    }
+
+    fn execute_palette_action(&mut self, action: TuiActionKind, event_tx: Option<&TuiEventSender>) {
+        let Some(metadata) = action_by_kind(action) else {
+            return;
+        };
+
+        if self.action_availability(metadata).is_unavailable() {
+            return;
+        }
+
+        self.execute_action(action, event_tx);
+    }
+
+    fn action_availability(&self, action: &TuiAction) -> TuiActionAvailability {
+        match action.id {
+            TuiActionId::Build | TuiActionId::Deploy | TuiActionId::Clean
+                if self.command_is_running() =>
+            {
+                TuiActionAvailability::Unavailable("command already running")
+            }
+            TuiActionId::RefreshAgents if self.agents.refresh_running => {
+                TuiActionAvailability::Unavailable("refresh already running")
+            }
+            TuiActionId::RefreshAgents if self.context_executor.is_none() => {
+                TuiActionAvailability::Unavailable("context executor unavailable")
+            }
+            _ => TuiActionAvailability::Available,
         }
     }
 
@@ -2368,7 +2397,7 @@ fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_left_rail(frame, summary_area, command_rail_style());
 
     let lines = if app.repl.run.status == ReplStatus::Stopped && app.repl.run.exit_code.is_none() {
-        vec![prefixed_line("Press r or Enter to start `golem repl`.")]
+        vec![prefixed_line("Press r or enter to start `golem repl`.")]
     } else {
         repl_screen_lines(&app.repl.run, terminal_area.height as usize)
     };
@@ -2551,7 +2580,7 @@ fn agent_inspect_title_line(title: &'static str, job: &InspectJob, focused: bool
         fixed_span(job.status.title(), 10, inspect_job_status_style(job.status)),
         Span::raw(" | "),
         fixed_span(
-            "Left/Right focus  Esc back",
+            "left/right focus  esc back",
             30,
             Style::default().fg(theme().text_muted),
         ),
@@ -2682,7 +2711,7 @@ fn agent_status_line(agents: &AgentsState) -> Line<'static> {
             ),
             Span::raw(" | "),
             fixed_span(
-                "Left/Right switch  Esc back",
+                "left/right switch  esc back",
                 30,
                 Style::default().fg(theme().text_muted),
             ),
@@ -2736,7 +2765,7 @@ fn agent_status_line(agents: &AgentsState) -> Line<'static> {
             if agents.refresh_running {
                 "refreshing"
             } else {
-                "Enter inspect"
+                "enter inspect"
             },
             14,
             if agents.refresh_running {
@@ -2911,8 +2940,9 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
         Line::default(),
     ];
 
-    push_action_section(
+    push_action_section_for_app(
         &mut lines,
+        app,
         "Global",
         &[
             TuiActionId::OpenPalette,
@@ -2924,20 +2954,21 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
             TuiActionId::Quit,
         ],
     );
-    push_raw_help(&mut lines, "Ctrl-P / :", "Open Palette");
-    push_raw_help(&mut lines, "Esc / Ctrl-C", "Quit");
-    push_raw_help(&mut lines, "] / Tab", "Next view");
-    push_raw_help(&mut lines, "[ / Shift-Tab", "Previous view");
+    push_raw_help(&mut lines, "ctrl+p / :", "Open Palette");
+    push_raw_help(&mut lines, "esc / ctrl+c", "Quit");
+    push_raw_help(&mut lines, "] / tab", "Next view");
+    push_raw_help(&mut lines, "[ / shift+tab", "Previous view");
     push_raw_help(&mut lines, "1..5", "Jump to view");
 
     push_section_break(&mut lines, "Palette");
-    push_raw_help(&mut lines, "Type", "Filter commands");
-    push_raw_help(&mut lines, "Up / Down", "Move selection");
-    push_raw_help(&mut lines, "Enter", "Execute selected action");
-    push_raw_help(&mut lines, "Esc / Ctrl-C", "Close palette");
+    push_raw_help(&mut lines, "type", "Filter commands");
+    push_raw_help(&mut lines, "up / down", "Move selection");
+    push_raw_help(&mut lines, "enter", "Execute selected action");
+    push_raw_help(&mut lines, "esc / ctrl+c", "Close palette");
 
-    push_action_section(
+    push_action_section_for_app(
         &mut lines,
+        app,
         "Leader",
         &[
             TuiActionId::ToggleYes,
@@ -2951,14 +2982,15 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
     if app.active_view == TuiView::Agents {
         if app.agents.view_mode == AgentsViewMode::Inspect {
             push_section_break(&mut lines, "Agent Inspect");
-            push_raw_help(&mut lines, "Left / Right", "Switch pane focus");
-            push_raw_help(&mut lines, "Up / Down", "Scroll focused pane");
-            push_raw_help(&mut lines, "PageUp/Down", "Scroll focused pane");
-            push_raw_help(&mut lines, "Home / End", "Top / latest focused pane");
-            push_raw_help(&mut lines, "Esc", "Return to agent list");
+            push_raw_help(&mut lines, "left / right", "Switch pane focus");
+            push_raw_help(&mut lines, "up / down", "Scroll focused pane");
+            push_raw_help(&mut lines, "pageup / pagedown", "Scroll focused pane");
+            push_raw_help(&mut lines, "home / end", "Top / latest focused pane");
+            push_raw_help(&mut lines, "esc", "Return to agent list");
         } else {
-            push_action_section(
+            push_action_section_for_app(
                 &mut lines,
+                app,
                 "Agents",
                 &[
                     TuiActionId::RefreshAgents,
@@ -2968,33 +3000,34 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
                 ],
             );
             push_raw_help(&mut lines, "/", "Filter agents");
-            push_raw_help(&mut lines, "Up / Down", "Move selection");
-            push_raw_help(&mut lines, "Enter", "Inspect selected agent");
+            push_raw_help(&mut lines, "up / down", "Move selection");
+            push_raw_help(&mut lines, "enter", "Inspect selected agent");
         }
     }
 
     if app.command_is_running() {
         push_section_break(&mut lines, "Command");
-        push_raw_help(&mut lines, "Type", "Send input to command");
+        push_raw_help(&mut lines, "type", "Send input to command");
         push_raw_help(
             &mut lines,
-            "Esc / Ctrl-C",
+            "esc / ctrl+c",
             "Cancel command, press again to force kill",
         );
-        push_raw_help(&mut lines, "PageUp/Down", "Scroll output");
-        push_raw_help(&mut lines, "Home / End", "Top / latest output");
-        push_raw_help(&mut lines, "Mouse wheel", "Scroll output");
+        push_raw_help(&mut lines, "pageup / pagedown", "Scroll output");
+        push_raw_help(&mut lines, "home / end", "Top / latest output");
+        push_raw_help(&mut lines, "mouse wheel", "Scroll output");
     } else if app.active_view == TuiView::Output {
         push_section_break(&mut lines, "Output");
-        push_raw_help(&mut lines, "Up / Down", "Scroll output");
-        push_raw_help(&mut lines, "PageUp/Down", "Scroll output");
-        push_raw_help(&mut lines, "Home / End", "Top / latest output");
-        push_raw_help(&mut lines, "Mouse wheel", "Scroll output");
+        push_raw_help(&mut lines, "up / down", "Scroll output");
+        push_raw_help(&mut lines, "pageup / pagedown", "Scroll output");
+        push_raw_help(&mut lines, "home / end", "Top / latest output");
+        push_raw_help(&mut lines, "mouse wheel", "Scroll output");
     }
 
     if app.active_view == TuiView::Repl || app.repl.is_running() {
-        push_action_section(
+        push_action_section_for_app(
             &mut lines,
+            app,
             "REPL",
             &[
                 TuiActionId::StartOrFocusRepl,
@@ -3003,19 +3036,24 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
                 TuiActionId::RestartRepl,
             ],
         );
-        push_raw_help(&mut lines, "Enter", "Start or focus REPL");
-        push_raw_help(&mut lines, "Ctrl-X p / ?", "Palette / help");
+        push_raw_help(&mut lines, "enter", "Start or focus REPL");
+        push_raw_help(&mut lines, "ctrl+x p / ?", "Palette / help");
     }
 
     lines.push(Line::default());
-    lines.push(Line::from("Press Esc to close this help."));
+    lines.push(Line::from("Press esc to close this help."));
     lines
 }
 
-fn push_action_section(lines: &mut Vec<Line<'static>>, title: &'static str, ids: &[TuiActionId]) {
+fn push_action_section_for_app(
+    lines: &mut Vec<Line<'static>>,
+    app: &TuiApp,
+    title: &'static str,
+    ids: &[TuiActionId],
+) {
     push_section_break(lines, title);
     for id in ids {
-        push_action_help(lines, action(*id));
+        push_action_help_for_app(lines, app, action(*id));
     }
 }
 
@@ -3026,13 +3064,20 @@ fn push_section_break(lines: &mut Vec<Line<'static>>, title: &'static str) {
     lines.push(Line::from(title));
 }
 
-fn push_action_help(lines: &mut Vec<Line<'static>>, action: &TuiAction) {
+fn push_action_help_for_app(lines: &mut Vec<Line<'static>>, app: &TuiApp, action: &TuiAction) {
     let shortcut = action.shortcut.unwrap_or("-");
-    lines.push(Line::from(format!("  {shortcut:<14} {}", action.label)));
+    let suffix = match app.action_availability(action) {
+        TuiActionAvailability::Available => String::new(),
+        TuiActionAvailability::Unavailable(reason) => format!(" ({reason})"),
+    };
+    lines.push(Line::from(format!(
+        "  {shortcut:<18} {}{suffix}",
+        action.label
+    )));
 }
 
 fn push_raw_help(lines: &mut Vec<Line<'static>>, shortcut: &'static str, label: &'static str) {
-    lines.push(Line::from(format!("  {shortcut:<14} {label}")));
+    lines.push(Line::from(format!("  {shortcut:<18} {label}")));
 }
 
 fn render_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -3430,7 +3475,7 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
             run.status,
             CommandStatus::Running | CommandStatus::Cancelling
         ) {
-            fixed_span("Esc/Ctrl-C cancel", 17, Style::default().fg(theme().accent))
+            fixed_span("esc/ctrl+c cancel", 17, Style::default().fg(theme().accent))
         } else {
             fixed_span(
                 "b/d/c run again",
@@ -3513,10 +3558,10 @@ fn repl_status_style(status: ReplStatus) -> Style {
 
 fn repl_mode_hint(run: &ReplRun, mode: TuiMode) -> &'static str {
     match mode {
-        TuiMode::Repl => "Ctrl-X q leave  Ctrl-X k stop",
-        TuiMode::LeaderRepl => "q leave  k stop  R restart",
-        _ if run.is_running() => "r focus  Ctrl-X k stop",
-        _ => "r/Enter start",
+        TuiMode::Repl => "ctrl+x q leave  ctrl+x k stop",
+        TuiMode::LeaderRepl => "q leave  k stop  shift+r restart",
+        _ if run.is_running() => "r focus  ctrl+x k stop",
+        _ => "r/enter start",
     }
 }
 
@@ -3545,9 +3590,9 @@ fn server_status_style(status: ServerStatus) -> Style {
 
 fn server_hint(run: &ServerRun) -> &'static str {
     match run.status {
-        ServerStatus::Starting | ServerStatus::Running => "s/Ctrl-C stop",
-        ServerStatus::Stopping => "s/Ctrl-C force kill",
-        ServerStatus::Stopped | ServerStatus::Failed => "s start  Ctrl-X R",
+        ServerStatus::Starting | ServerStatus::Running => "s/ctrl+c stop",
+        ServerStatus::Stopping => "s/ctrl+c force kill",
+        ServerStatus::Stopped | ServerStatus::Failed => "s start  ctrl+x shift+r",
     }
 }
 
@@ -3694,11 +3739,13 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
     let visible_actions = actions.iter().take(8).copied().collect::<Vec<_>>();
     let width_actions = palette_actions();
     let label_width = palette_label_width(&width_actions);
+    let reason_width = palette_reason_width(app, &width_actions);
     let area = centered_rect_fixed(
         palette_width(
             &app.palette.query,
             &width_actions,
             label_width,
+            reason_width,
             frame.area().width,
         ),
         palette_height(width_actions.len().min(8), frame.area().height),
@@ -3720,10 +3767,14 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
         for (index, action) in visible_actions.iter().enumerate() {
             let prefix = if index == selected { "> " } else { "  " };
             let plain_label = palette_action_label(action, prefix);
-            let style = if index == selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
+            let availability = app.action_availability(action);
+            let style = match (index == selected, availability.is_unavailable()) {
+                (true, true) => Style::default()
+                    .fg(theme().text_muted)
+                    .add_modifier(Modifier::REVERSED),
+                (true, false) => Style::default().add_modifier(Modifier::REVERSED),
+                (false, true) => Style::default().fg(theme().text_muted),
+                (false, false) => Style::default(),
             };
             let mut label_spans = vec![Span::styled(format!("{prefix}{}", action.label), style)];
             if let Some(shortcut) = action.shortcut {
@@ -3735,7 +3786,10 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
             let mut line_spans = label_spans;
             line_spans.push(Span::raw(" ".repeat(padding)));
             line_spans.push(Span::raw("  "));
-            line_spans.push(Span::raw(action.description));
+            line_spans.push(Span::styled(action.description, style));
+            if let TuiActionAvailability::Unavailable(reason) = availability {
+                line_spans.push(Span::styled(format!(" - {reason}"), style));
+            }
             lines.push(Line::from(line_spans));
         }
     }
@@ -3764,6 +3818,17 @@ fn palette_label_width(actions: &[TuiAction]) -> usize {
         .max(18)
 }
 
+fn palette_reason_width(app: &TuiApp, actions: &[TuiAction]) -> usize {
+    actions
+        .iter()
+        .filter_map(|action| match app.action_availability(action) {
+            TuiActionAvailability::Available => None,
+            TuiActionAvailability::Unavailable(reason) => Some(3 + reason.chars().count()),
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 fn palette_action_label(action: &TuiAction, prefix: &str) -> String {
     let shortcut = action
         .shortcut
@@ -3776,11 +3841,12 @@ fn palette_width(
     query: &str,
     actions: &[TuiAction],
     label_width: usize,
+    reason_width: usize,
     terminal_width: u16,
 ) -> u16 {
     let action_width = actions
         .iter()
-        .map(|action| label_width + 2 + action.description.chars().count())
+        .map(|action| label_width + 2 + action.description.chars().count() + reason_width)
         .max()
         .unwrap_or("No matching commands".len());
     let content_width = action_width
@@ -3910,6 +3976,7 @@ impl TuiActionScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TuiActionExecutionKind {
     Internal,
+    Direct,
     NestedCli,
     ViewNavigation,
 }
@@ -3918,6 +3985,7 @@ impl TuiActionExecutionKind {
     fn label(self) -> &'static str {
         match self {
             Self::Internal => "internal",
+            Self::Direct => "direct",
             Self::NestedCli => "nested-cli",
             Self::ViewNavigation => "navigation",
         }
@@ -3935,6 +4003,18 @@ struct TuiAction {
     execution_kind: TuiActionExecutionKind,
     palette_visible: bool,
     kind: TuiActionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiActionAvailability {
+    Available,
+    Unavailable(&'static str),
+}
+
+impl TuiActionAvailability {
+    fn is_unavailable(self) -> bool {
+        matches!(self, Self::Unavailable(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4001,7 +4081,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::ToggleYes,
         label: "Toggle Yes",
         description: "Toggle --yes for build/deploy",
-        shortcut: Some("Ctrl-X y"),
+        shortcut: Some("ctrl+x y"),
         category: TuiActionCategory::Settings,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4012,7 +4092,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::ToggleReset,
         label: "Toggle Reset",
         description: "Toggle --reset for deploy",
-        shortcut: Some("Ctrl-X r"),
+        shortcut: Some("ctrl+x r"),
         category: TuiActionCategory::Settings,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4034,7 +4114,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::RestartServer,
         label: "Restart Server",
         description: "Restart the local server",
-        shortcut: Some("Ctrl-X R"),
+        shortcut: Some("ctrl+x shift+r"),
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -4045,7 +4125,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::CleanRestartServer,
         label: "Clean Restart Server",
         description: "Restart local server with --clean",
-        shortcut: Some("Ctrl-X C"),
+        shortcut: Some("ctrl+x shift+c"),
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -4056,7 +4136,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::ToggleServerClean,
         label: "Toggle Server Clean",
         description: "Toggle --clean for next server start",
-        shortcut: Some("Ctrl-X s"),
+        shortcut: Some("ctrl+x s"),
         category: TuiActionCategory::Settings,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4070,7 +4150,7 @@ const ACTIONS: [TuiAction; 26] = [
         shortcut: Some("u"),
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
-        execution_kind: TuiActionExecutionKind::NestedCli,
+        execution_kind: TuiActionExecutionKind::Direct,
         palette_visible: true,
         kind: TuiActionKind::RefreshAgents,
     },
@@ -4078,7 +4158,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::ToggleAgentAutoRefresh,
         label: "Toggle Agent Auto Refresh",
         description: "Toggle automatic agent refresh",
-        shortcut: Some("Ctrl-X a"),
+        shortcut: Some("ctrl+x a"),
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4089,7 +4169,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::CycleAgentMode,
         label: "Cycle Agent Mode",
         description: "Cycle durable, ephemeral, all",
-        shortcut: Some("Ctrl-X m"),
+        shortcut: Some("ctrl+x m"),
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4100,7 +4180,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::ToggleAgentDetails,
         label: "Toggle Agent Details",
         description: "Show or hide selected agent details",
-        shortcut: Some("Ctrl-X d"),
+        shortcut: Some("ctrl+x d"),
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4188,7 +4268,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::LeaveRepl,
         label: "Leave REPL Mode",
         description: "Return keyboard input to the TUI",
-        shortcut: Some("Ctrl-X q"),
+        shortcut: Some("ctrl+x q"),
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::ReplLeader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4198,8 +4278,8 @@ const ACTIONS: [TuiAction; 26] = [
     TuiAction {
         id: TuiActionId::StopRepl,
         label: "Stop REPL",
-        description: "Send Ctrl-C to the embedded REPL",
-        shortcut: Some("Ctrl-X k"),
+        description: "Send ctrl+c to the embedded REPL",
+        shortcut: Some("ctrl+x k"),
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::ReplLeader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4210,7 +4290,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::RestartRepl,
         label: "Restart REPL",
         description: "Restart the embedded REPL",
-        shortcut: Some("Ctrl-X R"),
+        shortcut: Some("ctrl+x shift+r"),
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::ReplLeader,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -4221,7 +4301,7 @@ const ACTIONS: [TuiAction; 26] = [
         id: TuiActionId::OpenPalette,
         label: "Open Palette",
         description: "Open the command palette",
-        shortcut: Some("Ctrl-P"),
+        shortcut: Some("ctrl+p"),
         category: TuiActionCategory::System,
         scope: TuiActionScope::System,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -4257,6 +4337,10 @@ fn action(id: TuiActionId) -> &'static TuiAction {
         .iter()
         .find(|action| action.id == id)
         .expect("registered action")
+}
+
+fn action_by_kind(kind: TuiActionKind) -> Option<&'static TuiAction> {
+    ACTIONS.iter().find(|action| action.kind == kind)
 }
 
 fn action_shortcut(id: TuiActionId) -> &'static str {
@@ -4408,8 +4492,8 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert_eq!(app.mode, TuiMode::LeaderNormal);
-        assert!(frame.contains("Ctrl-X y"), "{frame}");
-        assert!(frame.contains("Ctrl-X r"), "{frame}");
+        assert!(frame.contains("ctrl+x y"), "{frame}");
+        assert!(frame.contains("ctrl+x r"), "{frame}");
         assert!(frame.contains("clean:off"), "{frame}");
     }
 
@@ -4455,7 +4539,7 @@ mod tests {
         let actions = filtered_actions("");
         let visible = actions.iter().take(8).copied().collect::<Vec<_>>();
         let label_width = palette_label_width(&visible);
-        let width = palette_width("", &visible, label_width, 120);
+        let width = palette_width("", &visible, label_width, 0, 120);
 
         assert!(width > 36);
         assert!(width <= 116);
@@ -4467,7 +4551,7 @@ mod tests {
         let visible = actions.iter().take(8).copied().collect::<Vec<_>>();
         let label_width = palette_label_width(&visible);
 
-        assert_eq!(palette_width("", &visible, label_width, 30), 26);
+        assert_eq!(palette_width("", &visible, label_width, 0, 30), 26);
     }
 
     #[test]
@@ -4476,8 +4560,8 @@ mod tests {
         let label_width = palette_label_width(&width_actions);
 
         assert_eq!(
-            palette_width("", &width_actions, label_width, 120),
-            palette_width("comp", &width_actions, label_width, 120)
+            palette_width("", &width_actions, label_width, 0, 120),
+            palette_width("comp", &width_actions, label_width, 0, 120)
         );
     }
 
@@ -4500,6 +4584,37 @@ mod tests {
                 action.id
             );
         }
+    }
+
+    #[test]
+    fn action_shortcuts_use_lowercase_notation() {
+        for action in ACTIONS {
+            if let Some(shortcut) = action.shortcut {
+                assert_eq!(
+                    shortcut,
+                    shortcut.to_lowercase(),
+                    "shortcut should use lowercase notation: {shortcut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refresh_agents_action_metadata_is_direct() {
+        assert_eq!(
+            action(TuiActionId::RefreshAgents).execution_kind,
+            TuiActionExecutionKind::Direct
+        );
+        assert!(
+            filtered_actions("nested-cli")
+                .iter()
+                .all(|action| action.id != TuiActionId::RefreshAgents)
+        );
+        assert!(
+            filtered_actions("direct")
+                .iter()
+                .any(|action| action.id == TuiActionId::RefreshAgents)
+        );
     }
 
     #[test]
@@ -4861,7 +4976,7 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert!(frame.contains("Keyboard Shortcuts"), "{frame}");
-        assert!(frame.contains("Ctrl-P / :"), "{frame}");
+        assert!(frame.contains("ctrl+p / :"), "{frame}");
     }
 
     #[test]
@@ -4887,7 +5002,7 @@ mod tests {
 
         assert_eq!(app.mode, TuiMode::Help);
         driver.assert_visible(&app, "Agent Inspect");
-        driver.assert_visible(&app, "Left / Right");
+        driver.assert_visible(&app, "left / right");
         driver.assert_visible(&app, "Return to agent list");
     }
 
@@ -4921,7 +5036,27 @@ mod tests {
         assert_eq!(app.mode, TuiMode::Help);
         driver.assert_visible(&app, "Command");
         driver.assert_visible(&app, "Cancel command");
-        driver.assert_visible(&app, "Mouse wheel");
+        driver.assert_visible(&app, "mouse wheel");
+    }
+
+    #[test]
+    fn unavailable_palette_action_renders_reason_and_does_not_execute() {
+        let mut app = test_app();
+
+        app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        for character in "refresh agents".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let frame = render_app_text(&app);
+
+        assert!(frame.contains("Refresh Agents"), "{frame}");
+        assert!(frame.contains("context executor unavailable"), "{frame}");
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.mode, TuiMode::Palette);
+        assert!(!app.agents.refresh_running);
+        assert!(app.agents.last_error.is_none());
     }
 
     #[test]

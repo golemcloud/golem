@@ -66,11 +66,11 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 
 ### Milestone 1: Interaction Metadata Cleanup
 
-- [ ] Standardize user-facing shortcut notation on lowercase forms such as `ctrl+x`, `ctrl+p`, `esc`, `enter`, and `tab`.
-- [ ] Fix action metadata drift, including execution kind drift for direct typed Agents refresh.
-- [ ] Add action availability reasons and show unavailable actions consistently.
-- [ ] Align help, footer, leader hints, and palette wording with workspace/panel/focus/job vocabulary.
-- [ ] Keep this milestone behavior-preserving except for clearer disabled-state and help/metadata text.
+- [x] Standardize user-facing shortcut notation on lowercase forms such as `ctrl+x`, `ctrl+p`, `esc`, `enter`, and `tab`.
+- [x] Fix action metadata drift, including execution kind drift for direct typed Agents refresh.
+- [x] Add action availability reasons and show unavailable actions consistently.
+- [x] Align help, footer, leader hints, and palette wording with workspace/panel/focus/job vocabulary.
+- [x] Keep this milestone behavior-preserving except for clearer disabled-state and help/metadata text.
 
 ### Milestone 2: Workspace Shell Full Remap
 

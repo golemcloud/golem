@@ -371,3 +371,25 @@ Current status:
   may happen before the shell; selected context UX follows the first shell
   remap; direct streaming providers, module splitting, and local observability
   follow afterward.
+
+Interaction metadata cleanup implemented.
+
+Current status:
+
+- Standardized user-facing TUI shortcut notation to lowercase forms such as
+  `ctrl+x`, `ctrl+p`, `esc`, `enter`, `tab`, and explicit `shift+...` when a
+  shifted key is actually required.
+- Marked typed Agents refresh as a direct action instead of nested CLI metadata.
+- Added action availability results with reasons for finite commands while a
+  command is running, Agents refresh while already running, and Agents refresh
+  when the context executor is unavailable.
+- Kept unavailable palette actions visible, muted, and annotated with the
+  reason; unavailable palette actions do not execute.
+- Updated help, leader hints, footer/status strings, palette rendering, and
+  focused tests for the new notation and availability rules.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib -- tui::`
+- `cargo check -p golem-cli`
