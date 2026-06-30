@@ -39,6 +39,7 @@ type = "Enabled"
 
 [component_cache]
 max_capacity = 32
+max_concurrent_compilations = 16
 max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
@@ -96,6 +97,8 @@ max_oplog_query_pages_size = 100
 
 [memory]
 acquire_retry_delay = "500ms"
+component_size_coefficient = 2.0
+enable_measured_admission = true
 worker_estimate_coefficient = 1.1
 worker_memory_ratio = 0.8
 
@@ -307,6 +310,7 @@ without_time = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
@@ -364,6 +368,8 @@ without_time = false
 # 
 # [memory]
 # acquire_retry_delay = "500ms"
+# component_size_coefficient = 2.0
+# enable_measured_admission = true
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 

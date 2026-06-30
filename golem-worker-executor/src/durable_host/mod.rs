@@ -249,6 +249,27 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    _store_alive_guard: StoreAliveGuard,
+}
+
+/// Increments the live-`Store` gauge on construction and decrements it on drop.
+/// Held as a field of [`DurableWorkerCtx`], which is the data of the wasmtime
+/// `Store`, so the gauge follows the `Store`'s true lifetime regardless of which
+/// reference keeps it alive. A persistent gap above the resident-worker count
+/// indicates `Store`s retained after their worker was deleted.
+struct StoreAliveGuard;
+
+impl StoreAliveGuard {
+    fn new() -> Self {
+        crate::metrics::workers::inc_worker_store_alive();
+        StoreAliveGuard
+    }
+}
+
+impl Drop for StoreAliveGuard {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_worker_store_alive();
+    }
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -476,6 +497,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            _store_alive_guard: StoreAliveGuard::new(),
         })
     }
 
@@ -1161,6 +1183,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        if self.state.snapshotting_mode.is_some() {
+            let begin_index = self.state.current_oplog_index().await;
+            self.state.current_retry_point = begin_index;
+            return Ok(begin_index);
+        }
+
         if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
             || matches!(
                 *function_type,
@@ -1303,6 +1331,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        }
+
         if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
             || matches!(
                 *function_type,
@@ -1698,6 +1730,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
+                            .durable_ctx_mut()
                             .begin_call_snapshotting_function();
 
                         let load_result = invoke_observed_and_traced(
@@ -1711,7 +1744,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .end_call_snapshotting_function();
+                            .durable_ctx_mut()
+                            .end_call_snapshotting_function_if_active();
 
                         for span_id in local_span_ids {
                             let _ = store
@@ -1855,9 +1889,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => (payload, mime_type),
             _ => {
-                warn!(
+                let error = format!(
                     "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
                 );
+                warn!("{error}");
+                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
@@ -1884,7 +1920,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             Ok(data) => data,
             Err(err) => {
-                warn!("Failed to download snapshot payload: {err}; falling back to full replay");
+                let error = format!(
+                    "Failed to download snapshot payload: {err}; falling back to full replay"
+                );
+                warn!("{error}");
+                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
@@ -1928,7 +1968,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
-                warn!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
+                let error =
+                    format!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
+                warn!("{error}");
+                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 return SnapshotRecoveryResult::Failed;
             }
         };
@@ -1942,13 +1985,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_invocation_context(invocation_context)
             .await
         {
-            warn!("Snapshot recovery failed to install invocation context: {err}");
+            let error = format!("Snapshot recovery failed to install invocation context: {err}");
+            warn!("{error}");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
             return SnapshotRecoveryResult::Failed;
         }
 
         store
             .as_context_mut()
             .data_mut()
+            .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
         let load_result =
@@ -1957,7 +2003,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         store
             .as_context_mut()
             .data_mut()
-            .end_call_snapshotting_function();
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
 
         for span_id in local_span_ids {
             let _ = store
@@ -2002,11 +2049,37 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         if let Some(error) = failed {
             warn!("{error}; re-creating instance for full replay");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
             SnapshotRecoveryResult::Failed
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
             SnapshotRecoveryResult::Success
         }
+    }
+
+    fn emit_snapshot_recovery_event(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        snapshot_index: OplogIndex,
+        succeeded: bool,
+        error: Option<String>,
+    ) {
+        store
+            .as_context_mut()
+            .data_mut()
+            .get_public_state()
+            .event_service()
+            .emit_event(
+                if succeeded {
+                    InternalWorkerEvent::snapshot_recovery_succeeded(snapshot_index)
+                } else {
+                    InternalWorkerEvent::snapshot_recovery_failed(
+                        snapshot_index,
+                        error.unwrap_or_else(|| "unknown".to_string()),
+                    )
+                },
+                true,
+            );
     }
 }
 
@@ -2017,6 +2090,12 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn end_call_snapshotting_function_if_active(&mut self) {
+        if self.state.snapshotting_mode.is_some() {
+            self.end_call_snapshotting_function();
+        }
+    }
+
     pub(crate) fn register_open_websocket(
         &mut self,
         rep: u32,
@@ -2579,6 +2658,14 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         // While calling a snapshotting function (load/save), we completely turn off persistence
         // In addition to the user-controllable persistence level we also skip writing the
         // oplog entries marking the exported function call.
+        if self.state.snapshotting_mode.is_some() {
+            warn!(
+                "begin_call_snapshotting_function called while snapshotting is already active; \
+                 leaving persistence level unchanged"
+            );
+            return;
+        }
+
         let previous_level = self.state.persistence_level;
         self.state.snapshotting_mode = Some(previous_level);
         self.state.persistence_level = PersistenceLevel::PersistNothing;

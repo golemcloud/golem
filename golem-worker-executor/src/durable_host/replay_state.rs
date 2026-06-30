@@ -629,7 +629,9 @@ impl ReplayState {
     }
 
     async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<(OplogIndex, OplogEntry)> {
-        self.oplog.read_many(idx, n).await.into_iter().collect()
+        let result: Vec<(OplogIndex, OplogEntry)> =
+            self.oplog.read_many(idx, n).await.into_iter().collect();
+        result
     }
 }
 

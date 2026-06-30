@@ -21,6 +21,17 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::info;
 
+#[cfg(all(feature = "jemalloc-prof", feature = "mimalloc"))]
+compile_error!("features `jemalloc-prof` and `mimalloc` must not be enabled together");
+
+#[cfg(feature = "jemalloc-prof")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(all(feature = "mimalloc", not(feature = "jemalloc-prof")))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
@@ -51,6 +62,8 @@ async fn async_main(
     prometheus: prometheus::Registry,
     runtime: Arc<tokio::runtime::Runtime>,
 ) -> Result<(), anyhow::Error> {
+    spawn_heap_profile_dump_on_signal(runtime.handle().clone());
+
     let mut join_set = JoinSet::new();
 
     let _run_details =
@@ -61,3 +74,59 @@ async fn async_main(
     }
     Ok(())
 }
+
+/// On jemalloc profiling builds, install a SIGUSR2 handler that writes a heap
+/// profile to `/heap`. Configure jemalloc with MALLOC_CONF, for example:
+/// `prof:true,prof_active:true,lg_prof_sample:21,prof_prefix:/heap/worker-executor`.
+#[cfg(all(feature = "jemalloc-prof", target_os = "linux"))]
+fn spawn_heap_profile_dump_on_signal(handle: tokio::runtime::Handle) {
+    use std::ffi::CString;
+    use tracing::{error, info, warn};
+
+    handle.spawn(async move {
+        let mut sigusr2 =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2()) {
+                Ok(stream) => stream,
+                Err(err) => {
+                    error!("failed to install SIGUSR2 heap-profile handler: {err}");
+                    return;
+                }
+            };
+
+        info!("SIGUSR2 jemalloc heap-profile handler installed");
+        loop {
+            sigusr2.recv().await;
+
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let path = format!(
+                "/heap/worker-executor-{}-{timestamp}.heap",
+                std::process::id()
+            );
+            let c_path = match CString::new(path.clone()) {
+                Ok(path) => path,
+                Err(err) => {
+                    warn!("failed to prepare heap profile path {path}: {err}");
+                    continue;
+                }
+            };
+
+            let dump_result = unsafe {
+                tikv_jemalloc_ctl::raw::write(
+                    b"prof.dump\0",
+                    c_path.as_ptr() as *const std::os::raw::c_char,
+                )
+            };
+
+            match dump_result {
+                Ok(()) => info!("jemalloc heap profile written to {path}"),
+                Err(err) => warn!("failed to write jemalloc heap profile to {path}: {err}"),
+            }
+        }
+    });
+}
+
+#[cfg(not(all(feature = "jemalloc-prof", target_os = "linux")))]
+fn spawn_heap_profile_dump_on_signal(_handle: tokio::runtime::Handle) {}

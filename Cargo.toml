@@ -154,10 +154,13 @@ log = "0.4.26"
 mac_address = "1.1.8"
 mappable-rc = "0.1.1"
 md5 = "0.7.0"
+metrics = "0.24.2"
+metrics-exporter-prometheus = { version = "0.16.2", default-features = false }
 metrohash = "1.0.7"
 miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
+mimalloc = "0.1.52"
 minijinja = "2.7.0"
 
 nanoid = "0.4.0"
@@ -247,7 +250,10 @@ testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", 
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
+tikv-jemalloc-ctl = "0.7.0"
+tikv-jemallocator = { version = "0.7.0", features = ["profiling"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", "signal"] }
+tokio-metrics = { version = "0.5.0", features = ["metrics-rs-integration"] }
 tokio-postgres = "0.7.13"
 tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -329,6 +335,7 @@ opt-level = 1
 codegen-units = 256
 incremental = true
 debug = true
+lto = false
 
 [profile.dev-release-ci]
 inherits = "dev-release"
@@ -337,6 +344,7 @@ debug = "line-tables-only"
 
 [profile.release]
 panic = "abort"
+lto = "thin"
 
 [profile.benchmarks]
 inherits = "release"

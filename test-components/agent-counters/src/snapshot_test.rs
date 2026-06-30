@@ -1,10 +1,13 @@
 use golem_rust::{agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
-#[agent_definition(snapshotting = "enabled")]
+use crate::busy_loop;
+
+#[agent_definition(snapshotting = "every(100)")]
 trait SnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
+    fn busy_for(&mut self, millis: u32) -> u32;
     fn get(&self) -> u32;
     fn was_recovered_from_snapshot(&self) -> bool;
 }
@@ -26,6 +29,12 @@ impl SnapshotCounter for SnapshotCounterImpl {
     }
 
     fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn busy_for(&mut self, millis: u32) -> u32 {
+        let _ = busy_loop(millis);
         self.count += 1;
         self.count
     }

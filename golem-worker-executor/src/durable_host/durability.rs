@@ -769,7 +769,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live(),
+            is_live: self.state.is_live() || self.state.snapshotting_mode.is_some(),
             persistence_level: self.state.persistence_level,
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
@@ -782,6 +782,10 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         retry_from: OplogIndex,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
+        if self.state.snapshotting_mode.is_some() {
+            return;
+        }
+
         use golem_common::model::oplog::AgentError;
         let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
         let entry = OplogEntry::error(
@@ -816,13 +820,14 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.end_function(function_type, begin_index).await?;
-        if function_type == &DurableFunctionType::WriteRemote
-            || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
-            || matches!(
-                function_type,
-                DurableFunctionType::WriteRemoteTransaction(_)
-            )
-            || forced_commit
+        if self.state.snapshotting_mode.is_none()
+            && (function_type == &DurableFunctionType::WriteRemote
+                || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
+                || matches!(
+                    function_type,
+                    DurableFunctionType::WriteRemoteTransaction(_)
+                )
+                || forced_commit)
         {
             self.public_state
                 .worker()
@@ -1257,6 +1262,20 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         &self,
         ctx: &mut impl DurabilityHost,
     ) -> Result<HostResponse, WorkerExecutorError> {
+        if self.durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
+            warn!(
+                interface = Pair::INTERFACE,
+                function = Pair::FUNCTION,
+                fqfn = Pair::FQFN,
+                durable_function_type = ?self.function_type,
+                begin_index = %self.begin_index,
+                is_live = self.durable_execution_state.is_live,
+                persistence_level = ?self.durable_execution_state.persistence_level,
+                snapshotting_mode = ?self.durable_execution_state.snapshotting_mode,
+                "Attempting to replay a durable host function in a PersistNothing block"
+            );
+        }
+
         let oplog_entry = ctx.read_persisted_durable_function_invocation().await?;
 
         let function_name = Pair::FQFN;

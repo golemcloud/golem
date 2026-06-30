@@ -395,6 +395,16 @@ impl Display for BenchmarkResultView {
             let show_length = first_config.length.is_some();
             let show_duration = items.iter().any(|i| i.duration.is_some());
             let show_count = items.iter().any(|i| i.count.is_some());
+            // When every count is a single reported value (avg == min == max),
+            // the three-column avg/min/max table is noise — collapse it to one
+            // "Count" column. Real distributions (where the three differ for any
+            // row) keep all three.
+            let count_is_single_value = items.iter().all(|i| {
+                i.count
+                    .as_ref()
+                    .map(|c| c.avg == c.min && c.min == c.max)
+                    .unwrap_or(true)
+            });
 
             fn bold(s: &str) -> Cell {
                 Cell::new(s).add_attribute(Attribute::Bold)
@@ -423,9 +433,13 @@ impl Display for BenchmarkResultView {
                 header.push(bold("Duration p99"));
             }
             if show_count {
-                header.push(bold("Count Avg"));
-                header.push(bold("Count Min"));
-                header.push(bold("Count Max"));
+                if count_is_single_value {
+                    header.push(bold("Count"));
+                } else {
+                    header.push(bold("Count Avg"));
+                    header.push(bold("Count Min"));
+                    header.push(bold("Count Max"));
+                }
             }
 
             let mut tbl = Table::new();
@@ -470,9 +484,13 @@ impl Display for BenchmarkResultView {
                 if show_count {
                     let count_cell =
                         |c: Option<u64>| right(c.map(|c| format!("{c}")).unwrap_or_default());
-                    record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
-                    record.push(count_cell(item.count.as_ref().map(|c| c.min)));
-                    record.push(count_cell(item.count.as_ref().map(|c| c.max)));
+                    if count_is_single_value {
+                        record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
+                    } else {
+                        record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
+                        record.push(count_cell(item.count.as_ref().map(|c| c.min)));
+                        record.push(count_cell(item.count.as_ref().map(|c| c.max)));
+                    }
                 }
                 tbl.add_row(record);
             }
@@ -484,6 +502,97 @@ impl Display for BenchmarkResultView {
     }
 }
 
+/// Cloud-mode run metadata collected by the buildspec and passed via environment variables.
+/// All fields are optional — missing env vars produce `None` rather than failing the run.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMetadata {
+    /// The `golem-oss` commit SHA that was built and deployed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub golem_oss_commit_sha: Option<String>,
+    /// The `golem-cloud` (kubernetes manifests) commit SHA that was deployed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub kubernetes_manifest_commit_sha: Option<String>,
+    /// Number of Ready `worker-executor` pods observed at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub observed_cluster_size: Option<u32>,
+    /// Container image tag of the deployed `worker-executor`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_executor_image_tag: Option<String>,
+    /// Container image tag of the deployed `registry-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub registry_service_image_tag: Option<String>,
+    /// Container image tag of the deployed `worker-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_service_image_tag: Option<String>,
+    /// Aurora ACU capacity for the main (`golem_dev`) cluster at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub aurora_acu_main: Option<f64>,
+    /// Aurora ACU capacity for the indexed-storage cluster at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub aurora_acu_indexed: Option<f64>,
+    /// Aurora ACU capacity for the keyvalue-storage cluster at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub aurora_acu_keyvalue: Option<f64>,
+    /// Ready replica count for `worker-executor` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_executor_replicas: Option<u32>,
+    /// Ready replica count for `worker-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_service_replicas: Option<u32>,
+    /// Ready replica count for `registry-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub registry_service_replicas: Option<u32>,
+    /// Ready replica count for `compilation-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub compilation_service_replicas: Option<u32>,
+    /// Ready replica count for `debugging-service` at run start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub debugging_service_replicas: Option<u32>,
+    /// Free-form note from the `workflow_dispatch` trigger.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub note: Option<String>,
+}
+
+impl RunMetadata {
+    /// Reads all `GOLEM_BENCH_*` environment variables and returns a populated
+    /// `RunMetadata`.  Missing variables produce `None` for that field.
+    pub fn from_env() -> Self {
+        fn env_str(key: &str) -> Option<String> {
+            std::env::var(key).ok().filter(|v| !v.is_empty())
+        }
+        fn env_u32(key: &str) -> Option<u32> {
+            env_str(key).and_then(|v| v.parse().ok())
+        }
+        fn env_f64(key: &str) -> Option<f64> {
+            env_str(key).and_then(|v| v.parse().ok())
+        }
+
+        Self {
+            golem_oss_commit_sha: env_str("GOLEM_BENCH_OSS_COMMIT_SHA"),
+            kubernetes_manifest_commit_sha: env_str("GOLEM_BENCH_K8S_MANIFEST_COMMIT_SHA"),
+            observed_cluster_size: env_u32("GOLEM_BENCH_OBSERVED_CLUSTER_SIZE"),
+            worker_executor_image_tag: env_str("GOLEM_BENCH_WORKER_EXECUTOR_IMAGE_TAG"),
+            registry_service_image_tag: env_str("GOLEM_BENCH_REGISTRY_SERVICE_IMAGE_TAG"),
+            worker_service_image_tag: env_str("GOLEM_BENCH_WORKER_SERVICE_IMAGE_TAG"),
+            aurora_acu_main: env_f64("GOLEM_BENCH_AURORA_ACU_MAIN"),
+            aurora_acu_indexed: env_f64("GOLEM_BENCH_AURORA_ACU_INDEXED"),
+            aurora_acu_keyvalue: env_f64("GOLEM_BENCH_AURORA_ACU_KEYVALUE"),
+            worker_executor_replicas: env_u32("GOLEM_BENCH_WORKER_EXECUTOR_REPLICAS"),
+            worker_service_replicas: env_u32("GOLEM_BENCH_WORKER_SERVICE_REPLICAS"),
+            registry_service_replicas: env_u32("GOLEM_BENCH_REGISTRY_SERVICE_REPLICAS"),
+            compilation_service_replicas: env_u32("GOLEM_BENCH_COMPILATION_SERVICE_REPLICAS"),
+            debugging_service_replicas: env_u32("GOLEM_BENCH_DEBUGGING_SERVICE_REPLICAS"),
+            note: env_str("GOLEM_BENCH_RUN_NOTE"),
+        }
+    }
+
+    /// Returns `true` if every field is `None` (nothing was read from env).
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResultCollection {
     pub runs: Vec<BenchmarkSuiteResult>,
@@ -491,10 +600,20 @@ pub struct BenchmarkSuiteResultCollection {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResult {
+    /// Result format version. Always `1` for results produced by this binary.
+    pub schema_version: u32,
     pub suite: String,
     pub environment: String,
     pub version: String,
     pub timestamp: DateTime<Utc>,
+    /// Suite-level run-id. Set in cloud mode to `bench-{run_id}` to allow
+    /// cross-run correlation and garbage collection of orphaned state.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_id: Option<String>,
+    /// Cloud-mode run metadata populated from `GOLEM_BENCH_*` environment variables.
+    /// `None` in Spawned or Provided modes where cluster metadata is not available.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_metadata: Option<RunMetadata>,
     pub results: Vec<BenchmarkResult>,
 }
 
@@ -526,10 +645,13 @@ impl BenchmarkSuiteResult {
         );
 
         Self {
+            schema_version: 1,
             suite: suite.to_string(),
             environment,
             version: golem_common::golem_version().to_string(),
             timestamp: Utc::now(),
+            run_id: None,
+            run_metadata: None,
             results: vec![],
         }
     }
@@ -606,6 +728,10 @@ pub struct BenchmarkResult {
     pub description: String,
     pub runs: Vec<RunConfig>,
     pub results: Vec<BenchmarkRunResult>,
+    /// Suite-level run-id. Set in cloud mode to `bench-{run_id}` to allow
+    /// cross-run correlation and garbage collection of orphaned state.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_id: Option<String>,
 }
 
 impl BenchmarkResult {

@@ -69,18 +69,26 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 11] = &[
     0.001, 0.01, 0.1, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
 ];
 
-const MEMORY_SIZE_BUCKETS: &[f64; 11] = &[
-    1024.0,
-    4096.0,
-    16384.0,
-    65536.0,
-    262144.0,
-    1048576.0,
-    4194304.0,
-    16777216.0,
-    67108864.0,
-    268435456.0,
-    1073741824.0,
+/// Buckets for the size of a single `memory.grow` allocation. Deliberately
+/// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
+/// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
+const MEMORY_SIZE_BUCKETS: &[f64; 16] = &[
+    65536.0,      // 64 KiB
+    262144.0,     // 256 KiB
+    1048576.0,    // 1 MiB
+    2097152.0,    // 2 MiB
+    4194304.0,    // 4 MiB
+    6291456.0,    // 6 MiB
+    8388608.0,    // 8 MiB
+    12582912.0,   // 12 MiB
+    16777216.0,   // 16 MiB
+    25165824.0,   // 24 MiB
+    33554432.0,   // 32 MiB
+    67108864.0,   // 64 MiB
+    134217728.0,  // 128 MiB
+    268435456.0,  // 256 MiB
+    536870912.0,  // 512 MiB
+    1073741824.0, // 1 GiB
 ];
 
 pub mod component {
@@ -103,6 +111,191 @@ pub mod component {
     pub fn record_compilation_time(duration: Duration) {
         COMPILATION_TIME_SECONDS.observe(duration.as_secs_f64());
     }
+}
+
+pub mod runtime {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+    use tokio::runtime::Handle;
+    use tokio::task::JoinSet;
+    use tokio_metrics::RuntimeMetricsReporterBuilder;
+
+    /// How often the recorder's upkeep runs to keep its internal storage
+    /// bounded (e.g. pruning idle metrics once an idle timeout is configured).
+    const UPKEEP_INTERVAL: Duration = Duration::from_secs(30);
+
+    /// Installs a dedicated `metrics`-crate Prometheus recorder for tokio
+    /// runtime metrics, spawns the tokio-metrics reporter on `join_set`, and
+    /// returns a renderer that emits the collected metrics in Prometheus text
+    /// format.
+    ///
+    /// `sampling_interval` controls how often metrics are sampled from the
+    /// runtime into the recorder; Prometheus scrapes the rendered values
+    /// independently.
+    ///
+    /// The returned closure is appended to the `prometheus`-crate scrape output
+    /// on the shared `/metrics` endpoint, so all `tokio_*` series appear on the
+    /// same endpoint as the rest of the executor's metrics, carrying the same
+    /// `executor_id` label.
+    ///
+    /// Returns `None` if a global `metrics` recorder is already installed (which
+    /// should not happen in the executor), in which case runtime metrics are
+    /// simply not exported.
+    pub fn install_runtime_metrics(
+        runtime: Handle,
+        sampling_interval: Duration,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+    ) -> Option<Arc<dyn Fn() -> String + Send + Sync>> {
+        let executor_id = crate::identity::executor_id();
+
+        let handle: PrometheusHandle = match PrometheusBuilder::new()
+            .add_global_label("executor_id", executor_id)
+            .install_recorder()
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to install tokio runtime metrics recorder, runtime metrics will not be exported: {err}"
+                );
+                return None;
+            }
+        };
+
+        let reporter = RuntimeMetricsReporterBuilder::default().with_interval(sampling_interval);
+        join_set.spawn_on(
+            async move {
+                reporter.describe_and_run().await;
+                Ok(())
+            },
+            &runtime,
+        );
+
+        // Run periodic upkeep so the recorder's internal storage stays bounded.
+        let upkeep_handle = handle.clone();
+        join_set.spawn_on(
+            async move {
+                let mut interval = tokio::time::interval(UPKEEP_INTERVAL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    upkeep_handle.run_upkeep();
+                    crate::metrics::mimalloc::sample();
+                }
+            },
+            &runtime,
+        );
+
+        Some(Arc::new(move || handle.render()))
+    }
+}
+
+/// mimalloc allocator memory accounting, sampled into Prometheus gauges.
+///
+/// `mi_process_info` reports both the resident set (touched pages actually in
+/// physical RAM) and the committed set (pages mimalloc has obtained from the OS
+/// and not yet returned). On the containerised Linux deployment the cgroup's
+/// `memory.current` — which the admission gate reads — charges the committed
+/// set, so a large `committed - resident` gap means mimalloc is holding pages
+/// it could return, inflating the gate's measured usage. Comparing committed vs
+/// resident distinguishes allocator retention/fragmentation (commit >> rss)
+/// from genuinely live memory (commit ~= rss).
+#[cfg(feature = "mimalloc")]
+pub mod mimalloc {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    // `libmimalloc-sys` does not re-export `mi_process_info`, but the symbol is
+    // present in the linked static library, so we declare it ourselves. All
+    // out-parameters are `size_t` (bytes for the memory fields, milliseconds for
+    // the timing fields).
+    unsafe extern "C" {
+        fn mi_process_info(
+            elapsed_msecs: *mut usize,
+            user_msecs: *mut usize,
+            system_msecs: *mut usize,
+            current_rss: *mut usize,
+            peak_rss: *mut usize,
+            current_commit: *mut usize,
+            peak_commit: *mut usize,
+            page_faults: *mut usize,
+        );
+    }
+
+    lazy_static! {
+        static ref MIMALLOC_CURRENT_RSS_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_current_rss_bytes",
+            "mimalloc-reported resident set size: pages currently touched and in physical RAM",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref MIMALLOC_PEAK_RSS_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_peak_rss_bytes",
+            "mimalloc-reported peak resident set size since process start",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref MIMALLOC_CURRENT_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_current_commit_bytes",
+            "mimalloc-reported committed memory: pages obtained from the OS and not yet returned (what the cgroup charges as memory.current)",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref MIMALLOC_PEAK_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_peak_commit_bytes",
+            "mimalloc-reported peak committed memory since process start",
+            &["executor_id"]
+        )
+        .unwrap();
+    }
+
+    /// Reads `mi_process_info` and updates the mimalloc memory gauges. Cheap and
+    /// allocation-free; intended to be called from a periodic sampling loop.
+    pub fn sample() {
+        let mut elapsed = 0usize;
+        let mut user = 0usize;
+        let mut system = 0usize;
+        let mut current_rss = 0usize;
+        let mut peak_rss = 0usize;
+        let mut current_commit = 0usize;
+        let mut peak_commit = 0usize;
+        let mut page_faults = 0usize;
+
+        // Safety: all pointers are valid, non-overlapping stack locations of the
+        // expected `size_t` type; mi_process_info only writes through them.
+        unsafe {
+            mi_process_info(
+                &mut elapsed,
+                &mut user,
+                &mut system,
+                &mut current_rss,
+                &mut peak_rss,
+                &mut current_commit,
+                &mut peak_commit,
+                &mut page_faults,
+            );
+        }
+
+        let id = crate::identity::executor_id();
+        MIMALLOC_CURRENT_RSS_BYTES
+            .with_label_values(&[id])
+            .set(current_rss as f64);
+        MIMALLOC_PEAK_RSS_BYTES
+            .with_label_values(&[id])
+            .set(peak_rss as f64);
+        MIMALLOC_CURRENT_COMMIT_BYTES
+            .with_label_values(&[id])
+            .set(current_commit as f64);
+        MIMALLOC_PEAK_COMMIT_BYTES
+            .with_label_values(&[id])
+            .set(peak_commit as f64);
+    }
+}
+
+#[cfg(not(feature = "mimalloc"))]
+pub mod mimalloc {
+    pub fn sample() {}
 }
 
 pub mod events {
@@ -175,6 +368,12 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_worker_store_alive_count",
+            "Live wasmtime Store contexts on this executor, counted by the Store's own lifetime: incremented when a worker's Store is constructed and decremented when it is dropped. Diverging above the resident-worker count means Stores are retained after the owning worker was deleted",
+            &["executor_id"]
+        )
+        .unwrap();
         pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "worker_kv_cache_value_size_bytes",
             "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
@@ -182,6 +381,61 @@ pub mod workers {
             crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
+        pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_total_bytes",
+            "Usable memory ceiling (usable_ratio * measured limit) the admission gate admits against on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_used_bytes",
+            "Total linear memory granted to live workers and reserved by the admission gate on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_ADMISSION_RSS_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_admission_rss_bytes",
+            "Measured resident memory (probe snapshot) the admission gate last read on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec = register_counter_vec!(
+            "golem_worker_memory_grow_rejected_total",
+            "Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire)",
+            &["executor_id"]
+        )
+        .unwrap();
+    }
+
+    /// Counts one invocation interrupted because a linear-memory grow was
+    /// refused by the admission gate (the worker traps out-of-memory and is
+    /// restarted to reacquire memory).
+    pub fn record_worker_memory_grow_rejected() {
+        WORKER_MEMORY_GROW_REJECTED_TOTAL
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    /// Sets the gate's usable memory ceiling gauge.
+    pub fn record_worker_memory_ceiling(bytes: u64) {
+        WORKER_MEMORY_POOL_TOTAL_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
+    }
+
+    /// Sets the gauge of total memory granted to live workers (the gate's
+    /// reservation).
+    pub fn record_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
+    }
+
+    /// Sets the gauge of measured resident memory last read by the gate.
+    pub fn record_worker_admission_rss(bytes: u64) {
+        WORKER_ADMISSION_RSS_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -221,6 +475,10 @@ pub mod workers {
         WORKER_WAITING_FOR_MEMORY_COUNT
             .with_label_values(&[id])
             .set(0.0);
+        WORKER_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        WORKER_MEMORY_GROW_REJECTED_TOTAL
+            .with_label_values(&[id])
+            .inc_by(0.0);
     }
 
     pub fn inc_worker_memory_resident() {
@@ -231,6 +489,23 @@ pub mod workers {
 
     pub fn dec_worker_memory_resident() {
         WORKER_MEMORY_RESIDENT_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    /// Incremented when a worker's wasmtime `Store` context is constructed.
+    /// Paired with [`dec_worker_store_alive`] from a guard dropped with the
+    /// `Store` itself, so the gauge tracks the `Store`'s true lifetime rather
+    /// than the owning worker's accounting.
+    pub fn inc_worker_store_alive() {
+        WORKER_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    /// Decremented when a worker's wasmtime `Store` context is dropped.
+    pub fn dec_worker_store_alive() {
+        WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
     }
@@ -292,18 +567,6 @@ pub mod workers {
 
     pub fn inc_filesystem_semaphore_available(permits: u64) {
         WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.add(permits.into_f64());
-    }
-
-    /// Records acquisition of `bytes` from the worker-memory pool.
-    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
-    pub fn record_memory_permit_acquired(bytes: usize) {
-        crate::metrics::storage::record_worker_memory_pool_acquired(bytes as u64);
-    }
-
-    /// Records release of `bytes` back to the worker-memory pool.
-    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
-    pub fn record_memory_permit_released(bytes: usize) {
-        crate::metrics::storage::record_worker_memory_pool_released(bytes as u64);
     }
 
     pub fn record_worker_kv_cache_value_size(bytes: usize) {
@@ -504,7 +767,13 @@ pub mod wasm {
         .unwrap();
         static ref ALLOCATED_MEMORY_BYTES: Histogram = register_histogram!(
             "allocated_memory_bytes",
-            "Amount of memory allocated by a single memory.grow instruction",
+            "Worker's total linear memory size after a memory.grow, sampled at each grow",
+            crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
+            "worker_resident_linear_memory_bytes",
+            "Per-worker cumulative linear-memory grant (total_linear_memory_size = sum of memory.grow deltas) sampled when the worker is admitted. This is the linear memory the admission gate reserves for the worker; it is an upper bound on resident RSS, not measured resident memory, since grown pages are largely demand-paged. Compare to container_memory_working_set_bytes for the gap.",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
@@ -579,6 +848,10 @@ pub mod wasm {
 
     pub fn record_allocated_memory(amount: usize) {
         ALLOCATED_MEMORY_BYTES.observe(amount as f64);
+    }
+
+    pub fn record_worker_resident_linear_memory(bytes: u64) {
+        WORKER_RESIDENT_LINEAR_MEMORY_BYTES.observe(bytes as f64);
     }
 }
 
@@ -717,16 +990,10 @@ pub mod storage {
     use lazy_static::lazy_static;
     use prometheus::*;
 
-    /// Returns the executor identity label: POD_NAME env var, falling back to HOSTNAME, then "unknown".
-    /// Resolved once on first call and cached for the lifetime of the process.
-    pub fn executor_id() -> &'static str {
-        static EXECUTOR_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        EXECUTOR_ID.get_or_init(|| {
-            std::env::var("POD_NAME")
-                .or_else(|_| std::env::var("HOSTNAME"))
-                .unwrap_or_else(|_| "unknown".to_string())
-        })
-    }
+    /// Re-exported from [`crate::identity`], which owns the process identity.
+    /// Kept here so existing metric-recording call sites can keep using
+    /// `crate::metrics::storage::executor_id()`.
+    pub use crate::identity::executor_id;
 
     lazy_static! {
         pub static ref STORAGE_FILESYSTEM_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
@@ -738,18 +1005,6 @@ pub mod storage {
         pub static ref STORAGE_FILESYSTEM_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
             "golem_storage_filesystem_pool_used_bytes",
             "Currently acquired filesystem storage bytes across all workers on this executor",
-            &["executor_id"]
-        )
-        .unwrap();
-        pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_worker_memory_pool_total_bytes",
-            "Configured worker-memory semaphore size in bytes for this executor",
-            &["executor_id"]
-        )
-        .unwrap();
-        pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_worker_memory_pool_used_bytes",
-            "Bytes currently acquired from the worker-memory semaphore on this executor",
             &["executor_id"]
         )
         .unwrap();
@@ -769,24 +1024,6 @@ pub mod storage {
 
     pub fn record_filesystem_pool_released(bytes: u64) {
         STORAGE_FILESYSTEM_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .sub(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_total(bytes: u64) {
-        WORKER_MEMORY_POOL_TOTAL_BYTES
-            .with_label_values(&[executor_id()])
-            .set(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_acquired(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .add(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_released(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
     }

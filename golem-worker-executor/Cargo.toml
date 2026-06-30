@@ -26,6 +26,18 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
+[features]
+default = ["mimalloc"]
+# Switches the worker-executor binary from mimalloc to jemalloc with heap
+# profiling support and installs a SIGUSR2 handler that writes a heap profile.
+# Off by default; intended only for explicitly tagged profiling Docker images.
+jemalloc-prof = [
+  "dep:tikv-jemalloc-ctl",
+  "dep:tikv-jemallocator",
+  "tikv-jemallocator/profiling",
+]
+mimalloc = ["dep:mimalloc"]
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
@@ -73,7 +85,10 @@ lazy_static = { workspace = true }
 log = { workspace = true }
 mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 metrohash = { workspace = true }
+mimalloc = { workspace = true, optional = true }
 nonempty-collections = { workspace = true }
 nonzero_ext = { workspace = true }
 pgvector = { workspace = true }
@@ -91,7 +106,10 @@ sqlx = { workspace = true }
 sqlx-core = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
+tikv-jemalloc-ctl = { workspace = true, optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
 tokio = { workspace = true }
+tokio-metrics = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
