@@ -4626,18 +4626,22 @@ mod tests {
     fn rich_leaf_secret_and_quota_identity_is_compared() {
         assert!(shapes_match(
             SchemaType::secret(SecretSpec {
-                category: Some("api-key".into())
+                inner: Box::new(SchemaType::string()),
+                category: Some("api-key".into()),
             }),
             SchemaType::secret(SecretSpec {
-                category: Some("api-key".into())
+                inner: Box::new(SchemaType::string()),
+                category: Some("api-key".into()),
             }),
         ));
         assert!(!shapes_match(
             SchemaType::secret(SecretSpec {
-                category: Some("api-key".into())
+                inner: Box::new(SchemaType::string()),
+                category: Some("api-key".into()),
             }),
             SchemaType::secret(SecretSpec {
-                category: Some("oauth-token".into())
+                inner: Box::new(SchemaType::string()),
+                category: Some("oauth-token".into()),
             }),
         ));
         assert!(!shapes_match(
@@ -4646,6 +4650,20 @@ mod tests {
             }),
             SchemaType::quota_token(QuotaTokenSpec {
                 resource_name: Some("requests".into())
+            }),
+        ));
+    }
+
+    #[test]
+    fn rich_leaf_secret_inner_identity_is_compared() {
+        assert!(!shapes_match(
+            SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: Some("api-key".into()),
+            }),
+            SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::u64()),
+                category: Some("api-key".into()),
             }),
         ));
     }
