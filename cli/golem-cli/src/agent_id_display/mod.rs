@@ -104,7 +104,7 @@ impl std::fmt::Display for SourceLanguage {
 }
 
 /// Render a paired schema graph + root type + value using language-specific
-/// syntax. Capability values render as `<redacted>`.
+/// syntax. Capability values render as `<redacted: kind>`.
 pub fn render_typed_schema_value(
     typed: &TypedSchemaValue,
     source_language: &SourceLanguage,

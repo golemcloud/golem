@@ -31,7 +31,9 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 mod replay_state;
+mod secrets;
 mod sockets;
+pub mod tool;
 pub mod wasm_rpc;
 pub mod websocket;
 
@@ -3178,8 +3180,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 && !recorded_result.replay_equivalent(&output.result)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("{full_function_name} => {recorded_result:?}"),
-                    format!("{full_function_name} => {:?}", output.result),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        recorded_result.redacted_debug()
+                    ),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        output.result.redacted_debug()
+                    ),
                 ));
             }
         }

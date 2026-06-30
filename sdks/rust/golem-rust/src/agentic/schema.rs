@@ -725,3 +725,53 @@ pub fn multimodal_schema_type(fields: &[(String, SchemaGraph)]) -> SchemaType {
     schema.metadata_mut().role = Some(Role::Multimodal);
     schema
 }
+
+/// Rejects quota-token capability values appearing anywhere inside an agent
+/// constructor parameter tree.
+///
+/// Constructor parameters define an agent's deterministic, stable identity (they
+/// are encoded into its agent-id). A quota token is an opaque, single-use
+/// capability handle and must never participate in identity, so it is rejected
+/// here — before the constructor value is ever encoded — so that the handle is
+/// not silently consumed and the user gets a clear error.
+///
+/// This is an internal helper used by generated remote-client constructors.
+#[doc(hidden)]
+pub fn __reject_quota_tokens_in_agent_constructor(value: &SchemaValue) -> Result<(), String> {
+    use crate::schema::ResultValuePayload;
+
+    fn contains_quota_token(value: &SchemaValue) -> bool {
+        match value {
+            SchemaValue::QuotaToken(_) => true,
+            SchemaValue::Record { fields } => fields.iter().any(contains_quota_token),
+            SchemaValue::Tuple { elements }
+            | SchemaValue::List { elements }
+            | SchemaValue::FixedList { elements } => elements.iter().any(contains_quota_token),
+            SchemaValue::Variant(payload) => {
+                payload.payload.as_deref().is_some_and(contains_quota_token)
+            }
+            SchemaValue::Map { entries } => entries
+                .iter()
+                .any(|(k, v)| contains_quota_token(k) || contains_quota_token(v)),
+            SchemaValue::Option { inner } => inner.as_deref().is_some_and(contains_quota_token),
+            SchemaValue::Result(payload) => match payload {
+                ResultValuePayload::Ok { value } | ResultValuePayload::Err { value } => {
+                    value.as_deref().is_some_and(contains_quota_token)
+                }
+            },
+            SchemaValue::Union(payload) => contains_quota_token(&payload.body),
+            _ => false,
+        }
+    }
+
+    if contains_quota_token(value) {
+        Err(
+            "quota tokens are not allowed in agent constructor parameters because constructor \
+             parameters define the agent's deterministic identity; pass quota tokens to methods \
+             instead"
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
+}

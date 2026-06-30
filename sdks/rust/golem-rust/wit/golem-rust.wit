@@ -7,9 +7,12 @@ world golem-rust {
   import golem:api/retry@1.5.0;
 
   import golem:agent/host@2.0.0;
+  import golem:tool/host@0.1.0;
 
   import golem:durability/durability@1.5.0;
   import golem:quota/types@1.5.0;
+  import golem:secrets/types@0.1.0;
+  import golem:secrets/reveal@0.1.0;
   import golem:rdbms/ignite2@1.5.0;
   import golem:rdbms/mysql@1.5.0;
   import golem:rdbms/postgres@1.5.0;
@@ -42,4 +45,5 @@ world golem-rust-oplog-processor {
 world golem-agentic {
    include golem-rust;
    export golem:agent/guest@2.0.0;
+   export golem:tool/guest@0.1.0;
 }

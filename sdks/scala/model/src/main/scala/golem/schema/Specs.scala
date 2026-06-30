@@ -16,8 +16,6 @@
 
 package golem.schema
 
-import golem.{EnvironmentId, Uuid}
-
 // Non-recursive leaf structures of the schema model. These mirror the
 // corresponding `golem:core/types@2.0.0` records/variants exactly so the WIT
 // codecs can pass them through unchanged.
@@ -43,6 +41,39 @@ final case class TextRestrictions(
 
 object TextRestrictions {
   val empty: TextRestrictions = TextRestrictions()
+}
+
+sealed trait NumericBound extends Product with Serializable
+object NumericBound {
+  final case class Signed(value: Long)    extends NumericBound
+  final case class Unsigned(value: Long)  extends NumericBound
+  final case class FloatBits(value: Long) extends NumericBound
+}
+
+final case class NumericRestrictions(
+  min: Option[NumericBound] = None,
+  max: Option[NumericBound] = None,
+  unit: Option[String] = None
+) {
+  def normalize: Option[NumericRestrictions] = {
+    val normalized = copy(
+      min = min.map(NumericRestrictions.canonicalizeBound),
+      max = max.map(NumericRestrictions.canonicalizeBound),
+      unit = unit.filter(_.nonEmpty)
+    )
+    if (normalized.min.isEmpty && normalized.max.isEmpty && normalized.unit.isEmpty) None else Some(normalized)
+  }
+}
+
+object NumericRestrictions {
+  val empty: NumericRestrictions = NumericRestrictions()
+
+  private def canonicalizeBound(bound: NumericBound): NumericBound =
+    bound match {
+      case NumericBound.FloatBits(bits) if java.lang.Double.longBitsToDouble(bits) == 0.0d =>
+        NumericBound.FloatBits(0L)
+      case other => other
+    }
 }
 
 final case class BinaryRestrictions(
@@ -98,7 +129,7 @@ final case class QuantitySpec(
   max: Option[QuantityValue] = None
 )
 
-final case class SecretSpec(category: Option[String] = None)
+final case class SecretSpec(inner: SchemaType, category: Option[String] = None)
 
 final case class QuotaTokenSpec(resourceName: Option[String] = None)
 
@@ -115,15 +146,3 @@ object DiscriminatorRule {
   final case class FieldEquals(field: FieldDiscriminator) extends DiscriminatorRule
   final case class FieldAbsent(fieldName: String)         extends DiscriminatorRule
 }
-
-/**
- * Capability value snapshot for a quota token. The receiver re-acquires a live
- * lease against `(environmentId, resourceName)` on demand.
- */
-final case class QuotaTokenValuePayload(
-  environmentId: EnvironmentId,
-  resourceName: String,
-  expectedUse: Long,
-  lastCredit: Long,
-  lastCreditAt: Datetime
-)

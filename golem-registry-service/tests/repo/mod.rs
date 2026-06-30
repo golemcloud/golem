@@ -18,6 +18,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
+use golem_registry_service::repo::agent_secret::AgentSecretRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
@@ -63,6 +64,7 @@ sequential_suite!(sqlite);
 pub struct Deps {
     pub account_repo: Box<dyn AccountRepo>,
     pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
+    pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
     pub plan_repo: Box<dyn PlanRepo>,

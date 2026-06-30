@@ -59,3 +59,24 @@ proptest! {
         );
     }
 }
+
+/// Deterministic numeric-restriction vectors round-trip through the desert
+/// `BinaryCodec` exactly. Adjacent payloadless variants (`bool`/`char`/`string`)
+/// are included to prove the codec stays internally consistent after the numeric
+/// variants gained an `Option<NumericRestrictions>` payload.
+#[test]
+fn numeric_restrictions_binary_codec_golden_round_trip() {
+    use crate::schema::schema_type::SchemaType;
+
+    for (label, ty) in crate::schema::tests::golden_numeric_schema_types() {
+        let graph = SchemaGraph::anonymous(ty);
+        let back: SchemaGraph = roundtrip(&graph);
+        assert_eq!(graph, back, "binary numeric golden mismatch: {label}");
+    }
+
+    for adjacent in [SchemaType::bool(), SchemaType::char(), SchemaType::string()] {
+        let graph = SchemaGraph::anonymous(adjacent);
+        let back: SchemaGraph = roundtrip(&graph);
+        assert_eq!(graph, back);
+    }
+}

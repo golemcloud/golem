@@ -16,15 +16,17 @@ use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::Role;
 use crate::schema::proptest_strategies::schema_values_eq;
 use crate::schema::render::error::RenderError;
-use crate::schema::render::json_value::{from_json_value, to_json_value};
+use crate::schema::render::json_value::{from_json_value, to_json_value, to_json_value_redacted};
 use crate::schema::render::tests::paired_strategy::paired_strategy;
 use crate::schema::schema_type::{
-    DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, TextRestrictions,
-    UnionBranch, UnionSpec, VariantCaseType,
+    DiscriminatorRule, FieldDiscriminator, NamedFieldType, QuotaTokenSpec, ResultSpec, SchemaType,
+    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    QuotaTokenValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
+use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -670,4 +672,236 @@ fn multimodal_variant_list_round_trips_through_json() {
     );
     let decoded = from_json_value(&graph, &list_ty, &json).expect("decode must succeed");
     assert!(schema_values_eq(&decoded, &value));
+}
+
+// ------------------------------------------------------------------ redaction
+
+fn secret_value() -> SchemaValue {
+    SchemaValue::Secret(SecretValuePayload {
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        category: None,
+    })
+}
+
+fn quota_token_value() -> SchemaValue {
+    SchemaValue::QuotaToken(QuotaTokenValuePayload {
+        environment_id: golem_schema::model::EnvironmentId::new(uuid::Uuid::nil()),
+        resource_name: "gpu-quota".to_string(),
+        expected_use: 1,
+        last_credit: 0,
+        last_credit_at: Utc.timestamp_opt(0, 0).unwrap(),
+    })
+}
+
+/// `to_json_value` is the lossless codec: capability material is emitted in its
+/// canonical form. This is the contract internal, trusted callers rely on,
+/// and the baseline the redacted variant must depart from.
+#[test]
+fn to_json_value_emits_canonical_capability_form() {
+    let ty = SchemaType::secret(SecretSpec::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = secret_value();
+    let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
+    let SchemaValue::Secret(secret) = value else {
+        panic!("secret_value must construct a secret")
+    };
+    let mut expected = serde_json::Map::new();
+    expected.insert("secretId".to_string(), json!(secret.secret_id.to_string()));
+    if let Some(config_key) = secret.config_key {
+        expected.insert("configKey".to_string(), json!(config_key));
+    }
+    expected.insert("version".to_string(), json!(secret.version));
+    expected.insert(
+        "resolvedAt".to_string(),
+        json!(secret.resolved_at.to_rfc3339()),
+    );
+    if let Some(category) = secret.category {
+        expected.insert("category".to_string(), json!(category));
+    }
+    assert_eq!(json, serde_json::Value::Object(expected));
+}
+
+#[test]
+fn to_json_value_redacted_replaces_secret_with_placeholder() {
+    let ty = SchemaType::secret(SecretSpec::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let json = to_json_value_redacted(&graph, &ty, &secret_value()).expect("redacted encode");
+    assert_eq!(json, json!("<redacted: secret>"));
+}
+
+#[test]
+fn to_json_value_redacted_replaces_quota_token_with_placeholder() {
+    let ty = SchemaType::quota_token(QuotaTokenSpec::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let json = to_json_value_redacted(&graph, &ty, &quota_token_value()).expect("redacted encode");
+    assert_eq!(json, json!("<redacted: quota-token>"));
+}
+
+/// Redaction recurses through every container kind the walker descends into,
+/// mirroring `redacted_schema_value_debug`. One representative value per
+/// container path; the assertion checks the capability never leaks and the
+/// placeholder always appears.
+#[test]
+fn to_json_value_redacted_recurses_through_containers() {
+    let secret_ty = SchemaType::secret(SecretSpec::default());
+    let quota_ty = SchemaType::quota_token(QuotaTokenSpec::default());
+
+    let record_ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "label".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "key".to_string(),
+            body: secret_ty.clone(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "tokens".to_string(),
+            body: SchemaType::list(quota_ty.clone()),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "maybe".to_string(),
+            body: SchemaType::option(secret_ty.clone()),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(record_ty.clone());
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::String("svc".to_string()),
+            secret_value(),
+            SchemaValue::List {
+                elements: vec![quota_token_value()],
+            },
+            SchemaValue::Option {
+                inner: Some(Box::new(secret_value())),
+            },
+        ],
+    };
+
+    let json = to_json_value_redacted(&graph, &record_ty, &value).expect("redacted encode");
+    let rendered = json.to_string();
+    assert!(
+        !rendered.contains("shhh-do-not-log"),
+        "secret leaked: {rendered}"
+    );
+    assert!(
+        !rendered.contains("gpu-quota"),
+        "quota token leaked: {rendered}"
+    );
+    assert!(
+        rendered.contains("<redacted: secret>"),
+        "missing secret placeholder: {rendered}"
+    );
+    assert!(
+        rendered.contains("<redacted: quota-token>"),
+        "missing quota-token placeholder: {rendered}"
+    );
+    // Non-capability material is preserved.
+    assert!(
+        rendered.contains("svc"),
+        "non-capability field dropped: {rendered}"
+    );
+}
+
+/// A `result<secret, quota-token>` redacts both arms.
+#[test]
+fn to_json_value_redacted_recurses_through_result_arms() {
+    let ty = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::secret(SecretSpec::default()))),
+        err: Some(Box::new(SchemaType::quota_token(QuotaTokenSpec::default()))),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+
+    let ok = SchemaValue::Result(crate::schema::schema_value::ResultValuePayload::Ok {
+        value: Some(Box::new(secret_value())),
+    });
+    let ok_json = to_json_value_redacted(&graph, &ty, &ok).expect("redacted encode");
+    assert_eq!(ok_json, json!({ "ok": "<redacted: secret>" }));
+
+    let err = SchemaValue::Result(crate::schema::schema_value::ResultValuePayload::Err {
+        value: Some(Box::new(quota_token_value())),
+    });
+    let err_json = to_json_value_redacted(&graph, &ty, &err).expect("redacted encode");
+    assert_eq!(err_json, json!({ "err": "<redacted: quota-token>" }));
+}
+
+/// A capability value nested in a variant payload is redacted.
+#[test]
+fn to_json_value_redacted_recurses_through_variant_payload() {
+    let ty = SchemaType::variant(vec![VariantCaseType {
+        name: "with_secret".to_string(),
+        payload: Some(SchemaType::secret(SecretSpec::default())),
+        metadata: Default::default(),
+    }]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::Variant(VariantValuePayload {
+        case: 0,
+        payload: Some(Box::new(secret_value())),
+    });
+    let json = to_json_value_redacted(&graph, &ty, &value).expect("redacted encode");
+    assert_eq!(json, json!({ "with_secret": "<redacted: secret>" }));
+}
+
+/// A capability value nested in a union body's record field is redacted while
+/// the discriminator (which keys off a plain string field) still matches, so
+/// the union's sanity check does not reject the redacted encoding.
+#[test]
+fn to_json_value_redacted_recurses_through_union_body() {
+    let branch_body = SchemaType::record(vec![
+        NamedFieldType {
+            name: "kind".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "credential".to_string(),
+            body: SchemaType::secret(SecretSpec::default()),
+            metadata: Default::default(),
+        },
+    ]);
+    let ty = SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "secret_branch".to_string(),
+            body: branch_body,
+            discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                field_name: "kind".to_string(),
+                literal: Some("secret".to_string()),
+            }),
+            metadata: Default::default(),
+        }],
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::Union(UnionValuePayload {
+        tag: "secret_branch".to_string(),
+        body: Box::new(SchemaValue::Record {
+            fields: vec![SchemaValue::String("secret".to_string()), secret_value()],
+        }),
+    });
+    let json = to_json_value_redacted(&graph, &ty, &value).expect("redacted encode");
+    assert_eq!(
+        json,
+        json!({ "kind": "secret", "credential": "<redacted: secret>" })
+    );
+}
+
+/// A type/value kind mismatch (e.g. a `Secret` value under a `String` type)
+/// still surfaces the normal mismatch error from the redacted renderer — the
+/// redaction guard only fires when type and value agree on the capability
+/// kind, so it never masks a real shape error.
+#[test]
+fn to_json_value_redacted_preserves_mismatch_error_for_wrong_kind() {
+    let ty = SchemaType::string();
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let result = to_json_value_redacted(&graph, &ty, &secret_value());
+    assert!(
+        result.is_err(),
+        "expected a mismatch error, got: {result:?}"
+    );
 }

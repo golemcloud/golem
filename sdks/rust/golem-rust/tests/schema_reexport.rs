@@ -1,8 +1,8 @@
 test_r::enable!();
 
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, Schema, SchemaValue, decode_typed_schema_value,
-    encode_typed_schema_value, schema::try_into_schema_graph,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaValue,
+    decode_typed_schema_value, encode_typed_schema_value, schema::try_into_schema_graph,
 };
 use test_r::test;
 
@@ -106,5 +106,48 @@ fn nonempty_vec_schema_round_trip() {
 #[test]
 fn url_schema_round_trip() {
     let value = url::Url::parse("https://example.com/path").unwrap();
-    assert_eq!(url::Url::from_value(&value.to_value()).unwrap(), value);
+    let encoded = value.to_value();
+    assert!(
+        matches!(encoded, SchemaValue::Url { .. }),
+        "url::Url must encode to the rich Url schema value, got {encoded:?}"
+    );
+    assert_eq!(url::Url::from_value(&encoded).unwrap(), value);
+}
+
+#[test]
+fn path_schema_round_trip() {
+    let value = std::path::PathBuf::from("/tmp/golem/α.txt");
+    let encoded = value.to_value();
+    assert!(
+        matches!(encoded, SchemaValue::Path { .. }),
+        "PathBuf must encode to the rich Path schema value, got {encoded:?}"
+    );
+    assert_eq!(std::path::PathBuf::from_value(&encoded).unwrap(), value);
+}
+
+struct TestBytes;
+
+impl QuantityUnit for TestBytes {
+    fn type_id() -> golem_rust::schema::TypeId {
+        golem_rust::schema::TypeId::new("golem.it.test.TestBytes")
+    }
+    fn base_unit() -> &'static str {
+        "B"
+    }
+}
+
+#[test]
+fn quantity_schema_round_trip() {
+    let value = Quantity::<TestBytes>::new(123, 1, "B").unwrap();
+    let encoded = value.to_value();
+    assert!(
+        matches!(encoded, SchemaValue::Quantity(_)),
+        "Quantity must encode to the rich Quantity schema value, got {encoded:?}"
+    );
+    assert_eq!(Quantity::<TestBytes>::from_value(&encoded).unwrap(), value);
+}
+
+#[test]
+fn quantity_rejects_disallowed_unit() {
+    assert!(Quantity::<TestBytes>::new(1, 0, "kg").is_err());
 }

@@ -30,7 +30,7 @@ import * as Either from '../../../newTypes/either';
 import { mapTsTypeToResolvedGraph } from './resolvedMapper';
 import { ResolvedGraph } from './resolvedType';
 import { resolvedGraphToSchemaType } from './schemaType';
-import { SchemaGraph } from '../../schema-model';
+import { SchemaGraph, t } from '../../schema-model';
 import { TypeScope } from './scope';
 
 /** Memoized schema graphs for a config property type. Do not mutate. */
@@ -39,6 +39,11 @@ export interface CachedConfigSchema {
   readonly graph: ResolvedGraph;
   /** Wire projection, used for the typed config value envelope. */
   readonly schemaGraph: SchemaGraph;
+}
+
+export interface CachedSecretConfigSchema extends CachedConfigSchema {
+  /** Wire projection expected by `get-config-value`: secret<T> or option<secret<T>>. */
+  readonly secretSchemaGraph: SchemaGraph;
 }
 
 const cache: WeakMap<Type.Type, Map<string, CachedConfigSchema>> = new WeakMap();
@@ -85,4 +90,42 @@ export function cachedConfigSchema(
     byScope.set(key, entry);
   }
   return entry;
+}
+
+export function cachedSecretConfigSchema(
+  type: Type.Type,
+  scope: TypeScope,
+  onError: (err: string) => Error,
+  handleOptional = TypeScope.isQuestionMarkOptional(scope),
+  preservePayloadOptional = false,
+): CachedSecretConfigSchema {
+  const entry = cachedConfigSchema(
+    type,
+    handleOptional && !preservePayloadOptional ? requiredScope(scope) : scope,
+    onError,
+  );
+  const secretSchemaGraph = secretConfigSchemaGraph(entry.schemaGraph, handleOptional);
+  return { ...entry, secretSchemaGraph };
+}
+
+function requiredScope(scope: TypeScope): TypeScope {
+  switch (scope.scope) {
+    case 'interface':
+    case 'object':
+    case 'method':
+    case 'constructor':
+      return { ...scope, hasQuestionMark: false };
+    case 'others':
+      return scope;
+  }
+}
+
+export function secretConfigSchemaGraph(
+  innerGraph: SchemaGraph,
+  optional = innerGraph.root.body.tag === 'option',
+): SchemaGraph {
+  return {
+    defs: innerGraph.defs,
+    root: optional ? t.option(t.secret(innerGraph.root)) : t.secret(innerGraph.root),
+  };
 }

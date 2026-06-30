@@ -11,6 +11,7 @@ fn encode_single_parameter<T: IntoSchema>(
     encode_schema_value(&SchemaValue::Record {
         fields: vec![value.to_value()],
     })
+    .expect("failed to encode RPC parameter")
 }
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
@@ -551,11 +552,11 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 
         // Connect to the RpcCounter agent in the same component.
         // WasmRpc::new resolves the component_id from the registered agent type.
-        let rpc = WasmRpc::new("RpcCounter", &constructor, None, &[]);
+        let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
 
         let arg = encode_single_parameter(1u64);
 
-        match rpc.invoke_and_await("inc_by", &arg) {
+        match rpc.invoke_and_await("inc_by", arg) {
             Ok(_) => RpcCallOutcome::Ok,
             Err(e) => RpcCallOutcome::from(e),
         }
@@ -570,10 +571,10 @@ impl CancelTester for CancelTesterImpl {
 
     fn test_cancel_before_await(&self, counter_name: String) {
         let constructor_data = encode_single_parameter(counter_name);
-        let wasm_rpc = WasmRpc::new("RpcCounter", &constructor_data, None, &[]);
+        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
 
         let input = encode_single_parameter(1u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", &input);
+        let future = wasm_rpc.async_invoke_and_await("inc_by", input);
 
         // Cancel immediately before polling/awaiting
         future.cancel();
@@ -583,11 +584,11 @@ impl CancelTester for CancelTesterImpl {
 
     async fn test_cancel_completed(&self, counter_name: String) -> u64 {
         let constructor_data = encode_single_parameter(counter_name.clone());
-        let wasm_rpc = WasmRpc::new("RpcCounter", &constructor_data, None, &[]);
+        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
 
         // First, call inc_by to increment the counter
         let input = encode_single_parameter(5u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", &input);
+        let future = wasm_rpc.async_invoke_and_await("inc_by", input);
 
         // Wait for completion
         loop {
@@ -652,7 +653,7 @@ impl HttpPollingSelfScheduler for HttpPollingSelfSchedulerImpl {
             .unwrap();
         let _ = Client::new().send(req).await;
 
-        let mut me = HttpPollingSelfSchedulerClient::get(self.name.clone());
+        let me = HttpPollingSelfSchedulerClient::get(self.name.clone());
         me.schedule_tick(host, port, datetime_500ms_from_now());
     }
 }

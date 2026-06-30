@@ -17,10 +17,13 @@
 package golem.config
 
 import golem.schema.IntoSchema
+import golem.schema.{SchemaGraph, SchemaType, SchemaTypeBody, SecretSpec}
 import zio.blocks.schema.Schema
 import zio.test._
 
 object ConfigIntrospectionSpec extends ZIOSpecDefault {
+  private def secretGraph[A](implicit into: IntoSchema[A]): SchemaGraph =
+    SchemaGraph(into.graph.defs, SchemaType(SchemaTypeBody.SecretType(SecretSpec(into.graph.root))))
 
   case class SimpleConfig(name: String, count: Int)
   object SimpleConfig {
@@ -82,7 +85,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Secret,
             decls.head.path == Nil,
-            decls.head.valueType == IntoSchema[String].graph
+            decls.head.valueType == secretGraph[String]
           )
         }
       ),
@@ -121,7 +124,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.exists(d =>
               d.path == List("password") &&
                 d.source == AgentConfigSource.Secret &&
-                d.valueType == IntoSchema[String].graph
+                d.valueType == secretGraph[String]
             )
           )
         }

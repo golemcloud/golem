@@ -380,6 +380,7 @@ name = "golem-rust"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "ctor",
  "golem-rust-macro",
  "golem-schema",
@@ -388,6 +389,7 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-segmentation",
+ "url",
  "uuid",
  "wasi-logger",
  "wasip2",
@@ -445,11 +447,13 @@ dependencies = [
 name = "golem_it_agent_sdk_rust"
 version = "0.0.1"
 dependencies = [
+ "chrono",
  "futures",
  "golem-rust",
  "log",
  "serde",
  "serde_json",
+ "url",
  "wstd",
 ]
 

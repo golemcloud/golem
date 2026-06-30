@@ -1,12 +1,26 @@
-// Phase 3f tests for the schema-carrier quota-token impls.
+// Tests for the schema-carrier quota-token impls.
 //
-// The runtime `QuotaToken` methods (`reserve`/`split`/`merge`/`to_record`/
-// `from_record`/`drop`/`commit`) call WASM host imports and therefore cannot
-// run in a unit test — referencing them links the `golem:quota/types` host
-// import, which the test runtime cannot instantiate. (`to_value` calls
-// `to_record` and `from_value` calls `from_record`, so neither value-side path
-// is host-free either.) These tests cover the type-side capability schema
-// (`type_id` + `register_in`, both pure) and its WIT round-trip.
+// The runtime `QuotaToken` methods (`new`/`reserve`/`split`/`merge`/`drop` and
+// `Reservation::commit`/`drop`) call WASM host imports and therefore cannot run
+// in a unit test — calling them would trap the unbound `golem:quota/types` /
+// `golem:core/types` resource-drop imports the test runtime cannot provide.
+// These tests cover the type-side capability schema (`type_id` + `register_in`,
+// both pure) and the value-side `to-value` / `from-value` mapping, which move an
+// opaque handle around without touching any host import. The owned handle here
+// wraps a fabricated resource index; it is never dropped or sent to a host.
+
+///|
+/// Fabricate an opaque quota-token handle for host-free value-mapping tests. The
+/// generated `@types.QuotaToken` is a plain index wrapper, so a handle can be
+/// built without a host call as long as the resource is never dropped or passed
+/// to a host import.
+fn fake_token(index : Int) -> QuotaToken {
+  {
+    handle: @model.GuestQuotaTokenHandle::new(
+      @types.QuotaToken::QuotaToken(index),
+    ),
+  }
+}
 
 ///|
 test "QuotaToken schema is a single capability node with no defs" {
@@ -33,39 +47,30 @@ test "QuotaToken schema survives the WIT round-trip" {
 }
 
 ///|
-/// The value-side `to_value`/`from_value` impls cannot be exercised host-free
-/// (they call `to_record`/`from_record`), but the pure record↔payload mapping
-/// they delegate to can. These cover the signedness bridge and the
-/// non-negative-timestamp guard without any host import.
-test "record -> payload -> record round-trips for a valid timestamp" {
-  let record : @raw.QuotaTokenRecord = {
-    environment_id: @host.EnvironmentId::{ uuid: { high_bits: 7, low_bits: 9 } },
-    resource_name: "llm-tokens",
-    expected_use: 1000,
-    last_credit: -42,
-    last_credit_at: @wallClock.Datetime::{
-      seconds: 1_700_000_000,
-      nanoseconds: 500,
-    },
+test "QuotaToken lowers to an opaque quota-token schema value" {
+  let token = fake_token(0)
+  let sv = @schema.to_value_as(token)
+  guard sv is QuotaToken(_) else {
+    fail("expected a quota-token schema value, got \{sv}")
   }
-  let payload = quota_token_payload_from_record(record)
-  inspect(payload.last_credit_at.seconds, content="1700000000")
-  let back = quota_token_record_from_payload(payload)
-  assert_eq(back, record)
 }
 
 ///|
-test "payload -> record rejects a negative timestamp" {
-  let payload : @types.QuotaTokenValuePayload = {
-    environment_id: { uuid: { high_bits: 0, low_bits: 0 } },
-    resource_name: "r",
-    expected_use: 0,
-    last_credit: 0,
-    last_credit_at: { seconds: -1, nanoseconds: 0 },
-  }
-  let r : Result[@raw.QuotaTokenRecord, @schema.FromSchemaError] = try? quota_token_record_from_payload(
-    payload,
+test "QuotaToken lifts back from an opaque quota-token schema value" {
+  let handle = @model.GuestQuotaTokenHandle::new(
+    @types.QuotaToken::QuotaToken(0),
   )
-  guard r is Err(Custom(msg)) else { fail("expected Custom error") }
-  inspect(msg, content="quota token timestamp must be non-negative")
+  let sv : @model.SchemaValue = QuotaToken(handle)
+  let _ : QuotaToken = @schema.from_value_as(sv)
+}
+
+///|
+test "QuotaToken from_value rejects a non quota-token value" {
+  let sv : @model.SchemaValue = String("not a token")
+  let r : Result[QuotaToken, @schema.FromSchemaError] = try? @schema.from_value_as(
+    sv,
+  )
+  guard r is Err(ShapeMismatch(_)) else {
+    fail("expected a ShapeMismatch error")
+  }
 }

@@ -55,24 +55,25 @@ final case class WitUnionBranch(
   discriminator: DiscriminatorRule,
   metadata: MetadataEnvelope
 )
+final case class WitSecretSpec(inner: Int, category: Option[String])
 
 sealed trait WitSchemaTypeBody extends Product with Serializable
 object WitSchemaTypeBody {
   final case class RefType(defIndex: Int) extends WitSchemaTypeBody
 
-  case object BoolType   extends WitSchemaTypeBody
-  case object S8Type     extends WitSchemaTypeBody
-  case object S16Type    extends WitSchemaTypeBody
-  case object S32Type    extends WitSchemaTypeBody
-  case object S64Type    extends WitSchemaTypeBody
-  case object U8Type     extends WitSchemaTypeBody
-  case object U16Type    extends WitSchemaTypeBody
-  case object U32Type    extends WitSchemaTypeBody
-  case object U64Type    extends WitSchemaTypeBody
-  case object F32Type    extends WitSchemaTypeBody
-  case object F64Type    extends WitSchemaTypeBody
-  case object CharType   extends WitSchemaTypeBody
-  case object StringType extends WitSchemaTypeBody
+  case object BoolType                                                       extends WitSchemaTypeBody
+  final case class S8Type(restrictions: Option[NumericRestrictions] = None)  extends WitSchemaTypeBody
+  final case class S16Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class S32Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class S64Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class U8Type(restrictions: Option[NumericRestrictions] = None)  extends WitSchemaTypeBody
+  final case class U16Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class U32Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class U64Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class F32Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  final case class F64Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
+  case object CharType                                                       extends WitSchemaTypeBody
+  case object StringType                                                     extends WitSchemaTypeBody
 
   final case class RecordType(fields: Vector[WitNamedFieldType])  extends WitSchemaTypeBody
   final case class VariantType(cases: Vector[WitVariantCaseType]) extends WitSchemaTypeBody
@@ -95,7 +96,7 @@ object WitSchemaTypeBody {
 
   final case class UnionType(spec: WitUnionSpec) extends WitSchemaTypeBody
 
-  final case class SecretType(spec: SecretSpec)         extends WitSchemaTypeBody
+  final case class SecretType(spec: WitSecretSpec)      extends WitSchemaTypeBody
   final case class QuotaTokenType(spec: QuotaTokenSpec) extends WitSchemaTypeBody
 
   final case class FutureType(element: Option[Int]) extends WitSchemaTypeBody
@@ -114,7 +115,6 @@ final case class WitTextValuePayload(text: String, language: Option[String])
 final case class WitBinaryValuePayload(bytes: Vector[Byte], mimeType: Option[String])
 final case class WitDurationValuePayload(nanoseconds: Long)
 final case class WitUnionValuePayload(tag: String, body: Int)
-final case class WitSecretValuePayload(secretRef: String)
 
 sealed trait WitResultValuePayload extends Product with Serializable
 object WitResultValuePayload {
@@ -159,8 +159,14 @@ object WitSchemaValueNode {
 
   final case class UnionValue(payload: WitUnionValuePayload) extends WitSchemaValueNode
 
-  final case class SecretValue(payload: WitSecretValuePayload)    extends WitSchemaValueNode
-  final case class QuotaTokenValue(value: QuotaTokenValuePayload) extends WitSchemaValueNode
+  final case class SecretValue(handle: GuestSecretHandle) extends WitSchemaValueNode
+
+  /**
+   * Flat carrier for an owned `quota-token` resource (`schema-value-node ::
+   * quota-token-handle(own<quota-token>)`). Carries the opaque affine handle
+   * unchanged; the take-once transfer happens at the JS host boundary.
+   */
+  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends WitSchemaValueNode
 }
 
 final case class WitTypedSchemaValue(graph: WitSchemaGraph, value: WitSchemaValueTree)

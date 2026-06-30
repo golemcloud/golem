@@ -14,11 +14,13 @@
 
 mod agent_config;
 mod api;
+mod capabilities;
 mod custom_api;
 mod fork;
 mod otlp_plugin;
 mod plugins;
 mod quota;
+mod rich_types;
 mod worker;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
@@ -44,6 +46,8 @@ tag_suite!(plugins, group7);
 
 tag_suite!(custom_api, group10);
 tag_suite!(quota, group10);
+tag_suite!(rich_types, group10);
+tag_suite!(capabilities, group10);
 
 test_r::sequential_suite!(otlp_plugin);
 test_r::sequential_suite!(plugins);

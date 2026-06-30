@@ -183,6 +183,36 @@ object JsResultSpec {
 }
 
 @js.native
+sealed trait JsNumericBound extends js.Object {
+  def tag: String = js.native
+}
+object JsNumericBound {
+  def signed(value: js.BigInt): JsNumericBound    = JsShape.tagged[JsNumericBound]("signed", value)
+  def unsigned(value: js.BigInt): JsNumericBound  = JsShape.tagged[JsNumericBound]("unsigned", value)
+  def floatBits(value: js.BigInt): JsNumericBound = JsShape.tagged[JsNumericBound]("float-bits", value)
+}
+
+@js.native
+sealed trait JsNumericRestrictions extends js.Object {
+  def min: js.UndefOr[JsNumericBound] = js.native
+  def max: js.UndefOr[JsNumericBound] = js.native
+  def unit: js.UndefOr[String]        = js.native
+}
+object JsNumericRestrictions {
+  def apply(
+    min: js.UndefOr[JsNumericBound],
+    max: js.UndefOr[JsNumericBound],
+    unit: js.UndefOr[String]
+  ): JsNumericRestrictions = {
+    val o = js.Dynamic.literal()
+    min.foreach(v => o.updateDynamic("min")(v))
+    max.foreach(v => o.updateDynamic("max")(v))
+    unit.foreach(v => o.updateDynamic("unit")(v))
+    o.asInstanceOf[JsNumericRestrictions]
+  }
+}
+
+@js.native
 sealed trait JsTextRestrictions extends js.Object {
   def languages: js.UndefOr[js.Array[String]] = js.native
   def minLength: js.UndefOr[Int]              = js.native
@@ -351,11 +381,12 @@ object JsUnionSpec {
 
 @js.native
 sealed trait JsSecretSpec extends js.Object {
+  def inner: Int                   = js.native
   def category: js.UndefOr[String] = js.native
 }
 object JsSecretSpec {
-  def apply(category: js.UndefOr[String]): JsSecretSpec = {
-    val o = js.Dynamic.literal()
+  def apply(inner: Int, category: js.UndefOr[String]): JsSecretSpec = {
+    val o = js.Dynamic.literal("inner" -> inner)
     category.foreach(v => o.updateDynamic("category")(v))
     o.asInstanceOf[JsSecretSpec]
   }
@@ -382,17 +413,27 @@ sealed trait JsSchemaTypeBody extends js.Object {
 object JsSchemaTypeBody {
   def refType(defIndex: Int): JsSchemaTypeBody = JsShape.tagged[JsSchemaTypeBody]("ref-type", defIndex)
 
-  def boolType: JsSchemaTypeBody   = JsShape.tagOnly[JsSchemaTypeBody]("bool-type")
-  def s8Type: JsSchemaTypeBody     = JsShape.tagOnly[JsSchemaTypeBody]("s8-type")
-  def s16Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("s16-type")
-  def s32Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("s32-type")
-  def s64Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("s64-type")
-  def u8Type: JsSchemaTypeBody     = JsShape.tagOnly[JsSchemaTypeBody]("u8-type")
-  def u16Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("u16-type")
-  def u32Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("u32-type")
-  def u64Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("u64-type")
-  def f32Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("f32-type")
-  def f64Type: JsSchemaTypeBody    = JsShape.tagOnly[JsSchemaTypeBody]("f64-type")
+  def boolType: JsSchemaTypeBody                                     = JsShape.tagOnly[JsSchemaTypeBody]("bool-type")
+  def s8Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("s8-type", r)
+  def s16Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("s16-type", r)
+  def s32Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("s32-type", r)
+  def s64Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("s64-type", r)
+  def u8Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("u8-type", r)
+  def u16Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("u16-type", r)
+  def u32Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("u32-type", r)
+  def u64Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("u64-type", r)
+  def f32Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("f32-type", r)
+  def f64Type(r: js.UndefOr[JsNumericRestrictions]): JsSchemaTypeBody =
+    JsShape.taggedOptional[JsSchemaTypeBody]("f64-type", r)
   def charType: JsSchemaTypeBody   = JsShape.tagOnly[JsSchemaTypeBody]("char-type")
   def stringType: JsSchemaTypeBody = JsShape.tagOnly[JsSchemaTypeBody]("string-type")
 
@@ -533,42 +574,6 @@ object JsUnionValuePayload {
     js.Dynamic.literal("tag" -> tag, "body" -> body).asInstanceOf[JsUnionValuePayload]
 }
 
-@js.native
-sealed trait JsSecretValuePayload extends js.Object {
-  def secretRef: String = js.native
-}
-object JsSecretValuePayload {
-  def apply(secretRef: String): JsSecretValuePayload =
-    js.Dynamic.literal("secretRef" -> secretRef).asInstanceOf[JsSecretValuePayload]
-}
-
-@js.native
-sealed trait JsQuotaTokenValuePayload extends js.Object {
-  def environmentId: JsEnvironmentId = js.native
-  def resourceName: String           = js.native
-  def expectedUse: js.BigInt         = js.native
-  def lastCredit: js.BigInt          = js.native
-  def lastCreditAt: JsDatetime       = js.native
-}
-object JsQuotaTokenValuePayload {
-  def apply(
-    environmentId: JsEnvironmentId,
-    resourceName: String,
-    expectedUse: js.BigInt,
-    lastCredit: js.BigInt,
-    lastCreditAt: JsDatetime
-  ): JsQuotaTokenValuePayload =
-    js.Dynamic
-      .literal(
-        "environmentId" -> environmentId,
-        "resourceName"  -> resourceName,
-        "expectedUse"   -> expectedUse,
-        "lastCredit"    -> lastCredit,
-        "lastCreditAt"  -> lastCreditAt
-      )
-      .asInstanceOf[JsQuotaTokenValuePayload]
-}
-
 // === Schema value node / tree / typed value ===
 
 @js.native
@@ -624,10 +629,16 @@ object JsSchemaValueNode {
 
   def unionValue(p: JsUnionValuePayload): JsSchemaValueNode = JsShape.tagged[JsSchemaValueNode]("union-value", p)
 
-  def secretValue(p: JsSecretValuePayload): JsSchemaValueNode =
-    JsShape.tagged[JsSchemaValueNode]("secret-value", p)
-  def quotaTokenValue(p: JsQuotaTokenValuePayload): JsSchemaValueNode =
-    JsShape.tagged[JsSchemaValueNode]("quota-token-value", p)
+  def secretValue(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("secret-value", resource)
+
+  /**
+   * `schema-value-node :: quota-token-handle(own<quota-token>)`. The `val`
+   * carries the opaque owned `golem:core/types@2.0.0` `quota-token` resource as
+   * an unforgeable handle; it has no readable structure.
+   */
+  def quotaTokenHandle(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("quota-token-handle", resource)
 }
 
 @js.native

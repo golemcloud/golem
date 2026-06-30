@@ -1,0 +1,8 @@
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/common",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+}
+
+warnings = "-44"

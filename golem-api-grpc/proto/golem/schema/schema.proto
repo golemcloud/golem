@@ -58,16 +58,16 @@ message SchemaType {
 
     // Primitives
     golem.common.Empty bool_type = 3;
-    golem.common.Empty s8_type = 4;
-    golem.common.Empty s16_type = 5;
-    golem.common.Empty s32_type = 6;
-    golem.common.Empty s64_type = 7;
-    golem.common.Empty u8_type = 8;
-    golem.common.Empty u16_type = 9;
-    golem.common.Empty u32_type = 10;
-    golem.common.Empty u64_type = 11;
-    golem.common.Empty f32_type = 12;
-    golem.common.Empty f64_type = 13;
+    NumericRestrictions s8_type = 4;
+    NumericRestrictions s16_type = 5;
+    NumericRestrictions s32_type = 6;
+    NumericRestrictions s64_type = 7;
+    NumericRestrictions u8_type = 8;
+    NumericRestrictions u16_type = 9;
+    NumericRestrictions u32_type = 10;
+    NumericRestrictions u64_type = 11;
+    NumericRestrictions f32_type = 12;
+    NumericRestrictions f64_type = 13;
     golem.common.Empty char_type = 14;
     golem.common.Empty string_type = 15;
 
@@ -162,6 +162,26 @@ message ResultType {
   SchemaType err = 2;
 }
 
+// A numeric bound usable across every numeric representation. Float bounds
+// carry canonical IEEE-754 f64 bits (NaN/inf rejected, -0.0 normalized).
+message NumericBound {
+  oneof bound {
+    int64 signed = 1;
+    uint64 unsigned = 2;
+    uint64 float_bits = 3;
+  }
+}
+
+// Inline numeric refinement. A present message with no fields set decodes to
+// `None` (the empty restriction set is never kept as `Some`). `unit` is
+// schema/help metadata only.
+message NumericRestrictions {
+  // Absent min/max (message not set) means unbounded on that side.
+  NumericBound min = 1;
+  NumericBound max = 2;
+  optional string unit = 3;
+}
+
 message TextRestrictions {
   // Absent `languages` means unrestricted.
   StringList languages = 1;
@@ -245,6 +265,7 @@ message FieldDiscriminator {
 
 message SecretSpec {
   optional string category = 1;
+  SchemaType inner = 2;
 }
 
 message QuotaTokenSpec {
@@ -388,7 +409,11 @@ message UnionValue {
 }
 
 message SecretValue {
-  string secret_ref = 1;
+  golem.common.UUID secret_id = 1;
+  StringList config_key = 2;
+  uint64 version = 3;
+  DatetimeValue resolved_at = 4;
+  optional string category = 5;
 }
 
 message QuotaTokenValue {

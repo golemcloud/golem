@@ -1,7 +1,7 @@
 import {
   "golemcloud/golem_sdk/interface/golem/api/host" @raw,
-  "golemcloud/golem_sdk/interface/golem/api/retry" @retry,
-  "golemcloud/golem_sdk/interface/golem/core/types" @types,
+  "golemcloud/golem_sdk/interface/golem/api/retry",
+  "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
   "moonbitlang/core/debug",
 }
