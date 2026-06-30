@@ -61,6 +61,59 @@ describe('fluent Zod walker', () => {
     expect(obj.fromValue(obj.toValue(value))).toEqual(value);
   });
 
+  it('maps tuples element-wise', () => {
+    const tup = compileSchema(z.tuple([z.string(), z.number(), z.boolean()]));
+    expect(tup.graph.root.body).toMatchObject({ tag: 'tuple' });
+    const value = ['a', 1, true];
+    expect(tup.fromValue(tup.toValue(value))).toEqual(value);
+  });
+
+  it('maps string enums to enum nodes by case index', () => {
+    const en = compileSchema(z.enum(['red', 'green', 'blue']));
+    expect(en.graph.root.body).toMatchObject({ tag: 'enum', cases: ['red', 'green', 'blue'] });
+    expect(en.toValue('green')).toEqual({ tag: 'enum', caseIndex: 1 });
+    expect(en.fromValue({ tag: 'enum', caseIndex: 2 })).toBe('blue');
+  });
+
+  it('maps a literal to its base primitive', () => {
+    const lit = compileSchema(z.literal('ok'));
+    expect(lit.graph.root.body).toMatchObject({ tag: 'string' });
+    expect(lit.fromValue(lit.toValue('ok'))).toBe('ok');
+  });
+
+  it('maps z.record to a map node', () => {
+    const rec = compileSchema(z.record(z.string(), z.number()));
+    expect(rec.graph.root.body).toMatchObject({ tag: 'map' });
+    const value = { a: 1, b: 2 };
+    expect(rec.fromValue(rec.toValue(value))).toEqual(value);
+  });
+
+  it('maps z.map to a map node (arbitrary keys)', () => {
+    const m = compileSchema(z.map(z.string(), z.number()));
+    expect(m.graph.root.body).toMatchObject({ tag: 'map' });
+    const value = new Map([
+      ['a', 1],
+      ['b', 2],
+    ]);
+    expect(m.fromValue(m.toValue(value))).toEqual(value);
+  });
+
+  it('maps a discriminated union to a variant', () => {
+    const du = compileSchema(
+      z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('a'), x: z.string() }),
+        z.object({ kind: z.literal('b'), y: z.number() }),
+      ]),
+    );
+    expect(du.graph.root.body).toMatchObject({ tag: 'variant' });
+    const a = { kind: 'a' as const, x: 'hi' };
+    const b = { kind: 'b' as const, y: 7 };
+    expect(du.toValue(a)).toMatchObject({ tag: 'variant', caseIndex: 0 });
+    expect(du.fromValue(du.toValue(a))).toEqual(a);
+    expect(du.toValue(b)).toMatchObject({ tag: 'variant', caseIndex: 1 });
+    expect(du.fromValue(du.toValue(b))).toEqual(b);
+  });
+
   it('rejects non-Standard-Schema values', () => {
     expect(() => compileSchema({} as never)).toThrow(/Standard Schema/);
   });
@@ -121,5 +174,31 @@ describe('fluent defineAgent', () => {
 
     // The initiator was registered so the guest can instantiate the agent.
     expect(AgentInitiatorRegistry.exists('counter')).toBe(true);
+  });
+
+  it('accepts an async init and exposes id/principal helpers on `this`', () => {
+    const asyncCounter = defineAgent({
+      name: 'asyncCounter',
+      id: { name: z.string() },
+      methods: {
+        whoami: method({ input: {}, returns: z.string() }),
+      },
+    });
+
+    asyncCounter.implement({
+      // async `init` is now supported (may return State | Promise<State>).
+      init: async () => ({ count: 0 }),
+      methods: {
+        whoami() {
+          // Identity + principal helpers are available on `this`.
+          const id = this.getId();
+          void this.getPhantomId();
+          void this.getPrincipal();
+          return id.value;
+        },
+      },
+    });
+
+    expect(AgentInitiatorRegistry.exists('asyncCounter')).toBe(true);
   });
 });

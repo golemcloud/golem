@@ -43,7 +43,8 @@ type HandlerFor<M> =
 /** SDK helpers available on a handler's `this` (alongside state). */
 export interface FluentAgentThis {
   getId(): ParsedAgentId;
-  phantomId(): Uuid | undefined;
+  getPhantomId(): Uuid | undefined;
+  getPrincipal(): Principal;
 }
 
 export interface InitContext<Id extends IdRecord> {
@@ -57,7 +58,7 @@ export interface AgentImplementation<
   Methods extends MethodsRecord,
   State extends object,
 > {
-  init: (ctx: InitContext<Id>) => State;
+  init: (ctx: InitContext<Id>) => State | Promise<State>;
   /** One handler per declared method; `this` is bound to `State` + SDK helpers. */
   methods: { [K in keyof Methods]: HandlerFor<Methods[K]> } & ThisType<State & FluentAgentThis>;
 }

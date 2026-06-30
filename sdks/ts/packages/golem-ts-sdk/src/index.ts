@@ -139,9 +139,9 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = initiator.initiateFromWit
+  const initiateResult = await (initiator.initiateFromWit
     ? initiator.initiateFromWit(input, principal)
-    : initiator.initiate(schemaValueFromWit(input), principal);
+    : initiator.initiate(schemaValueFromWit(input), principal));
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = initiateResult.val;
@@ -448,7 +448,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = initiator.initiate(agentParameters, principal);
+  const initiateResult = await initiator.initiate(agentParameters, principal);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;

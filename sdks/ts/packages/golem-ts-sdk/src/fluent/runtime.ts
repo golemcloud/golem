@@ -345,7 +345,7 @@ export function registerAgentInitiator(
   impl: AgentImplementation<IdRecord, MethodsRecord, object>,
 ): void {
   AgentInitiatorRegistry.register(reg.className, {
-    initiate(constructorInput: SchemaValue, principal: HostPrincipal) {
+    async initiate(constructorInput: SchemaValue, principal: HostPrincipal) {
       let idRecord: Record<string, unknown>;
       try {
         const fields = (constructorInput as Extract<SchemaValue, { tag: 'record' }>).fields;
@@ -372,28 +372,25 @@ export function registerAgentInitiator(
         };
       }
       const [, , phantomId] = agentId.parsed();
+      const sdkPrincipal = sdkPrincipalFromHost(principal);
 
+      // `init` may be synchronous or async (return a Promise); awaiting a plain
+      // value is a no-op, so both forms work. The guest `initialize`/load-snapshot
+      // paths await the initiate result.
       let state: object;
       try {
-        state = impl.init({ id: idRecord as never, principal: sdkPrincipalFromHost(principal), phantomId });
+        state = await impl.init({ id: idRecord as never, principal: sdkPrincipal, phantomId });
       } catch (e) {
         return {
           tag: 'err',
           val: createCustomError(`Agent ${reg.name} initialization failed: ${errorMessage(e)}`),
         };
       }
-      if (state !== null && typeof (state as { then?: unknown }).then === 'function') {
-        return {
-          tag: 'err',
-          val: createCustomError(
-            `Agent ${reg.name}: async \`init\` is not yet supported in the fluent SDK; return state synchronously`,
-          ),
-        };
-      }
 
       const instance: Record<string, unknown> = { ...(state as Record<string, unknown>) };
       instance.getId = () => agentId;
       instance.getPhantomId = () => phantomId;
+      instance.getPrincipal = () => sdkPrincipal;
 
       return {
         tag: 'ok',
