@@ -36,15 +36,22 @@ use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use reqwest::header::{CACHE_CONTROL, CONTENT_LENGTH, ETAG, HeaderValue, IF_NONE_MATCH, VARY};
-use test_r::test_dep;
+use test_r::{define_matrix_dimension, test_dep};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("postgres")]
+    EnvBasedTestDependencies
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite")]
+    EnvBasedTestDependencies
+);
 
 const AGENT_PATH_PREFIX: &str = "/readonly-agents/h-agent";
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,
         vec![(
@@ -57,6 +64,27 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     .await
     .unwrap()
 }
+
+#[test_dep(scope = PerWorker)]
+async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "postgres")]
+async fn test_context_postgres(
+    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
+async fn test_context_sqlite(
+    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
 fn header_str(value: Option<&HeaderValue>) -> Option<&str> {
     value.and_then(|v| v.to_str().ok())
@@ -77,7 +105,9 @@ fn header_has_token(header_value: &str, token: &str) -> bool {
 
 #[test]
 #[tracing::instrument]
-async fn h1_get_returns_etag_and_cache_control(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn h1_get_returns_etag_and_cache_control(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join(&format!("{AGENT_PATH_PREFIX}/count"))?)
@@ -113,7 +143,9 @@ async fn h1_get_returns_etag_and_cache_control(agent: &HttpTestContext) -> anyho
 
 #[test]
 #[tracing::instrument]
-async fn h2_if_none_match_returns_304(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn h2_if_none_match_returns_304(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     // Use a distinct path so this test doesn't interfere with H3's writes.
     let path = "/readonly-agents/h2-agent/count";
 
@@ -162,7 +194,9 @@ async fn h2_if_none_match_returns_304(agent: &HttpTestContext) -> anyhow::Result
 
 #[test]
 #[tracing::instrument]
-async fn h3_etag_invalidates_after_write(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn h3_etag_invalidates_after_write(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let path = "/readonly-agents/h3-agent/count";
     let increment_path = "/readonly-agents/h3-agent/increment";
 
@@ -215,7 +249,7 @@ async fn h3_etag_invalidates_after_write(agent: &HttpTestContext) -> anyhow::Res
 #[test]
 #[tracing::instrument]
 async fn h4_principal_unaware_uses_public_cache_directive(
-    agent: &HttpTestContext,
+    #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
         .client
@@ -245,7 +279,7 @@ async fn h4_principal_unaware_uses_public_cache_directive(
 #[test]
 #[tracing::instrument]
 async fn h4_principal_aware_uses_private_cache_directive_and_vary(
-    agent: &HttpTestContext,
+    #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
         .client
@@ -281,7 +315,9 @@ async fn h4_principal_aware_uses_private_cache_directive_and_vary(
 
 #[test]
 #[tracing::instrument]
-async fn h5_ttl_method_returns_max_age(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn h5_ttl_method_returns_max_age(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/readonly-agents/h5-agent/ttl-count")?)
