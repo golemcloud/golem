@@ -32,14 +32,13 @@ harness = false
 name = "schema_reexport"
 harness = false
 
-[[test]]
+[[bench]]
 name = "agent_registry_bench"
-path = "benches/agent_registry_bench.rs"
 harness = false
+required-features = ["export_golem_agentic"]
 
-[[test]]
+[[bench]]
 name = "eager_vs_lazy_format_bench"
-path = "benches/eager_vs_lazy_format_bench.rs"
 harness = false
 
 [[bench]]

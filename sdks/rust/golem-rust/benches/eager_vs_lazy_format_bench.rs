@@ -19,13 +19,10 @@
 //!   result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", name, e))  // lazy: no alloc on Ok
 //!
 //! Run with:
-//!   cd sdks/rust && cargo test -p golem-rust --test eager_vs_lazy_format_bench -- --nocapture
-
-test_r::enable!();
+//!   cd sdks/rust && cargo bench -p golem-rust --bench eager_vs_lazy_format_bench
 
 use std::hint::black_box;
 use std::time::Instant;
-use test_r::test;
 
 fn bench_loop<F: Fn() -> u64>(label: &str, iterations: usize, f: F) -> std::time::Duration {
     // Warmup
@@ -60,8 +57,7 @@ fn lazy_format(result: Result<u64, String>, method_name: &str) -> u64 {
     result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", method_name, e))
 }
 
-#[test]
-fn bench_eager_vs_lazy_format() {
+fn main() {
     const ITERATIONS: usize = 10_000_000;
 
     println!("\n========================================");
