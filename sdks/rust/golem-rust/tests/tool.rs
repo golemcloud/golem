@@ -194,6 +194,57 @@ mod tests {
         assert_eq!(cases[1].name, "io");
     }
 
+    #[test]
+    fn grep_canonical_input_record_order_matches_packed_values() {
+        let tool = descriptor::<GrepImpl>();
+        let command_index = tool
+            .command_index_by_path(&[])
+            .expect("implicit grep body is addressed by the empty path");
+        let fields = tool.canonical_input_fields(command_index);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["case-sensitive", "pattern", "files"],
+            "canonical order is inherited/global flags before fixed positionals and tail values",
+        );
+
+        let input = encoded_input(
+            &tool,
+            &[],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("needle".to_string()),
+                golem_rust::SchemaValue::List {
+                    elements: vec![
+                        golem_rust::SchemaValue::String("src/lib.rs".to_string()),
+                        golem_rust::SchemaValue::String("tests/tool.rs".to_string()),
+                    ],
+                },
+            ],
+        );
+        let decoded = golem_rust::decode_typed_schema_value(&input).expect("input decodes");
+        let golem_rust::SchemaValue::Record { fields } = decoded.value() else {
+            panic!("typed tool input must be encoded as a positional record");
+        };
+
+        assert_eq!(fields[0], golem_rust::SchemaValue::Bool(true));
+        assert_eq!(
+            fields[1],
+            golem_rust::SchemaValue::String("needle".to_string())
+        );
+        assert_eq!(
+            fields[2],
+            golem_rust::SchemaValue::List {
+                elements: vec![
+                    golem_rust::SchemaValue::String("src/lib.rs".to_string()),
+                    golem_rust::SchemaValue::String("tests/tool.rs".to_string()),
+                ],
+            }
+        );
+    }
+
     // --- subtree: git + remote ---------------------------------------------
 
     /// Manage remotes.
@@ -335,6 +386,48 @@ mod tests {
         );
 
         tool.try_to_tool().expect("git tool is valid");
+    }
+
+    #[test]
+    fn git_remote_add_canonical_input_record_starts_with_inherited_global() {
+        let tool = __golem_tool_descriptor_for_Git(&mut ToolBuildCtx::new())
+            .expect("git descriptor builds");
+        let command_index = tool
+            .command_index_by_path(&["remote".to_string(), "add".to_string()])
+            .expect("remote add command exists");
+        let fields = tool.canonical_input_fields(command_index);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["verbose", "name", "url"],
+            "grafted subtree leaf inputs must be encoded as inherited globals followed by child body fields",
+        );
+
+        let input = encoded_input(
+            &tool,
+            &["remote", "add"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("origin".to_string()),
+                golem_rust::SchemaValue::String("https://example.invalid/repo.git".to_string()),
+            ],
+        );
+        let decoded = golem_rust::decode_typed_schema_value(&input).expect("input decodes");
+        let golem_rust::SchemaValue::Record { fields } = decoded.value() else {
+            panic!("typed tool input must be encoded as a positional record");
+        };
+
+        assert_eq!(fields[0], golem_rust::SchemaValue::Bool(true));
+        assert_eq!(
+            fields[1],
+            golem_rust::SchemaValue::String("origin".to_string())
+        );
+        assert_eq!(
+            fields[2],
+            golem_rust::SchemaValue::String("https://example.invalid/repo.git".to_string())
+        );
     }
 
     // --- multi-level subtree: inherited-global suppression at depth ---------
@@ -907,6 +1000,522 @@ enum EmptyPayloadError {
         assert!(
             output.status.success(),
             "zero-field tuple/struct ToolError variants are parsed as payload-less and should compile\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn generated_tool_client_surface_shapes_compile() {
+        let output = cargo_check_tool_crate(
+            "typed-tool-client-surface-shapes",
+            r#"
+use std::convert::Infallible;
+use std::future::Future;
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum GrepError {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    BadPattern(String),
+}
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait Grep {
+    #[arg(case_sensitive = "global", short = 'i', kind = "flag")]
+    #[arg(pattern = "positional")]
+    #[arg(files = "tail", accepts_stdio = true)]
+    fn grep(
+        &self,
+        case_sensitive: bool,
+        pattern: String,
+        files: Vec<String>,
+    ) -> Result<Vec<String>, GrepError>;
+}
+
+#[tool_definition]
+trait StreamTool {
+    fn copy(
+        &self,
+        input: golem_rust::wasip2::io::streams::InputStream,
+        stdout: golem_rust::wasip2::io::streams::OutputStream,
+    ) -> Result<String, RemoteError>;
+}
+
+#[tool_definition]
+trait PlainReturnTool {
+    fn version(&self) -> String;
+}
+
+#[tool_definition]
+trait Remote {
+    fn add(&self, verbose: bool, name: String, url: String) -> Result<(), RemoteError>;
+}
+
+struct RemoteSubtree;
+
+#[tool_definition]
+trait Git {
+    #[command(subtree = Remote)]
+    fn remote(&self, verbose: bool) -> RemoteSubtree;
+}
+
+fn assert_future_output<F, T>(_future: F)
+where
+    F: Future<Output = T>,
+{
+}
+
+fn check_grep_client_shape() {
+    let client = GrepClient::default();
+    assert_future_output::<_, Result<Vec<String>, golem_rust::agentic::ToolError<GrepError>>>(
+        client.grep(true, "needle".to_string(), vec!["src/lib.rs".to_string()]),
+    );
+}
+
+fn check_plain_return_uses_infallible_tool_error() {
+    let client = PlainReturnToolClient::default();
+    assert_future_output::<_, Result<String, golem_rust::agentic::ToolError<Infallible>>>(
+        client.version(),
+    );
+}
+
+fn check_stdout_is_returned_not_passed(
+    client: &StreamToolClient,
+    input: golem_rust::wasip2::io::streams::InputStream,
+) {
+    assert_future_output::<_, Result<(String, golem_rust::wasip2::io::streams::OutputStream), golem_rust::agentic::ToolError<RemoteError>>>(
+        client.copy(input),
+    );
+}
+
+fn check_subtree_client_shape() {
+    let remote = GitClient::default().remote(true);
+    assert_future_output::<_, Result<(), golem_rust::agentic::ToolError<RemoteError>>>(
+        remote.add(
+            "origin".to_string(),
+            "https://example.invalid/repo.git".to_string(),
+        ),
+    );
+
+    assert_future_output::<_, Result<(), golem_rust::agentic::ToolError<RemoteError>>>(
+        RemoteClient::default().add(
+            true,
+            "upstream".to_string(),
+            "https://example.invalid/upstream.git".to_string(),
+        ),
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "typed tool clients should expose awaitable methods with typed errors, stdout-in-result, stdin params, and subtree clients; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_alias_captured_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-alias-captured-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global", aliases = ["format"])]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_alias() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child parameters captured by an inherited global alias, while standalone child clients keep the full signature\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_non_first_alias_captured_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-non-first-alias-captured-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global", aliases = ["level", "format"])]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_non_first_alias() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child parameters captured by any inherited global alias, not only the first alias, while standalone child clients keep the full signature\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_non_prefix_captured_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-non-prefix-captured-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, name: String, verbose: bool) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[command(subtree = Child)]
+    fn child(&self, verbose: bool) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_non_prefix_global() {
+    let child = ParentClient::default().child(true);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf("alice".to_string(), true);
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit inherited globals regardless of where the matching child parameter appears, while standalone child clients keep the full signature\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_wide_child_surface_still_omits_captured_global() {
+        let mut source = String::from("use golem_rust::tool_definition;\n\n");
+        source.push_str("#[tool_definition]\ntrait Child {\n");
+        source.push_str("    fn leaf(&self,\n");
+        for i in 0..17 {
+            source.push_str(&format!("        g{i}: String,\n"));
+        }
+        source.push_str("        value: String,\n    ) -> String;\n}\n\n");
+        source.push_str("struct ChildSubtree;\n\n");
+        source.push_str("#[tool_definition]\ntrait Parent {\n");
+        source.push_str("    #[arg(g0 = \"global\")]\n");
+        source.push_str("    #[command(subtree = Child)]\n");
+        source.push_str("    fn child(&self, g0: String) -> ChildSubtree;\n");
+        source.push_str("}\n\n");
+        source.push_str("fn check_grafted_client_uses_captured_global() {\n");
+        source.push_str("    let child = ParentClient::default().child(\"zero\".to_string());\n");
+        source.push_str("    let _ = child.leaf(\n");
+        for i in 1..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n\n");
+        source.push_str("fn check_standalone_child_keeps_full_signature() {\n");
+        source.push_str("    let _ = ChildClient::default().leaf(\n");
+        for i in 0..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n");
+
+        let output = cargo_check_tool_crate(
+            "subtree-client-wide-child-surface-omits-captured-global",
+            &source,
+        );
+
+        assert!(
+            output.status.success(),
+            "bounded omitted-surface generation should still compile valid grafted clients for wide child surfaces and omit the captured inherited global\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_wide_child_surface_omits_two_captured_globals() {
+        let mut source = String::from("use golem_rust::tool_definition;\n\n");
+        source.push_str("#[tool_definition]\ntrait Child {\n");
+        source.push_str("    fn leaf(&self,\n");
+        for i in 0..17 {
+            source.push_str(&format!("        g{i}: String,\n"));
+        }
+        source.push_str("        value: String,\n    ) -> String;\n}\n\n");
+        source.push_str("struct ChildSubtree;\n\n");
+        source.push_str("#[tool_definition]\ntrait Parent {\n");
+        source.push_str("    #[arg(g0 = \"global\")]\n");
+        source.push_str("    #[arg(g1 = \"global\")]\n");
+        source.push_str("    #[command(subtree = Child)]\n");
+        source.push_str("    fn child(&self, g0: String, g1: String) -> ChildSubtree;\n");
+        source.push_str("}\n\n");
+        source.push_str("fn check_grafted_client_uses_captured_globals() {\n");
+        source.push_str("    let child = ParentClient::default().child(\"zero\".to_string(), \"one\".to_string());\n");
+        source.push_str("    let _ = child.leaf(\n");
+        for i in 2..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n\n");
+        source.push_str("fn check_standalone_child_keeps_full_signature() {\n");
+        source.push_str("    let _ = ChildClient::default().leaf(\n");
+        for i in 0..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n");
+
+        let output = cargo_check_tool_crate(
+            "subtree-client-wide-child-surface-omits-two-captured-globals",
+            &source,
+        );
+
+        assert!(
+            output.status.success(),
+            "bounded omitted-surface generation should still compile valid grafted clients for wide child surfaces and omit all captured inherited globals\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_reversed_order_captured_globals() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-reversed-order-captured-globals",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, g0: String, g1: String, value: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(g1 = "global")]
+    #[arg(g0 = "global")]
+    #[command(subtree = Child)]
+    fn child(&self, g1: String, g0: String) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_globals_regardless_of_parent_order() {
+    let child = ParentClient::default().child("one".to_string(), "zero".to_string());
+    let _ = child.leaf("value".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(
+        "zero".to_string(),
+        "one".to_string(),
+        "value".to_string(),
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit all inherited globals regardless of whether the parent captures them in child parameter order; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_exposes_nested_subtree_methods() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-exposes-nested-subtree-methods",
+            r#"
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait Inner {
+    fn leaf(&self, verbose: bool, name: String) -> Result<(), RemoteError>;
+}
+
+struct InnerSubtree;
+struct MidSubtree;
+
+#[tool_definition]
+trait Mid {
+    #[command(subtree = Inner)]
+    fn inner(&self) -> InnerSubtree;
+}
+
+#[tool_definition]
+trait Outer {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+fn check_nested_grafted_client_shape() {
+    let mid = OuterClient::default().mid(true);
+    let inner = mid.inner();
+    let _ = inner.leaf("alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "typed clients for valid nested subtree descriptors should expose nested subtree wrapper methods and keep inherited captures across levels\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn subtree_client_reused_nested_subtree_wrappers_do_not_duplicate_impls() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-reused-nested-subtree-wrappers",
+            r#"
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait Inner {
+    fn leaf(&self, verbose: bool, name: String) -> Result<(), RemoteError>;
+}
+
+struct InnerSubtree;
+struct MidSubtree;
+
+#[tool_definition]
+trait Mid {
+    #[command(subtree = Inner)]
+    fn inner(&self) -> InnerSubtree;
+}
+
+#[tool_definition]
+trait FirstOuter {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+#[tool_definition]
+trait SecondOuter {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+fn check_reused_nested_grafted_client_shape() {
+    let first_inner = FirstOuterClient::default().mid(true).inner();
+    let _ = first_inner.leaf("alice".to_string());
+
+    let second_inner = SecondOuterClient::default().mid(false).inner();
+    let _ = second_inner.leaf("bob".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "reusing the same intermediate subtree under multiple parents must not emit duplicate nested wrapper impls\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_supports_sparse_nested_capture_set() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-sparse-nested-capture-set",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Inner {
+    fn leaf(&self, verbose: bool, name: String, mode: u32) -> String;
+}
+
+struct InnerSubtree;
+struct MidSubtree;
+
+#[tool_definition]
+trait Mid {
+    #[command(subtree = Inner)]
+    fn inner(&self, mode: u32) -> InnerSubtree;
+}
+
+#[tool_definition]
+trait Outer {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+fn check_sparse_nested_capture_set() {
+    let mid = OuterClient::default().mid(true);
+    let inner = mid.inner(7);
+    let _ = inner.leaf("alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "nested grafted typed clients should expose leaf methods when inherited globals captured at different levels form a sparse child-parameter subset; cargo check failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );

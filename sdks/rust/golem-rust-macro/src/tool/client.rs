@@ -28,8 +28,15 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         .commands
         .iter()
         .map(|cmd| synthesize_method(ir, cmd, &tool_name));
+    let subtree_wrappers = ir
+        .commands
+        .iter()
+        .filter_map(|cmd| synthesize_subtree_wrapper(ir, cmd));
+    let subtree_macro = synthesize_subtree_client_macro(ir, &tool_name);
 
     quote! {
+        #(#subtree_wrappers)*
+
         pub struct #client_ident {
             rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc,
             root_tool_name: ::std::string::String,
@@ -74,14 +81,25 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
                 Self::#constructor_ident()
             }
         }
+
+        #subtree_macro
     }
 }
 
 fn synthesize_method(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &str) -> TokenStream {
     if let Some(subtree) = &cmd.subtree {
-        return synthesize_subtree_method(ir, cmd, subtree, tool_name);
+        return synthesize_subtree_method(ir, cmd, subtree, tool_name, &[]);
     }
 
+    synthesize_leaf_method(ir, cmd, tool_name, &[])
+}
+
+fn synthesize_leaf_method(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    tool_name: &str,
+    omitted_names: &[String],
+) -> TokenStream {
     let method_ident = &cmd.method_ident;
     let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
     let command_name = command_name(cmd, tool_name);
@@ -94,13 +112,13 @@ fn synthesize_method(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &str) ->
         }
     };
     let inherited_params = inherited_root_params(ir, cmd, tool_name);
-    let input_args = kept_client_args(cmd, &inherited_params, false);
+    let input_args = kept_client_args_omitting(cmd, &inherited_params, false, omitted_names);
     let (stdin_ident, has_stdout) = stream_idents(cmd);
     let stdin_expr = match stdin_ident {
         Some(ident) => quote! { ::std::option::Option::Some(#ident) },
         None => quote! { ::std::option::Option::None },
     };
-    let value_inserts = value_inserts(ir, cmd, &inherited_params, tool_name);
+    let value_inserts = value_inserts(ir, cmd, &inherited_params, tool_name, omitted_names);
     let result_ty = client_result_type(&cmd.output, has_stdout);
     let decode_result = decode_client_result(&cmd.output, has_stdout);
     let invoke = invoke_call(&cmd.output, stdin_expr);
@@ -167,8 +185,9 @@ fn synthesize_method(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &str) ->
 fn synthesize_subtree_method(
     ir: &ToolDefinitionIr,
     cmd: &CommandIr,
-    subtree: &crate::tool::ir::SubtreeIr,
+    _subtree: &crate::tool::ir::SubtreeIr,
     tool_name: &str,
+    omitted_names: &[String],
 ) -> TokenStream {
     let method_ident = &cmd.method_ident;
     let command_name = cmd
@@ -176,33 +195,263 @@ fn synthesize_subtree_method(
         .clone()
         .unwrap_or_else(|| to_kebab_case(&cmd.method_ident.to_string()));
     let inherited_params = inherited_root_params(ir, cmd, tool_name);
-    let input_args = kept_client_args(cmd, &inherited_params, true);
-    let value_prefixes = prefix_value_builders(ir, cmd, &inherited_params, tool_name);
-    let child_client_path = client_path(&subtree.path);
+    let input_args = kept_client_args_omitting(cmd, &inherited_params, true, omitted_names);
+    let value_prefixes =
+        prefix_value_builders(ir, cmd, &inherited_params, tool_name, omitted_names);
+    let wrapper_ident = subtree_wrapper_ident(ir, cmd);
+    let child_omitted = subtree_child_omitted_surfaces(cmd, omitted_names);
+    let child_omitted_tag = omitted_tag(quote! { 0 }, &child_omitted);
+    let child_omitted_ty = omitted_type(quote! { () }, &child_omitted);
     let _ = tool_name;
 
     quote! {
-        pub fn #method_ident(&self, #(#input_args),*) -> #child_client_path {
+        pub fn #method_ident(&self, #(#input_args),*) -> #wrapper_ident<{ #child_omitted_tag }, #child_omitted_ty> {
             let mut __command_path = self.command_path.clone();
             __command_path.push(#command_name.to_string());
             let __schema_path = ::std::vec::Vec::new();
             let mut __inherited_prefix = self.inherited_prefix.clone();
             #(#value_prefixes)*
-            <#child_client_path as golem_rust::agentic::ToolClientWithParts>::__golem_tool_client_with_parts(self.root_tool_name.clone(), __command_path, __schema_path, __inherited_prefix)
+            #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
+                rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&self.root_tool_name),
+                root_tool_name: self.root_tool_name.clone(),
+                command_path: __command_path,
+                schema_path: __schema_path,
+                inherited_prefix: __inherited_prefix,
+                _omitted: ::std::marker::PhantomData,
+            }
         }
     }
 }
 
-fn kept_client_args(
+fn synthesize_subtree_method_with_context(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    _subtree: &crate::tool::ir::SubtreeIr,
+    tool_name: &str,
+    omitted_names: &[String],
+    omitted_tag: TokenStream,
+    omitted_ty: TokenStream,
+) -> TokenStream {
+    let method_ident = &cmd.method_ident;
+    let command_name = cmd
+        .name_override
+        .clone()
+        .unwrap_or_else(|| to_kebab_case(&cmd.method_ident.to_string()));
+    let inherited_params = inherited_root_params(ir, cmd, tool_name);
+    let input_args = kept_client_args_omitting(cmd, &inherited_params, true, omitted_names);
+    let value_prefixes =
+        prefix_value_builders(ir, cmd, &inherited_params, tool_name, omitted_names);
+    let wrapper_ident = subtree_wrapper_ident(ir, cmd);
+    let new_omitted = subtree_new_omitted_surfaces(cmd, omitted_names);
+    let child_omitted_tag = contextual_omitted_tag(omitted_tag, cmd, &new_omitted);
+    let child_omitted_ty = omitted_type(quote! { (#omitted_ty, fn() -> Self) }, &new_omitted);
+    let _ = tool_name;
+
+    quote! {
+        pub fn #method_ident(&self, #(#input_args),*) -> #wrapper_ident<{ #child_omitted_tag }, #child_omitted_ty> {
+            let mut __command_path = self.command_path.clone();
+            __command_path.push(#command_name.to_string());
+            let __schema_path = ::std::vec::Vec::new();
+            let mut __inherited_prefix = self.inherited_prefix.clone();
+            #(#value_prefixes)*
+            #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
+                rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&self.root_tool_name),
+                root_tool_name: self.root_tool_name.clone(),
+                command_path: __command_path,
+                schema_path: __schema_path,
+                inherited_prefix: __inherited_prefix,
+                _omitted: ::std::marker::PhantomData,
+            }
+        }
+    }
+}
+
+fn synthesize_subtree_wrapper(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Option<TokenStream> {
+    let subtree = cmd.subtree.as_ref()?;
+    let wrapper_ident = subtree_wrapper_ident(ir, cmd);
+    let child_macro_path = subtree_client_macro_path(&subtree.path);
+    let root_child_omitted = subtree_child_omitted_surfaces(cmd, &[]);
+    let root_child_omitted_tag = omitted_tag(quote! { 0 }, &root_child_omitted);
+    let root_child_omitted_ty = omitted_type(quote! { () }, &root_child_omitted);
+    let root_child_omitted_markers = omitted_markers(&root_child_omitted);
+    let root_child_macro_invocation = if root_child_omitted.is_empty() {
+        quote! { #child_macro_path!(#wrapper_ident); }
+    } else {
+        quote! { #child_macro_path!(#wrapper_ident, #root_child_omitted_tag, #root_child_omitted_ty, [#(#root_child_omitted_markers)*]); }
+    };
+    Some(quote! {
+        pub struct #wrapper_ident<const __GOLEM_OMITTED_TAG: u64 = 0, __GOLEM_OMITTED = ()> {
+            rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            root_tool_name: ::std::string::String,
+            command_path: ::std::vec::Vec<::std::string::String>,
+            schema_path: ::std::vec::Vec<::std::string::String>,
+            inherited_prefix: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
+            _omitted: ::std::marker::PhantomData<fn() -> __GOLEM_OMITTED>,
+        }
+
+        #root_child_macro_invocation
+    })
+}
+
+fn synthesize_subtree_client_macro(ir: &ToolDefinitionIr, tool_name: &str) -> TokenStream {
+    let macro_ident = subtree_client_macro_ident(&ir.trait_ident);
+    let local_omitted = local_omitted_surfaces(ir);
+    let scan_arms = subtree_client_macro_scan_arms(ir, &macro_ident);
+    let emit_arms = subtree_client_macro_emit_arms(ir, tool_name);
+    let scan_start = if local_omitted.is_empty() {
+        quote! {
+            #macro_ident!(@emit $client_ident, $omitted_tag, $omitted_ty, [], [$($omitted)*]);
+        }
+    } else {
+        let state = subtree_client_macro_scan_state_ident(0);
+        quote! {
+            #macro_ident!(#state $client_ident, $omitted_tag, $omitted_ty, [], [$($omitted)*] ; $($omitted)*);
+        }
+    };
+
+    quote! {
+        #[doc(hidden)]
+        macro_rules! #macro_ident {
+            ($client_ident:ident) => {
+                #macro_ident!($client_ident, 0, (), []);
+            };
+            ($client_ident:ident, $omitted_tag:expr, $omitted_ty:ty, [$($omitted:ident)*]) => {
+                #scan_start
+            };
+            #(#scan_arms)*
+            #(#emit_arms)*
+        }
+
+        #[doc(hidden)]
+        pub(crate) use #macro_ident;
+    }
+}
+
+fn subtree_client_macro_scan_arms(ir: &ToolDefinitionIr, macro_ident: &Ident) -> Vec<TokenStream> {
+    let surfaces = local_omitted_surfaces(ir);
+    let len = surfaces.len();
+    surfaces
+        .into_iter()
+        .enumerate()
+        .flat_map(|(idx, surface)| {
+            let state = subtree_client_macro_scan_state_ident(idx);
+            let marker = omitted_marker_ident(&surface);
+            let next_with_marker = subtree_client_macro_next_scan(
+                macro_ident,
+                idx + 1,
+                len,
+                quote! { [$($found)* #marker] },
+            );
+            let next_without_marker = subtree_client_macro_next_scan(
+                macro_ident,
+                idx + 1,
+                len,
+                quote! { [$($found)*] },
+            );
+            vec![
+                quote! {
+                    (#state $client_ident:ident, $omitted_tag:expr, $omitted_ty:ty, [$($found:ident)*], [$($all:ident)*] ; #marker $($rest:ident)*) => {
+                        #next_with_marker
+                    };
+                },
+                quote! {
+                    (#state $client_ident:ident, $omitted_tag:expr, $omitted_ty:ty, [$($found:ident)*], [$($all:ident)*] ; $unknown:ident $($rest:ident)*) => {
+                        #macro_ident!(#state $client_ident, $omitted_tag, $omitted_ty, [$($found)*], [$($all)*] ; $($rest)*);
+                    };
+                },
+                quote! {
+                    (#state $client_ident:ident, $omitted_tag:expr, $omitted_ty:ty, [$($found:ident)*], [$($all:ident)*] ; ) => {
+                        #next_without_marker
+                    };
+                },
+            ]
+        })
+        .collect()
+}
+
+fn subtree_client_macro_next_scan(
+    macro_ident: &Ident,
+    next_idx: usize,
+    len: usize,
+    found: TokenStream,
+) -> TokenStream {
+    if next_idx == len {
+        quote! {
+            #macro_ident!(@emit $client_ident, $omitted_tag, $omitted_ty, #found, [$($all)*]);
+        }
+    } else {
+        let next_state = subtree_client_macro_scan_state_ident(next_idx);
+        quote! {
+            #macro_ident!(#next_state $client_ident, $omitted_tag, $omitted_ty, #found, [$($all)*] ; $($all)*);
+        }
+    }
+}
+
+fn subtree_client_macro_scan_state_ident(idx: usize) -> Ident {
+    format_ident!("__golem_scan_{}", idx)
+}
+
+fn subtree_client_macro_emit_arms(ir: &ToolDefinitionIr, tool_name: &str) -> Vec<TokenStream> {
+    possible_omitted_surface_sequences(ir)
+        .into_iter()
+        .map(|omitted| {
+            let omitted_marker_tokens = omitted_markers(&omitted);
+            let methods = ir.commands.iter().map(|cmd| {
+                if let Some(subtree) = &cmd.subtree {
+                    synthesize_subtree_method_with_context(
+                        ir,
+                        cmd,
+                        subtree,
+                        tool_name,
+                        &omitted,
+                        quote! { $omitted_tag },
+                        quote! { $omitted_ty },
+                    )
+                } else {
+                    synthesize_leaf_method(ir, cmd, tool_name, &omitted)
+                }
+            });
+            let nested_contexts = ir.commands.iter().filter_map(|cmd| {
+                let subtree = cmd.subtree.as_ref()?;
+                let child_macro_path = subtree_client_macro_path(&subtree.path);
+                let wrapper_ident = subtree_wrapper_ident(ir, cmd);
+                let new_omitted = subtree_new_omitted_surfaces(cmd, &omitted);
+                let child_omitted_tag = contextual_omitted_tag(quote! { $omitted_tag }, cmd, &new_omitted);
+                let child_omitted_ty = omitted_type(
+                    quote! { ($omitted_ty, fn() -> $client_ident<{ $omitted_tag }, $omitted_ty>) },
+                    &new_omitted,
+                );
+                let new_markers = omitted_markers(&new_omitted);
+                Some(quote! {
+                    #child_macro_path!(#wrapper_ident, #child_omitted_tag, #child_omitted_ty, [$($all)* #(#new_markers)*]);
+                })
+            });
+            quote! {
+                (@emit $client_ident:ident, $omitted_tag:expr, $omitted_ty:ty, [#(#omitted_marker_tokens)*], [$($all:ident)*]) => {
+                    impl $client_ident<{ $omitted_tag }, $omitted_ty> {
+                        #(#methods)*
+                    }
+                    #(#nested_contexts)*
+                };
+            }
+        })
+        .collect()
+}
+
+fn kept_client_args_omitting(
     cmd: &CommandIr,
     inherited_params: &[ParamIr],
     include_stdout: bool,
+    omitted_names: &[String],
 ) -> Vec<FnArg> {
     inherited_params
         .iter()
         .chain(cmd.params.iter())
         .filter(|param| {
-            !is_principal_type(&param.ty)
+            !omitted_names
+                .iter()
+                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+                && !is_principal_type(&param.ty)
                 && (include_stdout || type_last_ident(&param.ty).as_deref() != Some("OutputStream"))
         })
         .map(|param| {
@@ -218,12 +467,19 @@ fn value_inserts(
     cmd: &CommandIr,
     inherited_params: &[ParamIr],
     tool_name: &str,
+    omitted_names: &[String],
 ) -> Vec<TokenStream> {
     let inserts = inherited_params
         .iter()
         .chain(cmd.params.iter())
         .filter_map(|param| {
             if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
+                return None;
+            }
+            if omitted_names
+                .iter()
+                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+            {
                 return None;
             }
             let ident = &param.ident;
@@ -245,11 +501,210 @@ fn value_inserts(
     }]
 }
 
+fn local_omitted_surfaces(ir: &ToolDefinitionIr) -> Vec<String> {
+    let mut surfaces = Vec::new();
+    for cmd in &ir.commands {
+        for param in cmd
+            .params
+            .iter()
+            .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
+        {
+            for surface in param_surfaces(cmd, param) {
+                if !surfaces.iter().any(|existing| existing == &surface) {
+                    surfaces.push(surface);
+                }
+            }
+        }
+    }
+    surfaces
+}
+
+fn possible_omitted_surface_sequences(ir: &ToolDefinitionIr) -> Vec<Vec<String>> {
+    let surfaces = local_omitted_surfaces(ir);
+    if surfaces.len() > 16 {
+        let mut sequences = vec![Vec::new()];
+        let mut width = 1;
+        while width <= surfaces.len() {
+            let before = sequences.len();
+            push_bounded_omitted_surface_combinations(
+                &surfaces,
+                width,
+                0,
+                &mut Vec::new(),
+                &mut sequences,
+                4096,
+            );
+            if sequences.len() == before || sequences.len() >= 4096 {
+                break;
+            }
+            width += 1;
+        }
+        return sequences;
+    }
+    let mut sequences = vec![Vec::new()];
+    push_omitted_surface_sequences(&surfaces, 0, &mut Vec::new(), &mut sequences);
+    sequences
+}
+
+fn push_bounded_omitted_surface_combinations(
+    surfaces: &[String],
+    width: usize,
+    index: usize,
+    current: &mut Vec<String>,
+    sequences: &mut Vec<Vec<String>>,
+    max_sequences: usize,
+) {
+    if sequences.len() >= max_sequences {
+        return;
+    }
+    if current.len() == width {
+        sequences.push(current.clone());
+        return;
+    }
+    if index == surfaces.len() {
+        return;
+    }
+    let remaining = width - current.len();
+    if surfaces.len() - index < remaining {
+        return;
+    }
+
+    current.push(surfaces[index].clone());
+    push_bounded_omitted_surface_combinations(
+        surfaces,
+        width,
+        index + 1,
+        current,
+        sequences,
+        max_sequences,
+    );
+    current.pop();
+    push_bounded_omitted_surface_combinations(
+        surfaces,
+        width,
+        index + 1,
+        current,
+        sequences,
+        max_sequences,
+    );
+}
+
+fn push_omitted_surface_sequences(
+    surfaces: &[String],
+    index: usize,
+    current: &mut Vec<String>,
+    sequences: &mut Vec<Vec<String>>,
+) {
+    if index == surfaces.len() {
+        return;
+    }
+
+    push_omitted_surface_sequences(surfaces, index + 1, current, sequences);
+    current.push(surfaces[index].clone());
+    sequences.push(current.clone());
+    push_omitted_surface_sequences(surfaces, index + 1, current, sequences);
+    current.pop();
+}
+
+fn subtree_child_omitted_surfaces(cmd: &CommandIr, inherited_omitted: &[String]) -> Vec<String> {
+    let mut surfaces = inherited_omitted.to_vec();
+    for param in cmd
+        .params
+        .iter()
+        .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
+    {
+        for surface in param_surfaces(cmd, param) {
+            if !surfaces.iter().any(|existing| existing == &surface) {
+                surfaces.push(surface);
+            }
+        }
+    }
+    surfaces
+}
+
+fn subtree_new_omitted_surfaces(cmd: &CommandIr, inherited_omitted: &[String]) -> Vec<String> {
+    cmd.params
+        .iter()
+        .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
+        .filter(|param| {
+            !inherited_omitted
+                .iter()
+                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+        })
+        .flat_map(|param| param_surfaces(cmd, param))
+        .collect()
+}
+
+fn omitted_type(base: TokenStream, surfaces: &[String]) -> TokenStream {
+    surfaces.iter().fold(base, |ty, surface| {
+        let id = omitted_surface_id(surface);
+        quote! { (#ty, golem_rust::agentic::OmittedSurface<#id>) }
+    })
+}
+
+fn omitted_tag(base: TokenStream, surfaces: &[String]) -> TokenStream {
+    omitted_tag_append(base, surfaces)
+}
+
+fn omitted_tag_append(base: TokenStream, surfaces: &[String]) -> TokenStream {
+    surfaces.iter().fold(base, |tag, surface| {
+        let id = omitted_surface_id(surface);
+        quote! { (#tag | #id) }
+    })
+}
+
+fn contextual_omitted_tag(base: TokenStream, cmd: &CommandIr, surfaces: &[String]) -> TokenStream {
+    let salt = omitted_surface_id(&format!(
+        "subtree:{}",
+        cmd.name_override
+            .clone()
+            .unwrap_or_else(|| to_kebab_case(&cmd.method_ident.to_string()))
+    ));
+    omitted_tag_append(quote! { (#base ^ #salt) }, surfaces)
+}
+
+fn omitted_markers(surfaces: &[String]) -> Vec<Ident> {
+    surfaces
+        .iter()
+        .map(|surface| omitted_marker_ident(surface))
+        .collect()
+}
+
+fn omitted_marker_ident(surface: &str) -> Ident {
+    format_ident!("__golem_omitted_{}", omitted_surface_id(surface))
+}
+
+fn omitted_surface_id(surface: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in surface.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn omitted_matches_param(cmd: &CommandIr, param: &ParamIr, omitted: &str) -> bool {
+    param_surfaces(cmd, param)
+        .iter()
+        .any(|surface| surface == omitted)
+}
+
+fn param_surfaces(cmd: &CommandIr, param: &ParamIr) -> Vec<String> {
+    let mut surfaces = vec![to_kebab_case(&param.ident.to_string())];
+    for alias in param_aliases(cmd, param) {
+        if !surfaces.iter().any(|surface| surface == &alias) {
+            surfaces.push(alias);
+        }
+    }
+    surfaces
+}
+
 fn prefix_value_builders(
     ir: &ToolDefinitionIr,
     cmd: &CommandIr,
     inherited_params: &[ParamIr],
     tool_name: &str,
+    omitted_names: &[String],
 ) -> Vec<TokenStream> {
     let mut inherited: Vec<&ParamIr> = inherited_params.iter().collect();
     inherited.sort_by_key(|param| if is_flag_param(cmd, param) { 1 } else { 0 });
@@ -260,6 +715,12 @@ fn prefix_value_builders(
         .chain(current)
         .filter_map(|param| {
             if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
+                return None;
+            }
+            if omitted_names
+                .iter()
+                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+            {
                 return None;
             }
             let ident = &param.ident;
@@ -538,12 +999,40 @@ fn command_name(cmd: &CommandIr, tool_name: &str) -> String {
     }
 }
 
-fn client_path(path: &Path) -> Path {
+fn subtree_wrapper_ident(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Ident {
+    format_ident!(
+        "{}{}Client",
+        ir.trait_ident,
+        pascal_case(&cmd.method_ident.to_string())
+    )
+}
+
+fn subtree_client_macro_path(path: &Path) -> Path {
     let mut rewritten = path.clone();
     if let Some(last) = rewritten.segments.last_mut() {
-        last.ident = format_ident!("{}Client", last.ident);
+        last.ident = subtree_client_macro_ident(&last.ident);
     }
     rewritten
+}
+
+fn subtree_client_macro_ident(trait_ident: &Ident) -> Ident {
+    format_ident!("__golem_tool_subtree_client_methods_for_{}", trait_ident)
+}
+
+fn pascal_case(input: &str) -> String {
+    let mut out = String::new();
+    let mut capitalize = true;
+    for ch in input.chars() {
+        if ch == '_' || ch == '-' {
+            capitalize = true;
+        } else if capitalize {
+            out.extend(ch.to_uppercase());
+            capitalize = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn is_stream_type(ty: &Type) -> bool {

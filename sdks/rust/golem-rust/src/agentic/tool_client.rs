@@ -60,6 +60,9 @@ pub struct ToolLeafCommand;
 pub struct ToolSubtreeCommand;
 
 #[doc(hidden)]
+pub struct OmittedSurface<const ID: u64>;
+
+#[doc(hidden)]
 pub trait ToolClientWithParts: Sized {
     fn __golem_tool_client_with_parts(
         root_tool_name: String,
@@ -377,6 +380,29 @@ mod tests {
         }
     }
 
+    enum FakeFailure {
+        Denied,
+        RemoteInvalidInput,
+    }
+
+    struct FailingToolRpc(FakeFailure);
+
+    impl ToolRpcClient for FailingToolRpc {
+        fn invoke_and_await_tool(
+            &self,
+            _command_path: &[String],
+            _input: crate::schema::wit::wire::TypedSchemaValue,
+            _stdin: Option<InputStream>,
+        ) -> Result<host::InvocationResult, WitRpcError> {
+            Err(match self.0 {
+                FakeFailure::Denied => WitRpcError::Denied("no access".to_string()),
+                FakeFailure::RemoteInvalidInput => WitRpcError::RemoteToolError(
+                    host::ToolError::InvalidInput("bad wire input".to_string()),
+                ),
+            })
+        }
+    }
+
     #[test]
     fn invoke_and_await_decoding_error_decodes_custom_tool_error_payload() {
         let input = ().into_typed_schema_value().unwrap();
@@ -393,6 +419,42 @@ mod tests {
                 panic!("expected declared tool error, got RPC error: {error:?}")
             }
             Ok(_) => panic!("expected declared tool error, got success"),
+        }
+    }
+
+    #[test]
+    fn invoke_and_await_maps_framing_errors_to_rpc_errors() {
+        let input = ().into_typed_schema_value().unwrap();
+
+        match invoke_and_await_payload_error::<CliError>(
+            &FailingToolRpc(FakeFailure::Denied),
+            &[],
+            &input,
+            None,
+        ) {
+            Err(ToolError::Rpc(RpcError::Denied(message))) => assert_eq!(message, "no access"),
+            Err(other) => panic!("expected denied RPC error, got {other:?}"),
+            Ok(_) => panic!("expected denied RPC error, got success"),
+        }
+
+        match invoke_and_await_payload_error::<CliError>(
+            &FailingToolRpc(FakeFailure::RemoteInvalidInput),
+            &[],
+            &input,
+            None,
+        ) {
+            Err(ToolError::Rpc(RpcError::Protocol(message))) => {
+                assert!(
+                    message.contains("remote tool error: invalid input: bad wire input"),
+                    "unexpected protocol error message: {message}"
+                );
+            }
+            Err(other) => {
+                panic!("expected remote framing error to map to protocol RPC error, got {other:?}")
+            }
+            Ok(_) => {
+                panic!("expected remote framing error to map to protocol RPC error, got success")
+            }
         }
     }
 }
