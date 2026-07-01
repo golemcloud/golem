@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, DropEvent, NotCancellable,
-    end_durable_function_access,
-};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{
@@ -35,21 +32,19 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
-    GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultCancel,
-    GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
+    GolemRpcCancellationTokenCancel, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
     GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
 };
-use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
+use golem_common::model::oplog::types::{SerializableRpcError, SerializableScheduleId};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
     HostRequestGolemRpcScheduledInvocationCancellation, HostResponseGolemRpcCreate,
-    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
-    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
-    HostResponseGolemRpcUnitOrFailure, OplogEntry,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcScheduledInvocation,
+    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, OplogEntry,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
-    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
+    OwnedAgentId, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::schema_value::SchemaValue;
@@ -62,7 +57,6 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedSender;
 use tracing::{Instrument, error};
 use wasmtime::component::{Accessor, HasSelf, Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
@@ -563,54 +557,31 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
 
-        // The generic read-only side-effect trap (see
-        // `DurabilityHost::begin_durable_function`) refuses this call up front for
-        // read-only agent methods.
-        let begin_index = self
-            .begin_durable_function(
-                &DurableFunctionType::WriteRemote,
-                "golem::rpc::wasm-rpc::async-invoke-and-await",
-            )
-            .await?;
-
-        let oplog_index = self.state.oplog.current_oplog_index().await;
-        let idempotency_key = self.derive_idempotency_key(oplog_index);
-
-        let span =
-            create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
-                .await?;
-
-        // Resolve the method and lift the input. Failures here are
-        // deterministic functions of the cached remote agent type and the
-        // guest payload, so they are reported as the future's baked-in result
-        // rather than as wasmtime traps. The future surfaces the error on the
-        // first `get`.
+        // Resolve the method and lift the input before opening any durability. Failures here are
+        // deterministic functions of the cached remote agent type and the guest payload, so they
+        // are baked into the future's result and surfaced on the first `get` — without opening a
+        // durable host call. Live and replay agree because the resolution is pure and no oplog
+        // entry (beyond the invocation span) is written for it.
         let input_value =
             match resolve_method_and_lift_input(&remote_agent_type, &method_name, input) {
                 Ok(parts) => parts,
                 Err(rpc_error) => {
-                    // The method/input could not be resolved. The recorded
-                    // request `input` is only informational here — the future
-                    // is baked with the error result and `get` never re-issues
-                    // the call — so an empty placeholder is used. Live and
-                    // replay agree because `get` surfaces the persisted result,
-                    // not this input.
-                    let request = HostRequestGolemRpcInvoke {
-                        remote_agent_id: remote_agent_id.agent_id(),
-                        idempotency_key: idempotency_key.clone(),
-                        method_name: method_name.clone(),
-                        input: SchemaValue::Tuple {
-                            elements: Vec::new(),
-                        },
-                        remote_agent_type: None,
-                        remote_agent_parameters: None,
-                    };
+                    // The method/input could not be resolved, so no remote call is dispatched. The
+                    // idempotency key is informational only and is derived from the current oplog
+                    // index; it exists solely to label the invocation span.
+                    let oplog_index = self.state.oplog.current_oplog_index().await;
+                    let idempotency_key = self.derive_idempotency_key(oplog_index);
+                    let span = create_invocation_span(
+                        self,
+                        &connection_span_id,
+                        &method_name,
+                        &idempotency_key,
+                    )
+                    .await?;
                     let fut = self.table().push(FutureInvokeResultEntry {
-                        payload: Box::new(FutureInvokeResultState::Completed {
-                            request,
+                        payload: Box::new(FutureInvokeResultState::Baked {
                             result: Ok(Err(rpc_error)),
                             span_id: span.span_id().clone(),
-                            begin_index,
                         }),
                         child_pollables: Vec::new(),
                         drop_pending: false,
@@ -619,8 +590,30 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             };
 
-        let agent_id = self.agent_id().clone();
-        let created_by = self.created_by();
+        // Open the single durable host call for this async RPC as a `WriteRemote` — the same
+        // durable function type as the synchronous `invoke_and_await`. It is a two-step call:
+        // `begin` yields the begin index and `start_live` then appends the eager host-call `Start`
+        // with the built request. The remote idempotency key is derived from the begin index.
+        // `start_live` appends the host-call `Start` unconditionally (even under
+        // `assume_idempotence`), and the accessor terminals (`complete_access` / `cancel_access` /
+        // `replay_access`) all support `WriteRemote`, so no separate durable scope is needed to make
+        // the key unique: each concurrently-created future advances the oplog by its own `Start` and
+        // therefore derives a distinct key. Under `assume_idempotence` `begin` opens no scope, so
+        // the begin index equals the host-call `Start` index; otherwise `begin` opens the durable
+        // scope that the terminal later closes. The read-only side-effect guard was already applied
+        // at the top of this function and is re-applied by `begin`.
+        let begun = CallHandle::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::begin(
+            self,
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+        let begin_index = begun.begin_index();
+        let idempotency_key = self.derive_idempotency_key(begin_index);
+
+        let span =
+            create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
+                .await?;
+
         let request = HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
@@ -630,93 +623,64 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_agent_parameters: None,
         };
 
-        let result = if self.state.is_live() {
-            let rpc = self.rpc();
-            let stack = self.clone_as_inherited_stack(span.span_id());
-
-            let in_atomic_region = self.in_atomic_region();
-            let allow_retry = !in_atomic_region;
-            let environment_state_service = self.state.environment_state_service.clone();
-            let environment_id = self.state.owned_agent_id.environment_id;
-            let default_retry_policy =
-                NamedRetryPolicy::default_from_config(&self.state.config.retry);
-            let agent_config_retry_policies = self.state.agent_config_retry_policies();
-            let runtime_retry_policy_mutations = self.state.runtime_retry_policy_mutations.clone();
-            let mut retry_properties =
-                RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
-            self.state.enrich_retry_properties(&mut retry_properties);
-            let max_delay = self.durable_execution_state().max_in_function_retry_delay;
-            let worker = self.public_state.worker();
-
-            let retry_params = if allow_retry {
-                Some(TaskRetryParams {
-                    environment_state_service,
-                    environment_id,
-                    default_retry_policy,
-                    agent_config_retry_policies,
-                    runtime_retry_policy_mutations,
-                    retry_properties,
-                    max_in_function_retry_delay: max_delay,
-                    worker,
-                    retry_point: begin_index,
-                    execution_status: self.execution_status.clone(),
-                })
-            } else {
-                None
+        if begun.is_live() {
+            let handle = match begun.start_live(self, request.clone()).await {
+                Ok(handle) => handle,
+                Err(err) => {
+                    // The eager `Start` could not be written; close any durable scope opened by
+                    // `begin` and finish the span so no half-open call is left behind.
+                    self.end_function(&DurableFunctionType::WriteRemote, begin_index)
+                        .await?;
+                    self.finish_span(span.span_id()).await?;
+                    return Err(err.into());
+                }
             };
 
-            let handle = spawn_rpc_task_with_retry(
-                rpc,
-                remote_agent_id,
+            let task = spawn_invoke_and_await_task(
+                self,
+                &remote_agent_id,
                 idempotency_key,
                 method_name,
-                input_value.clone(),
-                created_by,
-                agent_id,
-                env,
-                stack,
-                retry_params,
-                self.agent_auth_ctx(),
+                input_value,
+                env.clone(),
+                span.span_id(),
+                begin_index,
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
-                payload: Box::new(FutureInvokeResultState::Pending {
-                    handle: Arc::new(tokio::sync::Mutex::new(handle)),
+                payload: Box::new(FutureInvokeResultState::Active {
+                    handle: Some(handle),
+                    task: Some(Arc::new(tokio::sync::Mutex::new(task))),
                     request,
+                    remote_agent_id,
+                    env,
                     span_id: span.span_id().clone(),
-                    begin_index,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
             })?;
             Ok(fut)
         } else {
-            let auth_ctx = self.agent_auth_ctx();
+            // Replay: claim the eager `Start` from the oplog now. The RPC is not re-dispatched here.
+            // On a normal replay `get` replays the matching `End`, and `cancel` / `drop` consume the
+            // matching `Cancelled`. If the worker crashed after this `Start` but before its terminal,
+            // `get`'s `replay_access` returns `Incomplete` (a read-only `WriteRemote` call is safe to
+            // re-execute) and `get` re-dispatches the RPC there to complete the existing `Start`.
+            let handle = begun.start_replay(self).await?;
             let fut = self.table().push(FutureInvokeResultEntry {
-                payload: Box::new(FutureInvokeResultState::Deferred {
+                payload: Box::new(FutureInvokeResultState::Active {
+                    handle: Some(handle),
+                    task: None,
+                    request,
                     remote_agent_id,
-                    self_agent_id: agent_id,
-                    self_created_by: created_by,
                     env,
-                    method_name,
-                    method_parameters: input_value,
-                    idempotency_key,
                     span_id: span.span_id().clone(),
-                    begin_index,
-                    auth_ctx,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
             })?;
             Ok(fut)
-        };
-
-        if result.is_err() {
-            self.end_function(&DurableFunctionType::WriteRemote, begin_index)
-                .await?;
         }
-
-        result
     }
 
     async fn schedule_invocation(
@@ -892,425 +856,39 @@ type FutureInvokeTaskHandle =
     Arc<tokio::sync::Mutex<AbortOnDropJoinHandle<FutureInvokeTaskResult>>>;
 type FutureInvokeGetResult = Result<Result<SchemaValue, RpcError>, Error>;
 
-struct FutureInvokeGetSnapshot {
-    request: HostRequestGolemRpcInvoke,
-    begin_index: OplogIndex,
-    span_id: SpanId,
-    cancelled: bool,
-}
+/// The single durable host call representing one `async-invoke-and-await` operation. Its eager
+/// `Start` is written when the future is created (`async_invoke_and_await`) and its `End` /
+/// `Cancelled` when the future is awaited via `get`, cancelled, or dropped — so an async RPC is
+/// recorded like any other durable host call, with its two halves possibly non-adjacent in the
+/// oplog. Writing the `Start` eagerly at creation advances the oplog even under `assume_idempotence`,
+/// which is what gives each concurrently-created future a distinct begin index and therefore a
+/// distinct derived remote idempotency key. `Cancellable`: a future dropped before completion
+/// records a `Cancelled`.
+type FutureInvokeCallHandle = CallHandle<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>;
 
-struct FutureInvokeDropSnapshot {
-    request: Option<HostRequestGolemRpcInvoke>,
-    begin_index: OplogIndex,
-    span_id: SpanId,
-}
-
-struct FutureInvokeParentScopeGuard {
-    sink: Option<UnboundedSender<DropEvent>>,
-    begin_index: OplogIndex,
-    span_id: SpanId,
-    armed: bool,
-}
-
-impl FutureInvokeParentScopeGuard {
-    fn armed(
-        sink: Option<UnboundedSender<DropEvent>>,
-        begin_index: OplogIndex,
-        span_id: SpanId,
-    ) -> Self {
-        Self {
-            sink,
-            begin_index,
-            span_id,
-            armed: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
+/// Projects a background RPC task result (as produced for the [`FutureInvokeResultState::Baked`]
+/// path) into the wire result shape returned by `future-invoke-result.get`. A hard task failure
+/// (`Err`) is surfaced as a `get` trap.
+fn future_invoke_get_result_to_wire(
+    result: FutureInvokeGetResult,
+) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
+    match result {
+        Ok(Ok(value)) => Ok(Ok(schema_value_to_wire_output(&value))),
+        Ok(Err(rpc_error)) => Ok(Err(rpc_error)),
+        Err(err) => Err(err),
     }
 }
 
-impl Drop for FutureInvokeParentScopeGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        if let Some(sink) = &self.sink {
-            let _ = sink.send(DropEvent::CloseDurableScope {
-                function_type: DurableFunctionType::WriteRemote,
-                begin_index: self.begin_index,
-                span_id: Some(self.span_id.clone()),
-            });
-        }
-    }
-}
-
-struct DeferredFutureInvoke {
-    remote_agent_id: OwnedAgentId,
-    self_agent_id: AgentId,
-    self_created_by: AccountId,
-    env: Vec<(String, String)>,
-    method_name: String,
-    method_parameters: SchemaValue,
-    idempotency_key: IdempotencyKey,
-    span_id: SpanId,
-    begin_index: OplogIndex,
-    auth_ctx: AuthCtx,
-}
-
-enum FutureInvokeGetActionPlan {
-    Ready(FutureInvokeGetResult),
-    Await(FutureInvokeTaskHandle),
-    Deferred(DeferredFutureInvoke),
-}
-
-enum FutureInvokeGetAction {
-    Ready(FutureInvokeGetResult),
-    Await(FutureInvokeTaskHandle),
-}
-
-enum FutureInvokeGetActionResult {
-    Ready(FutureInvokeGetResult),
-    Awaited(FutureInvokeTaskResult),
-}
-
-fn future_invoke_request_from_deferred(
-    deferred: &DeferredFutureInvoke,
-) -> HostRequestGolemRpcInvoke {
-    HostRequestGolemRpcInvoke {
-        remote_agent_id: deferred.remote_agent_id.agent_id(),
-        idempotency_key: deferred.idempotency_key.clone(),
-        method_name: deferred.method_name.clone(),
-        input: deferred.method_parameters.clone(),
-        remote_agent_type: None,
-        remote_agent_parameters: None,
-    }
-}
-
-fn snapshot_future_invoke_get<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    this: Resource<FutureInvokeResult>,
-) -> anyhow::Result<FutureInvokeGetSnapshot> {
-    let entry = ctx.table().get_mut(&this)?;
-    let state = entry
-        .payload
-        .as_any_mut()
-        .downcast_mut::<FutureInvokeResultState>()
-        .unwrap();
-
-    let begin_index = state.begin_index();
-    let span_id = state.span_id().clone();
-    let cancelled = matches!(state, FutureInvokeResultState::Cancelled { .. });
-    let request = match state {
-        FutureInvokeResultState::Pending { request, .. }
-        | FutureInvokeResultState::Completed { request, .. }
-        | FutureInvokeResultState::Cancelled { request, .. }
-        | FutureInvokeResultState::Consumed { request, .. } => request.clone(),
-        FutureInvokeResultState::Deferred {
-            remote_agent_id,
-            method_name,
-            method_parameters,
-            idempotency_key,
-            ..
-        } => HostRequestGolemRpcInvoke {
-            remote_agent_id: remote_agent_id.agent_id(),
-            idempotency_key: idempotency_key.clone(),
-            method_name: method_name.clone(),
-            input: method_parameters.clone(),
-            remote_agent_type: None,
-            remote_agent_parameters: None,
-        },
-    };
-
-    Ok(FutureInvokeGetSnapshot {
-        request,
-        begin_index,
-        span_id,
-        cancelled,
-    })
-}
-
-fn snapshot_future_invoke_drop<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    this: Resource<FutureInvokeResult>,
-) -> anyhow::Result<Option<FutureInvokeDropSnapshot>> {
-    let entry = ctx.table().get_mut(&this)?;
-    let state = entry
-        .payload
-        .as_any_mut()
-        .downcast_mut::<FutureInvokeResultState>()
-        .unwrap();
-
-    Ok(match state {
-        FutureInvokeResultState::Pending {
-            request,
-            span_id,
-            begin_index,
-            ..
-        }
-        | FutureInvokeResultState::Completed {
-            request,
-            span_id,
-            begin_index,
-            ..
-        } => Some(FutureInvokeDropSnapshot {
-            request: Some(request.clone()),
-            begin_index: *begin_index,
-            span_id: span_id.clone(),
-        }),
-        FutureInvokeResultState::Deferred {
-            remote_agent_id,
-            method_name,
-            method_parameters,
-            idempotency_key,
-            span_id,
-            begin_index,
-            ..
-        } => Some(FutureInvokeDropSnapshot {
-            request: Some(HostRequestGolemRpcInvoke {
-                remote_agent_id: remote_agent_id.agent_id(),
-                idempotency_key: idempotency_key.clone(),
-                method_name: method_name.clone(),
-                input: method_parameters.clone(),
-                remote_agent_type: None,
-                remote_agent_parameters: None,
-            }),
-            begin_index: *begin_index,
-            span_id: span_id.clone(),
-        }),
-        FutureInvokeResultState::Cancelled {
-            span_id,
-            begin_index,
-            ..
-        } => Some(FutureInvokeDropSnapshot {
-            request: None,
-            begin_index: *begin_index,
-            span_id: span_id.clone(),
-        }),
-        FutureInvokeResultState::Consumed { .. } => None,
-    })
-}
-
-fn future_invoke_parent_scope<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    this: Resource<FutureInvokeResult>,
-) -> anyhow::Result<Option<(OplogIndex, SpanId)>> {
-    let entry = ctx.table().get_mut(&this)?;
-    let state = entry
-        .payload
-        .as_any_mut()
-        .downcast_mut::<FutureInvokeResultState>()
-        .unwrap();
-
-    Ok(match state {
-        FutureInvokeResultState::Consumed { .. } => None,
-        state => Some((state.begin_index(), state.span_id().clone())),
-    })
-}
-
-fn take_future_invoke_get_action_plan<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    this: Resource<FutureInvokeResult>,
-) -> anyhow::Result<FutureInvokeGetActionPlan> {
-    let entry = ctx.table().get_mut(&this)?;
-    let state = entry
-        .payload
-        .as_any_mut()
-        .downcast_mut::<FutureInvokeResultState>()
-        .unwrap();
-
-    match state {
-        FutureInvokeResultState::Consumed { .. } => {
-            let message = "future-invoke-result already consumed";
-            Ok(FutureInvokeGetActionPlan::Ready(Err(anyhow::Error::new(
-                ClassifiedHostError {
-                    kind: HostFailureKind::Permanent,
-                    message: message.to_string(),
-                },
-            ))))
-        }
-        FutureInvokeResultState::Pending {
-            request,
-            handle,
-            span_id,
-            begin_index,
-        } => {
-            let action = FutureInvokeGetActionPlan::Await(handle.clone());
-            let request = request.clone();
-            let span_id = span_id.clone();
-            let begin_index = *begin_index;
-            *state = FutureInvokeResultState::Consumed {
-                request,
-                span_id,
-                begin_index,
-            };
-            Ok(action)
-        }
-        FutureInvokeResultState::Completed {
-            request,
-            result,
-            span_id,
-            begin_index,
-        } => {
-            let result = future_invoke_task_result_to_get_result(result);
-            let request = request.clone();
-            let span_id = span_id.clone();
-            let begin_index = *begin_index;
-            *state = FutureInvokeResultState::Consumed {
-                request,
-                span_id,
-                begin_index,
-            };
-            Ok(FutureInvokeGetActionPlan::Ready(result))
-        }
-        FutureInvokeResultState::Cancelled {
-            request,
-            span_id,
-            begin_index,
-        } => {
-            let rpc_error = InternalRpcError::ProtocolError {
-                details: "Invocation cancelled".to_string(),
-            };
-            let request = request.clone();
-            let span_id = span_id.clone();
-            let begin_index = *begin_index;
-            *state = FutureInvokeResultState::Consumed {
-                request,
-                span_id,
-                begin_index,
-            };
-            Ok(FutureInvokeGetActionPlan::Ready(Ok(Err(rpc_error.into()))))
-        }
-        FutureInvokeResultState::Deferred {
-            remote_agent_id,
-            self_agent_id,
-            self_created_by,
-            env,
-            method_name,
-            method_parameters,
-            idempotency_key,
-            span_id,
-            begin_index,
-            auth_ctx,
-        } => {
-            let deferred = DeferredFutureInvoke {
-                remote_agent_id: remote_agent_id.clone(),
-                self_agent_id: self_agent_id.clone(),
-                self_created_by: *self_created_by,
-                env: env.clone(),
-                method_name: method_name.clone(),
-                method_parameters: method_parameters.clone(),
-                idempotency_key: idempotency_key.clone(),
-                span_id: span_id.clone(),
-                begin_index: *begin_index,
-                auth_ctx: auth_ctx.clone(),
-            };
-            Ok(FutureInvokeGetActionPlan::Deferred(deferred))
-        }
-    }
-}
-
-fn prepare_future_invoke_get_action<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    this: Resource<FutureInvokeResult>,
-) -> anyhow::Result<FutureInvokeGetAction> {
-    let this_rep = this.rep();
-    match take_future_invoke_get_action_plan(ctx, Resource::new_borrow(this_rep))? {
-        FutureInvokeGetActionPlan::Ready(result) => Ok(FutureInvokeGetAction::Ready(result)),
-        FutureInvokeGetActionPlan::Await(handle) => Ok(FutureInvokeGetAction::Await(handle)),
-        FutureInvokeGetActionPlan::Deferred(deferred) => {
-            let stack = ctx.clone_as_inherited_stack(&deferred.span_id);
-            let in_atomic_region = ctx.in_atomic_region();
-            let allow_retry = !in_atomic_region;
-            let retry_params = if allow_retry {
-                Some(TaskRetryParams {
-                    environment_state_service: ctx.state.environment_state_service.clone(),
-                    environment_id: ctx.state.owned_agent_id.environment_id,
-                    default_retry_policy: NamedRetryPolicy::default_from_config(
-                        &ctx.state.config.retry,
-                    ),
-                    agent_config_retry_policies: ctx.state.agent_config_retry_policies(),
-                    runtime_retry_policy_mutations: ctx
-                        .state
-                        .runtime_retry_policy_mutations
-                        .clone(),
-                    retry_properties: {
-                        let mut properties = RetryContext::rpc(
-                            "invoke-and-await",
-                            &deferred.remote_agent_id,
-                            &deferred.method_name,
-                        );
-                        if let Some(agent_id) = ctx.state.agent_id.as_ref() {
-                            properties.set(
-                                "agent-type",
-                                PredicateValue::Text(agent_id.agent_type.to_string()),
-                            );
-                            properties.set(
-                                "is-idempotent",
-                                PredicateValue::Boolean(ctx.state.assume_idempotence),
-                            );
-                        }
-                        properties
-                    },
-                    max_in_function_retry_delay: ctx
-                        .durable_execution_state()
-                        .max_in_function_retry_delay,
-                    worker: ctx.public_state.worker(),
-                    retry_point: deferred.begin_index,
-                    execution_status: ctx.execution_status.clone(),
-                })
-            } else {
-                None
-            };
-
-            let request = future_invoke_request_from_deferred(&deferred);
-            let span_id = deferred.span_id.clone();
-            let begin_index = deferred.begin_index;
-            let handle = spawn_rpc_task_with_retry(
-                ctx.rpc(),
-                deferred.remote_agent_id,
-                deferred.idempotency_key,
-                deferred.method_name,
-                deferred.method_parameters,
-                deferred.self_created_by,
-                deferred.self_agent_id,
-                deferred.env,
-                stack,
-                retry_params,
-                deferred.auth_ctx,
-            );
-            let handle = Arc::new(tokio::sync::Mutex::new(handle));
-            let this = Resource::<FutureInvokeResult>::new_borrow(this_rep);
-            let entry = ctx.table().get_mut(&this)?;
-            let state = entry
-                .payload
-                .as_any_mut()
-                .downcast_mut::<FutureInvokeResultState>()
-                .unwrap();
-            if matches!(state, FutureInvokeResultState::Deferred { .. }) {
-                *state = FutureInvokeResultState::Consumed {
-                    request,
-                    span_id,
-                    begin_index,
-                };
-            }
-            Ok(FutureInvokeGetAction::Await(handle))
-        }
-    }
-}
-
-async fn run_future_invoke_get_action(
-    action: FutureInvokeGetAction,
-) -> FutureInvokeGetActionResult {
-    match action {
-        FutureInvokeGetAction::Ready(result) => FutureInvokeGetActionResult::Ready(result),
-        FutureInvokeGetAction::Await(handle) => {
-            let result = {
-                let mut handle = handle.lock().await;
-                (&mut *handle).await
-            };
-            FutureInvokeGetActionResult::Awaited(result)
+/// Projects a completed `invoke-and-await` durable response (the payload of the call's `End`) into
+/// the wire result shape returned by `future-invoke-result.get`.
+fn invoke_and_await_response_to_wire(
+    result: Result<SchemaValue, SerializableRpcError>,
+) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
+    match result {
+        Ok(value) => Ok(Ok(schema_value_to_wire_output(&value))),
+        Err(error) => {
+            let rpc_error: InternalRpcError = error.into();
+            Ok(Err(rpc_error.into()))
         }
     }
 }
@@ -1323,58 +901,6 @@ fn future_invoke_task_result_to_get_result(
         Ok(Err(error)) => Ok(Err(error.clone().into())),
         Err(err) => Err(anyhow::anyhow!(err.to_string())),
     }
-}
-
-fn serializable_future_invoke_get_result(
-    result: &FutureInvokeGetResult,
-) -> SerializableInvokeResult {
-    match result {
-        Ok(Ok(value)) => SerializableInvokeResult::Completed(Ok(value.clone())),
-        Ok(Err(error)) => {
-            let error: InternalRpcError = error.clone().into();
-            SerializableInvokeResult::Completed(Err(error.into()))
-        }
-        Err(err) => SerializableInvokeResult::Failed(err.to_string()),
-    }
-}
-
-fn serializable_future_invoke_get_result_to_wire(
-    result: SerializableInvokeResult,
-) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
-    match result {
-        SerializableInvokeResult::Pending => Err(anyhow::anyhow!(
-            "future-invoke-result.get replayed a pending result"
-        )),
-        SerializableInvokeResult::Completed(result) => match result {
-            Ok(value) => Ok(Ok(schema_value_to_wire_output(&value))),
-            Err(error) => {
-                let rpc_error: InternalRpcError = error.into();
-                Ok(Err(rpc_error.into()))
-            }
-        },
-        SerializableInvokeResult::Failed(error) => Err(anyhow::anyhow!(error)),
-    }
-}
-
-fn mark_future_invoke_get_consumed<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    this: Resource<FutureInvokeResult>,
-    request: HostRequestGolemRpcInvoke,
-    span_id: SpanId,
-    begin_index: OplogIndex,
-) -> anyhow::Result<()> {
-    let entry = ctx.table().get_mut(&this)?;
-    let state = entry
-        .payload
-        .as_any_mut()
-        .downcast_mut::<FutureInvokeResultState>()
-        .unwrap();
-    *state = FutureInvokeResultState::Consumed {
-        request,
-        span_id,
-        begin_index,
-    };
-    Ok(())
 }
 
 async fn finish_span_access<T, Ctx: WorkerCtx>(
@@ -1420,164 +946,218 @@ async fn finish_span_access<T, Ctx: WorkerCtx>(
     })
 }
 
-async fn finish_future_invoke_get<T, Ctx: WorkerCtx>(
-    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
-    begin_index: OplogIndex,
-    span_id: &SpanId,
-) -> anyhow::Result<()> {
-    end_durable_function_access(
-        accessor,
-        accessor.getter(),
-        DurableFunctionType::WriteRemote,
-        begin_index,
-        false,
-    )
-    .await
-    .map_err(anyhow::Error::from)?;
-    finish_span_access(accessor, span_id)
-        .await
-        .map_err(anyhow::Error::from)
-}
-
-async fn finish_future_invoke_if_open<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    begin_index: OplogIndex,
-    span_id: &SpanId,
-) -> anyhow::Result<()> {
-    if ctx.state.is_durable_scope_open(begin_index) {
-        ctx.end_function(&DurableFunctionType::WriteRemote, begin_index)
-            .await?;
-        ctx.finish_span(span_id).await?;
-    }
-    Ok(())
-}
-
-async fn finish_future_invoke_if_open_access<T, Ctx: WorkerCtx>(
-    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
-    begin_index: OplogIndex,
-    span_id: &SpanId,
-) -> anyhow::Result<()> {
-    let is_open = accessor.with(|mut access| access.get().state.is_durable_scope_open(begin_index));
-
-    if is_open {
-        end_durable_function_access(
-            accessor,
-            accessor.getter(),
-            DurableFunctionType::WriteRemote,
-            begin_index,
-            false,
-        )
-        .await
-        .map_err(anyhow::Error::from)?;
-        finish_span_access(accessor, span_id)
-            .await
-            .map_err(anyhow::Error::from)?;
-    }
-
-    Ok(())
-}
-
 impl<Ctx: WorkerCtx> HostFutureInvokeResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn get<T: Send>(
         accessor: &Accessor<T, Self>,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
         let this_rep = this.rep();
-        let snapshot = accessor.with(|mut access| {
-            snapshot_future_invoke_get(access.get(), Resource::new_borrow(this_rep))
-        })?;
 
-        if snapshot.cancelled {
-            accessor.with(|mut access| {
-                mark_future_invoke_get_consumed(
-                    access.get(),
-                    Resource::new_borrow(this_rep),
-                    snapshot.request,
-                    snapshot.span_id.clone(),
-                    snapshot.begin_index,
-                )
-            })?;
-            let rpc_error = InternalRpcError::ProtocolError {
-                details: "Invocation cancelled".to_string(),
-            };
-            return Ok(Err(rpc_error.into()));
+        // Decide what `get` must do while holding the state lock, then run the async terminal
+        // outside it. The durable call handle (and, on the live path, the background task) are taken
+        // out of the state here so the terminal runs while nothing in the resource table still owns
+        // them: a live handle left behind and later dropped would spuriously enqueue a `Cancelled`.
+        enum GetPlan {
+            /// The result is already known — a baked deterministic failure or a prior cancellation.
+            Ready {
+                result: anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>>,
+                span_id: SpanId,
+                finish_span: bool,
+            },
+            /// The single durable call is still open; drive it to its `End`. `request`,
+            /// `remote_agent_id`, and `env` are carried so a replay that finds an incomplete `Start`
+            /// (crash-after-`Start`) can re-dispatch the read-only RPC and complete it.
+            Active {
+                handle: FutureInvokeCallHandle,
+                task: Option<FutureInvokeTaskHandle>,
+                request: HostRequestGolemRpcInvoke,
+                remote_agent_id: OwnedAgentId,
+                env: Vec<(String, String)>,
+                span_id: SpanId,
+            },
         }
 
-        let function_type = DurableFunctionType::WriteRemoteBatched(Some(snapshot.begin_index));
-        let mut parent_scope_guard = FutureInvokeParentScopeGuard::armed(
-            accessor.with(|mut access| access.get().state.dropped_call_event_sender()),
-            snapshot.begin_index,
-            snapshot.span_id.clone(),
-        );
-        let mut call = match CallHandle::<GolemRpcFutureInvokeResultGet, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            snapshot.request.clone(),
-            function_type,
-        )
-        .await
-        {
-            Ok(call) => call,
-            Err(err) => {
-                parent_scope_guard.disarm();
-                return Err(anyhow::Error::from(err));
-            }
-        };
-
-        if !call.is_live() {
-            match call
-                .replay_access(accessor, accessor.getter())
-                .await
-                .map_err(anyhow::Error::from)?
-            {
-                CallReplayOutcome::Replayed(response) => {
-                    finish_future_invoke_get(accessor, snapshot.begin_index, &snapshot.span_id)
-                        .await?;
-                    parent_scope_guard.disarm();
-                    accessor.with(|mut access| {
-                        mark_future_invoke_get_consumed(
-                            access.get(),
-                            Resource::new_borrow(this_rep),
-                            snapshot.request,
-                            snapshot.span_id.clone(),
-                            snapshot.begin_index,
-                        )
-                    })?;
-                    return serializable_future_invoke_get_result_to_wire(response.result);
+        let plan = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.observe_function_call("golem::rpc::future-invoke-result", "get");
+            let entry = ctx
+                .table()
+                .get_mut(&Resource::<FutureInvokeResult>::new_borrow(this_rep))?;
+            let state = entry
+                .payload
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
+                .unwrap();
+            Ok::<_, anyhow::Error>(match state {
+                FutureInvokeResultState::Consumed { span_id, .. } => GetPlan::Ready {
+                    result: Err(anyhow::Error::new(ClassifiedHostError {
+                        kind: HostFailureKind::Permanent,
+                        message: "future-invoke-result already consumed".to_string(),
+                    })),
+                    span_id: span_id.clone(),
+                    finish_span: false,
+                },
+                FutureInvokeResultState::Baked { result, span_id } => {
+                    let wire = future_invoke_get_result_to_wire(
+                        future_invoke_task_result_to_get_result(result),
+                    );
+                    let span_id = span_id.clone();
+                    *state = FutureInvokeResultState::Consumed {
+                        span_id: span_id.clone(),
+                    };
+                    GetPlan::Ready {
+                        result: wire,
+                        span_id,
+                        finish_span: true,
+                    }
                 }
-                CallReplayOutcome::Incomplete(live) => call = live,
+                FutureInvokeResultState::Cancelled { span_id } => {
+                    let rpc_error = InternalRpcError::ProtocolError {
+                        details: "Invocation cancelled".to_string(),
+                    };
+                    let span_id = span_id.clone();
+                    *state = FutureInvokeResultState::Consumed {
+                        span_id: span_id.clone(),
+                    };
+                    GetPlan::Ready {
+                        result: Ok(Err(rpc_error.into())),
+                        span_id,
+                        // The span was already finished by `cancel`.
+                        finish_span: false,
+                    }
+                }
+                FutureInvokeResultState::Active {
+                    handle,
+                    task,
+                    request,
+                    remote_agent_id,
+                    env,
+                    span_id,
+                } => {
+                    let handle = handle
+                        .take()
+                        .ok_or_else(|| anyhow::anyhow!("future-invoke-result already consumed"))?;
+                    GetPlan::Active {
+                        handle,
+                        task: task.take(),
+                        request: request.clone(),
+                        remote_agent_id: remote_agent_id.clone(),
+                        env: env.clone(),
+                        span_id: span_id.clone(),
+                    }
+                }
+            })
+        })?;
+
+        match plan {
+            GetPlan::Ready {
+                result,
+                span_id,
+                finish_span,
+            } => {
+                if finish_span {
+                    finish_span_access(accessor, &span_id).await?;
+                }
+                result
+            }
+            GetPlan::Active {
+                mut handle,
+                task,
+                request,
+                remote_agent_id,
+                env,
+                span_id,
+            } => {
+                let response = if handle.is_live() {
+                    let task =
+                        task.expect("a live future-invoke-result must own its background task");
+                    let task_result = {
+                        let mut task = task.lock().await;
+                        (&mut *task).await
+                    };
+                    match task_result {
+                        Ok(rpc_result) => handle
+                            .complete_access(
+                                accessor,
+                                accessor.getter(),
+                                HostResponseGolemRpcInvokeAndAwait {
+                                    result: rpc_result.map_err(Into::into),
+                                },
+                            )
+                            .await
+                            .map_err(anyhow::Error::from)?,
+                        Err(err) => {
+                            // The background RPC failed hard after its in-task retries. This is a
+                            // trap, not a durable result: abandon the call, leaving its `Start`
+                            // incomplete for durable-scope recovery, instead of recording an `End`.
+                            return Err(handle.trap(anyhow::anyhow!(err.to_string())));
+                        }
+                    }
+                } else {
+                    match handle
+                        .replay_access(accessor, accessor.getter())
+                        .await
+                        .map_err(anyhow::Error::from)?
+                    {
+                        CallReplayOutcome::Replayed(response) => response,
+                        CallReplayOutcome::Incomplete(mut live) => {
+                            // Crash-after-`Start` recovery: the eager `Start` is committed but its
+                            // terminal was never written. A read-only `WriteRemote` call is safe to
+                            // re-execute, so re-dispatch the RPC now and complete the existing `Start`
+                            // (mirrors the synchronous path's `Incomplete` -> re-run).
+                            let retry_point = live.begin_index();
+                            let mut task = accessor.with(|mut access| {
+                                let ctx = access.get();
+                                spawn_invoke_and_await_task(
+                                    ctx,
+                                    &remote_agent_id,
+                                    request.idempotency_key.clone(),
+                                    request.method_name.clone(),
+                                    request.input.clone(),
+                                    env.clone(),
+                                    &span_id,
+                                    retry_point,
+                                )
+                            });
+                            match (&mut task).await {
+                                Ok(rpc_result) => live
+                                    .complete_access(
+                                        accessor,
+                                        accessor.getter(),
+                                        HostResponseGolemRpcInvokeAndAwait {
+                                            result: rpc_result.map_err(Into::into),
+                                        },
+                                    )
+                                    .await
+                                    .map_err(anyhow::Error::from)?,
+                                Err(err) => {
+                                    return Err(live.trap(anyhow::anyhow!(err.to_string())));
+                                }
+                            }
+                        }
+                    }
+                };
+
+                finish_span_access(accessor, &span_id).await?;
+                accessor.with(|mut access| {
+                    let ctx = access.get();
+                    let entry = ctx
+                        .table()
+                        .get_mut(&Resource::<FutureInvokeResult>::new_borrow(this_rep))?;
+                    let state = entry
+                        .payload
+                        .as_any_mut()
+                        .downcast_mut::<FutureInvokeResultState>()
+                        .unwrap();
+                    *state = FutureInvokeResultState::Consumed {
+                        span_id: span_id.clone(),
+                    };
+                    Ok::<_, anyhow::Error>(())
+                })?;
+
+                invoke_and_await_response_to_wire(response.result)
             }
         }
-
-        let action = accessor.with(|mut access| {
-            prepare_future_invoke_get_action(access.get(), Resource::new_borrow(this_rep))
-        })?;
-        let result = match run_future_invoke_get_action(action).await {
-            FutureInvokeGetActionResult::Ready(result) => result,
-            FutureInvokeGetActionResult::Awaited(task_result) => {
-                future_invoke_task_result_to_get_result(&task_result)
-            }
-        };
-        let response = HostResponseGolemRpcInvokeGet {
-            result: serializable_future_invoke_get_result(&result),
-        };
-        let response = call
-            .complete_access(accessor, accessor.getter(), response)
-            .await
-            .map_err(anyhow::Error::from)?;
-        finish_future_invoke_get(accessor, snapshot.begin_index, &snapshot.span_id).await?;
-        parent_scope_guard.disarm();
-        accessor.with(|mut access| {
-            mark_future_invoke_get_consumed(
-                access.get(),
-                Resource::new_borrow(this_rep),
-                snapshot.request,
-                snapshot.span_id.clone(),
-                snapshot.begin_index,
-            )
-        })?;
-
-        serializable_future_invoke_get_result_to_wire(response.result)
     }
 
     async fn drop<T>(
@@ -1585,30 +1165,60 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResultWithStore for HasSelf<DurableWorkerCt
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<()> {
         let future_rep = this.rep();
-        let drop_snapshot = accessor.with(|mut access| {
+
+        enum DropPlan {
+            /// An open durable call must be cancelled and its span finished.
+            Cancel {
+                handle: FutureInvokeCallHandle,
+                span_id: SpanId,
+            },
+            /// No durable call, but the invocation span of a baked failure is still open.
+            FinishSpan { span_id: SpanId },
+            /// Nothing to finish — already consumed or cancelled.
+            Nothing,
+        }
+
+        let plan = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("golem::rpc::future-invoke-result", "drop");
-            snapshot_future_invoke_drop(ctx, Resource::new_borrow(future_rep))
+            let entry = ctx
+                .table()
+                .get_mut(&Resource::<FutureInvokeResult>::new_borrow(future_rep))?;
+            let state = entry
+                .payload
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
+                .unwrap();
+            Ok::<_, anyhow::Error>(match state {
+                FutureInvokeResultState::Active {
+                    handle, span_id, ..
+                } => match handle.take() {
+                    Some(handle) => DropPlan::Cancel {
+                        handle,
+                        span_id: span_id.clone(),
+                    },
+                    None => DropPlan::Nothing,
+                },
+                FutureInvokeResultState::Baked { span_id, .. } => DropPlan::FinishSpan {
+                    span_id: span_id.clone(),
+                },
+                FutureInvokeResultState::Cancelled { .. }
+                | FutureInvokeResultState::Consumed { .. } => DropPlan::Nothing,
+            })
         })?;
 
-        if let Some(snapshot) = &drop_snapshot {
-            if let Some(request) = &snapshot.request {
-                let handle =
-                    CallHandle::<GolemRpcFutureInvokeResultGet, Cancellable>::start_access(
-                        accessor,
-                        accessor.getter(),
-                        request.clone(),
-                        DurableFunctionType::WriteRemoteBatched(Some(snapshot.begin_index)),
-                    )
-                    .await?;
-
+        match plan {
+            DropPlan::Cancel { handle, span_id } => {
                 handle
                     .cancel_access(accessor, accessor.getter(), None)
-                    .await?;
+                    .await
+                    .map_err(anyhow::Error::from)?;
+                finish_span_access(accessor, &span_id).await?;
             }
-
-            finish_future_invoke_if_open_access(accessor, snapshot.begin_index, &snapshot.span_id)
-                .await?;
+            DropPlan::FinishSpan { span_id } => {
+                finish_span_access(accessor, &span_id).await?;
+            }
+            DropPlan::Nothing => {}
         }
 
         accessor.with(|mut access| {
@@ -1639,66 +1249,68 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         self.check_read_only_allows("golem::rpc::future-invoke-result::cancel")
             .map_err(wasmtime::Error::from)?;
 
-        let (should_attempt_remote_cancel, remote_agent_id, idempotency_key, request) = {
-            let entry = self.table().get(&this)?;
+        // Decide what to cancel while holding the table borrow, taking the durable call handle out
+        // of the state (a live handle must never drop while still owned here). The background task,
+        // if any, is dropped together with the old `Active` state, aborting the in-flight RPC.
+        enum CancelPlan {
+            /// The single durable call is still open; record its `Cancelled` and, for a live call,
+            /// best-effort cancel the remote invocation.
+            Cancel {
+                handle: FutureInvokeCallHandle,
+                remote_agent_id: AgentId,
+                idempotency_key: IdempotencyKey,
+                span_id: SpanId,
+            },
+            /// Nothing to cancel: a baked failure, or already cancelled / consumed.
+            Nothing,
+        }
+
+        let plan = {
+            let entry = self.table().get_mut(&this)?;
             let state = entry
                 .payload
-                .as_any()
-                .downcast_ref::<FutureInvokeResultState>()
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
                 .unwrap();
             match state {
-                FutureInvokeResultState::Pending { request, .. } => (
-                    true,
-                    request.remote_agent_id.clone(),
-                    request.idempotency_key.clone(),
-                    request.clone(),
-                ),
-                FutureInvokeResultState::Deferred {
-                    remote_agent_id,
-                    idempotency_key,
-                    method_name,
-                    method_parameters,
+                FutureInvokeResultState::Active {
+                    handle,
+                    request,
+                    span_id,
                     ..
-                } => (
-                    true,
-                    remote_agent_id.agent_id(),
-                    idempotency_key.clone(),
-                    HostRequestGolemRpcInvoke {
-                        remote_agent_id: remote_agent_id.agent_id(),
-                        idempotency_key: idempotency_key.clone(),
-                        method_name: method_name.clone(),
-                        input: method_parameters.clone(),
-                        remote_agent_type: None,
-                        remote_agent_parameters: None,
-                    },
-                ),
-                FutureInvokeResultState::Completed { request, .. }
-                | FutureInvokeResultState::Cancelled { request, .. }
-                | FutureInvokeResultState::Consumed { request, .. } => (
-                    false,
-                    request.remote_agent_id.clone(),
-                    request.idempotency_key.clone(),
-                    request.clone(),
-                ),
+                } => match handle.take() {
+                    Some(handle) => {
+                        let remote_agent_id = request.remote_agent_id.clone();
+                        let idempotency_key = request.idempotency_key.clone();
+                        let span_id = span_id.clone();
+                        *state = FutureInvokeResultState::Cancelled {
+                            span_id: span_id.clone(),
+                        };
+                        CancelPlan::Cancel {
+                            handle,
+                            remote_agent_id,
+                            idempotency_key,
+                            span_id,
+                        }
+                    }
+                    None => CancelPlan::Nothing,
+                },
+                FutureInvokeResultState::Baked { .. }
+                | FutureInvokeResultState::Cancelled { .. }
+                | FutureInvokeResultState::Consumed { .. } => CancelPlan::Nothing,
             }
         };
 
-        let mut handle = CallHandle::<GolemRpcFutureInvokeResultCancel, NotCancellable>::start(
-            self,
-            request,
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
-
-        'cancel: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(_) => break 'cancel,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
-                }
-            }
-
-            if should_attempt_remote_cancel
+        if let CancelPlan::Cancel {
+            handle,
+            remote_agent_id,
+            idempotency_key,
+            span_id,
+        } = plan
+        {
+            // Best-effort remote cancellation, only meaningful for a live call — on replay the
+            // recorded `Cancelled` is re-applied without re-issuing the side effect.
+            if handle.is_live()
                 && let Err(err) = self
                     .worker_proxy()
                     .cancel_invocation(&remote_agent_id, idempotency_key, &self.agent_auth_ctx())
@@ -1707,60 +1319,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 tracing::info!(err=%err, "Best-effort cancel_invocation failed");
             }
 
-            handle.complete(self, HostResponseGolemRpcUnit {}).await?;
-        }
-
-        // Transition deferred/pending futures to Cancelled so they won't be initiated on recovery
-        {
-            let entry = self.table().get_mut(&this)?;
-            let state = entry
-                .payload
-                .as_any_mut()
-                .downcast_mut::<FutureInvokeResultState>()
-                .unwrap();
-            match state {
-                FutureInvokeResultState::Deferred {
-                    remote_agent_id,
-                    method_name,
-                    method_parameters,
-                    idempotency_key,
-                    span_id,
-                    begin_index,
-                    ..
-                } => {
-                    *state = FutureInvokeResultState::Cancelled {
-                        request: HostRequestGolemRpcInvoke {
-                            remote_agent_id: remote_agent_id.agent_id(),
-                            idempotency_key: idempotency_key.clone(),
-                            method_name: method_name.clone(),
-                            input: method_parameters.clone(),
-                            remote_agent_type: None,
-                            remote_agent_parameters: None,
-                        },
-                        span_id: span_id.clone(),
-                        begin_index: *begin_index,
-                    };
-                }
-                FutureInvokeResultState::Pending {
-                    request,
-                    span_id,
-                    begin_index,
-                    ..
-                } => {
-                    *state = FutureInvokeResultState::Cancelled {
-                        request: request.clone(),
-                        span_id: span_id.clone(),
-                        begin_index: *begin_index,
-                    };
-                }
-                _ => {} // Completed/Consumed/already Cancelled - no-op
-            }
-        }
-
-        if let Some((begin_index, span_id)) =
-            future_invoke_parent_scope(self, Resource::new_borrow(this.rep()))?
-        {
-            finish_future_invoke_if_open(self, begin_index, &span_id).await?;
+            handle
+                .cancel(self, None)
+                .await
+                .map_err(anyhow::Error::from)?;
+            self.finish_span(&span_id).await?;
         }
 
         Ok(())
@@ -2018,6 +1581,62 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     )
 }
 
+/// Spawns the background RPC task for one `async-invoke-and-await` future, building the in-task
+/// retry context from the current worker state. Used both when the future is first created (live)
+/// and by `get` when replay finds the eager `Start` committed without a terminal (crash-after-`Start`
+/// recovery), where the read-only call is re-dispatched to complete the existing `Start`. Retries
+/// are enabled unless the call was initiated inside an atomic region.
+fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_agent_id: &OwnedAgentId,
+    idempotency_key: IdempotencyKey,
+    method_name: String,
+    input: SchemaValue,
+    env: Vec<(String, String)>,
+    span_id: &SpanId,
+    retry_point: OplogIndex,
+) -> AbortOnDropJoinHandle<FutureInvokeTaskResult> {
+    let rpc = ctx.rpc();
+    let created_by = ctx.created_by();
+    let agent_id = ctx.agent_id().clone();
+    let auth_ctx = ctx.agent_auth_ctx();
+    let stack = ctx.clone_as_inherited_stack(span_id);
+
+    let retry_params = if ctx.in_atomic_region() {
+        None
+    } else {
+        let mut retry_properties =
+            RetryContext::rpc("invoke-and-await", remote_agent_id, &method_name);
+        ctx.state.enrich_retry_properties(&mut retry_properties);
+        Some(TaskRetryParams {
+            environment_state_service: ctx.state.environment_state_service.clone(),
+            environment_id: ctx.state.owned_agent_id.environment_id,
+            default_retry_policy: NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
+            agent_config_retry_policies: ctx.state.agent_config_retry_policies(),
+            runtime_retry_policy_mutations: ctx.state.runtime_retry_policy_mutations.clone(),
+            retry_properties,
+            max_in_function_retry_delay: ctx.durable_execution_state().max_in_function_retry_delay,
+            worker: ctx.public_state.worker(),
+            retry_point,
+            execution_status: ctx.execution_status.clone(),
+        })
+    };
+
+    spawn_rpc_task_with_retry(
+        rpc,
+        remote_agent_id.clone(),
+        idempotency_key,
+        method_name,
+        input,
+        created_by,
+        agent_id,
+        env,
+        stack,
+        retry_params,
+        auth_ctx,
+    )
+}
+
 pub struct WasmRpcEntryPayload {
     #[allow(dead_code)]
     pub demand: Box<dyn RpcDemand>,
@@ -2156,72 +1775,47 @@ pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
 
 #[allow(clippy::large_enum_variant)]
 enum FutureInvokeResultState {
-    Pending {
+    /// The eager host-call `Start` has been written (live) or claimed from the oplog (replay). The
+    /// single [`FutureInvokeCallHandle`] owns both halves of the durable call: `get` finishes it
+    /// with an `End`, `cancel` / `drop` with a `Cancelled`. It is always `take`n out of the state
+    /// before a terminal runs, so a live handle is never dropped while still owned here (which would
+    /// spuriously enqueue a `Cancelled`).
+    ///
+    /// `task` is `Some` only on the live path — the background RPC task whose result feeds the `End`.
+    /// On the replay path it is `None`: `get` replays the recorded `End`. If replay instead finds an
+    /// incomplete `Start` (the worker crashed after the eager `Start` but before its terminal), `get`
+    /// re-dispatches the read-only RPC — using `remote_agent_id`, `request`, and `env` — and
+    /// completes the existing `Start`.
+    Active {
+        handle: Option<FutureInvokeCallHandle>,
+        task: Option<FutureInvokeTaskHandle>,
         request: HostRequestGolemRpcInvoke,
-        handle: FutureInvokeTaskHandle,
-        span_id: SpanId,
-        begin_index: OplogIndex,
-    },
-    Completed {
-        request: HostRequestGolemRpcInvoke,
-        result: Result<Result<SchemaValue, InternalRpcError>, Error>,
-        span_id: SpanId,
-        begin_index: OplogIndex,
-    },
-    Deferred {
         remote_agent_id: OwnedAgentId,
-        self_agent_id: AgentId,
-        self_created_by: AccountId,
         env: Vec<(String, String)>,
-        method_name: String,
-        method_parameters: SchemaValue,
-        idempotency_key: IdempotencyKey,
         span_id: SpanId,
-        begin_index: OplogIndex,
-        auth_ctx: AuthCtx,
     },
-    Cancelled {
-        request: HostRequestGolemRpcInvoke,
+    /// Method resolution / input lifting failed deterministically before any host call was opened,
+    /// so no `Start` / `End` is written for this future. `get` surfaces the baked error and finishes
+    /// the span. Live and replay agree because the failure is a pure function of the cached remote
+    /// agent type and the guest payload.
+    Baked {
+        result: FutureInvokeTaskResult,
         span_id: SpanId,
-        begin_index: OplogIndex,
     },
-    Consumed {
-        request: HostRequestGolemRpcInvoke,
-        span_id: SpanId,
-        begin_index: OplogIndex,
-    },
+    /// The future was cancelled: its host call recorded a `Cancelled` and its span was finished.
+    /// `get` returns a cancellation error without touching the oplog.
+    Cancelled { span_id: SpanId },
+    /// `get` already produced the result and finished the span; a second `get` traps.
+    Consumed { span_id: SpanId },
 }
 
 impl Debug for FutureInvokeResultState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Pending { .. } => write!(f, "Pending"),
-            Self::Completed { .. } => write!(f, "Completed"),
-            Self::Deferred { .. } => write!(f, "Deferred"),
+            Self::Active { .. } => write!(f, "Active"),
+            Self::Baked { .. } => write!(f, "Baked"),
             Self::Cancelled { .. } => write!(f, "Cancelled"),
             Self::Consumed { .. } => write!(f, "Consumed"),
-        }
-    }
-}
-
-impl FutureInvokeResultState {
-    pub fn span_id(&self) -> &SpanId {
-        match self {
-            Self::Pending { span_id, .. }
-            | Self::Completed { span_id, .. }
-            | Self::Deferred { span_id, .. }
-            | Self::Cancelled { span_id, .. }
-            | Self::Consumed { span_id, .. } => span_id,
-        }
-    }
-
-    pub fn begin_index(&self) -> OplogIndex {
-        match self {
-            Self::Pending { begin_index, .. } => *begin_index,
-            Self::Completed { begin_index, .. } => *begin_index,
-            Self::Deferred { begin_index, .. } => *begin_index,
-            Self::Cancelled { begin_index, .. } => *begin_index,
-            Self::Consumed { begin_index, .. } => *begin_index,
         }
     }
 }
@@ -2229,27 +1823,9 @@ impl FutureInvokeResultState {
 #[async_trait]
 impl SubscribeAny for FutureInvokeResultState {
     async fn ready(&mut self) {
-        if let Self::Pending {
-            handle,
-            request,
-            span_id,
-            begin_index,
-        } = self
-        {
-            let result = {
-                let mut handle = handle.lock().await;
-                (&mut *handle).await
-            };
-            let request = request.clone();
-            let span_id = span_id.clone();
-            let begin_index = *begin_index;
-            *self = Self::Completed {
-                result,
-                request,
-                span_id,
-                begin_index,
-            };
-        }
+        // The p3 `future-invoke-result` resource exposes no `subscribe`, so this pollable-readiness
+        // hook is never driven: `get` is the sole consumer and awaits the background task directly.
+        // Kept only to satisfy the `SubscribeAny` bound of the resource-table payload.
     }
 
     fn as_any(&self) -> &dyn Any {

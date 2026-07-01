@@ -2991,7 +2991,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         _update_state_lock_guard: &MutexGuard<'_, ()>,
         commit_level: CommitLevel,
     ) -> bool {
-        let new_entries = self.oplog.commit(commit_level).await;
+        // Run the oplog commit on a dedicated Tokio task rather than awaiting it directly.
+        //
+        // Under the p3 concurrent guest model a durable host call (e.g. an async RPC's
+        // `future-invoke-result.get`) completes inside a `wasmtime` `run_concurrent` host future,
+        // and its terminal path calls back into here. `oplog.commit()` ultimately awaits a blocking
+        // `sqlx` SQLite operation whose readiness is signalled from a driver-owned worker thread.
+        // `run_concurrent` does not reliably re-poll such a host future from an external wakeup when
+        // it is the only in-flight subtask (see wasmtime issues #11869 / #11870), so awaiting the
+        // commit inline can wedge forever once concurrent siblings have gone quiet. Driving the
+        // commit on a Tokio task and awaiting its `JoinHandle` keeps the SQLite future on the Tokio
+        // runtime; the host future then only awaits the join, which resumes reliably.
+        let new_entries = {
+            let oplog = self.oplog.clone();
+            tokio::spawn(async move { oplog.commit(commit_level).await })
+                .await
+                .expect("oplog commit task panicked")
+        };
 
         if !self.last_known_status_detached.load(Ordering::Acquire) {
             let old_status = self.last_known_status.read().await.clone();
