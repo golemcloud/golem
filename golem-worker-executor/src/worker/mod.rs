@@ -2991,22 +2991,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         _update_state_lock_guard: &MutexGuard<'_, ()>,
         commit_level: CommitLevel,
     ) -> bool {
-        // Run the oplog commit on a dedicated Tokio task rather than awaiting it directly.
+        // The oplog commit is run on a Tokio task rather than awaited inline.
         //
-        // Under the p3 concurrent guest model a durable host call (e.g. an async RPC's
-        // `future-invoke-result.get`) completes inside a `wasmtime` `run_concurrent` host future,
-        // and its terminal path calls back into here. `oplog.commit()` ultimately awaits a blocking
-        // `sqlx` SQLite operation whose readiness is signalled from a driver-owned worker thread.
-        // `run_concurrent` does not reliably re-poll such a host future from an external wakeup when
-        // it is the only in-flight subtask (see wasmtime issues #11869 / #11870), so awaiting the
-        // commit inline can wedge forever once concurrent siblings have gone quiet. Driving the
-        // commit on a Tokio task and awaiting its `JoinHandle` keeps the SQLite future on the Tokio
-        // runtime; the host future then only awaits the join, which resumes reliably.
+        // When a p3 concurrent durable host call commits its terminal entry (e.g. an async RPC's
+        // `future-invoke-result.get` writing its `End`), this executes inside a `wasmtime`
+        // `run_concurrent` host future. `oplog.commit()` acquires the oplog's FIFO async locks and
+        // awaits a blocking `sqlx` SQLite write. `run_concurrent` has a documented store-blocking
+        // limitation for a host future that inline-drives such a composed async operation while it
+        // is the last effectively-active subtask (here the sibling commits are serialized behind
+        // `update_state_lock`): the inline commit can stop making progress despite wake events and
+        // wedge the whole invocation. See the "Store-blocking behavior" section of wasmtime's
+        // `run_concurrent` docs and the tracking issues:
+        //   https://github.com/bytecodealliance/wasmtime/issues/11869
+        //   https://github.com/bytecodealliance/wasmtime/issues/11870
+        // Running the entire commit on a Tokio task and awaiting its handle keeps that work off the
+        // host-future poller — the same shape as an async RPC's own background task, which resumes
+        // reliably. Offloading only the inner storage write is not enough; the host future must hold
+        // no oplog frames across the await. This workaround can be removed once the wasmtime issues
+        // above are fixed.
+        //
+        // The caller still awaits the result before proceeding, so the "durably committed before we
+        // move on" barrier is preserved. `AbortOnDropJoinHandle` keeps the original inline
+        // cancellation semantics: if this future is dropped, the commit task is aborted rather than
+        // left running detached.
         let new_entries = {
             let oplog = self.oplog.clone();
-            tokio::spawn(async move { oplog.commit(commit_level).await })
-                .await
-                .expect("oplog commit task panicked")
+            wasmtime_wasi::runtime::spawn(async move { oplog.commit(commit_level).await }).await
         };
 
         if !self.last_known_status_detached.load(Ordering::Acquire) {
