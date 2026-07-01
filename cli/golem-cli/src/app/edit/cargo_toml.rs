@@ -301,6 +301,196 @@ pub fn upsert_dependency_auto(
     }
 }
 
+/// Where a dependency located by crate identity is declared, including target-specific tables.
+///
+/// This is distinct from [`DependencyLocation`] because it can also address
+/// `[target.<triple>.dependencies]` tables, which the crate-identity matchers scan but the
+/// name-based SDK dependency flow does not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MatchedDependencyLocation {
+    /// A top-level `[dependencies]` or `[build-dependencies]` table.
+    Package(DependencyTable),
+    /// A `[target.<triple>.dependencies]` or `[target.<triple>.build-dependencies]` table.
+    TargetSpecific {
+        target: String,
+        table: DependencyTable,
+    },
+    /// The `[workspace.dependencies]` table.
+    Workspace,
+}
+
+/// A dependency located by its crate identity: the explicit `package` value if present,
+/// otherwise the dependency's TOML map key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchedDependency {
+    /// The TOML map key of the dependency (differs from `crate_name` when a `package` alias is used).
+    pub key: String,
+    /// The crate identity: the explicit `package` value if present, otherwise the map key.
+    pub crate_name: String,
+    /// Where the dependency is declared.
+    pub location: MatchedDependencyLocation,
+    /// The current dependency spec.
+    pub spec: DependencySpec,
+}
+
+/// Finds dependencies in `[dependencies]`, `[build-dependencies]`, and their
+/// `[target.<triple>.*]` variants whose crate identity is in `crate_names`. Dev-dependencies and
+/// `{ workspace = true }` references are ignored (the latter are defined in
+/// `[workspace.dependencies]`).
+pub fn find_package_dependencies_by_crate_name(
+    source: &str,
+    crate_names: &BTreeSet<String>,
+) -> anyhow::Result<Vec<MatchedDependency>> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    let mut result = Vec::new();
+
+    collect_matched_package_dependencies(doc.as_table(), crate_names, &mut result, |table| {
+        MatchedDependencyLocation::Package(table)
+    });
+
+    if let Some(targets) = doc.get("target").and_then(|item| item.as_table_like()) {
+        for (target, target_item) in targets.iter() {
+            if let Some(target_table) = target_item.as_table_like() {
+                collect_matched_package_dependencies(
+                    target_table,
+                    crate_names,
+                    &mut result,
+                    |table| MatchedDependencyLocation::TargetSpecific {
+                        target: target.to_string(),
+                        table,
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn collect_matched_package_dependencies(
+    container: &dyn TableLike,
+    crate_names: &BTreeSet<String>,
+    result: &mut Vec<MatchedDependency>,
+    make_location: impl Fn(DependencyTable) -> MatchedDependencyLocation,
+) {
+    for table in [
+        DependencyTable::Dependencies,
+        DependencyTable::BuildDependencies,
+    ] {
+        if let Some(dependencies) = container
+            .get(table.as_str())
+            .and_then(|item| item.as_table_like())
+        {
+            for (key, item) in dependencies.iter() {
+                if is_workspace_ref(item) {
+                    continue;
+                }
+                let crate_name = dependency_package(item).unwrap_or_else(|| key.to_string());
+                if crate_names.contains(&crate_name)
+                    && let Some(spec) = dependency_spec(item)
+                {
+                    result.push(MatchedDependency {
+                        key: key.to_string(),
+                        crate_name,
+                        location: make_location(table),
+                        spec,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Finds dependencies in `[workspace.dependencies]` whose crate identity is in `crate_names`.
+pub fn find_workspace_dependencies_by_crate_name(
+    source: &str,
+    crate_names: &BTreeSet<String>,
+) -> anyhow::Result<Vec<MatchedDependency>> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    let mut result = Vec::new();
+
+    if let Some(table) = doc
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(|deps| deps.as_table_like())
+    {
+        for (key, item) in table.iter() {
+            let crate_name = dependency_package(item).unwrap_or_else(|| key.to_string());
+            if crate_names.contains(&crate_name)
+                && let Some(spec) = dependency_spec(item)
+            {
+                result.push(MatchedDependency {
+                    key: key.to_string(),
+                    crate_name,
+                    location: MatchedDependencyLocation::Workspace,
+                    spec,
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Sets the `path` field of an existing dependency entry in place, preserving other keys such as
+/// `package` and `features`. A bare version-string entry is replaced with an inline table that
+/// only contains `path`.
+pub fn set_dependency_path(
+    source: &str,
+    location: MatchedDependencyLocation,
+    key: &str,
+    new_path: &str,
+) -> anyhow::Result<String> {
+    let mut doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+
+    let item = match location {
+        MatchedDependencyLocation::Package(table) => doc
+            .get_mut(table.as_str())
+            .and_then(|item| item.as_table_like_mut())
+            .and_then(|table| table.get_mut(key)),
+        MatchedDependencyLocation::TargetSpecific { target, table } => doc
+            .get_mut("target")
+            .and_then(|item| item.as_table_like_mut())
+            .and_then(|targets| targets.get_mut(&target))
+            .and_then(|target_item| target_item.as_table_like_mut())
+            .and_then(|target_table| target_table.get_mut(table.as_str()))
+            .and_then(|item| item.as_table_like_mut())
+            .and_then(|deps| deps.get_mut(key)),
+        MatchedDependencyLocation::Workspace => doc
+            .get_mut("workspace")
+            .and_then(|workspace| workspace.as_table_like_mut())
+            .and_then(|workspace| workspace.get_mut("dependencies"))
+            .and_then(|deps| deps.as_table_like_mut())
+            .and_then(|deps| deps.get_mut(key)),
+    };
+
+    let Some(item) = item else {
+        return Ok(source.to_string());
+    };
+
+    if let Some(table) = item.as_table_like_mut() {
+        // Converting to a local path dependency: drop any source or version keys that would
+        // conflict with, or over-constrain, a path dependency (e.g. a retained `version` must be
+        // satisfied by the local crate's version). Keys such as `package` and `features` are kept.
+        for conflicting in ["version", "git", "registry", "branch", "tag", "rev"] {
+            table.remove(conflicting);
+        }
+        table.insert("path", value(new_path));
+    } else {
+        *item = inline_path_dep(new_path, &[]);
+    }
+
+    Ok(doc.to_string())
+}
+
+fn dependency_package(item: &Item) -> Option<String> {
+    item.as_table_like()
+        .and_then(|table| table.get("package"))
+        .and_then(|package| package.as_value())
+        .and_then(|package| package.as_str())
+        .map(str::to_string)
+}
+
 fn merge_table(
     doc: &mut DocumentMut,
     table_name: &str,
@@ -425,6 +615,13 @@ fn dependency_spec(item: &Item) -> Option<DependencySpec> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+
+    // A dependency with an explicit non-registry source (`git`) or a custom `registry` cannot be
+    // reduced to a plain version or rewritten to a path without corrupting the spec, so it is
+    // treated as unsupported regardless of any accompanying `path` or `version` keys.
+    if table.contains_key("git") || table.contains_key("registry") {
+        return Some(DependencySpec::Unsupported(item.to_string()));
+    }
 
     if let Some(path) = table
         .get("path")
@@ -698,5 +895,227 @@ mod tests {
         let refs = collect_workspace_dependency_refs(source).unwrap();
 
         assert_eq!(refs, BTreeSet::from(["guest".to_string()]));
+    }
+
+    #[test]
+    fn find_package_dependencies_matches_by_key_and_package_alias() {
+        let source = r#"
+            [package]
+            name = "consumer"
+
+            [dependencies]
+            bar-agent-guest-client = { path = "../old" }
+            aliased = { package = "foo-agent-guest-client", path = "../foo" }
+            unrelated = "1"
+
+            [build-dependencies]
+            baz-agent-guest-client = "0.0.0"
+        "#;
+
+        let crate_names = BTreeSet::from([
+            "bar-agent-guest-client".to_string(),
+            "foo-agent-guest-client".to_string(),
+            "baz-agent-guest-client".to_string(),
+        ]);
+        let matches = find_package_dependencies_by_crate_name(source, &crate_names).unwrap();
+
+        let by_crate = matches
+            .iter()
+            .map(|m| (m.crate_name.as_str(), m))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(by_crate.len(), 3);
+        assert_eq!(
+            by_crate["bar-agent-guest-client"].key,
+            "bar-agent-guest-client"
+        );
+        assert_eq!(
+            by_crate["bar-agent-guest-client"].location,
+            MatchedDependencyLocation::Package(DependencyTable::Dependencies)
+        );
+        assert_eq!(by_crate["foo-agent-guest-client"].key, "aliased");
+        assert_eq!(
+            by_crate["baz-agent-guest-client"].location,
+            MatchedDependencyLocation::Package(DependencyTable::BuildDependencies)
+        );
+    }
+
+    #[test]
+    fn git_or_registry_dependencies_are_matched_as_unsupported() {
+        let source = r#"
+            [dependencies]
+            a-agent-guest-client = { git = "https://example.com/a.git", version = "1" }
+            b-agent-guest-client = { git = "https://example.com/b.git", path = "../b" }
+            c-agent-guest-client = { registry = "custom", version = "1" }
+        "#;
+
+        let crate_names = BTreeSet::from([
+            "a-agent-guest-client".to_string(),
+            "b-agent-guest-client".to_string(),
+            "c-agent-guest-client".to_string(),
+        ]);
+        let matches = find_package_dependencies_by_crate_name(source, &crate_names).unwrap();
+
+        assert_eq!(matches.len(), 3);
+        for matched in matches {
+            assert!(
+                matches!(matched.spec, DependencySpec::Unsupported(_)),
+                "{} should be unsupported, got {:?}",
+                matched.crate_name,
+                matched.spec
+            );
+        }
+    }
+
+    #[test]
+    fn find_package_dependencies_matches_target_specific_table() {
+        let source = r#"
+            [package]
+            name = "consumer"
+
+            [target.wasm32-wasip2.dependencies]
+            bar-agent-guest-client = { path = "../old" }
+
+            [target.'cfg(unix)'.dev-dependencies]
+            foo-agent-guest-client = { path = "../foo" }
+        "#;
+
+        let crate_names = BTreeSet::from([
+            "bar-agent-guest-client".to_string(),
+            "foo-agent-guest-client".to_string(),
+        ]);
+        let matches = find_package_dependencies_by_crate_name(source, &crate_names).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].crate_name, "bar-agent-guest-client");
+        assert_eq!(
+            matches[0].location,
+            MatchedDependencyLocation::TargetSpecific {
+                target: "wasm32-wasip2".to_string(),
+                table: DependencyTable::Dependencies,
+            }
+        );
+    }
+
+    #[test]
+    fn find_package_dependencies_ignores_workspace_refs_and_dev_dependencies() {
+        let source = r#"
+            [package]
+            name = "consumer"
+
+            [dependencies]
+            bar-agent-guest-client = { workspace = true }
+
+            [dev-dependencies]
+            foo-agent-guest-client = { path = "../foo" }
+        "#;
+
+        let crate_names = BTreeSet::from([
+            "bar-agent-guest-client".to_string(),
+            "foo-agent-guest-client".to_string(),
+        ]);
+        let matches = find_package_dependencies_by_crate_name(source, &crate_names).unwrap();
+
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn find_workspace_dependencies_matches_by_package_alias() {
+        let source = r#"
+            [workspace]
+            members = ["consumer"]
+
+            [workspace.dependencies]
+            bar = { package = "bar-agent-guest-client", path = "old/path" }
+            other = { path = "other" }
+        "#;
+
+        let crate_names = BTreeSet::from(["bar-agent-guest-client".to_string()]);
+        let matches = find_workspace_dependencies_by_crate_name(source, &crate_names).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].key, "bar");
+        assert_eq!(matches[0].crate_name, "bar-agent-guest-client");
+        assert_eq!(matches[0].location, MatchedDependencyLocation::Workspace);
+    }
+
+    #[test]
+    fn set_dependency_path_replaces_bare_version_with_path() {
+        let source = r#"
+            [dependencies]
+            bar-agent-guest-client = "0.0.0"
+        "#;
+
+        let updated = set_dependency_path(
+            source,
+            MatchedDependencyLocation::Package(DependencyTable::Dependencies),
+            "bar-agent-guest-client",
+            "../bridge/bar-agent-guest-client",
+        )
+        .unwrap();
+
+        assert!(
+            updated.contains(
+                r#"bar-agent-guest-client = { path = "../bridge/bar-agent-guest-client" }"#
+            )
+        );
+        assert!(!updated.contains("0.0.0"));
+    }
+
+    #[test]
+    fn set_dependency_path_preserves_package_alias_and_features() {
+        let source = r#"
+            [dependencies]
+            bar = { package = "bar-agent-guest-client", path = "../old", features = ["extra"] }
+        "#;
+
+        let updated = set_dependency_path(
+            source,
+            MatchedDependencyLocation::Package(DependencyTable::Dependencies),
+            "bar",
+            "../bridge/bar-agent-guest-client",
+        )
+        .unwrap();
+
+        let doc: DocumentMut = updated.parse().unwrap();
+        let item = doc["dependencies"]["bar"].as_table_like().unwrap();
+        assert_eq!(
+            item.get("package").unwrap().as_str().unwrap(),
+            "bar-agent-guest-client"
+        );
+        assert_eq!(
+            item.get("path").unwrap().as_str().unwrap(),
+            "../bridge/bar-agent-guest-client"
+        );
+        assert!(item.get("features").is_some());
+    }
+
+    #[test]
+    fn set_dependency_path_updates_workspace_dependency() {
+        let source = r#"
+            [workspace.dependencies]
+            bar = { package = "bar-agent-guest-client", path = "old/path" }
+        "#;
+
+        let updated = set_dependency_path(
+            source,
+            MatchedDependencyLocation::Workspace,
+            "bar",
+            "bridge/bar-agent-guest-client",
+        )
+        .unwrap();
+
+        let doc: DocumentMut = updated.parse().unwrap();
+        let item = doc["workspace"]["dependencies"]["bar"]
+            .as_table_like()
+            .unwrap();
+        assert_eq!(
+            item.get("package").unwrap().as_str().unwrap(),
+            "bar-agent-guest-client"
+        );
+        assert_eq!(
+            item.get("path").unwrap().as_str().unwrap(),
+            "bridge/bar-agent-guest-client"
+        );
     }
 }
