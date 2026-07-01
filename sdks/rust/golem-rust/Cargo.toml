@@ -42,6 +42,11 @@ name = "eager_vs_lazy_format_bench"
 path = "benches/eager_vs_lazy_format_bench.rs"
 harness = false
 
+[[bench]]
+name = "tool_client_bench"
+harness = false
+required-features = ["export_golem_agentic"]
+
 [dependencies]
 golem-schema = { path = "../../../golem-schema", version = "0.0.0", default-features = false, features = ["guest"] }
 golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
@@ -92,3 +97,4 @@ url = ["dep:url", "golem-schema/url"]
 test-r = "3.0.9"
 proptest = "1.4.0"
 trybuild = "1.0.116"
+criterion = "0.5"
