@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// `FluentCodec` is the new-model analog of effect-golem's `WitCodec`: walking a
-// schema once yields BOTH the WIT type (`SchemaGraph`) and the bidirectional
-// value codec (`toValue`/`fromValue`). It depends only on the new schema model
+// `FluentCodec` pairs a schema's WIT type with its value codec: walking a schema
+// once yields BOTH the WIT type (`SchemaGraph`) and the bidirectional value codec
+// (`toValue`/`fromValue`). It depends only on the new schema model
 // (`internal/schema-model/`), never on the decorator-era `Type.Type` resolvers.
 
 import { SchemaGraph, SchemaValue } from '../../internal/schema-model';

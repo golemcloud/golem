@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Plain-async (no Effect) fluent wrapper around the
-// `golem:rdbms/mysql@1.5.0` host interface. Ported from effect-golem's
-// `Mysql/MySql.ts` + `Mysql/MySqlClient.ts` + `host/MysqlHostClient.ts`,
-// de-Effect-ified. The db-value <-> JS codec lives in `./shared`.
+// Plain-async fluent wrapper around the `golem:rdbms/mysql@1.5.0` host
+// interface. Every operation returns a `Promise` and throws a typed error on
+// failure. The db-value <-> JS codec lives in `./shared`.
 
 import { DbConnection, type DbResult, type DbValue } from 'golem:rdbms/mysql@1.5.0';
 import {

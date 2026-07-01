@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Plain-async (no Effect) fluent wrapper around the `wasi:keyvalue@0.1.0`
-// host interface. Ported from effect-golem's `KeyValue.ts` +
-// `host/KeyValueClient.ts`, de-Effect-ified: every operation returns a
-// `Promise` (or a plain value where the host call is synchronous) and throws a
-// typed `KeyValueError` instead of failing an Effect.
+// Plain-async fluent wrapper around the `wasi:keyvalue@0.1.0` host interface.
+// Every operation returns a `Promise` (or a plain value where the host call is
+// synchronous) and throws a typed `KeyValueError` on failure.
 //
 // Only the `eventual` (single-key CRUD) and `eventual-batch` (multi-key CRUD)
 // interfaces are exposed. The `atomic` and `cache` interfaces are NOT wrapped:

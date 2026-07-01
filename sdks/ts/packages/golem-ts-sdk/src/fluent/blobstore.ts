@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Plain-async (no Effect) fluent wrapper around `wasi:blobstore/blobstore` +
-// `wasi:blobstore/container` + `wasi:blobstore/types`. Ported from
-// effect-golem's `Blobstore.ts` + `host/BlobstoreClient.ts`, de-Effect-ified:
-// operations return `Promise`s and throw a typed `BlobstoreError` instead of
-// failing an Effect.
+// Plain-async fluent wrapper around `wasi:blobstore/blobstore` +
+// `wasi:blobstore/container` + `wasi:blobstore/types`. Operations return
+// `Promise`s and throw a typed `BlobstoreError` on failure.
 
 import * as Blob from 'wasi:blobstore/blobstore';
 import { strictTextDecoder } from './strictTextDecoder';

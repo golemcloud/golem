@@ -13,11 +13,10 @@
 // limitations under the License.
 
 // Shared, host-import-free internals for the fluent RDBMS surfaces
-// (`postgres.ts`, `mysql.ts`, `ignite.ts`). Ported from effect-golem's
-// `internal/rdbmsShared.ts` plus the per-driver `internal/codec.ts`, with the
-// Effect machinery removed: `Effect.try` becomes a `wrap(op, fn)` helper that
-// throws a typed {@link RdbmsError}, and the SqlClient error classification is
-// folded into the same error type.
+// (`postgres.ts`, `mysql.ts`, `ignite.ts`): the per-driver db-value <-> JS
+// codecs plus error handling. A `wrap(op, fn)` helper runs an operation and
+// throws a typed {@link RdbmsError} on failure, folding the SQL error
+// classification into the same error type.
 //
 // IMPORTANT: this file MUST NOT import any `golem:rdbms/*` host binding at the
 // top level — only the type-only `golem:rdbms/types@1.5.0` shared structs. The
@@ -70,9 +69,8 @@ const extractTaggedError = (e: unknown): RdbmsHostError | undefined => {
 
 /**
  * Coarse classification of an RDBMS failure, derived from the host's tagged
- * `Error` variant (or from a JS-side {@link ParamEncodingError}). Mirrors the
- * SqlError reasons effect-golem produced, collapsed onto a plain string union
- * so callers can branch without pulling in Effect.
+ * `Error` variant (or from a JS-side {@link ParamEncodingError}), collapsed onto
+ * a plain string union so callers can branch on the failure reason.
  */
 export type RdbmsErrorReason =
   | 'param-encoding'
@@ -368,9 +366,9 @@ const isDbParam = (driver: string, v: unknown): v is DbParam<string, unknown> =>
 // POSTGRES codec
 // ===========================================================================
 //
-// Faithful port of effect-golem `src/Postgres/internal/codec.ts`. Covers all
-// `DbValue` variants: scalars, text/json, bytea, uuid, temporals, ranges,
-// arrays, composite, domain, enumeration, vectors, inet/cidr/macaddr, bit.
+// Postgres db-value <-> JS codec. Covers all `DbValue` variants: scalars,
+// text/json, bytea, uuid, temporals, ranges, arrays, composite, domain,
+// enumeration, vectors, inet/cidr/macaddr, bit.
 
 // Minimal structural mirror of the postgres DbValue union — only what the
 // codec constructs / reads. `unknown`-tagged escape hatches keep it from
@@ -661,7 +659,7 @@ export type PgRangeElementHint = 'int4' | 'int8' | 'num' | 'ts' | 'tstz' | 'date
 // ===========================================================================
 // MYSQL codec
 // ===========================================================================
-// Faithful port of effect-golem `src/Mysql/internal/codec.ts`.
+// MySQL db-value <-> JS codec.
 
 type MyDbValue = { tag: string; val?: unknown };
 
@@ -785,7 +783,7 @@ export const mysqlDecodeDbValue = (value: MyDbValue, mode: TemporalDecodeMode): 
 // ===========================================================================
 // IGNITE codec
 // ===========================================================================
-// Faithful port of effect-golem `src/Ignite/internal/codec.ts`.
+// Ignite db-value <-> JS codec.
 
 type IgDbValue = { tag: string; val?: unknown };
 

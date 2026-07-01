@@ -14,6 +14,11 @@
 
 import { StandardSchemaV1 } from './schema/standardSchema';
 import { HttpEndpointSpec } from './http';
+import type {
+  BindableKeys,
+  ValidateEndpointsTuple,
+  ValidateSingleEndpoint,
+} from './httpTypes';
 
 export type InputRecord = Record<string, StandardSchemaV1>;
 
@@ -51,19 +56,45 @@ export interface MethodSpec<Input extends InputRecord = InputRecord, Output = un
  * Optional `description` / `promptHint` / `readOnly` metadata is threaded into
  * the assembled WIT `agent-method`.
  *
+ * **Compile-time guarantees on `http`** (literal `http.get('/…')` etc. call
+ * shapes only): every path / query / header `{var}` must be a method input
+ * parameter name ({@link BindableKeys}); a bodyless `get` / `head` endpoint may
+ * not leave any input parameter unbound (there is no request body to carry it);
+ * a parameter may be bound from at most one of path / query / header; and header
+ * names must be unique case-insensitively. Non-literal / segment-array forms
+ * widen and defer to the runtime checks in `runtime.ts`.
+ *
  * ```ts
  * method({ input: { by: z.number() }, returns: z.number() })
  * method({ input: {}, returns: z.number(), readOnly: true })
  * ```
  */
-export function method<Input extends InputRecord, Output>(spec: {
+export function method<
+  Input extends InputRecord,
+  Output,
+  const Eps extends ReadonlyArray<HttpEndpointSpec<BindableKeys<Input>>> = readonly [],
+>(spec: {
   input: Input;
   returns: StandardSchemaV1<unknown, Output>;
   description?: string;
   promptHint?: string;
   readOnly?: boolean;
-  http?: HttpEndpointSpec | HttpEndpointSpec[];
-}): MethodSpec<Input, Output> {
+  http?: ValidateEndpointsTuple<Eps, Input>;
+}): MethodSpec<Input, Output>;
+export function method<
+  Input extends InputRecord,
+  Output,
+  const Ep extends HttpEndpointSpec<BindableKeys<Input>> = HttpEndpointSpec<BindableKeys<Input>>,
+>(spec: {
+  input: Input;
+  returns: StandardSchemaV1<unknown, Output>;
+  description?: string;
+  promptHint?: string;
+  readOnly?: boolean;
+  http?: ValidateSingleEndpoint<Ep, Input>;
+}): MethodSpec<Input, Output>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function method(spec: any): MethodSpec {
   return {
     input: spec.input,
     returns: spec.returns,

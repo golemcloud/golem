@@ -16,11 +16,10 @@
 //
 // An agent declares its HTTP routing entirely with config objects: a single
 // mount on `defineAgent({ http: ... })` and one-or-more per-method endpoints on
-// `method({ http: ... })`. This module mirrors the de-Effect-ified shape of
-// effect-golem's `Http.ts` (`mount`, verb shorthands `get`/`post`/..., path
-// builders `literal`/`pathVar`/`restVar`, `withAuth`/`withCors`/
-// `withWebhookSuffix`, `compileMount`/`compileEndpoint`) but stays plain data —
-// no Effect runtime.
+// `method({ http: ... })`. The surface is plain data: a `mount` constructor,
+// verb shorthands (`get`/`post`/...), path builders (`literal`/`pathVar`/
+// `restVar`), the `withAuth`/`withCors`/`withWebhookSuffix` combinators, and the
+// `compileMount`/`compileEndpoint` compilers to the WIT records.
 //
 // Path templates use the `{var}` / `{*rest}` / `{agent-type}` brace syntax and
 // are parsed by the same decorator-era parsers (`src/internal/http/path.ts`,
@@ -42,6 +41,36 @@ import {
 import { parsePath } from '../internal/http/path';
 import { parseQuery } from '../internal/http/query';
 import { rejectEmptyString, rejectQueryParamsInPath } from '../internal/http/validation';
+import type {
+  EndpointBound,
+  EndpointBoundAny,
+  HeaderKeysTuple,
+  HeaderValuesArray,
+  PathTupleOf,
+  PathVarsOf,
+  QueryTupleOf,
+  QueryVarsOf,
+  SystemVariableName,
+  UnionToTuple,
+  ValidEndpointPath,
+  ValidMountPath,
+  ValuesOf,
+} from './httpTypes';
+
+// Re-export the type-level validators / helpers that make up the public
+// compile-time HTTP surface (used by `defineAgent` / `method` and available to
+// advanced callers). `Invalid<…>` is intentionally NOT re-exported: it is an
+// internal carrier users only ever meet as a hover/error message.
+export type {
+  EndpointBound,
+  EndpointBoundAny,
+  HeaderKeysTuple,
+  NoCaseFoldDuplicates,
+  NoDuplicateBindings,
+  UnionToTuple,
+  ValidEndpointPath,
+  ValidMountPath,
+} from './httpTypes';
 
 /**
  * A path-segment builder argument: either a raw {@link PathSegment} (escape
@@ -109,14 +138,43 @@ function verbToWit(v: HttpVerb): HttpMethod {
 
 // ---------------------------------------------------------------------------
 // Mount / endpoint spec records (plain data carried on the config objects)
+//
+// The generic parameters are PHANTOM: they are carried only by the optional
+// brand fields below (unique-symbol keys that never exist at runtime — the
+// factories cast plain objects into the branded types). They let `defineAgent`
+// and `method` bind mount/endpoint `{var}` names to the agent id record and the
+// method input at compile time. Callers that construct the wide, unparameterised
+// `HttpMountSpec` / `HttpEndpointSpec` (e.g. the runtime compilers) are
+// unaffected — the defaults widen the phantoms away.
 // ---------------------------------------------------------------------------
+
+declare const mountVarsBrand: unique symbol;
+declare const mountWebhookVarsBrand: unique symbol;
+declare const endpointVarsBrand: unique symbol;
+declare const endpointKindBrand: unique symbol;
+declare const endpointBoundBrand: unique symbol;
+declare const endpointHeaderNamesBrand: unique symbol;
+
+/**
+ * Whether an endpoint's HTTP verb permits a request body. `get` / `head` are
+ * `"bodyless"`; every other verb (and `custom`) is `"bodyful"`. Used as a
+ * phantom on {@link HttpEndpointSpec} so `method({...})` can statically reject a
+ * bodyless endpoint whose bindings do not cover every method parameter.
+ */
+export type EndpointKind = 'bodyless' | 'bodyful';
 
 /**
  * Mount declaration carried by `defineAgent({ http })`. Compiled to the WIT
  * `agent-type.http-mount` (`http-mount-details`) at registration time via
  * {@link compileMount}.
+ *
+ * `MountVars` is the union of `{var}` names in the mount path (system vars
+ * stripped); `WebhookVars` the union of `{var}` names in the optional
+ * `webhookSuffix`. Both are phantom — see the block comment above.
  */
-export interface HttpMountSpec {
+export interface HttpMountSpec<MountVars extends string = string, WebhookVars extends string = never> {
+  readonly [mountVarsBrand]?: MountVars;
+  readonly [mountWebhookVarsBrand]?: WebhookVars;
   /** Mount path prefix; a `{var}` template string or segment builders. */
   readonly path: PathInput;
   /** When `true`, every endpoint requires authentication. Default `false`. */
@@ -133,8 +191,29 @@ export interface HttpMountSpec {
  * Endpoint declaration carried by `method({ http })`. Compiled to one entry of
  * `agent-method.http-endpoint` (`http-endpoint-details`) via
  * {@link compileEndpoint}.
+ *
+ * `EndpointVars` is the union of every name the endpoint binds (path + query +
+ * header value); `Kind` tracks bodyless/bodyful; `Bound` is the structured
+ * `{ path; query; header }` tuple view (for duplicate-binding detection);
+ * `HeaderNames` is the tuple of declared header names (for case-fold
+ * uniqueness). All four are phantom — see the block comment above.
  */
-export interface HttpEndpointSpec {
+export interface HttpEndpointSpec<
+  EndpointVars extends string = string,
+  Kind extends EndpointKind = EndpointKind,
+  // `Bound` is intentionally left unconstrained (rather than `extends
+  // EndpointBound`): eagerly checking that constraint against the structured
+  // `{ path; query; header }` computed by the factories overflows tsc's
+  // comparison depth. The type-level validators (`NoDuplicateBindings`,
+  // `ValidateEndpointStructure`) re-assert `B extends EndpointBound` lazily at
+  // their concrete call sites, so nothing downstream loses safety.
+  Bound = EndpointBoundAny,
+  HeaderNames = ReadonlyArray<string>,
+> {
+  readonly [endpointVarsBrand]?: EndpointVars;
+  readonly [endpointKindBrand]?: Kind;
+  readonly [endpointBoundBrand]?: Bound;
+  readonly [endpointHeaderNamesBrand]?: HeaderNames;
   /** HTTP verb; standard lowercase literal or `{ custom }`. */
   readonly method: HttpVerb;
   /**
@@ -157,48 +236,169 @@ export interface HttpEndpointSpec {
 
 // ---------------------------------------------------------------------------
 // Verb shorthands — sugar producing an HttpEndpointSpec.
+//
+// Each verb factory is overloaded: a template-string form that infers and
+// checks the path `{var}` / `?query` bindings at compile time, and an
+// escape-hatch `PathSegment[]` form that widens to the unparameterised spec
+// (no compile-time checking; the runtime parser/validators still apply). The
+// runtime body is a single plain-object builder cast into the overloaded type;
+// the phantom brands never exist at runtime.
 // ---------------------------------------------------------------------------
 
-type EndpointSugarOpts = Omit<HttpEndpointSpec, 'method' | 'path'>;
+/**
+ * Default value for the `H` (headers) generic. An "empty record" sentinel that
+ * signals "no header bindings"; using `{}` directly would widen `ValuesOf<H>` to
+ * `string`.
+ */
+export type NoHeaderBindings = Readonly<Record<string, never>>;
+
+/**
+ * Options accepted by the verb factories and `custom`. `H` is the header
+ * name → method-parameter map; `Q` is the explicit query-param → method-parameter
+ * map. Both maps' VALUES are the bound method-parameter names.
+ */
+export interface EndpointOptsFor<
+  H extends Readonly<Record<string, string>> = NoHeaderBindings,
+  Q extends Readonly<Record<string, string>> = NoHeaderBindings,
+> {
+  /** Map of HTTP header name → method-parameter name. */
+  readonly headers?: H;
+  /**
+   * Explicit query-param name → method-parameter name map. Its VALUES are
+   * threaded into the endpoint's `EndpointVars` (so binding to a non-parameter
+   * errors) and into the structured `Bound.query` tuple (so it participates in
+   * cross-source duplicate-binding detection), on par with the inline
+   * `?k={var}` form. Use `as const` to preserve the literal values.
+   */
+  readonly query?: Q;
+  /** Override the mount-level auth requirement for this endpoint only. */
+  readonly auth?: boolean;
+  /** Additional CORS allowed-origin patterns for this endpoint. */
+  readonly cors?: readonly string[];
+}
+
+/** Escape-hatch (segment-array) form options: maps un-parameterised. */
+type EndpointSugarOpts = EndpointOptsFor<
+  Readonly<Record<string, string>>,
+  Readonly<Record<string, string>>
+>;
+
+/** Tuple of method-parameter names bound by an explicit `query` map's VALUES. */
+type QueryValuesTuple<Q extends Readonly<Record<string, string>>> = UnionToTuple<ValuesOf<Q>>;
+
+/** The branded endpoint spec produced for a literal path `P`, headers `H`, query `Q`. */
+type EndpointSpecFor<
+  P extends string,
+  H extends Readonly<Record<string, string>>,
+  Q extends Readonly<Record<string, string>>,
+  Kind extends EndpointKind,
+> = HttpEndpointSpec<
+  Exclude<PathVarsOf<P> | QueryVarsOf<P>, SystemVariableName> | ValuesOf<H> | ValuesOf<Q>,
+  Kind,
+  {
+    readonly path: PathTupleOf<P>;
+    readonly query: readonly [...QueryTupleOf<P>, ...QueryValuesTuple<Q>];
+    readonly header: HeaderValuesArray<H>;
+  },
+  HeaderKeysTuple<H>
+>;
+
+/** Overloaded verb-factory shape, parameterised by {@link EndpointKind}. */
+export interface VerbFactory<Kind extends EndpointKind> {
+  <
+    const P extends string,
+    H extends Readonly<Record<string, string>> = NoHeaderBindings,
+    Q extends Readonly<Record<string, string>> = NoHeaderBindings,
+  >(
+    path: ValidEndpointPath<P>,
+    opts?: EndpointOptsFor<H, Q>,
+  ): EndpointSpecFor<P, H, Q, Kind>;
+  (path: readonly PathSegment[], opts?: EndpointSugarOpts): HttpEndpointSpec;
+}
 
 const verbShorthand =
   (method: HttpVerb) =>
-  (path: PathInput, opts: EndpointSugarOpts = {}): HttpEndpointSpec => ({ method, path, ...opts });
+  (path: PathInput, opts: EndpointSugarOpts = {}): HttpEndpointSpec =>
+    ({ method, path, ...opts }) as HttpEndpointSpec;
 
-/** Shorthand for `{ method: 'get', path, ...opts }`. */
-export const get = verbShorthand('get');
-/** Shorthand for `{ method: 'head', path, ...opts }`. */
-export const head = verbShorthand('head');
-/** Shorthand for `{ method: 'post', path, ...opts }`. */
-export const post = verbShorthand('post');
-/** Shorthand for `{ method: 'put', path, ...opts }`. */
-export const put = verbShorthand('put');
-/** Shorthand for `{ method: 'delete', path, ...opts }`. */
-export const del = verbShorthand('delete');
-/** Shorthand for `{ method: 'patch', path, ...opts }`. */
-export const patch = verbShorthand('patch');
-/** Shorthand for `{ method: 'options', path, ...opts }`. */
-export const options = verbShorthand('options');
-/** Shorthand for `{ method: 'connect', path, ...opts }`. */
-export const connect = verbShorthand('connect');
-/** Shorthand for `{ method: 'trace', path, ...opts }`. */
-export const trace = verbShorthand('trace');
-/** Shorthand for a custom (non-standard) verb. */
-export const custom = (verb: string, path: PathInput, opts: EndpointSugarOpts = {}): HttpEndpointSpec => ({
-  method: { custom: verb },
-  path,
-  ...opts,
-});
+/** Shorthand for `{ method: 'get', path, ...opts }`. Bodyless. */
+export const get = verbShorthand('get') as unknown as VerbFactory<'bodyless'>;
+/** Shorthand for `{ method: 'head', path, ...opts }`. Bodyless. */
+export const head = verbShorthand('head') as unknown as VerbFactory<'bodyless'>;
+/** Shorthand for `{ method: 'post', path, ...opts }`. Bodyful. */
+export const post = verbShorthand('post') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'put', path, ...opts }`. Bodyful. */
+export const put = verbShorthand('put') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'delete', path, ...opts }`. Bodyful. */
+export const del = verbShorthand('delete') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'patch', path, ...opts }`. Bodyful. */
+export const patch = verbShorthand('patch') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'options', path, ...opts }`. Bodyful. */
+export const options = verbShorthand('options') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'connect', path, ...opts }`. Bodyful. */
+export const connect = verbShorthand('connect') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'trace', path, ...opts }`. Bodyful. */
+export const trace = verbShorthand('trace') as unknown as VerbFactory<'bodyful'>;
+
+/** Overloaded factory shape for {@link custom} (always bodyful). */
+export interface CustomFactory {
+  <
+    const P extends string,
+    H extends Readonly<Record<string, string>> = NoHeaderBindings,
+    Q extends Readonly<Record<string, string>> = NoHeaderBindings,
+  >(
+    verb: string,
+    path: ValidEndpointPath<P>,
+    opts?: EndpointOptsFor<H, Q>,
+  ): EndpointSpecFor<P, H, Q, 'bodyful'>;
+  (verb: string, path: readonly PathSegment[], opts?: EndpointSugarOpts): HttpEndpointSpec;
+}
+
+/** Shorthand for a custom (non-standard) verb. Always bodyful. */
+export const custom = ((verb: string, path: PathInput, opts: EndpointSugarOpts = {}): HttpEndpointSpec =>
+  ({ method: { custom: verb }, path, ...opts }) as HttpEndpointSpec) as unknown as CustomFactory;
+
+/** Options accepted by {@link mount}. */
+export interface MountOptionsFor<W extends string = string> {
+  /** When `true`, the host treats every endpoint as authentication-required. */
+  readonly auth?: boolean;
+  /** CORS allowed-origin patterns advertised at the mount level. */
+  readonly cors?: readonly string[];
+  /** Mark this agent as a phantom agent (one fresh instance per HTTP request). */
+  readonly phantomAgent?: boolean;
+  /**
+   * Optional custom webhook suffix path. Validated with the same
+   * {@link ValidMountPath} rules as the mount path; a non-literal `string`
+   * (default `W = string`) reduces the constraint to plain `string` and is
+   * enforced by the runtime parser.
+   */
+  readonly webhookSuffix?: string extends W ? string : ValidMountPath<W>;
+}
+
+/** Escape-hatch (segment-array) form options for {@link mount}. */
+type MountSugarOpts = MountOptionsFor<string> & { readonly webhookSuffix?: PathInput };
+
+/** Overloaded factory shape for {@link mount}. */
+export interface MountFactory {
+  <const P extends string, const W extends string = string>(
+    path: ValidMountPath<P>,
+    opts?: MountOptionsFor<W>,
+  ): HttpMountSpec<
+    Exclude<PathVarsOf<P>, SystemVariableName>,
+    Exclude<PathVarsOf<W>, SystemVariableName>
+  >;
+  (path: readonly PathSegment[], opts?: MountSugarOpts): HttpMountSpec;
+}
 
 /**
- * Declare an HTTP mount for an agent. Convenience constructor mirroring
- * effect-golem's `Http.mount`; equivalent to writing the `HttpMountSpec`
- * object literal directly.
+ * Declare an HTTP mount for an agent. Convenience constructor; equivalent to
+ * writing the `HttpMountSpec` object literal directly. The template-string form
+ * binds the path `{var}` names into the `MountVars` phantom (and any
+ * `webhookSuffix` `{var}` names into `WebhookVars`) so `defineAgent` can check
+ * coverage against the agent id.
  */
-export const mount = (path: PathInput, opts: Omit<HttpMountSpec, 'path'> = {}): HttpMountSpec => ({
-  path,
-  ...opts,
-});
+export const mount = ((path: PathInput, opts: MountSugarOpts = {}): HttpMountSpec =>
+  ({ path, ...opts }) as HttpMountSpec) as unknown as MountFactory;
 
 // ---------------------------------------------------------------------------
 // Pipeable-free combinators — additive copies (input never mutated).

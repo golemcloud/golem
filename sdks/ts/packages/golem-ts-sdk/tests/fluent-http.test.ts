@@ -74,7 +74,9 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
         getMessage: method({
           input: { messageId: z.string(), limit: z.number(), trace: z.string() },
           returns: z.string(),
-          http: http.get('/messages/{messageId}?limit={limit}', { headers: { 'X-Trace': 'trace' } }),
+          http: http.get('/messages/{messageId}?limit={limit}', {
+            headers: { 'X-Trace': 'trace' } as const,
+          }),
         }),
       },
     });
@@ -150,7 +152,9 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
         id: { name: z.string() },
         http: { path: '/c/{name}' },
         methods: {
-          look: method({ input: {}, returns: z.string(), http: http.get('/look/{ghost}') }),
+          // `as string` widens the path away from a literal so the compile-time
+          // binding gate short-circuits; this test targets the RUNTIME check.
+          look: method({ input: {}, returns: z.string(), http: http.get('/look/{ghost}' as string) }),
         },
       }),
     ).toThrow(/path variable "ghost"/);

@@ -26,6 +26,7 @@ import { Uuid } from '../uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
 import { ConfigSpec } from './config';
 import { HttpMountSpec } from './http';
+import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
 
 export type { ConfigSpec } from './config';
 
@@ -116,7 +117,12 @@ export type SnapshottingSpec =
   | { periodicSeconds: number }
   | { everyNInvocations: number };
 
-export interface AgentSpec<Id extends IdRecord, Methods extends MethodsRecord> {
+export interface AgentSpec<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+> {
   /** The wire-level agent type name. */
   name: string;
   id: Id;
@@ -143,10 +149,21 @@ export interface AgentSpec<Id extends IdRecord, Methods extends MethodsRecord> {
   config?: ConfigSpec;
   /**
    * HTTP mount for the agent: a path prefix (`{var}` template or path-segment
-   * builders) plus optional auth / CORS / webhook-suffix. Required if any
-   * method declares an `http` endpoint. Surfaced as `agent-type.http-mount`.
+   * builders) plus optional auth / CORS / webhook-suffix. Surfaced as
+   * `agent-type.http-mount`.
+   *
+   * Type-level constraints (literal `http.mount('/…')` call shapes only):
+   * - Every id-record field must be covered by a `{var}` in the mount path, and
+   *   every mount `{var}` must be an id field — enforced via
+   *   {@link MountSpecCovering}.
+   * - Every `{var}` in the optional `webhookSuffix` must be an id field —
+   *   enforced via {@link WebhookVarsValid}.
+   *
+   * Plain object-literal / segment-array forms (which carry no phantom brand)
+   * skip these gates and are validated only by the runtime checks in
+   * `runtime.ts`.
    */
-  http?: HttpMountSpec;
+  http?: MountSpecCovering<Id, MV, WV> & WebhookVarsValid<Id, WV>;
 }
 
 /**
@@ -173,9 +190,12 @@ export interface AgentSpec<Id extends IdRecord, Methods extends MethodsRecord> {
  * });
  * ```
  */
-export function defineAgent<Id extends IdRecord, Methods extends MethodsRecord>(
-  spec: AgentSpec<Id, Methods>,
-): AgentDefinition<Id, Methods> {
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+>(spec: AgentSpec<Id, Methods, MV, WV>): AgentDefinition<Id, Methods> {
   const registered: RegisteredAgent = registerAgentType(spec.name, spec.id, spec.methods, {
     description: spec.description,
     promptHint: spec.promptHint,
@@ -183,7 +203,9 @@ export function defineAgent<Id extends IdRecord, Methods extends MethodsRecord>(
     dependencies: (spec.dependencies ?? []).map((d) => d.name),
     snapshotting: spec.snapshotting,
     config: spec.config,
-    http: spec.http,
+    // The branded `MountSpecCovering<…>` type is a compile-time gate only; strip
+    // the phantom brands back to the wide registration-side `HttpMountSpec`.
+    http: spec.http as HttpMountSpec | undefined,
   });
   return {
     name: spec.name,

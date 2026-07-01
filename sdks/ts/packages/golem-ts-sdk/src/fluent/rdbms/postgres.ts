@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Plain-async (no Effect) fluent wrapper around the
-// `golem:rdbms/postgres@1.5.0` host interface. Ported from effect-golem's
-// `Postgres/Pg.ts` + `Postgres/PgClient.ts` + `host/PostgresHostClient.ts`,
-// de-Effect-ified: every operation returns a `Promise` and throws a typed
-// {@link PostgresError} instead of failing an Effect. The db-value <-> JS codec
-// lives in `./shared` (host-import-free, so it round-trips under node tests).
+// Plain-async fluent wrapper around the `golem:rdbms/postgres@1.5.0` host
+// interface. Every operation returns a `Promise` and throws a typed
+// {@link PostgresError} on failure. The db-value <-> JS codec lives in `./shared`
+// (host-import-free, so it round-trips under node tests).
 
 import {
   DbConnection,

@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Vendor-neutral "marker" schemas — the no-Effect analog of effect-golem's
-// annotation keys (`effect-golem/witType`, `effect-golem/witQuotaToken`, the
-// `Unstructured*` / `multimodal` carriers). Standard Schema can express scalar
-// shapes (string/number/boolean/…) but has NO way to pin a numeric to a
-// specific WIT width, to say "this string is a single `char`", or to select the
-// capability / rich nodes (secret, quota-token, multimodal, unstructured). A
-// marker fills that gap.
+// Vendor-neutral "marker" schemas. Standard Schema can express scalar shapes
+// (string/number/boolean/…) but has NO way to pin a numeric to a specific WIT
+// width, to say "this string is a single `char`", or to select the capability /
+// rich nodes (secret, quota-token, multimodal, unstructured). A marker fills
+// that gap by carrying the extra WIT intent alongside a plain Standard Schema.
 //
 // A marker is a fully-valid {@link StandardSchemaV1} (so it passes the existing
 // param/return typing and `isStandardSchema` checks) that ALSO carries a hidden
@@ -68,10 +66,36 @@ export const WIT_MARKER: unique symbol = Symbol('golem.witMarker');
  */
 export type MarkerDescriptor = (recurse: (child: unknown) => FluentCodec) => FluentCodec;
 
+/**
+ * Type-level classification of a marker. `'scalar'` covers everything that can
+ * be bound from a string source (numeric pins, `char`, `datetime`, `url`,
+ * `secret`, …); the other three tag the rich payload markers that can NOT be
+ * bound from a path / query / header variable and therefore must be excluded
+ * from HTTP variable binding (see {@link MarkerKindOf} / `BindableKeys`).
+ */
+export type MarkerKind = 'scalar' | 'multimodal' | 'unstructured-text' | 'unstructured-binary';
+
+/** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
+declare const MARKER_KIND: unique symbol;
+
 /** A Standard Schema that additionally carries a {@link WIT_MARKER} brand. */
-export interface MarkerSchema<Output = unknown> extends StandardSchemaV1<Output, Output> {
+export interface MarkerSchema<Output = unknown, Kind extends MarkerKind = 'scalar'>
+  extends StandardSchemaV1<Output, Output> {
   readonly [WIT_MARKER]: MarkerDescriptor;
+  /**
+   * PURE PHANTOM: never assigned at runtime (no runtime object carries it), so
+   * marker values are structurally unchanged. It exists only so the marker's
+   * {@link MarkerKind} is recoverable at the type level via {@link MarkerKindOf}.
+   */
+  readonly [MARKER_KIND]?: Kind;
 }
+
+/**
+ * Recover a marker's {@link MarkerKind} at the type level. Resolves to
+ * `undefined` for any value that is not a {@link MarkerSchema} (e.g. a plain
+ * Zod / Valibot / ArkType schema).
+ */
+export type MarkerKindOf<V> = V extends MarkerSchema<any, infer K> ? K : undefined;
 
 /** Type guard: does this value carry a {@link WIT_MARKER} brand? */
 export function isMarkerSchema(value: unknown): value is MarkerSchema {
@@ -94,10 +118,10 @@ type Validator<Output> = (value: unknown) => StandardSchemaV1.Result<Output>;
  * branded with the codec-builder `descriptor`. The `vendor` is informational
  * (markers are intercepted before vendor dispatch).
  */
-function marker<Output>(
+function marker<Output, Kind extends MarkerKind = 'scalar'>(
   validate: Validator<Output>,
   descriptor: MarkerDescriptor,
-): MarkerSchema<Output> {
+): MarkerSchema<Output, Kind> {
   return {
     '~standard': {
       version: 1,
@@ -385,7 +409,9 @@ interface UnstructuredBinaryOpts {
   mimeTypes?: string[];
 }
 
-function unstructuredTextMarker(opts?: UnstructuredTextOpts): MarkerSchema<TextReferenceValue> {
+function unstructuredTextMarker(
+  opts?: UnstructuredTextOpts,
+): MarkerSchema<TextReferenceValue, 'unstructured-text'> {
   const languages = opts?.languages ?? [];
   const validate: Validator<TextReferenceValue> = (value) =>
     value !== null && typeof value === 'object' && 'tag' in (value as object)
@@ -422,10 +448,12 @@ function unstructuredTextMarker(opts?: UnstructuredTextOpts): MarkerSchema<TextR
       },
     };
   };
-  return marker(validate, descriptor);
+  return marker<TextReferenceValue, 'unstructured-text'>(validate, descriptor);
 }
 
-function unstructuredBinaryMarker(opts?: UnstructuredBinaryOpts): MarkerSchema<BinaryReferenceValue> {
+function unstructuredBinaryMarker(
+  opts?: UnstructuredBinaryOpts,
+): MarkerSchema<BinaryReferenceValue, 'unstructured-binary'> {
   const mimeTypes = opts?.mimeTypes ?? [];
   const validate: Validator<BinaryReferenceValue> = (value) =>
     value !== null && typeof value === 'object' && 'tag' in (value as object)
@@ -462,7 +490,7 @@ function unstructuredBinaryMarker(opts?: UnstructuredBinaryOpts): MarkerSchema<B
       },
     };
   };
-  return marker(validate, descriptor);
+  return marker<BinaryReferenceValue, 'unstructured-binary'>(validate, descriptor);
 }
 
 // ============================================================
@@ -481,7 +509,7 @@ export interface MultimodalCase {
   schema: unknown;
 }
 
-function multimodalMarker(cases: MultimodalCase[]): MarkerSchema<MultimodalElement[]> {
+function multimodalMarker(cases: MultimodalCase[]): MarkerSchema<MultimodalElement[], 'multimodal'> {
   const validate: Validator<MultimodalElement[]> = (value) =>
     Array.isArray(value) ? ok(value as MultimodalElement[]) : fail('Expected an array of multimodal elements');
   const descriptor: MarkerDescriptor = (recurse) => {
@@ -516,7 +544,7 @@ function multimodalMarker(cases: MultimodalCase[]): MarkerSchema<MultimodalEleme
       },
     };
   };
-  return marker(validate, descriptor);
+  return marker<MultimodalElement[], 'multimodal'>(validate, descriptor);
 }
 
 // ============================================================

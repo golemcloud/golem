@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Plain-imperative (no Effect / Socket / Channel) fluent wrapper around
-// `golem:websocket/client@1.5.0`. Ported from effect-golem's `Websocket.ts` +
-// `host/WebsocketClient.ts`, reduced to a thin imperative façade over the host
-// `WebsocketConnection` resource. The Effect version bridges the resource onto
-// an Effect `Socket`; the fluent version exposes the host's send / receive /
-// receive-with-timeout / close methods directly.
+// Plain-imperative fluent wrapper around `golem:websocket/client@1.5.0`: a thin
+// façade over the host `WebsocketConnection` resource that exposes the host's
+// send / receive / receive-with-timeout / close methods directly.
 
 import * as WsClient from 'golem:websocket/client@1.5.0';
 

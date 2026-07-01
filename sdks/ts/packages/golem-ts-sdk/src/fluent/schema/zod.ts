@@ -13,10 +13,10 @@
 // limitations under the License.
 
 // Zod schema walker (vendor `"zod"`). Walks the schema's runtime structure once
-// (effect-golem `WitCodec.walk` analog) to produce a `FluentCodec` — a
-// `SchemaType` (new model) plus a `SchemaValue` encode/decode pair. It
-// duck-types Zod's internals (v4 `._zod.def`, v3 `._def`) and does NOT
-// `import 'zod'`, so Zod is never baked into the SDK/WASM. No `Type.Type`.
+// to produce a `FluentCodec` — a `SchemaType` (new model) plus a `SchemaValue`
+// encode/decode pair. It duck-types Zod's internals (v4 `._zod.def`, v3 `._def`)
+// and does NOT `import 'zod'`, so Zod is never baked into the SDK/WASM. No
+// `Type.Type`.
 
 import {
   field,
@@ -385,10 +385,10 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
     }
     case 'union': {
       // Plain (non-discriminated) unions compile to a WIT `variant`. Robust
-      // structural disambiguation on encode (the effect-golem `genericVariantNode`
-      // analog) is deferred; for now require a discriminated union or an
-      // `s.variant(...)` marker for ambiguous cases. We still support the common
-      // case by trying each branch's validator-equivalent on decode by caseIndex.
+      // structural disambiguation on encode is deferred; for now require a
+      // discriminated union or an `s.variant(...)` marker for ambiguous cases. We
+      // still support the common case by trying each branch's validator-equivalent
+      // on decode by caseIndex.
       throw new Error(
         `Plain z.union(...) is not yet supported by the fluent SDK walker; use z.discriminatedUnion(...) ` +
           `or an SDK variant marker. (kind '${kind}')`,

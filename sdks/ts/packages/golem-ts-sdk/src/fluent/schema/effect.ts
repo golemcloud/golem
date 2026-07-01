@@ -16,8 +16,8 @@
 // `Schema.standardSchemaV1(schema)` wrapper, which carries the schema's `ast`.
 // Unlike Zod/Valibot, an Effect Schema AST node's children do NOT themselves
 // carry a `~standard` brand, so this walker recurses over the AST *internally*
-// (a `walkAst` analog of effect-golem's `WitCodec.walk`) rather than via the
-// adapter's `recurse` callback. It duck-types the AST `_tag` discriminators
+// rather than via the adapter's `recurse` callback. It duck-types the AST `_tag`
+// discriminators
 // (`StringKeyword`, `NumberKeyword`, `TypeLiteral`, `TupleType`, `Union`,
 // `Literal`, `Enums`, `Refinement`/`Transformation`, …) and does NOT
 // `import 'effect'`, so Effect is never baked into the SDK / WASM. The per-kind
