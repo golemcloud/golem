@@ -484,6 +484,9 @@ fn build_command_node(
         .enumerate()
         .rev()
         .find_map(|(idx, param)| {
+            if is_auto_injected_principal_type(&param.ty) {
+                return None;
+            }
             let arg = arg_for(cmd, &param.ident);
             if is_positional_candidate(param, arg) {
                 Some(idx)
@@ -507,6 +510,9 @@ fn build_command_node(
         .enumerate()
         .rev()
         .find_map(|(idx, param)| {
+            if is_auto_injected_principal_type(&param.ty) {
+                return None;
+            }
             let arg = arg_for(cmd, &param.ident);
             let is_inherited =
                 !is_root && repeats_inherited_global(&param.ident, arg, inherited_globals);
@@ -518,6 +524,15 @@ fn build_command_node(
         });
 
     for (idx, param) in cmd.params.iter().enumerate() {
+        if is_auto_injected_principal_type(&param.ty) {
+            if let Some(arg) = arg_for(cmd, &param.ident) {
+                return Err(Error::new(
+                    arg.param.span(),
+                    "auto-injected Principal parameters cannot have #[arg] attributes because they are not part of the tool input schema",
+                ));
+            }
+            continue;
+        }
         let arg = arg_for(cmd, &param.ident);
         // A parameter repeating a global inherited from the root command is not
         // skipped here: it is projected normally and reconciled (removed when
@@ -850,7 +865,7 @@ fn vec_tail_spec(
 /// them like any other parameter and the runtime (`reinfer_body_tail`) decides
 /// which candidates survive.
 fn is_positional_candidate(param: &crate::tool::ir::ParamIr, arg: Option<&ArgIr>) -> bool {
-    if is_stream_type(&param.ty) {
+    if is_stream_type(&param.ty) || is_auto_injected_principal_type(&param.ty) {
         return false;
     }
     match arg.and_then(|a| a.placement) {
@@ -2336,6 +2351,31 @@ fn is_stream_type(ty: &Type) -> bool {
     matches!(
         type_last_ident(ty).as_deref(),
         Some("InputStream" | "OutputStream")
+    )
+}
+
+fn is_auto_injected_principal_type(ty: &Type) -> bool {
+    let Type::Path(tp) = ty else {
+        return false;
+    };
+    let segments = tp
+        .path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
+    matches!(
+        segments.as_slice(),
+        ["golem_rust", "agentic", "Principal"]
+            | [
+                "golem_rust",
+                "golem_agentic",
+                "golem",
+                "agent",
+                "common",
+                "Principal"
+            ]
     )
 }
 

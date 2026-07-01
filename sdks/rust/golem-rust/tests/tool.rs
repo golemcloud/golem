@@ -20,7 +20,8 @@ test_r::enable!();
 #[allow(clippy::disallowed_names, dead_code)]
 mod tests {
     use golem_rust::agentic::{
-        ExtendedOptionShape, ExtendedToolType, ToolBuildCtx, ToolBuildError, ToolErrorSchema,
+        CanonicalInputModel, ExtendedOptionShape, ExtendedToolType, ToolBuildCtx, ToolBuildError,
+        ToolErrorSchema, get_tool_invoker_by_name,
     };
     use golem_rust::{
         FromSchema, IntoSchema, Quantity, QuantityUnit, tool_definition, tool_implementation,
@@ -31,6 +32,92 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
     use test_r::test;
+
+    fn encoded_input(
+        tool: &ExtendedToolType,
+        command_path: &[&str],
+        values: Vec<golem_rust::SchemaValue>,
+    ) -> golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue {
+        let path = command_path
+            .iter()
+            .map(|segment| segment.to_string())
+            .collect::<Vec<_>>();
+        let command_index = tool
+            .command_index_by_path(&path)
+            .expect("command path resolves");
+        let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index))
+            .expect("canonical input model builds");
+        let input = golem_rust::TypedSchemaValue::new(
+            model.record_schema,
+            golem_rust::SchemaValue::Record { fields: values },
+        );
+        golem_rust::encode_typed_schema_value(&input).expect("typed schema value encodes")
+    }
+
+    fn anonymous_principal() -> golem_rust::agentic::Principal {
+        golem_rust::agentic::Principal::Anonymous
+    }
+
+    #[tool_definition]
+    trait PrincipalAutoInjectedRoundTrip {
+        fn whoami(&self, principal: golem_rust::agentic::Principal, name: String) -> String;
+    }
+
+    #[test]
+    fn tool_descriptor_accepts_auto_injected_principal_parameters() {
+        let tool = __golem_tool_descriptor_for_PrincipalAutoInjectedRoundTrip(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect("Principal is supplied by the guest invocation principal, not by the input record");
+        let command_index = tool
+            .command_index_by_path(&["whoami".to_string()])
+            .expect("whoami command exists");
+        let fields = tool.canonical_input_fields(command_index);
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["name"],
+            "auto-injected Principal parameters must not appear in the tool input schema",
+        );
+    }
+
+    #[test]
+    fn imported_user_principal_parameter_is_schema_input() {
+        mod user_principal_schema {
+            use golem_rust::{FromSchema, IntoSchema};
+
+            #[derive(IntoSchema, FromSchema)]
+            pub struct Principal {
+                pub id: String,
+            }
+        }
+
+        use user_principal_schema::Principal;
+
+        #[tool_definition]
+        trait LocalImportedPrincipalTool {
+            fn whoami(&self, principal: Principal, name: String) -> String;
+        }
+
+        let tool = __golem_tool_descriptor_for_LocalImportedPrincipalTool(&mut ToolBuildCtx::new())
+            .expect("an imported user Principal type is a normal schema input");
+        let command_index = tool
+            .command_index_by_path(&["whoami".to_string()])
+            .expect("whoami command exists");
+        let fields = tool.canonical_input_fields(command_index);
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["principal", "name"],
+            "bare/imported Principal is not enough to mark a tool parameter as auto-injected",
+        );
+    }
 
     #[derive(ToolError)]
     enum GrepError {
@@ -401,6 +488,815 @@ mod tests {
             ),
             "expected an InheritedGlobalConflict for `verbose` on `leaf`, got {err:?}",
         );
+    }
+
+    #[tool_definition]
+    trait SameTraitGlobalRoundTrip {
+        #[arg(verbose = "global", kind = "flag")]
+        fn same_trait_global_round_trip(
+            &self,
+            verbose: bool,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(&self, verbose: bool, name: String) -> String;
+
+        fn fail(&self, reason: String) -> Result<String, RemoteError>;
+    }
+
+    struct SameTraitGlobalRoundTripImpl;
+
+    #[tool_implementation]
+    impl SameTraitGlobalRoundTrip for SameTraitGlobalRoundTripImpl {
+        fn same_trait_global_round_trip(
+            &self,
+            _verbose: bool,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, verbose: bool, name: String) -> String {
+            format!("{verbose}:{name}")
+        }
+
+        fn fail(&self, reason: String) -> Result<String, RemoteError> {
+            Err(RemoteError::Failed(reason))
+        }
+    }
+
+    #[test]
+    fn guest_invoke_decodes_same_trait_root_globals_and_plain_return() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("alice".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .expect("guest invocation succeeds");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "true:alice");
+    }
+
+    #[test]
+    fn guest_invoke_encodes_custom_tool_errors() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail"],
+            vec![
+                golem_rust::SchemaValue::Bool(false),
+                golem_rust::SchemaValue::String("boom".to_string()),
+            ],
+        );
+
+        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
+            .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        let decoded = RemoteError::from_error_payload_value(value)
+            .expect("custom error payload decodes to the declared error enum");
+        match decoded {
+            RemoteError::Failed(reason) => assert_eq!(reason, "boom"),
+        }
+    }
+
+    #[test]
+    fn guest_custom_tool_error_payload_matches_declared_error_case_payload_schema() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let fail_index = tool
+            .command_index_by_path(&["fail".to_string()])
+            .expect("fail command exists");
+        let payload_schema = tool.commands[fail_index]
+            .body
+            .as_ref()
+            .and_then(|body| body.errors.first())
+            .and_then(|error| error.payload.as_ref())
+            .expect("RemoteError::Failed declares a payload schema");
+        assert!(
+            matches!(payload_schema.root, golem_rust::SchemaType::String { .. }),
+            "the declared error-case payload schema is String, got {:#?}",
+            payload_schema.root
+        );
+
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail"],
+            vec![
+                golem_rust::SchemaValue::Bool(false),
+                golem_rust::SchemaValue::String("boom".to_string()),
+            ],
+        );
+
+        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
+            .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        let payload = String::from_value(value.value())
+            .expect("custom-error payload must match the declared error-case payload type");
+        assert_eq!(payload, "boom");
+    }
+
+    #[derive(Debug, Eq, PartialEq, ToolError)]
+    enum AmbiguousRemoteError {
+        #[tool_error(kind = "usage-error", exit_code = 2)]
+        BadInput(String),
+        #[tool_error(kind = "runtime-error", exit_code = 1)]
+        Backend(String),
+    }
+
+    #[tool_definition]
+    trait AmbiguousErrorRoundTrip {
+        fn fail_backend(&self, reason: String) -> Result<String, AmbiguousRemoteError>;
+    }
+
+    struct AmbiguousErrorRoundTripImpl;
+
+    #[tool_implementation]
+    impl AmbiguousErrorRoundTrip for AmbiguousErrorRoundTripImpl {
+        fn fail_backend(&self, reason: String) -> Result<String, AmbiguousRemoteError> {
+            Err(AmbiguousRemoteError::Backend(reason))
+        }
+    }
+
+    #[test]
+    fn custom_tool_error_duplicate_payload_schemas_decode_as_first_matching_case() {
+        let tool = <AmbiguousErrorRoundTripImpl as AmbiguousErrorRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("ambiguous-error-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail-backend"],
+            vec![golem_rust::SchemaValue::String("boom".to_string())],
+        );
+
+        let err = invoker(
+            vec!["fail-backend".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+
+        assert_eq!(
+            AmbiguousRemoteError::from_error_payload_value(value)
+                .expect("custom error payload decodes"),
+            AmbiguousRemoteError::BadInput("boom".to_string()),
+            "the current custom-error wire shape carries only the payload, so duplicate payload schemas decode to the first matching case",
+        );
+    }
+
+    #[test]
+    fn bug_finder_guest_custom_error_wire_value_matches_declared_case_payload() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let fail_index = tool
+            .command_index_by_path(&["fail".to_string()])
+            .expect("fail command exists");
+        assert!(
+            matches!(
+                tool.commands[fail_index]
+                    .body
+                    .as_ref()
+                    .and_then(|body| body.errors.first())
+                    .and_then(|error| error.payload.as_ref())
+                    .map(|payload| &payload.root),
+                Some(golem_rust::SchemaType::String { .. })
+            ),
+            "the declared custom error case payload is String"
+        );
+
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail"],
+            vec![
+                golem_rust::SchemaValue::Bool(false),
+                golem_rust::SchemaValue::String("declared-payload".to_string()),
+            ],
+        );
+
+        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
+            .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        let payload = String::from_value(value.value())
+            .expect("custom-error wire value must match the declared error-case payload schema");
+        assert_eq!(payload, "declared-payload");
+    }
+
+    #[derive(Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+    struct CustomPlainReturn {
+        name: String,
+    }
+
+    #[tool_definition]
+    trait CustomPlainReturnRoundTrip {
+        fn custom_plain(&self, name: String) -> CustomPlainReturn;
+    }
+
+    struct CustomPlainReturnRoundTripImpl;
+
+    #[tool_implementation]
+    impl CustomPlainReturnRoundTrip for CustomPlainReturnRoundTripImpl {
+        fn custom_plain(&self, name: String) -> CustomPlainReturn {
+            CustomPlainReturn { name }
+        }
+    }
+
+    #[test]
+    fn guest_invoke_encodes_custom_plain_return_types() {
+        let tool =
+            <CustomPlainReturnRoundTripImpl as CustomPlainReturnRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("custom-plain-return-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["custom-plain"],
+            vec![golem_rust::SchemaValue::String("custom".to_string())],
+        );
+
+        let result = invoker(
+            vec!["custom-plain".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .expect("guest invocation succeeds for a custom IntoSchema return type");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = CustomPlainReturn::from_value(result.value())
+            .expect("result schema matches return type");
+        assert_eq!(
+            value,
+            CustomPlainReturn {
+                name: "custom".to_string()
+            }
+        );
+    }
+
+    #[tool_definition]
+    trait DefaultBodyInvokeRoundTrip {
+        fn default_body_invoke_round_trip(&self, name: String) -> String {
+            format!("default:{name}")
+        }
+    }
+
+    struct DefaultBodyInvokeRoundTripImpl;
+
+    #[tool_implementation]
+    impl DefaultBodyInvokeRoundTrip for DefaultBodyInvokeRoundTripImpl {}
+
+    #[test]
+    fn guest_invoke_dispatches_trait_default_method_bodies() {
+        let tool =
+            <DefaultBodyInvokeRoundTripImpl as DefaultBodyInvokeRoundTrip>::__tool_descriptor();
+        assert!(
+            tool.command_index_by_path(&[]).is_some(),
+            "the default method body is present in the generated descriptor"
+        );
+        let invoker = get_tool_invoker_by_name("default-body-invoke-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &[],
+            vec![golem_rust::SchemaValue::String("alice".to_string())],
+        );
+
+        let result = invoker(vec![], input, None, anonymous_principal())
+            .expect("guest invocation dispatches the trait default method body");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "default:alice");
+    }
+
+    #[test]
+    fn stdout_tool_invocation_shape_compiles() {
+        let output = cargo_check_tool_crate(
+            "stdout-tool-invocation-shape",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, ToolError};
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait StdoutTool {
+    fn run(&self, stdout: golem_rust::wasip2::io::streams::OutputStream) -> Result<(), RemoteError>;
+}
+
+struct StdoutToolImpl;
+
+#[tool_implementation]
+impl StdoutTool for StdoutToolImpl {
+    fn run(&self, _stdout: golem_rust::wasip2::io::streams::OutputStream) -> Result<(), RemoteError> {
+        Ok(())
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "stdout tool definitions should generate a guest invoker and typed client shape, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[tool_definition]
+    trait ChildRoundTrip {
+        fn leaf(&self, verbose: bool, name: String) -> String;
+    }
+
+    struct ChildRoundTripSubtree;
+    struct ChildRoundTripImpl;
+
+    #[tool_implementation]
+    impl ChildRoundTrip for ChildRoundTripImpl {
+        fn leaf(&self, verbose: bool, name: String) -> String {
+            format!("child:{verbose}:{name}")
+        }
+    }
+
+    #[tool_definition]
+    trait ParentRoundTrip {
+        #[command(name = "kid", aliases = ["k"], subtree = ChildRoundTrip)]
+        fn child_round_trip(&self, verbose: bool) -> ChildRoundTripSubtree;
+    }
+
+    struct ParentRoundTripImpl;
+
+    #[tool_implementation]
+    impl ParentRoundTrip for ParentRoundTripImpl {
+        fn child_round_trip(&self, _verbose: bool) -> ChildRoundTripSubtree {
+            ChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    fn guest_invoke_routes_grafted_subtrees_to_child_invoker() {
+        let tool = <ParentRoundTripImpl as ParentRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("parent-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["kid", "leaf"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("bob".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["kid".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .expect("grafted subtree invocation succeeds");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:true:bob");
+    }
+
+    #[test]
+    fn guest_invoke_routes_grafted_subtrees_through_command_aliases() {
+        let tool = <ParentRoundTripImpl as ParentRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("parent-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["k", "leaf"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("aliased".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["k".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .expect("grafted subtree invocation succeeds through command aliases");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:true:aliased");
+    }
+
+    #[tool_definition]
+    trait AliasChildRoundTrip {
+        fn leaf(&self, format: u32, name: String) -> String;
+    }
+
+    struct AliasChildRoundTripSubtree;
+    struct AliasChildRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasChildRoundTrip for AliasChildRoundTripImpl {
+        fn leaf(&self, format: u32, name: String) -> String {
+            format!("child:{format}:{name}")
+        }
+    }
+
+    #[tool_definition]
+    trait AliasParentSubtreeRoundTrip {
+        #[arg(count = "global", aliases = ["format"])]
+        #[command(subtree = AliasChildRoundTrip)]
+        fn alias_child_round_trip(&self, count: u32) -> AliasChildRoundTripSubtree;
+    }
+
+    struct AliasParentSubtreeRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasParentSubtreeRoundTrip for AliasParentSubtreeRoundTripImpl {
+        fn alias_child_round_trip(&self, _count: u32) -> AliasChildRoundTripSubtree {
+            AliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    fn guest_invoke_maps_alias_deprojected_subtree_globals_to_child_parameters() {
+        let tool =
+            <AliasParentSubtreeRoundTripImpl as AliasParentSubtreeRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("alias-parent-subtree-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["alias-child-round-trip", "leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("aliased-subtree".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["alias-child-round-trip".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .expect(
+            "guest invocation maps an inherited subtree global alias back to the child parameter",
+        );
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:7:aliased-subtree");
+    }
+
+    #[tool_definition]
+    trait EarlierGlobalAliasParentSubtreeRoundTrip {
+        #[arg(profile = "global")]
+        fn earlier_global_alias_parent_subtree_round_trip(
+            &self,
+            profile: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(count = "global", aliases = ["format"])]
+        #[command(name = "alias-child-round-trip", aliases = ["alias-child"], subtree = AliasChildRoundTrip)]
+        fn alias_child(&self, count: u32) -> AliasChildRoundTripSubtree;
+    }
+
+    struct EarlierGlobalAliasParentSubtreeRoundTripImpl;
+
+    #[tool_implementation]
+    impl EarlierGlobalAliasParentSubtreeRoundTrip for EarlierGlobalAliasParentSubtreeRoundTripImpl {
+        fn earlier_global_alias_parent_subtree_round_trip(
+            &self,
+            _profile: u32,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn alias_child(&self, _count: u32) -> AliasChildRoundTripSubtree {
+            AliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    fn guest_invoke_uses_alias_mapping_not_position_for_subtree_globals() {
+        let tool = <EarlierGlobalAliasParentSubtreeRoundTripImpl as EarlierGlobalAliasParentSubtreeRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("earlier-global-alias-parent-subtree-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["alias-child", "leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(99),
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("aliased-subtree".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["alias-child".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .expect("guest invocation uses alias mapping instead of same-typed absolute position");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:7:aliased-subtree");
+    }
+
+    #[tool_definition]
+    trait ReverseAliasChildRoundTrip {
+        #[arg(count = "option", aliases = ["format"])]
+        fn leaf(&self, count: u32, name: String) -> String;
+    }
+
+    struct ReverseAliasChildRoundTripSubtree;
+    struct ReverseAliasChildRoundTripImpl;
+
+    #[tool_implementation]
+    impl ReverseAliasChildRoundTrip for ReverseAliasChildRoundTripImpl {
+        fn leaf(&self, count: u32, name: String) -> String {
+            format!("child:{count}:{name}")
+        }
+    }
+
+    #[tool_definition]
+    trait ReverseAliasParentSubtreeRoundTrip {
+        #[arg(format = "global")]
+        #[command(subtree = ReverseAliasChildRoundTrip)]
+        fn reverse_alias_child_round_trip(&self, format: u32) -> ReverseAliasChildRoundTripSubtree;
+    }
+
+    struct ReverseAliasParentSubtreeRoundTripImpl;
+
+    #[tool_implementation]
+    impl ReverseAliasParentSubtreeRoundTrip for ReverseAliasParentSubtreeRoundTripImpl {
+        fn reverse_alias_child_round_trip(
+            &self,
+            _format: u32,
+        ) -> ReverseAliasChildRoundTripSubtree {
+            ReverseAliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    fn guest_invoke_matches_child_aliases_for_subtree_globals() {
+        let tool = <ReverseAliasParentSubtreeRoundTripImpl as ReverseAliasParentSubtreeRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("reverse-alias-parent-subtree-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["reverse-alias-child-round-trip", "leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("reverse-alias".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec![
+                "reverse-alias-child-round-trip".to_string(),
+                "leaf".to_string(),
+            ],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .expect("guest invocation maps a child alias back to the inherited parent global");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:7:reverse-alias");
+    }
+
+    #[tool_definition]
+    trait ImplParameterNameRoundTrip {
+        fn leaf(&self, verbose: bool, name: String) -> String;
+    }
+
+    struct ImplParameterNameRoundTripImpl;
+
+    #[tool_implementation]
+    impl ImplParameterNameRoundTrip for ImplParameterNameRoundTripImpl {
+        fn leaf(&self, v: bool, n: String) -> String {
+            format!("{v}:{n}")
+        }
+    }
+
+    #[test]
+    fn guest_invoke_uses_trait_parameter_names_not_impl_parameter_names() {
+        let tool =
+            <ImplParameterNameRoundTripImpl as ImplParameterNameRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("impl-parameter-name-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::String("renamed".to_string()),
+                golem_rust::SchemaValue::Bool(true),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .expect("guest invocation succeeds when impl parameter names differ from the trait");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "true:renamed");
+    }
+
+    #[tool_definition]
+    trait AliasInheritedGlobalRoundTrip {
+        #[arg(count = "global", aliases = ["format"])]
+        fn alias_inherited_global_round_trip(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(&self, format: u32, name: String) -> String;
+    }
+
+    struct AliasInheritedGlobalRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasInheritedGlobalRoundTrip for AliasInheritedGlobalRoundTripImpl {
+        fn alias_inherited_global_round_trip(
+            &self,
+            _count: u32,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, format: u32, name: String) -> String {
+            format!("{format}:{name}")
+        }
+    }
+
+    #[test]
+    fn guest_invoke_maps_alias_deprojected_inherited_globals_to_method_parameters() {
+        let tool =
+            <AliasInheritedGlobalRoundTripImpl as AliasInheritedGlobalRoundTrip>::__tool_descriptor(
+            );
+        let invoker = get_tool_invoker_by_name("alias-inherited-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("aliased-global".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .expect("guest invocation maps an inherited global alias back to the method parameter");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "7:aliased-global");
+    }
+
+    #[tool_definition]
+    trait ReverseAliasInheritedGlobalRoundTrip {
+        #[arg(format = "global")]
+        fn reverse_alias_inherited_global_round_trip(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(count = "option", aliases = ["format"])]
+        fn leaf(&self, count: u32, name: String) -> String;
+    }
+
+    struct ReverseAliasInheritedGlobalRoundTripImpl;
+
+    #[tool_implementation]
+    impl ReverseAliasInheritedGlobalRoundTrip for ReverseAliasInheritedGlobalRoundTripImpl {
+        fn reverse_alias_inherited_global_round_trip(
+            &self,
+            _format: u32,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, count: u32, name: String) -> String {
+            format!("{count}:{name}")
+        }
+    }
+
+    #[test]
+    fn guest_invoke_matches_child_aliases_for_same_trait_inherited_globals() {
+        let tool = <ReverseAliasInheritedGlobalRoundTripImpl as ReverseAliasInheritedGlobalRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("reverse-alias-inherited-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("reverse-alias-global".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .expect("guest invocation maps a child alias back to the same-trait inherited global");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "7:reverse-alias-global");
+    }
+
+    #[tool_definition]
+    trait RootBodyAliasDoesNotDeprojectRoundTrip {
+        #[arg(count = "option", aliases = ["format"])]
+        fn root_body_alias_does_not_deproject_round_trip(
+            &self,
+            count: u32,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(&self, format: u32, name: String) -> String;
+    }
+
+    struct RootBodyAliasDoesNotDeprojectRoundTripImpl;
+
+    #[tool_implementation]
+    impl RootBodyAliasDoesNotDeprojectRoundTrip for RootBodyAliasDoesNotDeprojectRoundTripImpl {
+        fn root_body_alias_does_not_deproject_round_trip(
+            &self,
+            _count: u32,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, format: u32, name: String) -> String {
+            format!("{format}:{name}")
+        }
+    }
+
+    #[test]
+    fn guest_invoke_does_not_deproject_root_body_aliases() {
+        let tool = <RootBodyAliasDoesNotDeprojectRoundTripImpl as RootBodyAliasDoesNotDeprojectRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("root-body-alias-does-not-deproject-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("leaf-value".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .expect("root body aliases are not inherited by sibling commands");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "7:leaf-value");
     }
 
     struct Meters;
@@ -3679,6 +4575,38 @@ impl BadTool for BadToolImpl {
     }
 
     #[test]
+    fn bug_finder_auto_injected_principal_rejects_arg_attributes_that_would_be_ignored() {
+        let output = cargo_check_tool_crate(
+            "principal-arg-attr",
+            r#"
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait BadTool {
+    #[arg(principal = "option")]
+    fn run(&self, principal: golem_rust::agentic::Principal, name: String) -> String;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _principal: golem_rust::agentic::Principal, name: String) -> String {
+        name
+    }
+}
+"#,
+        );
+
+        assert!(
+            !output.status.success(),
+            "an auto-injected Principal is projected only from its exact SDK/WIT type and any `#[arg]` field would be silently dropped, so it must be rejected, but cargo check succeeded\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
     fn tool_client_accepts_public_wasip2_stdin_stream() {
         let output = cargo_check_tool_crate(
             "tool-client-wasip2-stdin",
@@ -3696,6 +4624,335 @@ fn forward_stdin(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue, stdin: Inp
         assert!(
             output.status.success(),
             "tool client helpers must accept the same public wasip2 stream type that tool definitions use, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn tool_client_allows_command_named_new() {
+        let output = cargo_check_tool_crate(
+            "tool-client-command-named-new",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Project {
+    fn new(&self, name: String) -> String;
+}
+
+fn build_client() {
+    let client = ProjectClient::default();
+    let _future = client.new("demo".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a valid tool command named `new` must not collide with the generated client constructor, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_command_named_new_does_not_reserve_fallback_constructor_name() {
+        let output = cargo_check_tool_crate(
+            "tool-client-new-fallback-name-collision",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Project {
+    fn new(&self, name: String) -> String;
+    fn __golem_tool_client_new(&self, name: String) -> String;
+}
+
+fn build_client() {
+    let client = ProjectClient::default();
+    let _first = client.new("demo".to_string());
+    let _second = client.__golem_tool_client_new("demo".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "renaming the generated constructor away from `new` must not reserve a valid command method name; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_command_named_with_parts_does_not_collide_with_hidden_client_helper() {
+        let output = cargo_check_tool_crate(
+            "tool-client-with-parts-name-collision",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Project {
+    fn __golem_tool_client_with_parts(&self, name: String) -> String;
+}
+
+fn build_client() {
+    let client = ProjectClient::default();
+    let _future = client.__golem_tool_client_with_parts("demo".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "valid command names must not collide with generated client helpers, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn subtree_placeholder_return_type_does_not_need_magic_suffix() {
+        let output = cargo_check_tool_crate(
+            "subtree-placeholder-return-type",
+            r#"
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait ChildTool {
+    fn leaf(&self) -> String;
+}
+
+struct ChildHandle;
+
+#[tool_definition]
+trait ParentTool {
+    #[command(subtree = ChildTool)]
+    fn child_tool(&self) -> ChildHandle;
+}
+
+struct ParentToolImpl;
+
+#[tool_implementation]
+impl ParentTool for ParentToolImpl {
+    fn child_tool(&self) -> ChildHandle {
+        ChildHandle
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "the #[command(subtree = ...)] attribute, not a return-type suffix, marks a subtree dispatcher placeholder, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn tool_implementation_on_named_field_struct_still_compiles() {
+        let output = cargo_check_tool_crate(
+            "stateful-tool-implementation",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, ToolError};
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait StatefulTool {
+    fn run(&self, input: String) -> Result<String, E>;
+}
+
+struct StatefulToolImpl {
+    prefix: String,
+}
+
+#[tool_implementation]
+impl StatefulTool for StatefulToolImpl {
+    fn run(&self, input: String) -> Result<String, E> {
+        Ok(format!("{}{}", self.prefix, input))
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "#[tool_implementation] is applied to trait impls and should not impose an undocumented unit-struct-only restriction, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn tool_implementation_allows_wildcard_impl_parameter_names() {
+        let output = cargo_check_tool_crate(
+            "wildcard-impl-parameter",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, ToolError};
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait UnusedParamTool {
+    fn run(&self, input: String) -> Result<String, E>;
+}
+
+struct UnusedParamToolImpl;
+
+#[tool_implementation]
+impl UnusedParamTool for UnusedParamToolImpl {
+    fn run(&self, _: String) -> Result<String, E> {
+        Ok("ok".to_string())
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "#[tool_implementation] should accept ordinary Rust impl parameter patterns such as `_`, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn user_value_type_named_principal_is_not_auto_injected() {
+        let output = cargo_check_tool_crate(
+            "user-principal-value-type",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+
+mod domain {
+    use super::*;
+
+    #[derive(IntoSchema, FromSchema)]
+    pub struct Principal {
+        pub id: String,
+    }
+}
+
+#[tool_definition]
+trait DomainTool {
+    fn run(&self, principal: domain::Principal) -> String;
+}
+
+struct DomainToolImpl;
+
+#[tool_implementation]
+impl DomainTool for DomainToolImpl {
+    fn run(&self, principal: domain::Principal) -> String {
+        principal.id
+    }
+}
+
+fn build_client() {
+    let client = DomainToolClient::default();
+    let _future = client.run(domain::Principal { id: "u".to_string() });
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a user-defined value type named `Principal` should be treated by path as a normal schema value, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_domain_principal_parameter_is_schema_input() {
+        let output = cargo_check_tool_crate(
+            "bug-finder-domain-principal-input",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+
+mod domain {
+    use super::*;
+
+    #[derive(IntoSchema, FromSchema)]
+    pub struct Principal {
+        pub id: String,
+    }
+}
+
+#[tool_definition]
+trait DomainPrincipalTool {
+    fn lookup(&self, principal: domain::Principal) -> String;
+}
+
+struct DomainPrincipalToolImpl;
+
+#[tool_implementation]
+impl DomainPrincipalTool for DomainPrincipalToolImpl {
+    fn lookup(&self, principal: domain::Principal) -> String {
+        principal.id
+    }
+}
+
+fn compile_client_and_impl() {
+    let client = DomainPrincipalToolClient::default();
+    let _future = client.lookup(domain::Principal { id: "user-1".to_string() });
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a user-defined schema type whose last path segment is `Principal` must not be treated as the host principal; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_local_principal_type_is_schema_input() {
+        let output = cargo_check_tool_crate(
+            "bug-finder-local-principal-input",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+
+#[derive(IntoSchema, FromSchema)]
+pub struct Principal {
+    pub id: String,
+}
+
+#[tool_definition]
+trait LocalPrincipalTool {
+    fn lookup(&self, principal: Principal) -> String;
+}
+
+struct LocalPrincipalToolImpl;
+
+#[tool_implementation]
+impl LocalPrincipalTool for LocalPrincipalToolImpl {
+    fn lookup(&self, principal: Principal) -> String {
+        principal.id
+    }
+}
+
+fn compile_client_and_impl() {
+    let client = LocalPrincipalToolClient::default();
+    let _future = client.lookup(Principal { id: "user-1".to_string() });
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a local user-defined schema type named `Principal` should be treated as a normal schema value, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );

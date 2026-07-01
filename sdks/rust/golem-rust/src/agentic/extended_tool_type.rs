@@ -228,6 +228,12 @@ pub struct ExtendedErrorCase {
 /// descriptor synthesis.
 pub trait ToolErrorSchema {
     fn error_cases() -> Result<Vec<ExtendedErrorCase>, ToolBuildError>;
+
+    fn to_error_payload_value(&self) -> Result<crate::TypedSchemaValue, String>;
+
+    fn from_error_payload_value(value: crate::TypedSchemaValue) -> Result<Self, String>
+    where
+        Self: Sized;
 }
 
 #[derive(Clone, Debug)]
@@ -498,6 +504,7 @@ pub struct EffectiveCommandBody {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanonicalInputField {
     pub name: String,
+    pub aliases: Vec<String>,
     pub schema: SchemaGraph,
 }
 
@@ -510,6 +517,7 @@ pub struct CanonicalInputModel {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalInputValue {
     pub name: String,
+    pub aliases: Vec<String>,
     pub schema: SchemaGraph,
     pub value: SchemaValue,
 }
@@ -543,6 +551,7 @@ impl CanonicalInputModel {
             .zip(values)
             .map(|(field, value)| CanonicalInputValue {
                 name: field.name,
+                aliases: field.aliases,
                 schema: field.schema,
                 value,
             })
@@ -627,6 +636,26 @@ impl ExtendedToolType {
         result
     }
 
+    pub fn command_index_by_path(&self, command_path: &[String]) -> Option<usize> {
+        let mut current = 0usize;
+        if self.commands.is_empty() {
+            return None;
+        }
+        if command_path.is_empty() {
+            return self.commands[current].body.as_ref().map(|_| current);
+        }
+        for segment in command_path {
+            let next = self.commands[current].subcommands.iter().find_map(|idx| {
+                let idx = usize::try_from(*idx).ok()?;
+                let node = self.commands.get(idx)?;
+                (node.name == *segment || node.aliases.iter().any(|alias| alias == segment))
+                    .then_some(idx)
+            })?;
+            current = next;
+        }
+        self.commands[current].body.as_ref().map(|_| current)
+    }
+
     pub fn canonical_input_fields(&self, command_index: usize) -> Vec<CanonicalInputField> {
         // Collect the body field names first so an inherited global can be
         // shadowed by a body-local declaration of the same surface name. A
@@ -670,6 +699,7 @@ impl ExtendedToolType {
                     }
                     fields.push(CanonicalInputField {
                         name: o.long.clone(),
+                        aliases: o.aliases.clone(),
                         schema: option_collected_graph(&o.shape),
                     })
                 }
@@ -681,6 +711,7 @@ impl ExtendedToolType {
                     }
                     fields.push(CanonicalInputField {
                         name: f.long.clone(),
+                        aliases: f.aliases.clone(),
                         schema: flag_graph(&f),
                     })
                 }
@@ -689,20 +720,24 @@ impl ExtendedToolType {
         if let Some(body) = body {
             fields.extend(body.positionals.fixed.iter().map(|p| CanonicalInputField {
                 name: p.name.clone(),
+                aliases: Vec::new(),
                 schema: p.type_.clone(),
             }));
             if let Some(t) = &body.positionals.tail {
                 fields.push(CanonicalInputField {
                     name: t.name.clone(),
+                    aliases: Vec::new(),
                     schema: list_wrapper_graph(&t.item_type),
                 });
             }
             fields.extend(body.options.iter().map(|o| CanonicalInputField {
                 name: o.long.clone(),
+                aliases: o.aliases.clone(),
                 schema: option_collected_graph(&o.shape),
             }));
             fields.extend(body.flags.iter().map(|f| CanonicalInputField {
                 name: f.long.clone(),
+                aliases: f.aliases.clone(),
                 schema: flag_graph(f),
             }));
         }
@@ -3629,10 +3664,12 @@ mod tests {
         let error = CanonicalInputModel::from_fields(vec![
             CanonicalInputField {
                 name: "same".to_string(),
+                aliases: Vec::new(),
                 schema: str_graph(),
             },
             CanonicalInputField {
                 name: "same".to_string(),
+                aliases: Vec::new(),
                 schema: u32_graph(),
             },
         ])
@@ -3666,6 +3703,7 @@ mod tests {
         assert!(crate::schema::validation::validate_graph(&graph).is_err());
         let error = CanonicalInputModel::from_fields(vec![CanonicalInputField {
             name: "field".to_string(),
+            aliases: Vec::new(),
             schema: graph,
         }])
         .unwrap_err();

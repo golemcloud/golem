@@ -51,6 +51,24 @@ pub enum ToolError<E> {
     Tool(E),
 }
 
+/// Generated marker for a tool trait method that is invokable as a command body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolLeafCommand;
+
+/// Generated marker for a tool trait method that only grafts a subtree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolSubtreeCommand;
+
+#[doc(hidden)]
+pub trait ToolClientWithParts: Sized {
+    fn __golem_tool_client_with_parts(
+        root_tool_name: String,
+        command_path: Vec<String>,
+        schema_path: Vec<String>,
+        inherited_prefix: Vec<crate::agentic::CanonicalInputValue>,
+    ) -> Self;
+}
+
 impl<E: Display> Display for ToolError<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
