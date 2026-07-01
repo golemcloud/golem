@@ -240,6 +240,9 @@ async fn gen_bridge_sdk_target(
                         &output_dir,
                         false,
                     )?),
+                    GuestLanguage::Kotlin => {
+                        bail!("Bridge generation is not yet supported for Kotlin")
+                    }
                     GuestLanguage::MoonBit => Box::new(MoonBitBridgeGenerator::new(
                         target.agent_type,
                         &output_dir,

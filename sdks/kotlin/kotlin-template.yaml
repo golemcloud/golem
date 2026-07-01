@@ -1,0 +1,25 @@
+# Component build template for Kotlin/JS agents (mirrors scala-js-template.yaml).
+#
+# `golem build` runs `bundleAgentJs` (the cloud.golem.wasm-component Gradle plugin task) which
+# produces the single agent JS bundle (agent code + SDK + KSP-generated registration) exporting
+# `guest`, and extracts the prebuilt agent_guest.wasm from the plugin into build/golem/. golem
+# then injects the bundle into that wasm and Wizer-preinitializes it.
+manifestVersion: 1.5.0
+componentTemplates:
+  kotlin:
+    build:
+    - command: ./gradlew bundleAgentJs
+      sources:
+      - src
+      - build.gradle.kts
+      - settings.gradle.kts
+      targets:
+      - build/golem/counter-agent.js
+      - build/golem/agent_guest.wasm
+    - injectToPrebuiltQuickjs: build/golem/agent_guest.wasm
+      module: build/golem/counter-agent.js
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+    - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

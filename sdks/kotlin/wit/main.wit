@@ -1,0 +1,5 @@
+package golem:kotlin-agent@0.1.0;
+
+world kotlin-agent-guest {
+  include golem:agent/agent-guest@2.0.0;
+}

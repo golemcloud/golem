@@ -78,6 +78,7 @@ pub enum GuestLanguage {
     TypeScript,
     Rust,
     Scala,
+    Kotlin,
     MoonBit,
 }
 
@@ -87,6 +88,7 @@ impl GuestLanguage {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
             "scala" => Some(GuestLanguage::Scala),
+            "kotlin" => Some(GuestLanguage::Kotlin),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
         }
@@ -97,6 +99,7 @@ impl GuestLanguage {
             "rust" => Some(GuestLanguage::Rust),
             "ts" => Some(GuestLanguage::TypeScript),
             "scala" => Some(GuestLanguage::Scala),
+            "kotlin" => Some(GuestLanguage::Kotlin),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
         }
@@ -107,6 +110,7 @@ impl GuestLanguage {
             GuestLanguage::Rust => "rust",
             GuestLanguage::TypeScript => "ts",
             GuestLanguage::Scala => "scala",
+            GuestLanguage::Kotlin => "kotlin",
             GuestLanguage::MoonBit => "moonbit",
         }
     }
@@ -117,6 +121,7 @@ impl GuestLanguage {
             | GuestLanguage::TypeScript
             | GuestLanguage::Scala
             | GuestLanguage::MoonBit => true,
+            GuestLanguage::Kotlin => false,
         }
     }
 
@@ -125,6 +130,7 @@ impl GuestLanguage {
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
             GuestLanguage::Scala => "Scala",
+            GuestLanguage::Kotlin => "Kotlin",
             GuestLanguage::MoonBit => "MoonBit",
         }
     }

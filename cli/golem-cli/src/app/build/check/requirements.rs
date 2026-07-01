@@ -149,6 +149,29 @@ const SCALA_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     },
 ];
 
+const KOTLIN_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
+    ToolRequirement {
+        key: "java",
+        name: "Java",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "java",
+            args: &["-version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::JAVA_MIN)),
+        install_hint: "Install Java 17 or newer: https://adoptium.net/",
+    },
+    ToolRequirement {
+        key: "gradle",
+        name: "Gradle",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "gradle",
+            args: &["--version"],
+        },
+        version_range: None,
+        install_hint: "Install Gradle 8.11 or newer: https://gradle.org/install/",
+    },
+];
+
 const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     ToolRequirement {
         key: "moon",
@@ -177,6 +200,7 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
         GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
         GuestLanguage::Scala => SCALA_TOOL_REQUIREMENTS,
+        GuestLanguage::Kotlin => KOTLIN_TOOL_REQUIREMENTS,
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
     }
 }

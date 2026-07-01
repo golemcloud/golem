@@ -1,0 +1,40 @@
+# golem-app-manifest-header
+
+componentTemplates:
+  kotlin:
+    presets:
+      optimized:
+        default: true
+        build:
+        - command: gradle bundleAgentJs
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ appRootDir }}/build.gradle.kts"
+          - "{{ appRootDir }}/settings.gradle.kts"
+          targets:
+          - "{{ appRootDir }}/build/golem/{{ component_name | to_snake_case }}.js"
+          - "{{ appRootDir }}/build/golem/agent_guest.wasm"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/build/golem/agent_guest.wasm"
+          module: "{{ appRootDir }}/build/golem/{{ component_name | to_snake_case }}.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      quick:
+        build:
+        - command: gradle bundleAgentJs
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ appRootDir }}/build.gradle.kts"
+          - "{{ appRootDir }}/settings.gradle.kts"
+          targets:
+          - "{{ appRootDir }}/build/golem/{{ component_name | to_snake_case }}.js"
+          - "{{ appRootDir }}/build/golem/agent_guest.wasm"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/build/golem/agent_guest.wasm"
+          module: "{{ appRootDir }}/build/golem/{{ component_name | to_snake_case }}.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
