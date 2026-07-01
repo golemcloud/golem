@@ -913,6 +913,100 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+async fn webhook_callback_accepts_query_only_test_server_url(
+    agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    use axum::{Router, body::Bytes, extract::Query, routing::post};
+    use reqwest::Client;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::spawn;
+    use tokio::sync::Mutex;
+
+    let host_header = agent.host_header.clone();
+    let (agent_host, agent_port) = agent.base_url.authority().split_once(':').unwrap();
+    let agent_host = agent_host.to_string();
+    let agent_port = agent_port.parse::<u16>().unwrap();
+
+    let received_query = Arc::new(Mutex::new(None::<String>));
+    let received_query_clone = received_query.clone();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(async move {
+        let route = Router::new().route(
+            "/",
+            post(
+                move |Query(query): Query<HashMap<String, String>>, body: Bytes| {
+                    let received_query_clone = received_query_clone.clone();
+                    async move {
+                        let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                        let webhook_url_str = body_json["webhookUrl"].as_str().unwrap();
+
+                        let mut lock = received_query_clone.lock().await;
+                        *lock = query.get("token").cloned();
+
+                        let mut url: Url = webhook_url_str.parse().unwrap();
+                        url.set_host(Some(&agent_host)).unwrap();
+                        url.set_port(Some(agent_port)).unwrap();
+
+                        let client = Client::new();
+                        let payload = serde_json::to_vec(&"hello").unwrap();
+                        client
+                            .post(url)
+                            .header("Host", host_header.clone())
+                            .body(payload.clone())
+                            .send()
+                            .await
+                            .unwrap();
+
+                        "ok"
+                    }
+                },
+            ),
+        );
+
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let test_server_url = format!("http://127.0.0.1:{port}?token=query-only");
+    agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/webhook-agents/test-agent/set-test-server-url")?,
+        )
+        .json(&serde_json::json!({ "test_server_url": test_server_url }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let response = agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/webhook-agents/test-agent/test-webhook")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "payload_length": 5 }));
+    assert_eq!(received_query.lock().await.as_deref(), Some("query-only"));
+
+    http_server.abort();
+
+    Ok(())
+}
+
 // PATCH method tests
 
 #[test]

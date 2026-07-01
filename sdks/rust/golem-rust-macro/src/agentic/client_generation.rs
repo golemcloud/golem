@@ -538,7 +538,7 @@ fn generate_method_code(
             rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
         }
 
-        pub fn #schedule_name(#(#input_defs),*, scheduled_time: golem_rust::wasip3::clocks::system_clock::Instant) {
+        pub fn #schedule_name(#(#input_defs),*, scheduled_time: golem_rust::ScheduledTime) {
             #encode_input
 
             self.wasm_rpc.schedule_invocation(
@@ -548,7 +548,7 @@ fn generate_method_code(
             );
         }
 
-        pub fn #schedule_cancelable_name(#(#input_defs),*, scheduled_time: golem_rust::wasip3::clocks::system_clock::Instant) -> golem_rust::golem_agentic::golem::agent::host::CancellationToken {
+        pub fn #schedule_cancelable_name(#(#input_defs),*, scheduled_time: golem_rust::ScheduledTime) -> golem_rust::golem_agentic::golem::agent::host::CancellationToken {
             #encode_input
 
             self.wasm_rpc.schedule_cancelable_invocation(

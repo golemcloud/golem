@@ -101,7 +101,7 @@ impl HttpClient2 for HttpClient2Impl {
                 println!("Poll loop finished");
                 return;
             } else {
-                wstd::task::sleep(std::time::Duration::from_millis(100).into()).await;
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(100_000_000).await;
             }
         }
     }
@@ -135,5 +135,4 @@ impl HttpClient2 for HttpClient2Impl {
             }
         }
     }
-
 }

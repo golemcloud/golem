@@ -69,7 +69,7 @@ impl StreamingClient for StreamingClientImpl {
             Ok::<_, String>(result)
         };
         let timeout = async {
-            wstd::task::sleep(wstd::time::Duration::from_secs(60)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(60_000_000_000).await;
             Err("Timeout".to_string())
         };
         let (Ok(result) | Err(result)) = ((r1, r2, r3, timeout)).race().await;
@@ -88,7 +88,7 @@ impl StreamingClient for StreamingClientImpl {
         };
 
         // Step 2: sleep — produces additional durable ready/poll entries
-        wstd::task::sleep(wstd::time::Duration::from_millis(100)).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(100_000_000).await;
 
         format!("body_len={},slept", body.len())
     }
@@ -121,7 +121,7 @@ impl StreamingClient for StreamingClientImpl {
         let http_fut = async { Some(self.slow_body_stream().await) };
         let timer_fut = async {
             println!("!!! TIMER STARTED with {timeout_ms}");
-            wstd::task::sleep(wstd::time::Duration::from_millis(timeout_ms)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(timeout_ms.saturating_mul(1_000_000)).await;
             println!("!!! TIMER ELAPSED");
             None
         };
@@ -152,7 +152,7 @@ impl StreamingClient for StreamingClientImpl {
             Ok::<_, String>(result)
         };
         let timeout = async {
-            wstd::task::sleep(wstd::time::Duration::from_secs(60)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(60_000_000_000).await;
             Err("Timeout".to_string())
         };
         let (Ok(result) | Err(result)) = ((r1, r2, r3, timeout)).race().await;
@@ -206,9 +206,7 @@ async fn send_raw_streaming_request() -> Result<String, String> {
         outgoing_handler::handle(request, None).map_err(|e| format!("handle error: {e:?}"))?;
 
     let pollable = future_response.subscribe();
-    wstd::runtime::AsyncPollable::new(pollable)
-        .wait_for()
-        .await;
+    wstd::runtime::AsyncPollable::new(pollable).wait_for().await;
 
     let response = future_response
         .get()
@@ -217,16 +215,12 @@ async fn send_raw_streaming_request() -> Result<String, String> {
         .map_err(|e| format!("HTTP error: {e:?}"))?;
 
     let incoming_body = response.consume().map_err(|_| "Failed to consume body")?;
-    let stream = incoming_body
-        .stream()
-        .map_err(|_| "Failed to get stream")?;
+    let stream = incoming_body.stream().map_err(|_| "Failed to get stream")?;
 
     let mut result: Vec<u8> = Vec::new();
     loop {
         let pollable = stream.subscribe();
-        wstd::runtime::AsyncPollable::new(pollable)
-            .wait_for()
-            .await;
+        wstd::runtime::AsyncPollable::new(pollable).wait_for().await;
 
         match stream.read(4096) {
             Ok(chunk) => {
@@ -274,9 +268,7 @@ async fn send_raw_streaming_request_with_trailers() -> Result<String, String> {
         outgoing_handler::handle(request, None).map_err(|e| format!("handle error: {e:?}"))?;
 
     let pollable = future_response.subscribe();
-    wstd::runtime::AsyncPollable::new(pollable)
-        .wait_for()
-        .await;
+    wstd::runtime::AsyncPollable::new(pollable).wait_for().await;
 
     let response = future_response
         .get()
@@ -285,16 +277,12 @@ async fn send_raw_streaming_request_with_trailers() -> Result<String, String> {
         .map_err(|e| format!("HTTP error: {e:?}"))?;
 
     let incoming_body = response.consume().map_err(|_| "Failed to consume body")?;
-    let stream = incoming_body
-        .stream()
-        .map_err(|_| "Failed to get stream")?;
+    let stream = incoming_body.stream().map_err(|_| "Failed to get stream")?;
 
     let mut result: Vec<u8> = Vec::new();
     loop {
         let pollable = stream.subscribe();
-        wstd::runtime::AsyncPollable::new(pollable)
-            .wait_for()
-            .await;
+        wstd::runtime::AsyncPollable::new(pollable).wait_for().await;
 
         match stream.read(4096) {
             Ok(chunk) => {
@@ -314,9 +302,7 @@ async fn send_raw_streaming_request_with_trailers() -> Result<String, String> {
 
     loop {
         let pollable = future_trailers.subscribe();
-        wstd::runtime::AsyncPollable::new(pollable)
-            .wait_for()
-            .await;
+        wstd::runtime::AsyncPollable::new(pollable).wait_for().await;
 
         if let Some(_trailers_result) = future_trailers.get() {
             break;

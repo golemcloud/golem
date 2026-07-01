@@ -36,7 +36,7 @@ impl Clock for ClockImpl {
     async fn sleep_during_request(&self, secs: u64) -> String {
         let response = send_request();
         let timeout = async {
-            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000)).await;
             Err("Timeout".to_string())
         };
         let (Ok(result) | Err(result)) = ((response, timeout)).race().await;
@@ -66,7 +66,7 @@ impl Clock for ClockImpl {
             Ok(result)
         };
         let timeout = async {
-            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000)).await;
             Err("Timeout".to_string())
         };
         let (Ok(result) | Err(result)) = ((response1, response2, response3, timeout)).race().await;
@@ -77,9 +77,19 @@ impl Clock for ClockImpl {
         let mut result = String::new();
         for _ in 0..(n as usize) {
             result.push_str(&format!("{:?}\n", send_request().await));
-            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000)).await;
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sleep_timeout_seconds_to_nanoseconds_must_not_overflow() {
+        let overflowing_secs = std::hint::black_box(36_028_797_018_963_968u64);
+
+        let _duration_nanos = overflowing_secs.saturating_mul(1_000_000_000);
     }
 }
 

@@ -22,7 +22,12 @@ use crate::{
 use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
-use wit_bindgen::block_on;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use std::{
+    pin::Pin,
+    sync::{Condvar, Mutex},
+    task::{Context, Poll, Waker},
+};
 
 #[derive(Default)]
 pub struct State {
@@ -35,6 +40,52 @@ pub struct State {
 #[derive(Default)]
 pub struct AgentTypes {
     pub agent_types: HashMap<AgentTypeName, ExtendedAgentType>,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn block_on_agent_future<F>(future: F) -> F::Output
+where
+    F: Future,
+    F::Output: 'static,
+{
+    let wake_state = Arc::new(NativeWakeState {
+        woken: Mutex::new(false),
+        condvar: Condvar::new(),
+    });
+    let waker = Waker::from(wake_state.clone());
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match Pin::new(&mut future).poll(&mut context) {
+            Poll::Ready(result) => break result,
+            Poll::Pending => {
+                let mut woken = wake_state.woken.lock().unwrap();
+                while !*woken {
+                    woken = wake_state.condvar.wait(woken).unwrap();
+                }
+                *woken = false;
+            }
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+struct NativeWakeState {
+    woken: Mutex<bool>,
+    condvar: Condvar,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl std::task::Wake for NativeWakeState {
+    fn wake(self: Arc<Self>) {
+        *self.woken.lock().unwrap() = true;
+        self.condvar.notify_one();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        *self.woken.lock().unwrap() = true;
+        self.condvar.notify_one();
+    }
 }
 
 static mut STATE: Option<State> = None;
@@ -132,7 +183,7 @@ pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
 }
 
 // To be used only in agent implementation
-pub fn with_agent_instance_async<F, Fut, R>(f: F) -> R
+pub async fn with_agent_instance_async<F, Fut, R>(f: F) -> R
 where
     F: FnOnce(Rc<ResolvedAgent>) -> Fut,
     Fut: Future<Output = R> + 'static,
@@ -145,7 +196,7 @@ where
         .clone()
         .unwrap();
 
-    block_on(async move { f(agent_instance).await })
+    f(agent_instance).await
 }
 
 pub fn with_agent_instance<F, R>(f: F) -> R
@@ -260,7 +311,7 @@ fn extract_parameter_schema(
         .map(|(_, parameter_schema)| parameter_schema.clone())
 }
 
-pub fn with_agent_initiator<F, Fut, R>(f: F, agent_type_name: &AgentTypeName) -> R
+pub async fn with_agent_initiator<F, Fut, R>(f: F, agent_type_name: &AgentTypeName) -> R
 where
     F: FnOnce(Arc<dyn AgentInitiator>) -> Fut,
     Fut: Future<Output = R> + 'static,
@@ -281,7 +332,7 @@ where
             )
         });
 
-    block_on(async move { f(agent_initiator).await })
+    f(agent_initiator).await
 }
 
 #[derive(Eq, Hash, PartialEq)]
@@ -290,5 +341,58 @@ pub struct AgentTypeName(pub String);
 impl std::borrow::Borrow<str> for AgentTypeName {
     fn borrow(&self) -> &str {
         &self.0
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::block_on_agent_future;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::task::{Context, Poll};
+    use std::time::Duration;
+    use test_r::test;
+
+    struct WakeLater {
+        armed: bool,
+        ready: Arc<AtomicBool>,
+    }
+
+    impl Future for WakeLater {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            if self.ready.load(Ordering::Acquire) {
+                return Poll::Ready(());
+            }
+
+            if self.armed {
+                panic!("future was polled again before its waker fired");
+            }
+
+            self.armed = true;
+            let ready = self.ready.clone();
+            let waker = cx.waker().clone();
+
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                ready.store(true, Ordering::Release);
+                waker.wake();
+            });
+
+            Poll::Pending
+        }
+    }
+
+    #[test]
+    fn native_block_on_waits_for_waker_before_repolling() {
+        block_on_agent_future(WakeLater {
+            armed: false,
+            ready: Arc::new(AtomicBool::new(false)),
+        });
     }
 }

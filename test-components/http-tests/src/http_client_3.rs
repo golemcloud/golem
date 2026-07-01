@@ -122,10 +122,8 @@ impl HttpClient3 for HttpClient3Impl {
         use golem_wasi_http::*;
 
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
-        let component_id =
-            std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
-        let worker_name =
-            std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
+        let component_id = std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
+        let worker_name = std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
 
         println!("Polling until receiving {until}");
 
@@ -149,7 +147,7 @@ impl HttpClient3 for HttpClient3Impl {
                         println!("Poll loop finished");
                         return;
                     } else {
-                        wstd::task::sleep(std::time::Duration::from_millis(100).into()).await;
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(100_000_000).await;
                     }
                 }
                 Err(err) => {

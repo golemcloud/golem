@@ -25,15 +25,19 @@
 //! methods still take `&mut self`, two calls cannot truly overlap yet, so the resolver's
 //! out-of-order behaviour is proven by synthetic unit tests rather than a concurrent runtime test.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::SpanId;
+use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     OplogPayload, PersistenceLevel, ScopeScanState, host_functions::HostFunctionName,
@@ -43,6 +47,7 @@ use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::component::Component;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData};
@@ -53,9 +58,15 @@ use crate::durable_host::durability::{
     TerminalCallError, mark_durable_call_trap_context, try_trigger_host_trap_retry,
 };
 use crate::durable_host::replay_state::OplogEntryLookupResult;
-use crate::durable_host::{DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState};
+use crate::durable_host::{
+    DurableScopeKind, DurableWorkerCtx, IFSWorkerFile, PublicDurableWorkerState,
+};
 use crate::services::HasWorker;
+use crate::services::card::CardService;
+use crate::services::component::ComponentService;
+use crate::services::file_loader::FileLoader;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
+use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use std::fmt::Display;
 
@@ -859,6 +870,10 @@ pub trait DropPolicy {
 /// Drop policy for calls that may legitimately be cancelled (dropped from a `select!`, etc.).
 pub struct Cancellable;
 
+/// Drop policy for idempotent calls whose unfinished live execution should be retried from the
+/// committed `Start` during replay instead of recorded as a terminal cancellation.
+pub struct LeaveIncompleteOnDrop;
+
 /// Drop policy for calls that must always be finished or explicitly cancelled. Dropping one
 /// unfinished is a bug (default-deny).
 pub struct NotCancellable;
@@ -879,6 +894,26 @@ impl DropPolicy for Cancellable {
                 "durable call {start_idx} dropped unfinished; no production cancellation recorder yet"
             );
         }
+    }
+}
+
+impl DropPolicy for LeaveIncompleteOnDrop {
+    fn production_drop_sink(
+        sink: Option<UnboundedSender<DropEvent>>,
+    ) -> Option<UnboundedSender<DropEvent>> {
+        sink
+    }
+
+    fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>) {
+        if let Some(begin_index) = call.atomic_region_registration()
+            && let Some(sink) = sink
+        {
+            let _ = sink.send(DropEvent::CleanupAtomicRegion { begin_index });
+        }
+        tracing::debug!(
+            start_idx = %call.start_idx(),
+            "durable call dropped unfinished; leaving committed Start incomplete for replay"
+        );
     }
 }
 
@@ -2814,32 +2849,387 @@ where
                     ctx.state.current_phantom_id = Some(new_phantom_id);
                 });
             }
-            crate::durable_host::replay_state::ReplayEvent::UpdateReplayed { .. } => {
-                return Err(WorkerExecutorError::runtime(
-                    "p3 accessor durable call path cannot yet apply replayed component updates",
-                ));
+            crate::durable_host::replay_state::ReplayEvent::UpdateReplayed { new_revision } => {
+                tracing::debug!(
+                    "Updating worker state to component metadata revision {new_revision}"
+                );
+                update_state_to_new_component_revision_access(store, get_ctx, new_revision).await?;
             }
             crate::durable_host::replay_state::ReplayEvent::ReplayFinished => {
-                let has_pending_update = store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    ctx.state
-                        .pending_update
-                        .try_lock()
-                        .map(|pending| pending.is_some())
-                        .map_err(|_| {
-                            WorkerExecutorError::runtime(
-                                "p3 accessor durable call path cannot inspect pending component update state",
-                            )
-                        })
-                })?;
-                if has_pending_update {
-                    return Err(WorkerExecutorError::runtime(
-                        "p3 accessor durable call path cannot yet finalize replayed component updates",
-                    ));
-                }
+                tracing::debug!("Replaying oplog finished");
+                finalize_pending_automatic_update_access(store, get_ctx).await?;
             }
         }
     }
+    Ok(())
+}
+
+struct AccessRevisionUpdateInputs<Ctx: WorkerCtx> {
+    public_state: PublicDurableWorkerState<Ctx>,
+    component_service: Arc<dyn ComponentService>,
+    card_service: Arc<dyn CardService>,
+    file_loader: Arc<FileLoader>,
+    owned_agent_id: golem_common::model::OwnedAgentId,
+    agent_id: Option<ParsedAgentId>,
+    initial_agent_config: Vec<golem_common::model::worker::TypedAgentConfigEntry>,
+    worker_dir: PathBuf,
+    current_revision: ComponentRevision,
+}
+
+struct AccessRevisionUpdate {
+    metadata: Component,
+    agent_state: Option<(
+        HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
+        golem_common::model::card::EffectiveSurface,
+    )>,
+    files: HashMap<PathBuf, IFSWorkerFile>,
+}
+
+async fn finalize_pending_automatic_update_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let pending_update = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        let pending_update = ctx
+            .state
+            .pending_update
+            .try_lock()
+            .map_err(|_| {
+                WorkerExecutorError::runtime(
+                    "p3 accessor durable call path cannot inspect pending component update state",
+                )
+            })?
+            .take();
+        Ok::<_, WorkerExecutorError>(pending_update)
+    });
+
+    let pending_update = if let Some(pending_update) = pending_update? {
+        pending_update
+    } else {
+        return Ok(());
+    };
+
+    match pending_update.description {
+        UpdateDescription::Automatic { target_revision } => {
+            tracing::debug!("Finalizing pending automatic update");
+            if let Err(error) =
+                update_state_to_new_component_revision_access(store, get_ctx, target_revision).await
+            {
+                let stringified_error = format!("Applying worker update failed: {error}");
+                record_worker_update_failed_access(
+                    store,
+                    get_ctx,
+                    target_revision,
+                    stringified_error,
+                )
+                .await?;
+                return Err(error);
+            }
+
+            let (component_size, active_plugins) = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                (
+                    ctx.state.component_metadata.component_size,
+                    HashSet::from_iter({
+                        ctx.agent_type_provision_config()
+                            .map(|c| c.plugins.as_slice())
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|installation| installation.environment_plugin_grant_id)
+                    }),
+                )
+            });
+            record_worker_update_succeeded_access(
+                store,
+                get_ctx,
+                target_revision,
+                component_size,
+                active_plugins,
+            )
+            .await?;
+            tracing::debug!("Finalizing automatic update to revision {target_revision}");
+            Ok(())
+        }
+        _ => Err(WorkerExecutorError::runtime(
+            "pending replay event finalization expected an automatic update description",
+        )),
+    }
+}
+
+async fn update_state_to_new_component_revision_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    new_revision: ComponentRevision,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let inputs = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        AccessRevisionUpdateInputs {
+            public_state: ctx.public_state.clone(),
+            component_service: ctx.state.component_service.clone(),
+            card_service: ctx.state.card_service.clone(),
+            file_loader: ctx.state.file_loader.clone(),
+            owned_agent_id: ctx.owned_agent_id.clone(),
+            agent_id: ctx.state.agent_id.clone(),
+            initial_agent_config: ctx.state.initial_agent_config.clone(),
+            worker_dir: ctx.worker_dir.path().to_path_buf(),
+            current_revision: ctx.state.component_metadata.revision,
+        }
+    });
+
+    if new_revision <= inputs.current_revision {
+        tracing::debug!("Update {new_revision} was already applied, skipping");
+        return Ok(());
+    }
+
+    let update = prepare_revision_update_access(store, get_ctx, &inputs, new_revision).await?;
+    store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        apply_revision_update_access(ctx, update);
+    });
+    Ok(())
+}
+
+async fn prepare_revision_update_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    inputs: &AccessRevisionUpdateInputs<Ctx>,
+    new_revision: ComponentRevision,
+) -> Result<AccessRevisionUpdate, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let metadata = inputs
+        .component_service
+        .get_metadata(inputs.owned_agent_id.component_id(), Some(new_revision))
+        .await?;
+
+    let provision_config = inputs.agent_id.as_ref().and_then(|agent_id| {
+        metadata
+            .metadata
+            .agent_type_provision_configs()
+            .get(&agent_id.agent_type)
+            .cloned()
+    });
+
+    let agent_state = if let Some(agent_id) = &inputs.agent_id {
+        let agent_type = metadata
+            .metadata
+            .find_agent_type_by_name_ref(&agent_id.agent_type)
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Agent type {} not found in updated agent metadata",
+                    agent_id.agent_type
+                ))
+            })?;
+
+        let updated_agent_config = effective_agent_config(
+            inputs.initial_agent_config.clone(),
+            provision_config
+                .as_ref()
+                .map(|c| c.config.clone())
+                .unwrap_or_default(),
+        )?;
+        validate_agent_config(&updated_agent_config, agent_type)?;
+
+        let liveness = match metadata
+            .metadata
+            .agent_type_initial_permission_template(&agent_id.agent_type)
+            .map(|template| template.card_id)
+        {
+            Some(card_id) => {
+                let liveness = inputs
+                    .card_service
+                    .check_cards(vec![card_id])
+                    .await?
+                    .get(&card_id)
+                    .copied()
+                    .unwrap_or(crate::services::card::CardLiveness::Revoked {
+                        newly_detected: true,
+                    });
+                if liveness.newly_detected_revocation() {
+                    inputs
+                        .public_state
+                        .worker()
+                        .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
+                        .await;
+                }
+                liveness
+            }
+            None => crate::services::card::CardLiveness::Live,
+        };
+
+        let effective_surface = if liveness.is_live() {
+            crate::durable_host::agent_effective_surface_from_component_metadata(
+                &metadata,
+                &inputs.owned_agent_id,
+                agent_id,
+            )
+        } else {
+            golem_common::model::card::EffectiveSurface::default()
+        };
+
+        Some((updated_agent_config, effective_surface))
+    } else {
+        None
+    };
+
+    let mut files = take_initial_files_access(store, get_ctx)?;
+    let update_result = super::update_filesystem(
+        &mut files,
+        &inputs.file_loader,
+        inputs.owned_agent_id.environment_id,
+        &inputs.worker_dir,
+        provision_config
+            .as_ref()
+            .map(|c| c.files.as_slice())
+            .unwrap_or_default(),
+    )
+    .await;
+
+    if let Err(error) = update_result {
+        restore_initial_files_access(store, get_ctx, files)?;
+        return Err(error);
+    }
+
+    Ok(AccessRevisionUpdate {
+        metadata,
+        agent_state,
+        files,
+    })
+}
+
+fn take_initial_files_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        let mut files = ctx.state.files.try_write().map_err(|_| {
+            WorkerExecutorError::runtime(
+                "p3 accessor durable call path cannot acquire initial-files lock",
+            )
+        })?;
+        Ok(std::mem::take(&mut *files))
+    })
+}
+
+fn restore_initial_files_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    restored: HashMap<PathBuf, IFSWorkerFile>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        let mut files = ctx.state.files.try_write().map_err(|_| {
+            WorkerExecutorError::runtime(
+                "p3 accessor durable call path cannot restore initial-files state",
+            )
+        })?;
+        *files = restored;
+        Ok(())
+    })
+}
+
+fn apply_revision_update_access<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    update: AccessRevisionUpdate,
+) {
+    let read_only_paths = super::compute_read_only_paths(&update.files);
+    {
+        let mut files = ctx
+            .state
+            .files
+            .try_write()
+            .expect("initial-files state was taken by this update path");
+        *files = update.files;
+    }
+    {
+        let mut read_only = ctx.state.read_only_paths.write().unwrap();
+        *read_only = read_only_paths;
+    }
+
+    if let Some((agent_config, effective_surface)) = update.agent_state {
+        ctx.state.agent_config = agent_config;
+        ctx.state.cached_agent_config_retry_policies = None;
+        ctx.state.agent_effective_surface = effective_surface;
+    }
+    ctx.state.component_metadata = update.metadata;
+}
+
+async fn record_worker_update_failed_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    target_revision: ComponentRevision,
+    details: String,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let public_state = store.with(|mut access| get_ctx(access.data_mut()).public_state.clone());
+    public_state
+        .worker()
+        .add_and_commit_oplog(OplogEntry::failed_update(
+            target_revision,
+            Some(details.clone()),
+        ))
+        .await;
+    tracing::warn!(
+        "Worker failed to update to {}: {}, update attempt aborted",
+        target_revision,
+        details
+    );
+    Ok(())
+}
+
+async fn record_worker_update_succeeded_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    target_revision: ComponentRevision,
+    component_size: u64,
+    active_plugins: HashSet<
+        golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
+    >,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    tracing::info!("Worker update to {} finished successfully", target_revision);
+    let public_state = store.with(|mut access| get_ctx(access.data_mut()).public_state.clone());
+    public_state
+        .worker()
+        .add_and_commit_oplog(OplogEntry::successful_update(
+            target_revision,
+            component_size,
+            active_plugins,
+        ))
+        .await;
     Ok(())
 }
 

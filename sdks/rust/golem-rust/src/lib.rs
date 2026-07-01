@@ -16,8 +16,7 @@
 test_r::enable!();
 
 pub use uuid::Uuid;
-pub use wasip2;
-pub use wstd;
+pub use wasip3;
 
 pub use golem_schema;
 pub use golem_schema::schema;
@@ -61,6 +60,24 @@ pub fn decode_typed_schema_value(
     schema::wit::decode_typed(value)
 }
 
+// Compatibility shim for the `wasi:clocks` types the Golem WIT interfaces reference
+// (`wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant}` and
+// `wasi:clocks/types@0.3.0-rc-2026-03-15.{duration}`). The `with:` remaps in every
+// `generate!` block point the generated bindings at these modules so the Rust
+// types come from a single source.
+
+/// Public alias for the instant/datetime type used by Golem's scheduling APIs.
+pub type ScheduledTime = wasip3::clocks::system_clock::Instant;
+
+mod wasi_clocks_compat {
+    pub mod system_clock {
+        pub use wasip3::clocks::system_clock::Instant;
+    }
+    pub mod types {
+        pub use wasip3::clocks::types::Duration;
+    }
+}
+
 mod raw_bindings {
     use wit_bindgen::generate;
 
@@ -72,8 +89,8 @@ mod raw_bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
         }
     });
 }
@@ -110,13 +127,14 @@ pub mod load_snapshot {
     generate!({
         path: "wit",
         world: "golem-rust-load-snapshot",
+        async: ["export:golem:api/load-snapshot@1.5.0#load"],
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -148,13 +166,14 @@ pub mod save_snapshot {
     generate!({
         path: "wit",
         world: "golem-rust-save-snapshot",
+        async: ["export:golem:api/save-snapshot@1.5.0#save"],
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -186,14 +205,18 @@ pub mod golem_agentic {
     generate!({
         path: "wit",
         world: "golem-agentic",
+        async: [
+            "export:golem:agent/guest@2.0.0#initialize",
+            "export:golem:agent/guest@2.0.0#invoke",
+        ],
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
 
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -246,8 +269,8 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -852,12 +875,14 @@ pub struct PromiseResult {
 }
 
 impl PromiseResult {
-    pub fn subscribe(&self) -> wasip2::io::poll::Pollable {
-        self.raw.subscribe()
-    }
-
-    pub fn get(&self) -> Option<Vec<u8>> {
-        self.raw.get()
+    /// Awaits the promise result. The agent is suspended until the promise is
+    /// completed; the completed payload is then returned.
+    ///
+    /// On WASI P2 this was a non-blocking `get() -> Option<...>` paired with a
+    /// `subscribe() -> pollable`; the P3 `wasi:io/poll` pollable is gone, so the
+    /// host `get-promise-result.get` is now an `async func` that awaits directly.
+    pub async fn get(&self) -> Vec<u8> {
+        self.raw.get().await
     }
 }
 
@@ -926,9 +951,7 @@ pub fn fork() -> ForkResult {
 /// awaiting of the promise with other operations.
 pub fn blocking_await_promise(promise_id: &PromiseId) -> Vec<u8> {
     let promise = get_promise(promise_id);
-    let pollable = promise.subscribe();
-    pollable.block();
-    promise.get().unwrap()
+    wit_bindgen::block_on(async move { promise.get().await })
 }
 
 /// Awaits a promise.
@@ -937,9 +960,7 @@ pub fn blocking_await_promise(promise_id: &PromiseId) -> Vec<u8> {
 /// suspended until any of them completes.
 pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     let promise = get_promise(promise_id);
-    let pollable = promise.subscribe();
-    wstd::io::AsyncPollable::new(pollable).wait_for().await;
-    promise.get().unwrap()
+    promise.get().await
 }
 
 pub struct PersistenceLevelGuard {

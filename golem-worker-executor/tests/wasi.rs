@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;

@@ -1,0 +1,1 @@
+This interface common types used throughout wasi:clocks.

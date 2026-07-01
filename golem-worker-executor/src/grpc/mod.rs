@@ -199,24 +199,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             AgentStatus::Exited => Err(WorkerExecutorError::PreviousInvocationExited),
-            _ => {
-                let error_and_retry_count = Ctx::get_last_error_and_retry_count(
-                    self,
-                    owned_agent_id,
-                    agent_mode,
-                    &metadata.last_known_status,
-                )
-                .await;
-                debug!("Last error and retry count: {:?}", error_and_retry_count);
-                if let Some(last_error) = error_and_retry_count {
-                    Err(WorkerExecutorError::PreviousInvocationFailed {
-                        error: last_error.error,
-                        stderr: last_error.stderr,
-                    })
-                } else {
-                    Ok(())
-                }
-            }
+            _ => Ok(()),
         }
     }
 

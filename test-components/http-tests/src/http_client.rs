@@ -11,7 +11,11 @@ pub trait HttpClient {
 }
 
 struct HttpClientImpl {
-    incoming_response: Option<(wasi::http::types::IncomingResponse, Vec<u8>, wasi::http::types::FutureIncomingResponse)>,
+    incoming_response: Option<(
+        wasi::http::types::IncomingResponse,
+        Vec<u8>,
+        wasi::http::types::FutureIncomingResponse,
+    )>,
 }
 
 #[agent_implementation]

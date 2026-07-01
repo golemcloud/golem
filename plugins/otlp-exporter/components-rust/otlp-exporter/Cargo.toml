@@ -8,8 +8,10 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
+futures = { workspace = true }
 golem-rust = { workspace = true }
-wstd = { workspace = true }
+http = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
+wit-bindgen = { workspace = true }

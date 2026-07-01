@@ -177,9 +177,15 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest
-                .call_initialize(&mut *store, &agent_type, &input, &principal)
-                .await;
+            let result = store
+                .as_context_mut()
+                .run_concurrent(async |accessor| {
+                    guest
+                        .call_initialize(accessor, agent_type, input, principal)
+                        .await
+                })
+                .await
+                .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -198,9 +204,15 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest
-                .call_invoke(&mut *store, &method_name, &input, &principal)
-                .await;
+            let result = store
+                .as_context_mut()
+                .run_concurrent(async |accessor| {
+                    guest
+                        .call_invoke(accessor, method_name, input, principal)
+                        .await
+                })
+                .await
+                .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -218,7 +230,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         LoweredCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest.call_save(&mut *store).await;
+            let result = store
+                .as_context_mut()
+                .run_concurrent(async |accessor| guest.call_save(accessor).await)
+                .await
+                .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -234,7 +250,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         LoweredCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest.call_load(&mut *store, &snapshot).await;
+            let result = store
+                .as_context_mut()
+                .run_concurrent(async |accessor| guest.call_load(accessor, snapshot).await)
+                .await
+                .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {

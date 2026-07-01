@@ -114,7 +114,7 @@ impl From<QuotaTokenRecord> for types::QuotaTokenRecord {
             expected_use: value.expected_use,
             last_credit: value.last_credit,
             last_credit_at: types::Datetime {
-                seconds: seconds as u64,
+                seconds,
                 nanoseconds: value.last_credit_at.timestamp_subsec_nanos(),
             },
         }

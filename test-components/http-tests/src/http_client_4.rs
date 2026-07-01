@@ -51,15 +51,11 @@ impl HttpClient4 for HttpClient4Impl {
     }
 
     async fn post_non_idempotent(&self) -> String {
-        with_idempotence_mode(false, || {
-            do_post_request()
-        })
+        with_idempotence_mode(false, || do_post_request())
     }
 
     async fn get_idempotent(&self) -> String {
-        with_idempotence_mode(false, || {
-            do_get_request()
-        })
+        with_idempotence_mode(false, || do_get_request())
     }
 
     async fn post_large_body(&self) -> String {
@@ -121,7 +117,7 @@ fn do_post_request() -> String {
         "X-Test".to_string(),
         "test-header".to_string().into(),
     )])
-        .unwrap();
+    .unwrap();
     let request = wasi::http::types::OutgoingRequest::new(headers);
     request
         .set_method(&wasi::http::types::Method::Post)
@@ -161,9 +157,7 @@ fn do_get_request() -> String {
 
     let headers = wasi::http::types::Fields::new();
     let request = wasi::http::types::OutgoingRequest::new(headers);
-    request
-        .set_method(&wasi::http::types::Method::Get)
-        .unwrap();
+    request.set_method(&wasi::http::types::Method::Get).unwrap();
     request.set_path_with_query(Some("/")).unwrap();
     request
         .set_scheme(Some(&wasi::http::types::Scheme::Http))
@@ -198,7 +192,7 @@ fn do_post_large_body() -> String {
         "Content-Type".to_string(),
         "application/octet-stream".to_string().into(),
     )])
-        .unwrap();
+    .unwrap();
     let request = wasi::http::types::OutgoingRequest::new(headers);
     request
         .set_method(&wasi::http::types::Method::Post)
@@ -231,7 +225,9 @@ fn do_post_large_body() -> String {
     // and force hyper to write to the TCP connection mid-stream.
     let chunk = vec![0xABu8; 64 * 1024];
     for _ in 0..4 {
-        request_body_stream.blocking_write_and_flush(&chunk).unwrap();
+        request_body_stream
+            .blocking_write_and_flush(&chunk)
+            .unwrap();
     }
     drop(request_body_stream);
     wasi::http::types::OutgoingBody::finish(request_body, None).unwrap();
@@ -247,9 +243,7 @@ fn do_get_chunked_read() -> String {
 
     let headers = wasi::http::types::Fields::new();
     let request = wasi::http::types::OutgoingRequest::new(headers);
-    request
-        .set_method(&wasi::http::types::Method::Get)
-        .unwrap();
+    request.set_method(&wasi::http::types::Method::Get).unwrap();
     request.set_path_with_query(Some("/")).unwrap();
     request
         .set_scheme(Some(&wasi::http::types::Scheme::Http))
@@ -301,7 +295,7 @@ fn do_post_with_write_zeroes() -> String {
         "Content-Type".to_string(),
         "application/octet-stream".to_string().into(),
     )])
-        .unwrap();
+    .unwrap();
     let request = wasi::http::types::OutgoingRequest::new(headers);
     request
         .set_method(&wasi::http::types::Method::Post)
@@ -357,7 +351,7 @@ fn do_post_with_subscribe() -> String {
         "Content-Type".to_string(),
         "application/octet-stream".to_string().into(),
     )])
-        .unwrap();
+    .unwrap();
     let request = wasi::http::types::OutgoingRequest::new(headers);
     request
         .set_method(&wasi::http::types::Method::Post)
@@ -390,7 +384,9 @@ fn do_post_with_subscribe() -> String {
 
     let chunk = vec![0xABu8; 64 * 1024];
     for _ in 0..4 {
-        request_body_stream.blocking_write_and_flush(&chunk).unwrap();
+        request_body_stream
+            .blocking_write_and_flush(&chunk)
+            .unwrap();
     }
     drop(request_body_stream);
     wasi::http::types::OutgoingBody::finish(request_body, None).unwrap();
@@ -408,7 +404,7 @@ fn do_post_with_trailers() -> String {
         "X-Test".to_string(),
         "test-header".to_string().into(),
     )])
-        .unwrap();
+    .unwrap();
     let request = wasi::http::types::OutgoingRequest::new(headers);
     request
         .set_method(&wasi::http::types::Method::Post)
@@ -432,7 +428,7 @@ fn do_post_with_trailers() -> String {
         "x-test-trailer".to_string(),
         b"trailer-value".to_vec(),
     )])
-        .unwrap();
+    .unwrap();
     wasi::http::types::OutgoingBody::finish(request_body, Some(trailers)).unwrap();
 
     let options = wasi::http::types::RequestOptions::new();
@@ -456,9 +452,7 @@ fn do_get_with_body_skip() -> String {
 
     let headers = wasi::http::types::Fields::new();
     let request = wasi::http::types::OutgoingRequest::new(headers);
-    request
-        .set_method(&wasi::http::types::Method::Get)
-        .unwrap();
+    request.set_method(&wasi::http::types::Method::Get).unwrap();
     request.set_path_with_query(Some("/")).unwrap();
     request
         .set_scheme(Some(&wasi::http::types::Scheme::Http))

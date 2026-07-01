@@ -300,7 +300,7 @@ interface save-snapshot {
     use host.{snapshot};
 
     /// Saves the component's state into a user-defined snapshot
-    save: func() -> snapshot;
+    save: async func() -> snapshot;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
@@ -310,7 +310,7 @@ interface load-snapshot {
 
     /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
     /// The function can return with a failure to indicate that the update is not possible.
-    load: func(snapshot: snapshot) -> result<_, string>;
+    load: async func(snapshot: snapshot) -> result<_, string>;
 }
 
 world golem-host {

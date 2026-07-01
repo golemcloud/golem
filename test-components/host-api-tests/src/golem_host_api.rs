@@ -8,8 +8,8 @@ use golem_rust::{
     ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId, Transaction,
     UpdateMode, Uuid, agent_definition, agent_implementation, atomically, atomically_async,
     fallible_transaction, fork, generate_idempotency_key, get_agent_metadata, get_oplog_index,
-    get_promise, get_self_metadata, golem_operation, infallible_transaction, oplog_commit,
-    resolve_agent_id, resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
+    get_self_metadata, golem_operation, infallible_transaction, oplog_commit, resolve_agent_id,
+    resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
     use_idempotence_mode, use_persistence_level, with_persistence_level,
     with_persistence_level_async,
 };
@@ -31,8 +31,6 @@ pub trait GolemHostApi {
 
     fn create_promise(&self) -> PromiseId;
     fn await_promise(&self, promise_id: PromiseId) -> Vec<u8>;
-    fn poll_promise(&self, promise_id: PromiseId) -> Option<Vec<u8>>;
-
     fn fail_with_custom_max_retries(&self, max_retries: u64);
     fn explicit_commit(&self, replicas: u8);
     fn atomic_region(&self);
@@ -92,10 +90,6 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn await_promise(&self, promise_id: PromiseId) -> Vec<u8> {
         golem_rust::blocking_await_promise(&promise_id)
-    }
-
-    fn poll_promise(&self, promise_id: PromiseId) -> Option<Vec<u8>> {
-        get_promise(&promise_id).get()
     }
 
     fn fail_with_custom_max_retries(&self, max_retries: u64) {

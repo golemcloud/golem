@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
-use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, Cancellable, DropPolicy, LeaveIncompleteOnDrop, NotCancellable,
+};
+use crate::durable_host::durability::{
+    DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
+};
 use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
+use futures::future::{Either, select};
 use golem_common::model::oplog::host_functions::{
     P3HttpClientConsumeBody, P3HttpClientConsumeBodyChunk, P3HttpClientSend,
 };
@@ -74,45 +79,100 @@ impl<Ctx: WorkerCtx> client::HostWithStore for DurableP3<Ctx> {
         req: Resource<Request>,
     ) -> HttpResult<Resource<Response>> {
         let request = serialize_request::<Ctx, U>(store, borrow_resource(&req))?;
-        let mut handle = CallHandle::<P3HttpClientSend, Cancellable>::start_access(
-            store,
-            durable_worker_ctx::<Ctx, U>,
-            HostRequestP3HttpClientSend { request },
-            DurableFunctionType::WriteRemoteBatched(None),
-        )
-        .await
-        .map_err(HttpError::trap)?;
 
-        if !handle.is_live() {
-            match handle
-                .replay_access(store, durable_worker_ctx::<Ctx, U>)
-                .await
-                .map_err(HttpError::trap)?
-            {
-                CallReplayOutcome::Replayed(response) => {
-                    // The live path consumes the request inside `WasiHttp::send`.
-                    // On replay we never call `send`, so consume it here (delete
-                    // it, drain its outgoing body) before returning the recorded
-                    // response — otherwise the request leaks and a guest
-                    // streaming a body or awaiting its transmission future hangs.
-                    consume_replayed_request::<Ctx, U>(store, req).await?;
-                    return replay_send_response::<Ctx, U>(store, response.result);
-                }
-                CallReplayOutcome::Incomplete(live_handle) => handle = live_handle,
-            }
+        if is_idempotent_http_method(&request.method) {
+            send_with_durability::<Ctx, U, LeaveIncompleteOnDrop>(
+                store,
+                req,
+                request,
+                DurableFunctionType::WriteRemote,
+            )
+            .await
+        } else {
+            send_with_durability::<Ctx, U, Cancellable>(
+                store,
+                req,
+                request,
+                DurableFunctionType::WriteRemoteBatched(None),
+            )
+            .await
         }
+    }
+}
 
-        let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-        match <WasiHttp as client::HostWithStore>::send(&http_store, req).await {
-            Ok(response) => {
+async fn send_with_durability<Ctx, U, P>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    req: Resource<Request>,
+    request: SerializableP3HttpClientSend,
+    function_type: DurableFunctionType,
+) -> HttpResult<Resource<Response>>
+where
+    Ctx: WorkerCtx,
+    U: Send,
+    P: DropPolicy,
+{
+    let mut handle = CallHandle::<P3HttpClientSend, P>::start_access(
+        store,
+        durable_worker_ctx::<Ctx, U>,
+        HostRequestP3HttpClientSend { request },
+        function_type,
+    )
+    .await
+    .map_err(HttpError::trap)?;
+
+    if !handle.is_live() {
+        match handle
+            .replay_access(store, durable_worker_ctx::<Ctx, U>)
+            .await
+            .map_err(HttpError::trap)?
+        {
+            CallReplayOutcome::Replayed(response) => {
+                // The live path consumes the request inside `WasiHttp::send`.
+                // On replay we never call `send`, so consume it here (delete
+                // it, drain its outgoing body) before returning the recorded
+                // response — otherwise the request leaks and a guest
+                // streaming a body or awaiting its transmission future hangs.
+                consume_replayed_request::<Ctx, U>(store, req).await?;
+                return replay_send_response::<Ctx, U>(store, response.result);
+            }
+            CallReplayOutcome::Incomplete(live_handle) => handle = live_handle,
+        }
+    }
+
+    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+    let interrupt = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+    });
+    let send = <WasiHttp as client::HostWithStore>::send(&http_store, req);
+    let send_result = match select(Box::pin(send), interrupt).await {
+        Either::Left((result, _)) => result,
+        Either::Right((interrupt_kind, _)) => {
+            let error: anyhow::Error = interrupt_kind.into();
+            Err(HttpError::trap(wasmtime::Error::from_anyhow(error)))
+        }
+    };
+
+    match send_result {
+        Ok(response) => {
+            let result =
+                SerializableP3HttpClientSendResult::Success(serialize_response_headers::<Ctx, U>(
+                    store,
+                    borrow_resource(&response),
+                )?);
+            handle
+                .complete_access(
+                    store,
+                    durable_worker_ctx::<Ctx, U>,
+                    HostResponseP3HttpClientSendResult { result },
+                )
+                .await
+                .map_err(HttpError::trap)?;
+            Ok(response)
+        }
+        Err(error) => {
+            if let Some(error_code) = error.downcast_ref() {
                 let result =
-                    SerializableP3HttpClientSendResult::Success(serialize_response_headers::<
-                        Ctx,
-                        U,
-                    >(
-                        store,
-                        borrow_resource(&response),
-                    )?);
+                    SerializableP3HttpClientSendResult::HttpError(serialize_error_code(error_code));
                 handle
                     .complete_access(
                         store,
@@ -121,30 +181,26 @@ impl<Ctx: WorkerCtx> client::HostWithStore for DurableP3<Ctx> {
                     )
                     .await
                     .map_err(HttpError::trap)?;
-                Ok(response)
-            }
-            Err(error) => {
-                if let Some(error_code) = error.downcast_ref() {
-                    let result = SerializableP3HttpClientSendResult::HttpError(
-                        serialize_error_code(error_code),
-                    );
-                    handle
-                        .complete_access(
-                            store,
-                            durable_worker_ctx::<Ctx, U>,
-                            HostResponseP3HttpClientSendResult { result },
-                        )
-                        .await
-                        .map_err(HttpError::trap)?;
-                    Err(error)
-                } else {
-                    Err(HttpError::trap(wasmtime::Error::from_anyhow(
-                        handle.trap(error),
-                    )))
-                }
+                Err(error)
+            } else {
+                Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                    handle.trap(error),
+                )))
             }
         }
     }
+}
+
+fn is_idempotent_http_method(method: &SerializableHttpMethod) -> bool {
+    matches!(
+        method,
+        SerializableHttpMethod::Get
+            | SerializableHttpMethod::Head
+            | SerializableHttpMethod::Put
+            | SerializableHttpMethod::Delete
+            | SerializableHttpMethod::Options
+            | SerializableHttpMethod::Trace
+    )
 }
 
 fn borrow_resource<T: 'static>(resource: &Resource<T>) -> Resource<T> {

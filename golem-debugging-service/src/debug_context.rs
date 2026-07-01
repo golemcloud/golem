@@ -262,6 +262,14 @@ impl InvocationHooks for DebugContext {
         self.durable_ctx.get_current_retry_point().await
     }
 
+    fn current_in_atomic_region(&self) -> bool {
+        self.durable_ctx.current_in_atomic_region()
+    }
+
+    fn current_atomic_region_had_side_effects(&self) -> bool {
+        self.durable_ctx.current_atomic_region_had_side_effects()
+    }
+
     fn enter_read_only_mode(&mut self, method_name: String) {
         self.durable_ctx.enter_read_only_mode(method_name)
     }
@@ -449,10 +457,6 @@ impl HostWasmRpc for DebugContext {
 impl HostFutureInvokeResult for DebugContext {
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
-    }
-
-    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
     }
 }
 

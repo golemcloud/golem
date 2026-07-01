@@ -1,9 +1,12 @@
 use super::model::*;
 use golem_rust::agentic::{UnstructuredBinary, create_webhook};
+use golem_rust::wasip3::{
+    http::{client, types},
+    wit_future, wit_stream,
+};
 use golem_rust::{AllowedMimeTypes, agent_definition, agent_implementation, description, endpoint};
 use serde::Deserialize;
 use serde::Serialize;
-use wstd::http::{Body, Client, HeaderValue, Request};
 
 #[agent_definition(mount = "/http-agents/{agent_name}")]
 pub trait HttpAgent {
@@ -316,21 +319,13 @@ impl WebhookAgent for WebhookAgentImpl {
             webhook_url: webhook.url().to_string(),
         };
 
-        let body = Body::from_json(&url)
-            .map_err(|err| err.to_string())
-            .unwrap();
-        let request = Request::post(self.test_server_url.clone().unwrap())
-            .header("Accept", HeaderValue::from_str("application/json").unwrap())
-            .header("Content-Type", "application/json")
-            .body(body)
-            .map_err(|err| err.to_string())
-            .unwrap();
-
-        let _ = Client::new()
-            .send(request)
-            .await
-            .map_err(|err| err.to_string())
-            .unwrap();
+        send_json_post(
+            &self.test_server_url.clone().unwrap(),
+            serde_json::to_vec(&url).unwrap(),
+        )
+        .await
+        .map_err(|err| format!("{err:?}"))
+        .unwrap();
 
         let request = webhook.await;
 
@@ -340,4 +335,46 @@ impl WebhookAgent for WebhookAgentImpl {
             payload_length: data.len() as u64,
         }
     }
+}
+
+async fn send_json_post(url: &str, body: Vec<u8>) -> Result<(), types::ErrorCode> {
+    let Some(rest) = url.strip_prefix("http://") else {
+        panic!("test webhook URL must use http://");
+    };
+    let (authority, path_with_query) = match rest.split_once('/') {
+        Some((authority, path)) => (authority, format!("/{path}")),
+        None => match rest.split_once('?') {
+            Some((authority, query)) => (authority, format!("/?{query}")),
+            None => (rest, "/".to_string()),
+        },
+    };
+
+    let headers = types::Fields::from_list(&[
+        ("accept".to_string(), b"application/json".to_vec()),
+        ("content-type".to_string(), b"application/json".to_vec()),
+    ])
+    .expect("valid HTTP headers");
+
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request.set_authority(Some(authority)).unwrap();
+    request.set_path_with_query(Some(&path_with_query)).unwrap();
+
+    let (send_result, transmit_result, ()) = futures::join!(
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            let remaining = body_tx.write_all(body).await;
+            assert!(remaining.is_empty());
+            let _ = trailers_tx.write(Ok(None)).await;
+            drop(body_tx);
+        }
+    );
+
+    let response = send_result?;
+    drop(response);
+    transmit_result
 }

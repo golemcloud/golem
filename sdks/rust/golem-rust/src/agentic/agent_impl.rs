@@ -36,7 +36,7 @@ fn deserialize_principal(bytes: &[u8]) -> Result<Principal, String> {
 pub struct Component;
 
 impl Guest for Component {
-    fn initialize(
+    async fn initialize(
         agent_type: String,
         input: crate::schema::wit::wire::SchemaValueTree,
         principal: Principal,
@@ -68,11 +68,12 @@ impl Guest for Component {
             |initiator| async move { initiator.initiate(input, principal).await.map(|_| ()) },
             &agent_type_name,
         )
+        .await
     }
 
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn invoke(
+    async fn invoke(
         method_name: String,
         input: crate::schema::wit::wire::SchemaValueTree,
         principal: Principal,
@@ -94,6 +95,7 @@ impl Guest for Component {
                 .await
                 .map(|value| value.map(|value| encode_value(&value)))
         })
+        .await
     }
 
     fn get_definition() -> AgentType {
@@ -110,7 +112,7 @@ impl Guest for Component {
 impl LoadSnapshotGuest for Component {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn load(
+    async fn load(
         snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
     ) -> Result<(), String> {
         let bytes = snapshot.payload;
@@ -190,6 +192,7 @@ impl LoadSnapshotGuest for Component {
             |initiator| async move { initiator.initiate(agent_parameters, principal).await },
             &AgentTypeName(agent_type_name),
         )
+        .await
         .map_err(|e| e.to_string())?;
 
         with_agent_instance_async(|resolved_agent| async move {
@@ -199,13 +202,14 @@ impl LoadSnapshotGuest for Component {
                 .load_snapshot_base(agent_snapshot)
                 .await
         })
+        .await
     }
 }
 
 impl SaveSnapshotGuest for Component {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+    async fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
         with_agent_instance_async(|resolved_agent| async move {
             let snapshot_data = resolved_agent
                 .agent
@@ -247,6 +251,7 @@ impl SaveSnapshotGuest for Component {
                 }
             }
         })
+        .await
     }
 }
 crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
