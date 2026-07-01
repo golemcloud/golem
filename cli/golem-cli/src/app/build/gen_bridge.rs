@@ -19,7 +19,7 @@ use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
 use itertools::Itertools;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default)]
 pub(crate) struct AgentMetadataCache {
@@ -460,7 +460,156 @@ async fn collect_manifest_targets_for_components_and_mode(
         }
     }
 
+    if bridge_mode_filter.is_none_or(|bridge_mode| bridge_mode == BridgeMode::Guest) {
+        targets.extend(
+            collect_auto_guest_bridge_targets(ctx, component_names, agent_metadata_cache).await?,
+        );
+    }
+
     Ok(targets)
+}
+
+pub(crate) fn should_auto_enable_guest_bridge(
+    ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
+) -> bool {
+    auto_guest_bridge_target_languages().any(|target_language| {
+        has_selected_guest_bridge_target_language(ctx, selected_component_names, target_language)
+            && selected_component_names.iter().any(|component_name| {
+                component_may_produce_cross_language_agents(ctx, component_name, target_language)
+            })
+    })
+}
+
+async fn collect_auto_guest_bridge_targets(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let selected_component_names = ctx
+        .application_context()
+        .selected_component_names()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut targets = Vec::new();
+
+    for target_language in auto_guest_bridge_target_languages() {
+        if !has_selected_guest_bridge_target_language(
+            ctx,
+            &selected_component_names,
+            target_language,
+        ) {
+            continue;
+        }
+
+        let explicit_matchers = explicit_guest_bridge_matchers(ctx, target_language);
+        let explicitly_matches_all = explicit_matchers.contains("*");
+
+        for component_name in component_names {
+            if !component_may_produce_cross_language_agents(ctx, component_name, target_language) {
+                continue;
+            }
+            if !ctx
+                .application()
+                .component(component_name)
+                .agent_type_extraction_source_wasm()
+                .exists()
+            {
+                continue;
+            }
+
+            let agent_types = agent_metadata_cache.get(ctx, component_name).await?;
+            for agent_type in agent_types {
+                if agent_type_matches_language(ctx, component_name, &agent_type, target_language) {
+                    continue;
+                }
+                if explicitly_matches_all
+                    || explicit_matchers.contains(component_name.as_str())
+                    || explicit_matchers.contains(agent_type.type_name.as_str())
+                {
+                    continue;
+                }
+
+                let output_dir = ctx.application().bridge_sdk_dir(
+                    &agent_type.type_name,
+                    target_language,
+                    BridgeMode::Guest,
+                );
+                targets.push(BridgeSdkTarget {
+                    component_name: component_name.clone(),
+                    agent_type,
+                    target_language,
+                    bridge_mode: BridgeMode::Guest,
+                    output_dir,
+                });
+            }
+        }
+    }
+
+    Ok(targets)
+}
+
+fn auto_guest_bridge_target_languages() -> impl Iterator<Item = GuestLanguage> {
+    [GuestLanguage::Rust].into_iter()
+}
+
+fn explicit_guest_bridge_matchers(
+    ctx: &BuildContext<'_>,
+    target_language: GuestLanguage,
+) -> BTreeSet<String> {
+    ctx.application()
+        .bridge_sdks()
+        .for_language(target_language)
+        .and_then(|targets| targets.guest.as_ref())
+        .map(|guest| guest.agents.clone().into_set())
+        .unwrap_or_default()
+}
+
+fn has_selected_guest_bridge_target_language(
+    ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
+    target_language: GuestLanguage,
+) -> bool {
+    selected_component_names
+        .iter()
+        .any(|component_name| component_may_match_language(ctx, component_name, target_language))
+        || selected_component_names.iter().any(|component_name| {
+            super::component_guest_bridge_requirements(ctx, component_name)
+                .iter()
+                .any(|requirement| requirement.target_language == target_language)
+        })
+}
+
+fn component_may_produce_cross_language_agents(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+    target_language: GuestLanguage,
+) -> bool {
+    !component_may_match_language(ctx, component_name, target_language)
+}
+
+fn component_may_match_language(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+    language: GuestLanguage,
+) -> bool {
+    let component = ctx.application().component(component_name);
+    component
+        .guess_language()
+        .or_else(|| super::infer_component_language_from_dir(component.component_dir()))
+        == Some(language)
+}
+
+fn agent_type_matches_language(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+    agent_type: &golem_common::schema::AgentTypeSchema,
+    language: GuestLanguage,
+) -> bool {
+    GuestLanguage::from_string(&agent_type.source_language) == Some(language)
+        || (agent_type.source_language.is_empty()
+            && ctx.application().component(component_name).guess_language() == Some(language))
 }
 
 async fn collect_custom_targets(
