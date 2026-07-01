@@ -74,11 +74,11 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 
 ### Milestone 2: Workspace Shell Full Remap
 
-- [ ] Introduce Home, Dev, and Ops as the only top-level workspaces.
-- [ ] Remap Dashboard into Home.
-- [ ] Remap Output, Server, and REPL into Dev panels and jobs.
-- [ ] Remap Agents into the new workspace model, preserving its current list, filter, details, refresh, and inspect behavior during the transition.
-- [ ] Retain the initial TUI context for this milestone; full selected-context switching comes later.
+- [x] Introduce Home, Dev, and Ops as the only top-level workspaces.
+- [x] Remap Dashboard into Home.
+- [x] Remap Output, Server, and REPL into Dev panels and jobs.
+- [x] Remap Agents into the new workspace model, preserving its current list, filter, details, refresh, and inspect behavior during the transition.
+- [x] Retain the initial TUI context for this milestone; full selected-context switching comes later.
 
 ### Milestone 3: Selected Context UX
 

@@ -139,7 +139,8 @@ fn event_channel_closed(result: Result<(), TrySendError<TuiEvent>>) -> bool {
 
 struct TuiApp {
     should_quit: bool,
-    active_view: TuiView,
+    active_workspace: TuiWorkspace,
+    dev_focus: DevPanel,
     mode: TuiMode,
     palette: CommandPalette,
     command_options: CommandOptions,
@@ -156,7 +157,8 @@ impl TuiApp {
     fn from_context(ctx: &Context) -> Self {
         Self {
             should_quit: false,
-            active_view: TuiView::Dashboard,
+            active_workspace: TuiWorkspace::Home,
+            dev_focus: DevPanel::Repl,
             mode: TuiMode::Normal,
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
@@ -254,7 +256,7 @@ impl TuiApp {
     }
 
     fn handle_global_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
-        if self.active_view == TuiView::Agents && self.agents.view_mode == AgentsViewMode::Inspect {
+        if self.agents_focused() && self.agents.view_mode == AgentsViewMode::Inspect {
             if key.code == KeyCode::Char('?') {
                 self.mode = TuiMode::Help;
                 return;
@@ -266,7 +268,7 @@ impl TuiApp {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.active_view == TuiView::Server && self.server.run.is_running() {
+                if self.dev_panel_focused(DevPanel::Server) && self.server.run.is_running() {
                     self.stop_server();
                 } else {
                     self.should_quit = true;
@@ -279,52 +281,56 @@ impl TuiApp {
                 self.mode = TuiMode::LeaderNormal
             }
             KeyCode::Char('r') => self.start_or_focus_repl(event_tx),
-            KeyCode::Char('u') if self.active_view == TuiView::Agents => {
-                self.refresh_agents(event_tx)
-            }
-            KeyCode::Enter if self.active_view == TuiView::Agents => {
-                self.open_agent_inspect(event_tx)
-            }
-            KeyCode::Char('/') if self.active_view == TuiView::Agents => {
-                self.mode = TuiMode::AgentFilter
-            }
+            KeyCode::Char('u') if self.agents_focused() => self.refresh_agents(event_tx),
+            KeyCode::Enter if self.agents_focused() => self.open_agent_inspect(event_tx),
+            KeyCode::Char('/') if self.agents_focused() => self.mode = TuiMode::AgentFilter,
             KeyCode::Char('s') => self.open_and_toggle_server(event_tx),
-            KeyCode::Enter if self.active_view == TuiView::Server => self.toggle_server(event_tx),
-            KeyCode::Enter if self.active_view == TuiView::Repl => {
+            KeyCode::Enter if self.dev_panel_focused(DevPanel::Server) => {
+                self.toggle_server(event_tx)
+            }
+            KeyCode::Enter if self.dev_panel_focused(DevPanel::Repl) => {
                 self.start_or_focus_repl(event_tx)
             }
-            KeyCode::PageUp if self.active_view == TuiView::Server => self.scroll_server_up_by(10),
-            KeyCode::PageDown if self.active_view == TuiView::Server => {
+            KeyCode::PageUp if self.dev_panel_focused(DevPanel::Server) => {
+                self.scroll_server_up_by(10)
+            }
+            KeyCode::PageDown if self.dev_panel_focused(DevPanel::Server) => {
                 self.scroll_server_down_by(10)
             }
-            KeyCode::Home if self.active_view == TuiView::Server => {
+            KeyCode::Home if self.dev_panel_focused(DevPanel::Server) => {
                 self.server.run.output.scroll_top()
             }
-            KeyCode::End if self.active_view == TuiView::Server => {
+            KeyCode::End if self.dev_panel_focused(DevPanel::Server) => {
                 self.server.run.output.scroll_bottom()
             }
             KeyCode::PageUp => self.scroll_output_up(),
             KeyCode::PageDown => self.scroll_output_down(),
             KeyCode::Home => self.scroll_output_top(),
             KeyCode::End => self.scroll_output_bottom(),
-            KeyCode::Up if self.active_view == TuiView::Output => self.scroll_output_up_by(1),
-            KeyCode::Down if self.active_view == TuiView::Output => self.scroll_output_down_by(1),
-            KeyCode::Up if self.active_view == TuiView::Server => self.scroll_server_up_by(1),
-            KeyCode::Down if self.active_view == TuiView::Server => self.scroll_server_down_by(1),
-            KeyCode::Up if self.active_view == TuiView::Agents => self.select_previous_agent(),
-            KeyCode::Down if self.active_view == TuiView::Agents => self.select_next_agent(),
+            KeyCode::Up if self.dev_panel_focused(DevPanel::Output) => self.scroll_output_up_by(1),
+            KeyCode::Down if self.dev_panel_focused(DevPanel::Output) => {
+                self.scroll_output_down_by(1)
+            }
+            KeyCode::Up if self.dev_panel_focused(DevPanel::Server) => self.scroll_server_up_by(1),
+            KeyCode::Down if self.dev_panel_focused(DevPanel::Server) => {
+                self.scroll_server_down_by(1)
+            }
+            KeyCode::Up if self.agents_focused() => self.select_previous_agent(),
+            KeyCode::Down if self.agents_focused() => self.select_next_agent(),
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_palette();
             }
             KeyCode::Char(':') => self.open_palette(),
             KeyCode::Char('?') => self.mode = TuiMode::Help,
-            KeyCode::Char(']') | KeyCode::Tab => self.next_view(),
-            KeyCode::Char('[') | KeyCode::BackTab => self.previous_view(),
-            KeyCode::Char('1') => self.active_view = TuiView::Dashboard,
-            KeyCode::Char('2') => self.open_agents_view(event_tx),
-            KeyCode::Char('3') => self.active_view = TuiView::Output,
-            KeyCode::Char('4') => self.active_view = TuiView::Server,
-            KeyCode::Char('5') => self.active_view = TuiView::Repl,
+            KeyCode::Tab if self.active_workspace == TuiWorkspace::Dev => self.next_dev_panel(),
+            KeyCode::BackTab if self.active_workspace == TuiWorkspace::Dev => {
+                self.previous_dev_panel()
+            }
+            KeyCode::Char(']') => self.next_workspace(),
+            KeyCode::Char('[') => self.previous_workspace(),
+            KeyCode::Char('1') => self.active_workspace = TuiWorkspace::Home,
+            KeyCode::Char('2') => self.open_dev_workspace(DevPanel::Repl),
+            KeyCode::Char('3') => self.open_ops_workspace(event_tx),
             _ => {}
         }
     }
@@ -422,15 +428,15 @@ impl TuiApp {
                 self.server.clean = !self.server.clean;
                 self.mode = return_mode;
             }
-            KeyCode::Char('a') if self.active_view == TuiView::Agents => {
+            KeyCode::Char('a') if self.agents_focused() => {
                 self.toggle_agent_auto_refresh(event_tx);
                 self.mode = return_mode;
             }
-            KeyCode::Char('d') if self.active_view == TuiView::Agents => {
+            KeyCode::Char('d') if self.agents_focused() => {
                 self.agents.detail_visible = !self.agents.detail_visible;
                 self.mode = return_mode;
             }
-            KeyCode::Char('m') if self.active_view == TuiView::Agents => {
+            KeyCode::Char('m') if self.agents_focused() => {
                 self.cycle_agent_mode(event_tx);
                 self.mode = return_mode;
             }
@@ -443,11 +449,11 @@ impl TuiApp {
                 self.restart_repl(event_tx);
                 self.mode = TuiMode::Repl;
             }
-            KeyCode::Char('R') if self.active_view == TuiView::Server => {
+            KeyCode::Char('R') if self.dev_panel_focused(DevPanel::Server) => {
                 self.restart_server(ServerStartMode::Current, event_tx);
                 self.mode = return_mode;
             }
-            KeyCode::Char('C') if self.active_view == TuiView::Server => {
+            KeyCode::Char('C') if self.dev_panel_focused(DevPanel::Server) => {
                 self.restart_server(ServerStartMode::Clean, event_tx);
                 self.mode = return_mode;
             }
@@ -456,18 +462,28 @@ impl TuiApp {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
-        match (self.active_view, mouse.kind) {
-            (TuiView::Output, MouseEventKind::ScrollUp) => self.scroll_output_up_by(3),
-            (TuiView::Output, MouseEventKind::ScrollDown) => self.scroll_output_down_by(3),
-            (TuiView::Server, MouseEventKind::ScrollUp) => self.scroll_server_up_by(3),
-            (TuiView::Server, MouseEventKind::ScrollDown) => self.scroll_server_down_by(3),
-            (TuiView::Agents, MouseEventKind::ScrollUp)
-                if self.agents.view_mode == AgentsViewMode::Inspect =>
+        match mouse.kind {
+            MouseEventKind::ScrollUp if self.dev_panel_focused(DevPanel::Output) => {
+                self.scroll_output_up_by(3)
+            }
+            MouseEventKind::ScrollDown if self.dev_panel_focused(DevPanel::Output) => {
+                self.scroll_output_down_by(3)
+            }
+            MouseEventKind::ScrollUp if self.dev_panel_focused(DevPanel::Server) => {
+                self.scroll_server_up_by(3)
+            }
+            MouseEventKind::ScrollDown if self.dev_panel_focused(DevPanel::Server) => {
+                self.scroll_server_down_by(3)
+            }
+            MouseEventKind::ScrollUp
+                if self.ops_agents_focused()
+                    && self.agents.view_mode == AgentsViewMode::Inspect =>
             {
                 self.scroll_agent_inspect_up_by(3)
             }
-            (TuiView::Agents, MouseEventKind::ScrollDown)
-                if self.agents.view_mode == AgentsViewMode::Inspect =>
+            MouseEventKind::ScrollDown
+                if self.ops_agents_focused()
+                    && self.agents.view_mode == AgentsViewMode::Inspect =>
             {
                 self.scroll_agent_inspect_down_by(3)
             }
@@ -479,10 +495,9 @@ impl TuiApp {
         match action {
             TuiActionKind::SelectView(view) => {
                 self.close_palette();
-                if view == TuiView::Agents {
-                    self.open_agents_view(event_tx);
-                } else {
-                    self.active_view = view;
+                match view {
+                    TuiWorkspace::Ops => self.open_ops_workspace(event_tx),
+                    workspace => self.active_workspace = workspace,
                 }
             }
             TuiActionKind::Build => {
@@ -613,28 +628,54 @@ impl TuiApp {
     fn default_mode(&self) -> TuiMode {
         if self.command_is_running() {
             TuiMode::CommandInteraction
-        } else if self.active_view == TuiView::Repl && self.repl.is_running() {
+        } else if self.dev_panel_focused(DevPanel::Repl) && self.repl.is_running() {
             TuiMode::Repl
         } else {
             TuiMode::Normal
         }
     }
 
-    fn next_view(&mut self) {
-        self.active_view = TuiView::from_index((self.active_view.index() + 1) % TuiView::ALL.len());
+    fn next_workspace(&mut self) {
+        self.active_workspace =
+            TuiWorkspace::from_index((self.active_workspace.index() + 1) % TuiWorkspace::ALL.len());
     }
 
-    fn previous_view(&mut self) {
-        self.active_view = TuiView::from_index(
-            (self.active_view.index() + TuiView::ALL.len() - 1) % TuiView::ALL.len(),
+    fn previous_workspace(&mut self) {
+        self.active_workspace = TuiWorkspace::from_index(
+            (self.active_workspace.index() + TuiWorkspace::ALL.len() - 1) % TuiWorkspace::ALL.len(),
         );
     }
 
-    fn open_agents_view(&mut self, event_tx: Option<&TuiEventSender>) {
-        self.active_view = TuiView::Agents;
+    fn next_dev_panel(&mut self) {
+        self.dev_focus = self.dev_focus.next();
+    }
+
+    fn previous_dev_panel(&mut self) {
+        self.dev_focus = self.dev_focus.previous();
+    }
+
+    fn open_dev_workspace(&mut self, panel: DevPanel) {
+        self.active_workspace = TuiWorkspace::Dev;
+        self.dev_focus = panel;
+    }
+
+    fn open_ops_workspace(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.active_workspace = TuiWorkspace::Ops;
         if self.agents.agents.is_empty() && !self.agents.refresh_running {
             self.refresh_agents(event_tx);
         }
+    }
+
+    fn dev_panel_focused(&self, panel: DevPanel) -> bool {
+        self.active_workspace == TuiWorkspace::Dev && self.dev_focus == panel
+    }
+
+    fn ops_agents_focused(&self) -> bool {
+        self.active_workspace == TuiWorkspace::Ops
+    }
+
+    fn agents_focused(&self) -> bool {
+        self.ops_agents_focused() || self.dev_panel_focused(DevPanel::Agents)
     }
 
     fn select_next_agent(&mut self) {
@@ -657,19 +698,18 @@ impl TuiApp {
             return;
         }
 
-        self.agents.refresh_generation += 1;
-        let generation = self.agents.refresh_generation;
-        self.agents.refresh_running = true;
-        self.agents.last_error = None;
-
         let Some(event_tx) = event_tx.cloned() else {
             return;
         };
         let Some(context_executor) = self.context_executor.clone() else {
-            self.agents.refresh_running = false;
             self.agents.last_error = Some("TUI context executor is not available".to_string());
             return;
         };
+
+        self.agents.refresh_generation += 1;
+        let generation = self.agents.refresh_generation;
+        self.agents.refresh_running = true;
+        self.agents.last_error = None;
         self.agents.refresh_context_id = Some(context_executor.current_context_id());
         let mode = self.agents.mode;
         context_executor.spawn(
@@ -915,14 +955,14 @@ impl TuiApp {
     fn start_command(&mut self, kind: CommandKind, event_tx: Option<&TuiEventSender>) {
         if self.command_is_running() {
             self.append_local_command_line("command already running");
-            self.active_view = TuiView::Output;
+            self.open_dev_workspace(DevPanel::Output);
             return;
         }
 
         let args = self.command_args(kind);
         let command_id = self.next_command_id;
         self.next_command_id += 1;
-        self.active_view = TuiView::Output;
+        self.open_dev_workspace(DevPanel::Output);
         self.mode = TuiMode::CommandInteraction;
         self.command_run = Some(CommandRun::new(
             command_id,
@@ -1159,7 +1199,7 @@ impl TuiApp {
     }
 
     fn open_and_toggle_server(&mut self, event_tx: Option<&TuiEventSender>) {
-        self.active_view = TuiView::Server;
+        self.open_dev_workspace(DevPanel::Server);
         self.toggle_server(event_tx);
     }
 
@@ -1169,7 +1209,7 @@ impl TuiApp {
                 .run
                 .output
                 .append_local_line("server already running");
-            self.active_view = TuiView::Server;
+            self.open_dev_workspace(DevPanel::Server);
             return;
         }
 
@@ -1178,7 +1218,7 @@ impl TuiApp {
             ServerStartMode::Clean => true,
         };
         let args = server_args(clean);
-        self.active_view = TuiView::Server;
+        self.open_dev_workspace(DevPanel::Server);
         self.server.run = ServerRun::new(self.server.next_id, clean, args.clone());
         self.server.next_id += 1;
         self.server
@@ -1338,7 +1378,7 @@ impl TuiApp {
     }
 
     fn start_or_focus_repl(&mut self, event_tx: Option<&TuiEventSender>) {
-        self.active_view = TuiView::Repl;
+        self.open_dev_workspace(DevPanel::Repl);
         if self.repl.is_running() {
             self.mode = TuiMode::Repl;
             return;
@@ -1404,7 +1444,7 @@ impl TuiApp {
     }
 
     fn focus_repl(&mut self) {
-        self.active_view = TuiView::Repl;
+        self.open_dev_workspace(DevPanel::Repl);
         if self.repl.is_running() {
             self.mode = TuiMode::Repl;
         }
@@ -2159,40 +2199,20 @@ fn agent_refresh_error(error: String, logs: Vec<String>) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiView {
-    Dashboard,
-    Agents,
-    Output,
-    Server,
-    Repl,
+enum TuiWorkspace {
+    Home,
+    Dev,
+    Ops,
 }
 
-impl TuiView {
-    const ALL: [Self; 5] = [
-        Self::Dashboard,
-        Self::Agents,
-        Self::Output,
-        Self::Server,
-        Self::Repl,
-    ];
+impl TuiWorkspace {
+    const ALL: [Self; 3] = [Self::Home, Self::Dev, Self::Ops];
 
     fn title(self) -> &'static str {
         match self {
-            Self::Dashboard => "Dashboard",
-            Self::Agents => "Agents",
-            Self::Output => "Output",
-            Self::Server => "Server",
-            Self::Repl => "REPL",
-        }
-    }
-
-    fn placeholder(self) -> &'static str {
-        match self {
-            Self::Dashboard => "Selected context and quick actions.",
-            Self::Agents => "Agent monitoring and management will appear here.",
-            Self::Output => "Nested command output will appear here.",
-            Self::Server => "Local server logs will appear here.",
-            Self::Repl => "Embedded REPL session will appear here.",
+            Self::Home => "Home",
+            Self::Dev => "Dev",
+            Self::Ops => "Ops",
         }
     }
 
@@ -2202,6 +2222,42 @@ impl TuiView {
 
     fn from_index(index: usize) -> Self {
         Self::ALL[index]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DevPanel {
+    Repl,
+    Output,
+    Server,
+    Agents,
+}
+
+impl DevPanel {
+    const ALL: [Self; 4] = [Self::Repl, Self::Output, Self::Server, Self::Agents];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Repl => "REPL",
+            Self::Output => "Output",
+            Self::Server => "Server",
+            Self::Agents => "Agents",
+        }
+    }
+
+    fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    fn previous(self) -> Self {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+
+    fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|panel| *panel == self)
+            .unwrap_or(0)
     }
 }
 
@@ -2347,22 +2403,10 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
     render_tabs(frame, tabs, app);
     render_separator(frame, separator);
 
-    if app.active_view == TuiView::Agents {
-        render_agents_view(frame, body, app);
-    } else if app.active_view == TuiView::Output {
-        render_output_view(frame, body, app);
-    } else if app.active_view == TuiView::Server {
-        render_server_view(frame, body, app);
-    } else if app.active_view == TuiView::Repl {
-        render_repl_view(frame, body, app);
-    } else {
-        render_surface(frame, body);
-        render_dashboard_logo(frame, body);
-        let dashboard = Paragraph::new(view_lines(app, body.width as usize))
-            .style(surface_style())
-            .wrap(Wrap { trim: false });
-        frame.render_widget(dashboard, body);
-        render_left_rail(frame, body, surface_rail_style());
+    match app.active_workspace {
+        TuiWorkspace::Home => render_home_workspace(frame, body, app),
+        TuiWorkspace::Dev => render_dev_workspace(frame, body, app),
+        TuiWorkspace::Ops => render_agents_view(frame, body, app),
     }
 
     let footer = Paragraph::new(footer_line(app))
@@ -2380,6 +2424,104 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
         TuiMode::LeaderRepl => render_leader_hint(frame, app, TuiMode::Repl),
         TuiMode::Palette => render_palette(frame, app),
         TuiMode::Help => render_help(frame, app),
+    }
+}
+
+fn render_home_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    render_surface(frame, area);
+    render_dashboard_logo(frame, area);
+    let home = Paragraph::new(home_lines(app, area.width as usize))
+        .style(surface_style())
+        .wrap(Wrap { trim: false });
+    frame.render_widget(home, area);
+    render_left_rail(frame, area, surface_rail_style());
+}
+
+fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    render_surface(frame, area);
+    if area.width < 90 || area.height < 18 {
+        match app.dev_focus {
+            DevPanel::Repl => render_repl_view(frame, area, app),
+            DevPanel::Output => render_output_view(frame, area, app),
+            DevPanel::Server => render_server_view(frame, area, app),
+            DevPanel::Agents => render_agents_view(frame, area, app),
+        }
+        return;
+    }
+
+    let [repl_area, side_area] = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .areas(area);
+    let [output_area, server_area, agents_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .areas(side_area);
+
+    render_panel_title(frame, repl_area, DevPanel::Repl, app.dev_focus);
+    render_repl_view(frame, inset_top(repl_area), app);
+    render_panel_title(frame, output_area, DevPanel::Output, app.dev_focus);
+    render_output_view(frame, inset_top(output_area), app);
+    render_panel_title(frame, server_area, DevPanel::Server, app.dev_focus);
+    render_server_view(frame, inset_top(server_area), app);
+    render_panel_title(frame, agents_area, DevPanel::Agents, app.dev_focus);
+    render_agents_view(frame, inset_top(agents_area), app);
+}
+
+fn render_panel_title(frame: &mut Frame<'_>, area: Rect, panel: DevPanel, focused: DevPanel) {
+    let style = if panel == focused {
+        command_status_bg_style()
+    } else {
+        tabs_style()
+    };
+    let title_style = if panel == focused {
+        Style::default()
+            .fg(theme().accent_hover)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme().text_muted)
+    };
+    let line = Line::from(vec![
+        Span::styled(
+            "┃ ",
+            if panel == focused {
+                command_rail_style()
+            } else {
+                tabs_rail_style()
+            },
+        ),
+        Span::styled(panel.title(), title_style),
+        Span::raw("  "),
+        Span::styled("tab focus", Style::default().fg(theme().text_muted)),
+    ]);
+    frame.render_widget(Paragraph::new(line).style(style), title_area(area));
+    render_left_rail(
+        frame,
+        title_area(area),
+        if panel == focused {
+            command_rail_style()
+        } else {
+            tabs_rail_style()
+        },
+    );
+}
+
+fn title_area(area: Rect) -> Rect {
+    Rect {
+        height: area.height.min(1),
+        ..area
+    }
+}
+
+fn inset_top(area: Rect) -> Rect {
+    Rect {
+        y: area.y.saturating_add(1),
+        height: area.height.saturating_sub(1),
+        ..area
     }
 }
 
@@ -2956,9 +3098,9 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
     );
     push_raw_help(&mut lines, "ctrl+p / :", "Open Palette");
     push_raw_help(&mut lines, "esc / ctrl+c", "Quit");
-    push_raw_help(&mut lines, "] / tab", "Next view");
-    push_raw_help(&mut lines, "[ / shift+tab", "Previous view");
-    push_raw_help(&mut lines, "1..5", "Jump to view");
+    push_raw_help(&mut lines, "] / [", "Next / previous workspace");
+    push_raw_help(&mut lines, "1 / 2 / 3", "Jump to Home / Dev / Ops");
+    push_raw_help(&mut lines, "tab", "Next Dev panel");
 
     push_section_break(&mut lines, "Palette");
     push_raw_help(&mut lines, "type", "Filter commands");
@@ -2979,7 +3121,7 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
         ],
     );
 
-    if app.active_view == TuiView::Agents {
+    if app.agents_focused() {
         if app.agents.view_mode == AgentsViewMode::Inspect {
             push_section_break(&mut lines, "Agent Inspect");
             push_raw_help(&mut lines, "left / right", "Switch pane focus");
@@ -3016,7 +3158,7 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
         push_raw_help(&mut lines, "pageup / pagedown", "Scroll output");
         push_raw_help(&mut lines, "home / end", "Top / latest output");
         push_raw_help(&mut lines, "mouse wheel", "Scroll output");
-    } else if app.active_view == TuiView::Output {
+    } else if app.dev_panel_focused(DevPanel::Output) {
         push_section_break(&mut lines, "Output");
         push_raw_help(&mut lines, "up / down", "Scroll output");
         push_raw_help(&mut lines, "pageup / pagedown", "Scroll output");
@@ -3024,7 +3166,7 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
         push_raw_help(&mut lines, "mouse wheel", "Scroll output");
     }
 
-    if app.active_view == TuiView::Repl || app.repl.is_running() {
+    if app.dev_panel_focused(DevPanel::Repl) || app.repl.is_running() {
         push_action_section_for_app(
             &mut lines,
             app,
@@ -3083,12 +3225,12 @@ fn push_raw_help(lines: &mut Vec<Line<'static>>, shortcut: &'static str, label: 
 fn render_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let mut spans = vec![Span::styled("┃ ", tabs_rail_style())];
 
-    for (index, view) in TuiView::ALL.iter().copied().enumerate() {
+    for (index, view) in TuiWorkspace::ALL.iter().copied().enumerate() {
         if spans.len() > 1 {
             spans.push(Span::raw("  "));
         }
 
-        let tab_style = if view == app.active_view {
+        let tab_style = if view == app.active_workspace {
             Style::default()
                 .fg(theme().accent_hover)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
@@ -3108,11 +3250,12 @@ fn render_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_left_rail(frame, area, tabs_rail_style());
 }
 
-fn tab_status(view: TuiView, app: &TuiApp) -> Option<Span<'static>> {
+fn tab_status(view: TuiWorkspace, app: &TuiApp) -> Option<Span<'static>> {
     let running = match view {
-        TuiView::Output => app.command_is_running(),
-        TuiView::Server => app.server.run.is_running(),
-        TuiView::Repl => app.repl.is_running(),
+        TuiWorkspace::Dev => {
+            app.command_is_running() || app.server.run.is_running() || app.repl.is_running()
+        }
+        TuiWorkspace::Ops => app.agents.refresh_running,
         _ => return None,
     };
     let (label, style) = if running {
@@ -3232,58 +3375,86 @@ fn render_dashboard_logo(frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
-fn view_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![
+fn home_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
+    vec![
         dashboard_line(
             vec![Span::styled(
-                app.active_view.title(),
+                "Home",
                 Style::default().add_modifier(Modifier::BOLD),
             )],
             width,
         ),
         Line::default(),
-        dashboard_line(vec![Span::raw(app.active_view.placeholder())], width),
-    ];
-
-    if app.active_view == TuiView::Dashboard {
-        lines.extend([
-            Line::default(),
-            dashboard_line(
-                vec![Span::raw(format!(
-                    "Application : {}",
-                    app.context.application
-                ))],
-                width,
-            ),
-            dashboard_line(
-                vec![Span::raw(format!(
-                    "Environment : {}",
-                    app.context.environment
-                ))],
-                width,
-            ),
-            dashboard_line(
-                vec![Span::raw(format!("Server      : {}", app.context.server))],
-                width,
-            ),
-            dashboard_line(
-                vec![Span::raw(format!(
-                    "Config dir  : {}",
-                    app.context.config_dir
-                ))],
-                width,
-            ),
-            Line::default(),
-            dashboard_line(
-                vec![Span::raw(
-                    "Scaffold ready. Next steps: command execution and live data.",
-                )],
-                width,
-            ),
-        ]);
-    }
-
-    lines
+        dashboard_line(vec![Span::raw("Selected context and current work.")], width),
+        Line::default(),
+        dashboard_line(
+            vec![Span::raw(format!(
+                "Application : {}",
+                app.context.application
+            ))],
+            width,
+        ),
+        dashboard_line(
+            vec![Span::raw(format!(
+                "Environment : {}",
+                app.context.environment
+            ))],
+            width,
+        ),
+        dashboard_line(
+            vec![Span::raw(format!("Server      : {}", app.context.server))],
+            width,
+        ),
+        dashboard_line(
+            vec![Span::raw(format!(
+                "Config dir  : {}",
+                app.context.config_dir
+            ))],
+            width,
+        ),
+        Line::default(),
+        dashboard_line(
+            vec![Span::raw(format!(
+                "Command     : {}",
+                app.command_run
+                    .as_ref()
+                    .map(command_status_summary)
+                    .unwrap_or_else(|| "idle".to_string())
+            ))],
+            width,
+        ),
+        dashboard_line(
+            vec![Span::raw(format!(
+                "Local server: {}",
+                server_status_display(&app.server.run)
+            ))],
+            width,
+        ),
+        dashboard_line(
+            vec![Span::raw(format!(
+                "REPL        : {}",
+                app.repl.run.status.title()
+            ))],
+            width,
+        ),
+        dashboard_line(
+            vec![Span::raw(format!(
+                "Agents      : {} loaded{}",
+                app.agents.agents.len(),
+                if app.agents.refresh_running {
+                    " (refreshing)"
+                } else {
+                    ""
+                }
+            ))],
+            width,
+        ),
+        Line::default(),
+        dashboard_line(
+            vec![Span::raw("2 Dev workbench   3 Ops agents explorer")],
+            width,
+        ),
+    ]
 }
 
 fn dashboard_line(mut spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
@@ -3620,6 +3791,10 @@ fn command_status_display(run: &CommandRun) -> String {
     }
 }
 
+fn command_status_summary(run: &CommandRun) -> String {
+    format!("{} {}", run.kind.title(), command_status_display(run))
+}
+
 fn spinner_symbol(frame: usize) -> &'static str {
     const FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
     FRAMES[frame % FRAMES.len()]
@@ -3912,11 +4087,9 @@ enum TuiActionId {
     ToggleAgentAutoRefresh,
     CycleAgentMode,
     ToggleAgentDetails,
-    SelectDashboard,
-    SelectAgents,
-    SelectOutput,
-    SelectServer,
-    SelectRepl,
+    SelectHome,
+    SelectDev,
+    SelectOps,
     StartOrFocusRepl,
     FocusRepl,
     LeaveRepl,
@@ -4019,7 +4192,7 @@ impl TuiActionAvailability {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TuiActionKind {
-    SelectView(TuiView),
+    SelectView(TuiWorkspace),
     Build,
     Deploy,
     Clean,
@@ -4043,7 +4216,7 @@ enum TuiActionKind {
     Quit,
 }
 
-const ACTIONS: [TuiAction; 26] = [
+const ACTIONS: [TuiAction; 24] = [
     TuiAction {
         id: TuiActionId::Build,
         label: "Build",
@@ -4102,7 +4275,7 @@ const ACTIONS: [TuiAction; 26] = [
     TuiAction {
         id: TuiActionId::ToggleServer,
         label: "Start/Stop Server",
-        description: "Switch to Server and toggle it",
+        description: "Focus Dev Server and toggle it",
         shortcut: Some("s"),
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
@@ -4146,7 +4319,7 @@ const ACTIONS: [TuiAction; 26] = [
     TuiAction {
         id: TuiActionId::RefreshAgents,
         label: "Refresh Agents",
-        description: "Refresh the agent list",
+        description: "Refresh the Ops agent list",
         shortcut: Some("u"),
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
@@ -4188,59 +4361,37 @@ const ACTIONS: [TuiAction; 26] = [
         kind: TuiActionKind::ToggleAgentDetails,
     },
     TuiAction {
-        id: TuiActionId::SelectDashboard,
-        label: "Go to Dashboard",
-        description: "Switch to Dashboard view",
+        id: TuiActionId::SelectHome,
+        label: "Go to Home",
+        description: "Switch to Home workspace",
         shortcut: Some("1"),
         category: TuiActionCategory::Navigation,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiView::Dashboard),
+        kind: TuiActionKind::SelectView(TuiWorkspace::Home),
     },
     TuiAction {
-        id: TuiActionId::SelectAgents,
-        label: "Go to Agents",
-        description: "Switch to Agents view",
+        id: TuiActionId::SelectDev,
+        label: "Go to Dev",
+        description: "Switch to Dev workspace",
         shortcut: Some("2"),
         category: TuiActionCategory::Navigation,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiView::Agents),
+        kind: TuiActionKind::SelectView(TuiWorkspace::Dev),
     },
     TuiAction {
-        id: TuiActionId::SelectOutput,
-        label: "Go to Output",
-        description: "Switch to Output view",
+        id: TuiActionId::SelectOps,
+        label: "Go to Ops",
+        description: "Switch to Ops workspace",
         shortcut: Some("3"),
         category: TuiActionCategory::Navigation,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::ViewNavigation,
         palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiView::Output),
-    },
-    TuiAction {
-        id: TuiActionId::SelectServer,
-        label: "Go to Server",
-        description: "Switch to Server view",
-        shortcut: Some("4"),
-        category: TuiActionCategory::Navigation,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
-        palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiView::Server),
-    },
-    TuiAction {
-        id: TuiActionId::SelectRepl,
-        label: "Go to REPL",
-        description: "Switch to REPL view",
-        shortcut: Some("5"),
-        category: TuiActionCategory::Navigation,
-        scope: TuiActionScope::Global,
-        execution_kind: TuiActionExecutionKind::ViewNavigation,
-        palette_visible: true,
-        kind: TuiActionKind::SelectView(TuiView::Repl),
+        kind: TuiActionKind::SelectView(TuiWorkspace::Ops),
     },
     TuiAction {
         id: TuiActionId::StartOrFocusRepl,
@@ -4425,16 +4576,17 @@ mod tests {
         let app = test_app();
         let frame = render_app_text(&app);
 
-        assert!(frame.contains("Dashboard"), "{frame}");
-        assert!(frame.contains("Agents"), "{frame}");
-        assert!(frame.contains("[1] Dashboard"), "{frame}");
-        assert!(frame.contains("[5] REPL"), "{frame}");
-        assert!(!frame.contains("Environments"), "{frame}");
-        assert!(!frame.contains("Components"), "{frame}");
+        assert!(frame.contains("Home"), "{frame}");
+        assert!(frame.contains("Dev"), "{frame}");
+        assert!(frame.contains("Ops"), "{frame}");
+        assert!(frame.contains("[1] Home"), "{frame}");
+        assert!(frame.contains("[3] Ops"), "{frame}");
+        assert!(!frame.contains("[4]"), "{frame}");
+        assert!(!frame.contains("[5]"), "{frame}");
     }
 
     #[test]
-    fn tabs_show_running_indicators_for_output_server_and_repl() {
+    fn tabs_show_running_indicator_for_dev_workspace() {
         let mut app = test_app();
         app.command_run = Some(CommandRun::new(
             1,
@@ -4448,24 +4600,24 @@ mod tests {
         let frame = render_app_text(&app);
         let indicator_count = frame.chars().filter(|character| *character == '●').count();
 
-        assert!(indicator_count >= 3, "{frame}");
+        assert!(indicator_count >= 1, "{frame}");
     }
 
     #[test]
-    fn tabs_show_idle_indicators_for_output_server_and_repl() {
+    fn tabs_show_idle_indicators_for_dev_and_ops() {
         let app = test_app();
         let frame = render_app_text(&app);
         let indicator_count = frame.chars().filter(|character| *character == '○').count();
 
-        assert!(indicator_count >= 3, "{frame}");
+        assert!(indicator_count >= 2, "{frame}");
     }
 
     #[test]
     fn dashboard_renders_braille_logo_background() {
         let app = test_app();
-        let frame = render_app_text(&app);
+        let frame = render_app_text_at(&app, 160, 32);
 
-        assert!(frame.contains("⢶⣿⣿"), "{frame}");
+        assert!(frame.contains("⠻⣿⣿"), "{frame}");
         assert!(frame.contains("⠺⢿⣷"), "{frame}");
     }
 
@@ -4503,24 +4655,39 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char(']')));
         let frame = render_app_text(&app);
-        assert_eq!(app.active_view, TuiView::Agents);
-        assert!(frame.contains("Agents"), "{frame}");
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert!(frame.contains("Dev"), "{frame}");
 
         app.handle_key(key(KeyCode::Char('[')));
         let frame = render_app_text(&app);
-        assert_eq!(app.active_view, TuiView::Dashboard);
-        assert!(frame.contains("Dashboard"), "{frame}");
+        assert_eq!(app.active_workspace, TuiWorkspace::Home);
+        assert!(frame.contains("Home"), "{frame}");
     }
 
     #[test]
     fn jumps_to_tab_with_number() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('2')));
+        app.handle_key(key(KeyCode::Char('3')));
         let frame = render_app_text(&app);
 
-        assert_eq!(app.active_view, TuiView::Agents);
-        assert!(frame.contains("Agents"), "{frame}");
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert!(frame.contains("agents"), "{frame}");
+    }
+
+    #[test]
+    fn tab_cycles_dev_panel_focus() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('2')));
+
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Repl);
+
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.dev_focus, DevPanel::Output);
+
+        app.handle_key(key(KeyCode::BackTab));
+        assert_eq!(app.dev_focus, DevPanel::Repl);
     }
 
     #[test]
@@ -4697,7 +4864,7 @@ mod tests {
     #[test]
     fn agent_mode_cycles_and_preserves_filter() {
         let mut app = test_app();
-        app.active_view = TuiView::Agents;
+        app.active_workspace = TuiWorkspace::Ops;
         app.agents.query = "cart".to_string();
         app.agents.selected = 3;
 
@@ -4725,7 +4892,7 @@ mod tests {
     #[test]
     fn agent_details_panel_toggles() {
         let mut app = test_app();
-        app.active_view = TuiView::Agents;
+        app.active_workspace = TuiWorkspace::Ops;
         app.agents.agents = sample_agents();
 
         let frame = render_app_text(&app);
@@ -4740,7 +4907,7 @@ mod tests {
     #[test]
     fn enter_on_agent_opens_inspect_view() {
         let mut app = test_app();
-        app.active_view = TuiView::Agents;
+        app.active_workspace = TuiWorkspace::Ops;
         app.agents.agents = sample_agents();
 
         app.handle_key(key(KeyCode::Enter));
@@ -4949,7 +5116,7 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert!(frame.contains("> agent"), "{frame}");
-        assert!(frame.contains("Go to Agents"), "{frame}");
+        assert!(frame.contains("Refresh Agents"), "{frame}");
     }
 
     #[test]
@@ -4957,14 +5124,14 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        for character in "go agents".chars() {
+        for character in "go ops".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
         app.handle_key(key(KeyCode::Enter));
 
         let frame = render_app_text(&app);
-        assert_eq!(app.active_view, TuiView::Agents);
-        assert!(frame.contains("Agents"), "{frame}");
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert!(frame.contains("agents"), "{frame}");
         assert!(!frame.contains("Command Palette"), "{frame}");
     }
 
@@ -5050,6 +5217,7 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert!(frame.contains("Refresh Agents"), "{frame}");
+        let frame = render_app_text_at(&app, 140, 30);
         assert!(frame.contains("context executor unavailable"), "{frame}");
 
         app.handle_key(key(KeyCode::Enter));
@@ -5068,7 +5236,7 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert!(!frame.contains("Keyboard Shortcuts"), "{frame}");
-        assert!(frame.contains("Dashboard"), "{frame}");
+        assert!(frame.contains("Home"), "{frame}");
     }
 
     #[test]
@@ -5128,7 +5296,8 @@ mod tests {
         app.handle_key(key(KeyCode::Char('b')));
 
         let run = app.command_run.as_ref().expect("missing command run");
-        assert_eq!(app.active_view, TuiView::Output);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Output);
         assert_eq!(app.mode, TuiMode::CommandInteraction);
         assert_eq!(run.kind, CommandKind::Build);
         assert_eq!(run.args, vec!["build"]);
@@ -5141,7 +5310,8 @@ mod tests {
         app.handle_key(key(KeyCode::Char('c')));
 
         let run = app.command_run.as_ref().expect("missing command run");
-        assert_eq!(app.active_view, TuiView::Output);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Output);
         assert_eq!(app.mode, TuiMode::CommandInteraction);
         assert_eq!(run.kind, CommandKind::Clean);
         assert_eq!(run.args, vec!["clean"]);
@@ -5158,7 +5328,8 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
 
         let run = app.command_run.as_ref().expect("missing command run");
-        assert_eq!(app.active_view, TuiView::Output);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Output);
         assert_eq!(run.kind, CommandKind::Clean);
     }
 
@@ -5194,7 +5365,7 @@ mod tests {
     #[test]
     fn output_input_row_is_hidden_when_idle() {
         let mut app = test_app();
-        app.active_view = TuiView::Output;
+        app.active_workspace = TuiWorkspace::Dev;
 
         let frame = render_app_text(&app);
         assert!(!frame.contains("stdin"), "{frame}");
@@ -5282,7 +5453,8 @@ mod tests {
     #[test]
     fn normal_output_arrow_keys_and_mouse_scroll_output() {
         let mut app = test_app();
-        app.active_view = TuiView::Output;
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_focus = DevPanel::Output;
         app.command_run = Some(CommandRun::new(
             1,
             CommandKind::Build,
@@ -5380,10 +5552,11 @@ mod tests {
     fn server_tab_renders_initial_state() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('4')));
+        app.open_dev_workspace(DevPanel::Server);
         let frame = render_app_text(&app);
 
-        assert_eq!(app.active_view, TuiView::Server);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Server);
         assert!(frame.contains("server"), "{frame}");
         assert!(frame.contains("stopped"), "{frame}");
         assert!(frame.contains("clean:off"), "{frame}");
@@ -5392,7 +5565,7 @@ mod tests {
     #[test]
     fn server_clean_toggle_affects_next_start() {
         let mut app = test_app();
-        app.active_view = TuiView::Server;
+        app.active_workspace = TuiWorkspace::Dev;
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('s')));
@@ -5406,7 +5579,7 @@ mod tests {
     #[test]
     fn server_start_stop_and_restart_state() {
         let mut app = test_app();
-        app.active_view = TuiView::Server;
+        app.active_workspace = TuiWorkspace::Dev;
 
         app.handle_key(key(KeyCode::Char('s')));
         assert_eq!(app.server.run.status, ServerStatus::Starting);
@@ -5438,7 +5611,8 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('s')));
-        assert_eq!(app.active_view, TuiView::Server);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Server);
         assert_eq!(app.server.run.status, ServerStatus::Starting);
 
         app.server.run.status = ServerStatus::Running;
@@ -5452,7 +5626,8 @@ mod tests {
 
         app.execute_action(TuiActionKind::ToggleServer, None);
 
-        assert_eq!(app.active_view, TuiView::Server);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Server);
         assert_eq!(app.server.run.status, ServerStatus::Starting);
     }
 
@@ -5464,13 +5639,15 @@ mod tests {
         app.append_command_output(b"command log\n");
         app.server.run.output.append(b"server log\n");
 
-        app.active_view = TuiView::Output;
-        let output_frame = render_app_text(&app);
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_focus = DevPanel::Output;
+        let output_frame = render_app_text_at(&app, 80, 24);
         assert!(output_frame.contains("command log"), "{output_frame}");
         assert!(!output_frame.contains("server log"), "{output_frame}");
 
-        app.active_view = TuiView::Server;
-        let server_frame = render_app_text(&app);
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_focus = DevPanel::Server;
+        let server_frame = render_app_text_at(&app, 80, 24);
         assert!(server_frame.contains("server log"), "{server_frame}");
         assert!(!server_frame.contains("command log"), "{server_frame}");
     }
@@ -5478,7 +5655,8 @@ mod tests {
     #[test]
     fn server_mouse_scrolls_logs() {
         let mut app = test_app();
-        app.active_view = TuiView::Server;
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_focus = DevPanel::Server;
         for index in 0..20 {
             app.server
                 .run
@@ -5502,7 +5680,8 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char('r')));
 
-        assert_eq!(app.active_view, TuiView::Repl);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Repl);
         assert_eq!(app.mode, TuiMode::Repl);
         assert_eq!(app.repl.run.status, ReplStatus::Starting);
         assert_eq!(app.repl.run.args, vec!["repl"]);
@@ -5560,7 +5739,8 @@ mod tests {
     fn test_app() -> TuiApp {
         TuiApp {
             should_quit: false,
-            active_view: TuiView::Dashboard,
+            active_workspace: TuiWorkspace::Home,
+            dev_focus: DevPanel::Repl,
             mode: TuiMode::Normal,
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
@@ -5658,7 +5838,7 @@ mod tests {
 
     fn inspect_app() -> TuiApp {
         let mut app = test_app();
-        app.active_view = TuiView::Agents;
+        app.active_workspace = TuiWorkspace::Ops;
         app.agents.agents = sample_agents();
         app.handle_key(key(KeyCode::Enter));
         app

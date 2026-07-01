@@ -414,3 +414,30 @@ Current status:
 Validation:
 
 - `git diff --check -- .tui-plan/ui-system.md .tui-plan/tasks.md .tui-plan/progress.md`
+
+Workspace shell full remap implemented.
+
+Current status:
+
+- Replaced the old Dashboard, Agents, Output, Server, and REPL top-level TUI
+  views with Home, Dev, and Ops workspaces.
+- Remapped number navigation to `1` Home, `2` Dev, and `3` Ops; `[` and `]`
+  cycle workspaces, while `tab` cycles Dev panel focus.
+- Added the first Dev workbench layout with REPL as the primary panel and
+  Output, Server, and Agents as secondary panels, with focused-panel fallback
+  rendering on narrow terminals.
+- Routed build/deploy/clean to Dev Output, server actions to Dev Server, and
+  REPL actions to Dev REPL while preserving existing nested CLI behavior.
+- Remapped Ops to the existing full Agents explorer, preserving typed refresh,
+  mode cycle, auto-refresh, fuzzy filtering, details, stale-result handling,
+  errors, and inspect split behavior.
+- Updated action metadata, palette, help, tabs, and tests to use
+  workspace/panel vocabulary instead of old top-level view names.
+- Kept the initial TUI context model unchanged; selected-context switching is
+  still the next milestone.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib -- tui::`
+- `cargo check -p golem-cli`
