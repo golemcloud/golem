@@ -112,7 +112,8 @@ fn synthesize_leaf_method(
         }
     };
     let inherited_params = inherited_root_params(ir, cmd, tool_name);
-    let input_args = kept_client_args_omitting(cmd, &inherited_params, false, omitted_names);
+    let input_args =
+        kept_client_args_omitting(ir, cmd, &inherited_params, false, omitted_names, tool_name);
     let (stdin_ident, has_stdout) = stream_idents(cmd);
     let stdin_expr = match stdin_ident {
         Some(ident) => quote! { ::std::option::Option::Some(#ident) },
@@ -127,55 +128,97 @@ fn synthesize_leaf_method(
         pub async fn #method_ident(&self, #(#input_args),*) -> #result_ty {
             #(#value_inserts)*
 
-            let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-                .expect("tool descriptor build failed");
+            let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
             let mut __command_path = self.command_path.clone();
             let mut __schema_path = self.schema_path.clone();
             #command_path_part
-            let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
-                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                    format!("invalid generated tool command path `{}`", __schema_path.join(" "))
-                ))
-            })?;
-            let mut __canonical_fields: ::std::vec::Vec<golem_rust::agentic::CanonicalInputField> =
-                self.inherited_prefix.iter().map(|__value| golem_rust::agentic::CanonicalInputField {
-                    name: __value.name.clone(),
-                    aliases: __value.aliases.clone(),
-                    schema: __value.schema.clone(),
-                }).collect();
-            let __inherited_names: ::std::collections::BTreeSet<&str> = self.inherited_prefix.iter()
-                .flat_map(|__value| ::std::iter::once(__value.name.as_str()).chain(__value.aliases.iter().map(::std::string::String::as_str)))
-                .collect();
-            __canonical_fields.extend(
-                __tool.canonical_input_fields(__command_index)
-                    .into_iter()
-                    .filter(|__field| {
-                        !__inherited_names.contains(__field.name.as_str())
-                            && !__field.aliases.iter().any(|__alias| __inherited_names.contains(__alias.as_str()))
-                    })
-            );
-            let __model = golem_rust::agentic::CanonicalInputModel::from_fields(__canonical_fields)
-                .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.to_string())))?;
-            let mut __record_fields: ::std::vec::Vec<golem_rust::SchemaValue> =
-                self.inherited_prefix.iter().map(|__value| __value.value.clone()).collect();
-            for __field in __tool.canonical_input_fields(__command_index).into_iter() {
-                if __inherited_names.contains(__field.name.as_str())
-                    || __field.aliases.iter().any(|__alias| __inherited_names.contains(__alias.as_str()))
+            let __input = if __can_use_static_input_model {
+                static __GOLEM_TOOL_INPUT_MODEL: ::std::sync::OnceLock<
+                    ::std::result::Result<golem_rust::agentic::CanonicalInputModel, ::std::string::String>
+                > =
+                    ::std::sync::OnceLock::new();
+                let __model = __GOLEM_TOOL_INPUT_MODEL.get_or_init(|| {
+                    let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
+                        .expect("tool descriptor build failed");
+                    let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
+                        format!("invalid generated tool command path `{}`", __schema_path.join(" "))
+                    })?;
+                    __tool.canonical_input_model(__command_index)
+                        .map_err(|__err| __err.to_string())
+                }).as_ref().map_err(|__err| {
+                    golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.clone()))
+                })?;
+                let __record_fields = if __model.fields.len() == __golem_param_values.len()
+                    && __model.fields.iter()
+                        .zip(__golem_param_values.iter())
+                        .all(|(__field, (__name, _))| __field.name.as_str() == *__name)
                 {
-                    continue;
-                }
-                let __value = __golem_param_values.remove(__field.name.as_str())
-                    .ok_or_else(|| {
+                    __golem_param_values.into_iter().map(|(_, __value)| __value).collect()
+                } else {
+                    let mut __record_fields: ::std::vec::Vec<golem_rust::SchemaValue> =
+                        ::std::vec::Vec::with_capacity(__model.fields.len());
+                    for __field in __model.fields.iter() {
+                        let __value_index = __golem_param_values.iter()
+                            .rposition(|(__name, _)| *__name == __field.name.as_str())
+                            .ok_or_else(|| {
+                                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
+                                    format!("missing canonical tool input field `{}`", __field.name)
+                                ))
+                            })?;
+                        let (_, __value) = __golem_param_values.remove(__value_index);
+                        __record_fields.push(__value);
+                    }
+                    __record_fields
+                };
+                golem_rust::TypedSchemaValue::new(
+                    __model.record_schema.clone(),
+                    golem_rust::SchemaValue::Record { fields: __record_fields },
+                )
+            } else {
+                let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
+                    .expect("tool descriptor build failed");
+                let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
                     golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                        format!("missing canonical tool input field `{}`", __field.name)
+                        format!("invalid generated tool command path `{}`", __schema_path.join(" "))
                     ))
                 })?;
-                __record_fields.push(__value);
-            }
-            let __input = golem_rust::TypedSchemaValue::new(
-                __model.record_schema,
-                golem_rust::SchemaValue::Record { fields: __record_fields },
-            );
+                let mut __canonical_fields: ::std::vec::Vec<golem_rust::agentic::CanonicalInputField> =
+                    self.inherited_prefix.iter().map(|__value| golem_rust::agentic::CanonicalInputField {
+                        name: __value.name.clone(),
+                        aliases: __value.aliases.clone(),
+                        schema: __value.schema.clone(),
+                    }).collect();
+                let __inherited_names: ::std::collections::BTreeSet<&str> = self.inherited_prefix.iter()
+                    .flat_map(|__value| ::std::iter::once(__value.name.as_str()).chain(__value.aliases.iter().map(::std::string::String::as_str)))
+                    .collect();
+                __canonical_fields.extend(
+                    __tool.canonical_input_fields(__command_index)
+                        .into_iter()
+                        .filter(|__field| {
+                            !__inherited_names.contains(__field.name.as_str())
+                                && !__field.aliases.iter().any(|__alias| __inherited_names.contains(__alias.as_str()))
+                        })
+                );
+                let __model = golem_rust::agentic::CanonicalInputModel::from_fields(__canonical_fields)
+                    .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.to_string())))?;
+                let mut __record_fields: ::std::vec::Vec<golem_rust::SchemaValue> =
+                    self.inherited_prefix.iter().map(|__value| __value.value.clone()).collect();
+                for __field in __model.fields.iter().skip(self.inherited_prefix.len()) {
+                    let __value_index = __golem_param_values.iter()
+                        .rposition(|(__name, _)| *__name == __field.name.as_str())
+                        .ok_or_else(|| {
+                        golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
+                            format!("missing canonical tool input field `{}`", __field.name)
+                        ))
+                    })?;
+                    let (_, __value) = __golem_param_values.remove(__value_index);
+                    __record_fields.push(__value);
+                }
+                golem_rust::TypedSchemaValue::new(
+                    __model.record_schema,
+                    golem_rust::SchemaValue::Record { fields: __record_fields },
+                )
+            };
             let __result = #invoke?;
             #decode_result
         }
@@ -195,11 +238,14 @@ fn synthesize_subtree_method(
         .clone()
         .unwrap_or_else(|| to_kebab_case(&cmd.method_ident.to_string()));
     let inherited_params = inherited_root_params(ir, cmd, tool_name);
-    let input_args = kept_client_args_omitting(cmd, &inherited_params, true, omitted_names);
+    let input_args =
+        kept_client_args_omitting(ir, cmd, &inherited_params, true, omitted_names, tool_name);
     let value_prefixes =
         prefix_value_builders(ir, cmd, &inherited_params, tool_name, omitted_names);
     let wrapper_ident = subtree_wrapper_ident(ir, cmd);
-    let child_omitted = subtree_child_omitted_surfaces(cmd, omitted_names);
+    let inherited_surfaces = inherited_root_param_surfaces(ir, cmd, tool_name);
+    let child_omitted =
+        subtree_child_omitted_surfaces(ir, cmd, tool_name, &inherited_surfaces, omitted_names);
     let child_omitted_tag = omitted_tag(quote! { 0 }, &child_omitted);
     let child_omitted_ty = omitted_type(quote! { () }, &child_omitted);
     let _ = tool_name;
@@ -238,11 +284,12 @@ fn synthesize_subtree_method_with_context(
         .clone()
         .unwrap_or_else(|| to_kebab_case(&cmd.method_ident.to_string()));
     let inherited_params = inherited_root_params(ir, cmd, tool_name);
-    let input_args = kept_client_args_omitting(cmd, &inherited_params, true, omitted_names);
+    let input_args =
+        kept_client_args_omitting(ir, cmd, &inherited_params, true, omitted_names, tool_name);
     let value_prefixes =
         prefix_value_builders(ir, cmd, &inherited_params, tool_name, omitted_names);
     let wrapper_ident = subtree_wrapper_ident(ir, cmd);
-    let new_omitted = subtree_new_omitted_surfaces(cmd, omitted_names);
+    let new_omitted = subtree_new_omitted_surfaces(ir, cmd, tool_name, omitted_names);
     let child_omitted_tag = contextual_omitted_tag(omitted_tag, cmd, &new_omitted);
     let child_omitted_ty = omitted_type(quote! { (#omitted_ty, fn() -> Self) }, &new_omitted);
     let _ = tool_name;
@@ -270,7 +317,10 @@ fn synthesize_subtree_wrapper(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Option<
     let subtree = cmd.subtree.as_ref()?;
     let wrapper_ident = subtree_wrapper_ident(ir, cmd);
     let child_macro_path = subtree_client_macro_path(&subtree.path);
-    let root_child_omitted = subtree_child_omitted_surfaces(cmd, &[]);
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    let inherited_surfaces = inherited_root_param_surfaces(ir, cmd, &tool_name);
+    let root_child_omitted =
+        subtree_child_omitted_surfaces(ir, cmd, &tool_name, &inherited_surfaces, &[]);
     let root_child_omitted_tag = omitted_tag(quote! { 0 }, &root_child_omitted);
     let root_child_omitted_ty = omitted_type(quote! { () }, &root_child_omitted);
     let root_child_omitted_markers = omitted_markers(&root_child_omitted);
@@ -415,7 +465,7 @@ fn subtree_client_macro_emit_arms(ir: &ToolDefinitionIr, tool_name: &str) -> Vec
                 let subtree = cmd.subtree.as_ref()?;
                 let child_macro_path = subtree_client_macro_path(&subtree.path);
                 let wrapper_ident = subtree_wrapper_ident(ir, cmd);
-                let new_omitted = subtree_new_omitted_surfaces(cmd, &omitted);
+                let new_omitted = subtree_new_omitted_surfaces(ir, cmd, tool_name, &omitted);
                 let child_omitted_tag = contextual_omitted_tag(quote! { $omitted_tag }, cmd, &new_omitted);
                 let child_omitted_ty = omitted_type(
                     quote! { ($omitted_ty, fn() -> $client_ident<{ $omitted_tag }, $omitted_ty>) },
@@ -439,10 +489,12 @@ fn subtree_client_macro_emit_arms(ir: &ToolDefinitionIr, tool_name: &str) -> Vec
 }
 
 fn kept_client_args_omitting(
+    ir: &ToolDefinitionIr,
     cmd: &CommandIr,
     inherited_params: &[ParamIr],
     include_stdout: bool,
     omitted_names: &[String],
+    tool_name: &str,
 ) -> Vec<FnArg> {
     inherited_params
         .iter()
@@ -450,7 +502,7 @@ fn kept_client_args_omitting(
         .filter(|param| {
             !omitted_names
                 .iter()
-                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+                .any(|omitted| omitted_matches_param(ir, cmd, param, tool_name, omitted))
                 && !is_principal_type(&param.ty)
                 && (include_stdout || type_last_ident(&param.ty).as_deref() != Some("OutputStream"))
         })
@@ -478,7 +530,7 @@ fn value_inserts(
             }
             if omitted_names
                 .iter()
-                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+                .any(|omitted| omitted_matches_param(ir, cmd, param, tool_name, omitted))
             {
                 return None;
             }
@@ -487,16 +539,14 @@ fn value_inserts(
             Some(quote! {
                 let __golem_value = <_ as golem_rust::agentic::Schema>::to_schema_value(#ident)
                     .expect("failed to encode tool parameter");
-                __golem_param_values.insert(
-                    #name,
-                    __golem_value,
-                );
+                __golem_param_values.push((#name, __golem_value));
             })
         });
     let inserts: Vec<_> = inserts.collect();
+    let capacity = inserts.len();
     vec![quote! {
-            let mut __golem_param_values: ::std::collections::BTreeMap<&'static str, golem_rust::SchemaValue> =
-                ::std::collections::BTreeMap::new();
+            let mut __golem_param_values: ::std::vec::Vec<(&'static str, golem_rust::SchemaValue)> =
+                ::std::vec::Vec::with_capacity(#capacity);
             #(#inserts)*
     }]
 }
@@ -606,13 +656,28 @@ fn push_omitted_surface_sequences(
     current.pop();
 }
 
-fn subtree_child_omitted_surfaces(cmd: &CommandIr, inherited_omitted: &[String]) -> Vec<String> {
+fn subtree_child_omitted_surfaces(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    tool_name: &str,
+    inherited_surfaces: &[String],
+    inherited_omitted: &[String],
+) -> Vec<String> {
     let mut surfaces = inherited_omitted.to_vec();
+    for surface in inherited_surfaces {
+        if !surfaces.iter().any(|existing| existing == surface) {
+            surfaces.push(surface.clone());
+        }
+    }
     for param in cmd
         .params
         .iter()
         .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
     {
+        let canonical_name = canonical_value_name(ir, cmd, param, tool_name);
+        if !surfaces.iter().any(|existing| existing == &canonical_name) {
+            surfaces.push(canonical_name);
+        }
         for surface in param_surfaces(cmd, param) {
             if !surfaces.iter().any(|existing| existing == &surface) {
                 surfaces.push(surface);
@@ -622,14 +687,37 @@ fn subtree_child_omitted_surfaces(cmd: &CommandIr, inherited_omitted: &[String])
     surfaces
 }
 
-fn subtree_new_omitted_surfaces(cmd: &CommandIr, inherited_omitted: &[String]) -> Vec<String> {
+fn inherited_root_param_surfaces(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    tool_name: &str,
+) -> Vec<String> {
+    let Some(root) = ir
+        .commands
+        .iter()
+        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
+    else {
+        return Vec::new();
+    };
+    inherited_root_params(ir, cmd, tool_name)
+        .iter()
+        .flat_map(|param| param_surfaces(root, param))
+        .collect()
+}
+
+fn subtree_new_omitted_surfaces(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    tool_name: &str,
+    inherited_omitted: &[String],
+) -> Vec<String> {
     cmd.params
         .iter()
         .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
         .filter(|param| {
             !inherited_omitted
                 .iter()
-                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+                .any(|omitted| omitted_matches_param(ir, cmd, param, tool_name, omitted))
         })
         .flat_map(|param| param_surfaces(cmd, param))
         .collect()
@@ -683,10 +771,42 @@ fn omitted_surface_id(surface: &str) -> u64 {
     hash
 }
 
-fn omitted_matches_param(cmd: &CommandIr, param: &ParamIr, omitted: &str) -> bool {
-    param_surfaces(cmd, param)
+fn omitted_matches_param(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &ParamIr,
+    tool_name: &str,
+    omitted: &str,
+) -> bool {
+    if param_surfaces(cmd, param)
         .iter()
         .any(|surface| surface == omitted)
+    {
+        return true;
+    }
+    if to_kebab_case(&cmd.method_ident.to_string()) == tool_name {
+        return false;
+    }
+    let Some(root) = ir
+        .commands
+        .iter()
+        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
+    else {
+        return false;
+    };
+    let own_name = to_kebab_case(&param.ident.to_string());
+    let own_aliases = param_aliases(cmd, param);
+    root.params.iter().any(|root_param| {
+        let root_name = to_kebab_case(&root_param.ident.to_string());
+        is_global_param(root, root_param)
+            && omitted == root_name
+            && param_surfaces_intersect(
+                &root_name,
+                &param_aliases(root, root_param),
+                &own_name,
+                &own_aliases,
+            )
+    })
 }
 
 fn param_surfaces(cmd: &CommandIr, param: &ParamIr) -> Vec<String> {
@@ -719,7 +839,7 @@ fn prefix_value_builders(
             }
             if omitted_names
                 .iter()
-                .any(|omitted| omitted_matches_param(cmd, param, omitted))
+                .any(|omitted| omitted_matches_param(ir, cmd, param, tool_name, omitted))
             {
                 return None;
             }

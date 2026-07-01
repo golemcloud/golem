@@ -1204,6 +1204,172 @@ fn check_standalone_child_keeps_full_signature() {
     }
 
     #[test]
+    fn bug_finder_subtree_client_omits_child_root_alias_captured_by_primary_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-child-root-alias-captured-by-primary-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    #[arg(count = "global", aliases = ["format"])]
+    fn child(&self, count: u32, target: String) -> String;
+
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global")]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_child_root_alias() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child leaf parameters captured via the child root global's alias when the parent supplies that canonical global\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_dispatcher_param_canonicalized_by_parent_alias() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-dispatcher-param-canonicalized-by-parent-alias",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, count: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait ParentAlias {
+    #[arg(count = "global", aliases = ["format"])]
+    fn parent_alias(&self, count: u32, target: String) -> String;
+
+    #[command(subtree = Child)]
+    fn child(&self, format: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_dispatcher_alias_as_inherited_count() {
+    let child = ParentAliasClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a subtree dispatcher parameter captured via a parent root-global alias should omit child parameters matching the canonical inherited global\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_parent_root_global_without_dispatcher_param() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-parent-root-global-without-dispatcher-param",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, verbose: bool, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(verbose = "global", kind = "flag")]
+    fn parent(&self, verbose: bool, target: String) -> String;
+
+    #[command(subtree = Child)]
+    fn child(&self) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_root_inherited_global() {
+    let child = ParentClient::default().child(true);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(true, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child parameters captured by globals inherited from the parent root command, even when the subtree dispatcher has no own parameters\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_keeps_leaf_param_when_child_root_alias_is_deprojected() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-keeps-leaf-param-when-child-root-alias-is-deprojected",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    #[arg(format = "global", aliases = ["count"])]
+    fn child(&self, format: u32, target: String) -> String;
+
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global")]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_deprojected_child_root_alias_does_not_omit_primary_leaf_param() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf(9, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "when a child root global is de-projected through an alias to the inherited `count`, its primary `format` surface must not omit unrelated child leaf parameters\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
     fn bug_finder_subtree_client_omits_non_prefix_captured_global() {
         let output = cargo_check_tool_crate(
             "subtree-client-omits-non-prefix-captured-global",
@@ -1367,6 +1533,258 @@ fn check_standalone_child_keeps_full_signature() {
         assert!(
             output.status.success(),
             "grafted typed clients should omit all inherited globals regardless of whether the parent captures them in child parameter order; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn client_duplicate_canonical_name_preserves_last_staged_value() {
+        let output = cargo_test_tool_crate_with_renamed_sdk(
+            "client-duplicate-canonical-name-last-wins",
+            r#"
+use std::cell::RefCell;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+thread_local! {
+    static LAST_INPUT: RefCell<Option<golem_rust::TypedSchemaValue>> = const { RefCell::new(None) };
+}
+
+mod golem_rust {
+    pub use golem_rust_actual::*;
+
+    pub mod golem_agentic {
+        pub use golem_rust_actual::golem_agentic::*;
+
+        pub mod golem {
+            pub use golem_rust_actual::golem_agentic::golem::*;
+
+            pub mod tool {
+                pub use golem_rust_actual::golem_agentic::golem::tool::*;
+
+                pub mod host {
+                    #[derive(Clone, Debug)]
+                    pub struct ToolRpc;
+
+                    impl ToolRpc {
+                        pub fn new(_name: &str) -> Self {
+                            Self
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub mod agentic {
+        pub use golem_rust_actual::agentic::*;
+
+        pub fn invoke_and_await_infallible(
+            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _command_path: &[String],
+            input: &crate::golem_rust::TypedSchemaValue,
+            _stdin: Option<crate::golem_rust::wasip2::io::streams::InputStream>,
+        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
+            Ok(InvocationResult {
+                result: Some(
+                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
+                        &"ok".to_string(),
+                    )
+                    .unwrap(),
+                ),
+                stdout: None,
+            })
+        }
+    }
+}
+
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait MultiAliasClientInput {
+    #[arg(count = "global", aliases = ["format", "level"])]
+    fn multi_alias_client_input(&self, count: u32, target: String);
+
+    fn leaf(&self, format: u32, level: u32, name: String) -> String;
+}
+
+fn block_on_ready<F: Future>(future: F) -> F::Output {
+    fn no_op(_: *const ()) {}
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    match Future::poll(Pin::as_mut(&mut future), &mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("future unexpectedly pending"),
+    }
+}
+
+#[test]
+fn duplicate_canonical_param_uses_last_staged_value() {
+    let value = block_on_ready(
+        MultiAliasClientInputClient::default().leaf(1, 2, "alice".to_string()),
+    )
+    .expect("fake RPC returns a successful String result");
+    assert_eq!(value, "ok");
+
+    let input = LAST_INPUT
+        .with(|slot| slot.borrow_mut().take())
+        .expect("client invoked fake RPC");
+    let golem_rust::SchemaValue::Record { fields } = input.value() else {
+        panic!("expected client input to be a record");
+    };
+
+    assert_eq!(
+        fields[0],
+        golem_rust::SchemaValue::U32(2),
+        "when two client arguments map to the same canonical inherited global, the generated client must preserve the pre-optimization BTreeMap::insert overwrite semantics",
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "generated clients should preserve the pre-optimization last-write-wins behavior when multiple arguments map to the same canonical input name\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn client_duplicate_canonical_name_preserves_last_staged_value_after_prior_removal() {
+        let output = cargo_test_tool_crate_with_renamed_sdk(
+            "client-duplicate-canonical-name-last-wins-after-prior-removal",
+            r#"
+use std::cell::RefCell;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+thread_local! {
+    static LAST_INPUT: RefCell<Option<golem_rust::TypedSchemaValue>> = const { RefCell::new(None) };
+}
+
+mod golem_rust {
+    pub use golem_rust_actual::*;
+
+    pub mod golem_agentic {
+        pub use golem_rust_actual::golem_agentic::*;
+
+        pub mod golem {
+            pub use golem_rust_actual::golem_agentic::golem::*;
+
+            pub mod tool {
+                pub use golem_rust_actual::golem_agentic::golem::tool::*;
+
+                pub mod host {
+                    #[derive(Clone, Debug)]
+                    pub struct ToolRpc;
+
+                    impl ToolRpc {
+                        pub fn new(_name: &str) -> Self {
+                            Self
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub mod agentic {
+        pub use golem_rust_actual::agentic::*;
+
+        pub fn invoke_and_await_infallible(
+            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _command_path: &[String],
+            input: &crate::golem_rust::TypedSchemaValue,
+            _stdin: Option<crate::golem_rust::wasip2::io::streams::InputStream>,
+        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
+            Ok(InvocationResult {
+                result: Some(
+                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
+                        &"ok".to_string(),
+                    )
+                    .unwrap(),
+                ),
+                stdout: None,
+            })
+        }
+    }
+}
+
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait SwapRemoveLastWins {
+    #[arg(first = "global")]
+    #[arg(count = "global", aliases = ["format", "level", "depth"])]
+    fn swap_remove_last_wins(&self, first: u32, count: u32, target: String);
+
+    fn leaf(&self, name: String, format: u32, level: u32, depth: u32) -> String;
+}
+
+fn block_on_ready<F: Future>(future: F) -> F::Output {
+    fn no_op(_: *const ()) {}
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    match Future::poll(Pin::as_mut(&mut future), &mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("future unexpectedly pending"),
+    }
+}
+
+#[test]
+fn duplicate_canonical_param_uses_last_staged_value_after_prior_removal() {
+    let value = block_on_ready(
+        SwapRemoveLastWinsClient::default().leaf(
+            99,
+            "alice".to_string(),
+            1,
+            2,
+            3,
+        ),
+    )
+    .expect("fake RPC returns a successful String result");
+    assert_eq!(value, "ok");
+
+    let input = LAST_INPUT
+        .with(|slot| slot.borrow_mut().take())
+        .expect("client invoked fake RPC");
+    let golem_rust::SchemaValue::Record { fields } = input.value() else {
+        panic!("expected client input to be a record");
+    };
+
+    assert_eq!(fields[0], golem_rust::SchemaValue::U32(99));
+    assert_eq!(
+        fields[1],
+        golem_rust::SchemaValue::U32(3),
+        "last staged duplicate canonical value must still win after packing an earlier canonical field",
+    );
+    assert_eq!(
+        fields[2],
+        golem_rust::SchemaValue::String("alice".to_string()),
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "generated clients should preserve last-write-wins when packing an earlier canonical field removes a staged value before a later duplicate canonical field\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
@@ -6157,7 +6575,30 @@ impl BadTool for BadToolImpl {
         cargo_tool_crate(name, source, "test")
     }
 
+    fn cargo_test_tool_crate_with_renamed_sdk(name: &str, source: &str) -> std::process::Output {
+        cargo_tool_crate_with_dependency(
+            name,
+            source,
+            "test",
+            "golem-rust-actual = { package = \"golem-rust\", path = PATH, features = [\"export_golem_agentic\"] }",
+        )
+    }
+
     fn cargo_tool_crate(name: &str, source: &str, command: &str) -> std::process::Output {
+        cargo_tool_crate_with_dependency(
+            name,
+            source,
+            command,
+            "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
+        )
+    }
+
+    fn cargo_tool_crate_with_dependency(
+        name: &str,
+        source: &str,
+        command: &str,
+        dependency_template: &str,
+    ) -> std::process::Output {
         let root = std::env::temp_dir().join(format!(
             "golem-rust-tool-{name}-{}-{}",
             std::process::id(),
@@ -6169,6 +6610,7 @@ impl BadTool for BadToolImpl {
         fs::create_dir_all(root.join("src")).unwrap();
 
         let golem_rust_path = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let dependency = dependency_template.replace("PATH", &toml_string(golem_rust_path));
         fs::write(
             root.join("Cargo.toml"),
             format!(
@@ -6179,9 +6621,8 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-golem-rust = {{ path = {}, features = ["export_golem_agentic"] }}
+{dependency}
 "#,
-                toml_string(golem_rust_path)
             ),
         )
         .unwrap();

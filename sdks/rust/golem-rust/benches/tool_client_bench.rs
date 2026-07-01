@@ -22,7 +22,8 @@
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use golem_rust::agentic::{
-    CanonicalInputField, CanonicalInputModel, Schema as AgenticSchema, StructuredSchema,
+    CanonicalInputField, CanonicalInputModel, CanonicalInputValue, Schema as AgenticSchema,
+    StructuredSchema,
 };
 use golem_rust::{FromSchema, IntoSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 
@@ -369,10 +370,286 @@ fn bench_affine_handle_shape(c: &mut Criterion) {
     group.finish();
 }
 
+fn staged_git_commit_values() -> Vec<(&'static str, SchemaValue)> {
+    vec![
+        (
+            "message",
+            SchemaValue::String("Implement typed tool client benchmarks".to_string()),
+        ),
+        (
+            "paths",
+            SchemaValue::List {
+                elements: vec![
+                    SchemaValue::String("sdks/rust/golem-rust/Cargo.toml".to_string()),
+                    SchemaValue::String(
+                        "sdks/rust/golem-rust/benches/tool_client_bench.rs".to_string(),
+                    ),
+                ],
+            },
+        ),
+        (
+            "author",
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String(
+                    "Golem Bot <bot@golem.cloud>".to_string(),
+                ))),
+            },
+        ),
+        ("all", SchemaValue::Bool(false)),
+        ("amend", SchemaValue::Bool(false)),
+        ("signoff", SchemaValue::Bool(true)),
+        (
+            "trailers",
+            SchemaValue::List {
+                elements: vec![
+                    SchemaValue::String("Refs: #3534".to_string()),
+                    SchemaValue::String("Benchmark: typed-tool-client".to_string()),
+                ],
+            },
+        ),
+        (
+            "cleanup",
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String("strip".to_string()))),
+            },
+        ),
+        ("gpg-sign", SchemaValue::Option { inner: None }),
+        ("verbose", SchemaValue::U64(2)),
+    ]
+}
+
+fn assemble_static_input_current(
+    model: &CanonicalInputModel,
+    mut values: Vec<(&'static str, SchemaValue)>,
+) -> TypedSchemaValue {
+    let mut record_fields = Vec::with_capacity(model.fields.len());
+    for field in model.fields.iter() {
+        let value_index = values
+            .iter()
+            .rposition(|(name, _)| *name == field.name.as_str())
+            .expect("benchmark input field must be present");
+        let (_, value) = values.remove(value_index);
+        record_fields.push(value);
+    }
+    TypedSchemaValue::new(
+        model.record_schema.clone(),
+        SchemaValue::Record {
+            fields: record_fields,
+        },
+    )
+}
+
+fn assemble_static_input_ordered(
+    model: &CanonicalInputModel,
+    mut values: Vec<(&'static str, SchemaValue)>,
+) -> TypedSchemaValue {
+    let record_fields = if model.fields.len() == values.len()
+        && model
+            .fields
+            .iter()
+            .zip(values.iter())
+            .all(|(field, (name, _))| field.name.as_str() == *name)
+    {
+        values.into_iter().map(|(_, value)| value).collect()
+    } else {
+        let mut record_fields = Vec::with_capacity(model.fields.len());
+        for field in model.fields.iter() {
+            let value_index = values
+                .iter()
+                .rposition(|(name, _)| *name == field.name.as_str())
+                .expect("benchmark input field must be present");
+            let (_, value) = values.remove(value_index);
+            record_fields.push(value);
+        }
+        record_fields
+    };
+    TypedSchemaValue::new(
+        model.record_schema.clone(),
+        SchemaValue::Record {
+            fields: record_fields,
+        },
+    )
+}
+
+fn bench_generated_static_input_assembly(c: &mut Criterion) {
+    let input_model = CanonicalInputModel::from_fields(git_commit_fields())
+        .expect("git-commit-shaped input model must build");
+
+    let mut group = c.benchmark_group("tool_client_generated/static_input_assembly");
+    group.bench_function("current_rposition_remove", |b| {
+        b.iter_batched(
+            staged_git_commit_values,
+            |values| {
+                black_box(assemble_static_input_current(
+                    black_box(&input_model),
+                    values,
+                ))
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    group.bench_function("ordered_prefix_then_fallback", |b| {
+        b.iter_batched(
+            staged_git_commit_values,
+            |values| {
+                black_box(assemble_static_input_ordered(
+                    black_box(&input_model),
+                    values,
+                ))
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    group.finish();
+}
+
+fn inherited_prefix_values() -> Vec<CanonicalInputValue> {
+    vec![
+        CanonicalInputValue {
+            name: "workspace".to_string(),
+            aliases: Vec::new(),
+            schema: schema_graph_for::<String>(),
+            value: SchemaValue::String("/workspace".to_string()),
+        },
+        CanonicalInputValue {
+            name: "dry-run".to_string(),
+            aliases: Vec::new(),
+            schema: schema_graph_for::<bool>(),
+            value: SchemaValue::Bool(false),
+        },
+    ]
+}
+
+fn assemble_dynamic_input_current(
+    prefix: &[CanonicalInputValue],
+    mut values: Vec<(&'static str, SchemaValue)>,
+) -> TypedSchemaValue {
+    let mut canonical_fields: Vec<CanonicalInputField> = prefix
+        .iter()
+        .map(|value| CanonicalInputField {
+            name: value.name.clone(),
+            aliases: value.aliases.clone(),
+            schema: value.schema.clone(),
+        })
+        .collect();
+    let inherited_names: std::collections::BTreeSet<&str> = prefix
+        .iter()
+        .flat_map(|value| {
+            std::iter::once(value.name.as_str()).chain(value.aliases.iter().map(String::as_str))
+        })
+        .collect();
+    canonical_fields.extend(git_commit_fields().into_iter().filter(|field| {
+        !inherited_names.contains(field.name.as_str())
+            && !field
+                .aliases
+                .iter()
+                .any(|alias| inherited_names.contains(alias.as_str()))
+    }));
+    let model = CanonicalInputModel::from_fields(canonical_fields)
+        .expect("dynamic benchmark input model must build");
+    let mut record_fields: Vec<SchemaValue> =
+        prefix.iter().map(|value| value.value.clone()).collect();
+    for field in git_commit_fields().into_iter() {
+        if inherited_names.contains(field.name.as_str())
+            || field
+                .aliases
+                .iter()
+                .any(|alias| inherited_names.contains(alias.as_str()))
+        {
+            continue;
+        }
+        let value_index = values
+            .iter()
+            .rposition(|(name, _)| *name == field.name.as_str())
+            .expect("benchmark input field must be present");
+        let (_, value) = values.remove(value_index);
+        record_fields.push(value);
+    }
+    TypedSchemaValue::new(
+        model.record_schema,
+        SchemaValue::Record {
+            fields: record_fields,
+        },
+    )
+}
+
+fn assemble_dynamic_input_reuse_model_fields(
+    prefix: &[CanonicalInputValue],
+    mut values: Vec<(&'static str, SchemaValue)>,
+) -> TypedSchemaValue {
+    let mut canonical_fields: Vec<CanonicalInputField> = prefix
+        .iter()
+        .map(|value| CanonicalInputField {
+            name: value.name.clone(),
+            aliases: value.aliases.clone(),
+            schema: value.schema.clone(),
+        })
+        .collect();
+    let inherited_names: std::collections::BTreeSet<&str> = prefix
+        .iter()
+        .flat_map(|value| {
+            std::iter::once(value.name.as_str()).chain(value.aliases.iter().map(String::as_str))
+        })
+        .collect();
+    canonical_fields.extend(git_commit_fields().into_iter().filter(|field| {
+        !inherited_names.contains(field.name.as_str())
+            && !field
+                .aliases
+                .iter()
+                .any(|alias| inherited_names.contains(alias.as_str()))
+    }));
+    let model = CanonicalInputModel::from_fields(canonical_fields)
+        .expect("dynamic benchmark input model must build");
+    let mut record_fields: Vec<SchemaValue> =
+        prefix.iter().map(|value| value.value.clone()).collect();
+    for field in model.fields.iter().skip(prefix.len()) {
+        let value_index = values
+            .iter()
+            .rposition(|(name, _)| *name == field.name.as_str())
+            .expect("benchmark input field must be present");
+        let (_, value) = values.remove(value_index);
+        record_fields.push(value);
+    }
+    TypedSchemaValue::new(
+        model.record_schema,
+        SchemaValue::Record {
+            fields: record_fields,
+        },
+    )
+}
+
+fn bench_generated_dynamic_input_assembly(c: &mut Criterion) {
+    let prefix = inherited_prefix_values();
+
+    let mut group = c.benchmark_group("tool_client_generated/dynamic_input_assembly");
+    group.bench_function("current_recompute_fields", |b| {
+        b.iter_batched(
+            staged_git_commit_values,
+            |values| black_box(assemble_dynamic_input_current(black_box(&prefix), values)),
+            BatchSize::SmallInput,
+        )
+    });
+    group.bench_function("reuse_model_fields", |b| {
+        b.iter_batched(
+            staged_git_commit_values,
+            |values| {
+                black_box(assemble_dynamic_input_reuse_model_fields(
+                    black_box(&prefix),
+                    values,
+                ))
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_grep_shape,
     bench_git_commit_shape,
-    bench_affine_handle_shape
+    bench_affine_handle_shape,
+    bench_generated_static_input_assembly,
+    bench_generated_dynamic_input_assembly
 );
 criterion_main!(benches);
