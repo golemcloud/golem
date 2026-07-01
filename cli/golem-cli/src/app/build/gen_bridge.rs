@@ -866,6 +866,43 @@ mod tests {
         assert!(validate_no_output_dir_collisions(&targets).is_err());
     }
 
+    #[test]
+    fn validate_supported_bridge_targets_rejects_unsupported_guest_languages() {
+        for unsupported_language in [
+            GuestLanguage::TypeScript,
+            GuestLanguage::Scala,
+            GuestLanguage::MoonBit,
+        ] {
+            let targets = vec![bridge_sdk_target_with_mode(
+                "AlphaAgent",
+                unsupported_language,
+                BridgeMode::Guest,
+                tempdir().unwrap().path().join("bridge/alpha-guest-client"),
+            )];
+
+            let error = validate_supported_bridge_targets(&targets).unwrap_err();
+
+            assert!(
+                error.to_string().contains(&format!(
+                    "guest bridge mode is not supported for {unsupported_language} yet"
+                )),
+                "unexpected error for {unsupported_language}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_supported_bridge_targets_accepts_rust_guest_targets() {
+        let targets = vec![bridge_sdk_target_with_mode(
+            "AlphaAgent",
+            GuestLanguage::Rust,
+            BridgeMode::Guest,
+            tempdir().unwrap().path().join("bridge/alpha-guest-client"),
+        )];
+
+        validate_supported_bridge_targets(&targets).unwrap();
+    }
+
     fn bridge_sdk_target(
         agent_type_name: &str,
         target_language: GuestLanguage,
