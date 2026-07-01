@@ -306,8 +306,9 @@ pub struct ToolErrorVariantIr {
     pub doc: DocIr,
     pub kind: ErrorKindIr,
     pub exit_code: u8,
-    /// Payload schema source: unit variants carry no payload, single-field
-    /// variants carry the field's type (resolved to a `SchemaType` during metadata synthesis).
+    /// Payload schema source: unit and zero-field variants carry no payload,
+    /// single-field variants carry the field's type (resolved to a `SchemaType`
+    /// during metadata synthesis).
     pub payload: ToolErrorPayloadIr,
 }
 
@@ -316,9 +317,18 @@ pub struct ToolErrorVariantIr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum ToolErrorPayloadIr {
-    None,
+    None {
+        style: ToolErrorNoPayloadStyleIr,
+    },
     Single {
         ty: Type,
         field_ident: Option<Ident>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolErrorNoPayloadStyleIr {
+    Unit,
+    Tuple,
+    Struct,
 }

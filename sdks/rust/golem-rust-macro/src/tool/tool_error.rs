@@ -18,7 +18,9 @@
 
 use crate::tool::doc::parse_doc_full;
 use crate::tool::helpers::{SeenKeys, expr_str, expr_u8, to_kebab_case};
-use crate::tool::ir::{ErrorKindIr, ToolErrorIr, ToolErrorPayloadIr, ToolErrorVariantIr};
+use crate::tool::ir::{
+    ErrorKindIr, ToolErrorIr, ToolErrorNoPayloadStyleIr, ToolErrorPayloadIr, ToolErrorVariantIr,
+};
 use crate::tool::synthesis::{doc_tokens, error_kind_tokens};
 use proc_macro::TokenStream;
 use quote::quote;
@@ -43,7 +45,7 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
         let kind = error_kind_tokens(variant.kind);
         let exit_code = variant.exit_code;
         let payload = match &variant.payload {
-            ToolErrorPayloadIr::None => quote! { ::std::option::Option::None },
+            ToolErrorPayloadIr::None { .. } => quote! { ::std::option::Option::None },
             ToolErrorPayloadIr::Single { ty, .. } => {
                 let position = format!("error {name} payload");
                 quote! {
@@ -66,7 +68,7 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
     let schema_cases = ir.variants.iter().map(|variant| {
         let name = to_kebab_case(&variant.variant_ident.to_string());
         let payload = match &variant.payload {
-            ToolErrorPayloadIr::None => quote! { ::std::option::Option::None },
+            ToolErrorPayloadIr::None { .. } => quote! { ::std::option::Option::None },
             ToolErrorPayloadIr::Single { ty, .. } => {
                 quote! { ::std::option::Option::Some(<#ty as golem_rust::IntoSchema>::register_in(__builder)) }
             }
@@ -83,14 +85,17 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
         let variant_ident = &variant.variant_ident;
         let idx = idx as u32;
         match &variant.payload {
-            ToolErrorPayloadIr::None => quote! {
-                Self::#variant_ident => golem_rust::SchemaValue::Variant(
+            ToolErrorPayloadIr::None { style } => {
+                let pattern = no_payload_pattern(variant_ident, *style);
+                quote! {
+                #pattern => golem_rust::SchemaValue::Variant(
                     golem_rust::schema::VariantValuePayload {
                         case: #idx,
                         payload: ::std::option::Option::None,
                     }
                 )
-            },
+                }
+            }
             ToolErrorPayloadIr::Single {
                 field_ident: None, ..
             } => quote! {
@@ -122,16 +127,19 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
         let variant_ident = &variant.variant_ident;
         let idx = idx as u32;
         match &variant.payload {
-            ToolErrorPayloadIr::None => quote! {
+            ToolErrorPayloadIr::None { style } => {
+                let constructor = no_payload_constructor(variant_ident, *style);
+                quote! {
                 #idx => {
                     if __payload.payload.is_some() {
                         return ::std::result::Result::Err(golem_rust::schema::FromSchemaError::custom(
                             "tool error variant unexpectedly carried a payload"
                         ));
                     }
-                    ::std::result::Result::Ok(Self::#variant_ident)
+                    ::std::result::Result::Ok(#constructor)
                 }
-            },
+                }
+            }
             ToolErrorPayloadIr::Single { ty, field_ident: None } => quote! {
                 #idx => {
                     let __value = __payload.payload.as_deref().ok_or_else(|| {
@@ -155,12 +163,15 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
     let to_error_payload_arms = ir.variants.iter().map(|variant| {
         let variant_ident = &variant.variant_ident;
         match &variant.payload {
-            ToolErrorPayloadIr::None => quote! {
-                Self::#variant_ident => {
+            ToolErrorPayloadIr::None { style } => {
+                let pattern = no_payload_pattern(variant_ident, *style);
+                quote! {
+                #pattern => {
                     golem_rust::IntoTypedSchemaValue::into_typed_schema_value(&())
                         .map_err(|__err| __err.to_string())
                 }
-            },
+                }
+            }
             ToolErrorPayloadIr::Single {
                 field_ident: None, ..
             } => quote! {
@@ -183,11 +194,14 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
     let from_error_payload_arms = ir.variants.iter().map(|variant| {
         let variant_ident = &variant.variant_ident;
         match &variant.payload {
-            ToolErrorPayloadIr::None => quote! {
+            ToolErrorPayloadIr::None { style } => {
+                let constructor = no_payload_constructor(variant_ident, *style);
+                quote! {
                 if <() as golem_rust::FromSchema>::from_value(__value.value()).is_ok() {
-                    return ::std::result::Result::Ok(Self::#variant_ident);
+                    return ::std::result::Result::Ok(#constructor);
                 }
-            },
+                }
+            }
             ToolErrorPayloadIr::Single { ty, field_ident: None } => quote! {
                 if let ::std::result::Result::Ok(__payload) = <#ty as golem_rust::FromSchema>::from_value(__value.value()) {
                     return ::std::result::Result::Ok(Self::#variant_ident(__payload));
@@ -360,9 +374,15 @@ pub fn parse_tool_error(input: &DeriveInput) -> Result<ToolErrorIr, Error> {
 /// compile error (no synthetic record is generated).
 fn parse_payload(fields: &Fields) -> Result<ToolErrorPayloadIr, Error> {
     match fields {
-        Fields::Unit => Ok(ToolErrorPayloadIr::None),
-        Fields::Unnamed(f) if f.unnamed.is_empty() => Ok(ToolErrorPayloadIr::None),
-        Fields::Named(f) if f.named.is_empty() => Ok(ToolErrorPayloadIr::None),
+        Fields::Unit => Ok(ToolErrorPayloadIr::None {
+            style: ToolErrorNoPayloadStyleIr::Unit,
+        }),
+        Fields::Unnamed(f) if f.unnamed.is_empty() => Ok(ToolErrorPayloadIr::None {
+            style: ToolErrorNoPayloadStyleIr::Tuple,
+        }),
+        Fields::Named(f) if f.named.is_empty() => Ok(ToolErrorPayloadIr::None {
+            style: ToolErrorNoPayloadStyleIr::Struct,
+        }),
         Fields::Unnamed(f) if f.unnamed.len() == 1 => Ok(ToolErrorPayloadIr::Single {
             ty: f.unnamed.first().unwrap().ty.clone(),
             field_ident: None,
@@ -378,6 +398,28 @@ fn parse_payload(fields: &Fields) -> Result<ToolErrorPayloadIr, Error> {
             other.span(),
             "a ToolError variant may have at most one field; wrap multiple values in a struct or tuple type",
         )),
+    }
+}
+
+fn no_payload_pattern(
+    variant_ident: &syn::Ident,
+    style: ToolErrorNoPayloadStyleIr,
+) -> proc_macro2::TokenStream {
+    match style {
+        ToolErrorNoPayloadStyleIr::Unit => quote! { Self::#variant_ident },
+        ToolErrorNoPayloadStyleIr::Tuple => quote! { Self::#variant_ident() },
+        ToolErrorNoPayloadStyleIr::Struct => quote! { Self::#variant_ident {} },
+    }
+}
+
+fn no_payload_constructor(
+    variant_ident: &syn::Ident,
+    style: ToolErrorNoPayloadStyleIr,
+) -> proc_macro2::TokenStream {
+    match style {
+        ToolErrorNoPayloadStyleIr::Unit => quote! { Self::#variant_ident },
+        ToolErrorNoPayloadStyleIr::Tuple => quote! { Self::#variant_ident() },
+        ToolErrorNoPayloadStyleIr::Struct => quote! { Self::#variant_ident {} },
     }
 }
 
@@ -514,7 +556,12 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(ir.variants[0].payload, ToolErrorPayloadIr::None);
+        assert_eq!(
+            ir.variants[0].payload,
+            ToolErrorPayloadIr::None {
+                style: ToolErrorNoPayloadStyleIr::Unit,
+            }
+        );
         assert!(matches!(
             ir.variants[1].payload,
             ToolErrorPayloadIr::Single { .. }

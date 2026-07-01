@@ -839,6 +839,79 @@ impl StdoutTool for StdoutToolImpl {
         );
     }
 
+    #[test]
+    fn generated_tool_client_requires_schema_decodable_error_type() {
+        let output = cargo_check_tool_crate(
+            "tool-client-error-schema-bound",
+            r#"
+use golem_rust::agentic::{ExtendedErrorCase, ToolBuildError, ToolErrorSchema};
+use golem_rust::{tool_definition, TypedSchemaValue};
+
+enum ManualError {
+    Failed,
+}
+
+impl ToolErrorSchema for ManualError {
+    fn error_cases() -> Result<Vec<ExtendedErrorCase>, ToolBuildError> {
+        Ok(Vec::new())
+    }
+
+    fn to_error_payload_value(&self) -> Result<TypedSchemaValue, String> {
+        todo!()
+    }
+
+    fn from_error_payload_value(_value: TypedSchemaValue) -> Result<Self, String> {
+        todo!()
+    }
+}
+
+#[tool_definition]
+trait ManualErrorTool {
+    fn run(&self) -> Result<(), ManualError>;
+}
+"#,
+        );
+
+        assert!(
+            !output.status.success(),
+            "a tool client error type that implements ToolErrorSchema but not Schema must fail to compile\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Schema")
+                || stderr.contains("FromSchema")
+                || stderr.contains("IntoSchema"),
+            "expected the compile error to mention the schema decodability bound, got:\n{stderr}",
+        );
+    }
+
+    #[test]
+    fn bug_finder_tool_error_zero_field_payloadless_variants_compile() {
+        let output = cargo_check_tool_crate(
+            "tool-error-zero-field-payloadless-variants",
+            r#"
+use golem_rust::ToolError;
+
+#[derive(ToolError)]
+enum EmptyPayloadError {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    EmptyTuple(),
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    EmptyStruct {},
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "zero-field tuple/struct ToolError variants are parsed as payload-less and should compile\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
     #[tool_definition]
     trait ChildRoundTrip {
         fn leaf(&self, verbose: bool, name: String) -> String;

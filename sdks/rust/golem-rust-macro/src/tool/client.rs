@@ -439,13 +439,17 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
     let (_, err) = split_result(output);
     match err {
         Some(err) => quote! {
-            golem_rust::agentic::invoke_and_await(
-                &self.rpc,
-                &__command_path,
-                &__input,
-                #stdin_expr,
-                <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
-            )
+            {
+                fn __golem_assert_tool_error_decodable<E: golem_rust::agentic::Schema>() {}
+                __golem_assert_tool_error_decodable::<#err>();
+                golem_rust::agentic::invoke_and_await(
+                    &self.rpc,
+                    &__command_path,
+                    &__input,
+                    #stdin_expr,
+                    <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
+                )
+            }
         },
         None => quote! {
             golem_rust::agentic::invoke_and_await_infallible(
