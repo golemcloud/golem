@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use std::collections::BTreeMap;
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
+use std::collections::{BTreeMap, BTreeSet};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value, value};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DependencySpec {
@@ -114,6 +114,88 @@ pub fn collect_dependency_specs(
     }
 
     Ok(result)
+}
+
+pub fn collect_package_dependency_specs(source: &str) -> anyhow::Result<Vec<DependencySpec>> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    let mut result = Vec::new();
+
+    for_each_package_dependency(&doc, |_, item| {
+        if !is_workspace_ref(item)
+            && let Some(spec) = dependency_spec(item)
+        {
+            result.push(spec);
+        }
+    });
+
+    Ok(result)
+}
+
+pub fn collect_workspace_dependency_refs(source: &str) -> anyhow::Result<BTreeSet<String>> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    let mut result = BTreeSet::new();
+
+    for_each_package_dependency(&doc, |name, item| {
+        if is_workspace_ref(item) {
+            result.insert(name.to_string());
+        }
+    });
+
+    Ok(result)
+}
+
+pub fn collect_workspace_dependency_specs(
+    source: &str,
+) -> anyhow::Result<BTreeMap<String, DependencySpec>> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    let mut result = BTreeMap::new();
+
+    if let Some(table) = doc
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(|deps| deps.as_table_like())
+    {
+        for (name, item) in table.iter() {
+            if let Some(spec) = dependency_spec(item) {
+                result.insert(name.to_string(), spec);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn for_each_package_dependency(doc: &DocumentMut, mut visit: impl FnMut(&str, &Item)) {
+    for_each_package_dependency_in_container(doc.as_table(), &mut visit);
+
+    if let Some(targets) = doc.get("target").and_then(|item| item.as_table_like()) {
+        for (_, target_item) in targets.iter() {
+            if let Some(target_table) = target_item.as_table_like() {
+                for_each_package_dependency_in_container(target_table, &mut visit);
+            }
+        }
+    }
+}
+
+fn for_each_package_dependency_in_container(
+    container: &dyn TableLike,
+    visit: &mut impl FnMut(&str, &Item),
+) {
+    [
+        DependencyTable::Dependencies,
+        DependencyTable::BuildDependencies,
+    ]
+    .iter()
+    .for_each(|table| {
+        if let Some(dependencies) = container
+            .get(table.as_str())
+            .and_then(|item| item.as_table_like())
+        {
+            for (name, item) in dependencies.iter() {
+                visit(name, item);
+            }
+        }
+    });
 }
 
 pub fn resolve_dependency_location(
@@ -536,4 +618,85 @@ fn inline_path_dep(path: &str, features: &[String]) -> Item {
         );
     }
     Item::Value(Value::InlineTable(entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn package_metadata_dependencies_are_not_package_dependencies() {
+        let source = r#"
+            [package]
+            name = "example"
+
+            [package.metadata.tool.dependencies]
+            guest = { path = "../bridge/foo-agent-guest-client" }
+        "#;
+
+        let specs = collect_package_dependency_specs(source).unwrap();
+
+        assert!(specs.is_empty());
+    }
+
+    #[test]
+    fn target_specific_dependencies_are_collected_without_collapsing_names() {
+        let source = r#"
+            [package]
+            name = "example"
+
+            [dependencies]
+            guest = "1"
+
+            [target.wasm32-wasip2.dependencies]
+            guest = { path = "../bridge/foo-agent-guest-client" }
+        "#;
+
+        let specs = collect_package_dependency_specs(source).unwrap();
+
+        assert_eq!(specs.len(), 2);
+        assert!(specs.iter().any(|spec| matches!(
+            spec,
+            DependencySpec::Path { path, .. } if path == "../bridge/foo-agent-guest-client"
+        )));
+    }
+
+    #[test]
+    fn dev_dependencies_are_not_build_dependencies() {
+        let source = r#"
+            [package]
+            name = "example"
+
+            [dev-dependencies]
+            guest = { path = "../bridge/foo-agent-guest-client" }
+
+            [target.wasm32-wasip2.dev-dependencies]
+            target-guest = { workspace = true }
+        "#;
+
+        let specs = collect_package_dependency_specs(source).unwrap();
+        let refs = collect_workspace_dependency_refs(source).unwrap();
+
+        assert!(specs.is_empty());
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn target_specific_workspace_dependency_refs_are_collected() {
+        let source = r#"
+            [package]
+            name = "example"
+
+            [target.wasm32-wasip2.dependencies]
+            guest = { workspace = true }
+
+            [workspace.dependencies]
+            guest = { path = "../bridge/foo-agent-guest-client" }
+        "#;
+
+        let refs = collect_workspace_dependency_refs(source).unwrap();
+
+        assert_eq!(refs, BTreeSet::from(["guest".to_string()]));
+    }
 }

@@ -17,21 +17,133 @@ use crate::model::app::{BridgeSdkTarget, CustomBridgeSdkTarget};
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use anyhow::bail;
 use camino::Utf8PathBuf;
+use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use std::collections::BTreeMap;
 
+#[derive(Debug, Default)]
+pub(crate) struct AgentMetadataCache {
+    agent_types_by_component: BTreeMap<ComponentName, Vec<golem_common::schema::AgentTypeSchema>>,
+}
+
+impl AgentMetadataCache {
+    pub(crate) async fn get(
+        &mut self,
+        ctx: &BuildContext<'_>,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<Vec<golem_common::schema::AgentTypeSchema>> {
+        if let Some(agent_types) = self.agent_types_by_component.get(component_name) {
+            Ok(agent_types.clone())
+        } else {
+            let agent_types = extract_and_store_agent_types(ctx, component_name).await?;
+            self.agent_types_by_component
+                .insert(component_name.clone(), agent_types.clone());
+            Ok(agent_types)
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct BridgeGenerationPlan {
+    pub(crate) targets: Vec<BridgeSdkTarget>,
+    pub(crate) repl_metadata_by_language: BTreeMap<GuestLanguage, ReplMetadata>,
+}
+
 pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let mut targets = match &ctx.custom_bridge_sdk_target() {
-        Some(custom_target) => collect_custom_targets(ctx, custom_target).await?,
-        None => collect_manifest_targets(ctx).await?,
+    gen_bridge_with_manifest_mode_filter(ctx, None).await
+}
+
+pub async fn gen_external_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    gen_external_bridge_with_additional_collision_targets(ctx, &[]).await
+}
+
+pub async fn gen_external_bridge_with_additional_collision_targets(
+    ctx: &BuildContext<'_>,
+    additional_collision_targets: &[BridgeSdkTarget],
+) -> anyhow::Result<()> {
+    gen_bridge_with_manifest_mode_filter_and_additional_collision_targets(
+        ctx,
+        Some(BridgeMode::External),
+        additional_collision_targets,
+    )
+    .await
+}
+
+async fn gen_bridge_with_manifest_mode_filter(
+    ctx: &BuildContext<'_>,
+    manifest_bridge_mode_filter: Option<BridgeMode>,
+) -> anyhow::Result<()> {
+    gen_bridge_with_manifest_mode_filter_and_additional_collision_targets(
+        ctx,
+        manifest_bridge_mode_filter,
+        &[],
+    )
+    .await
+}
+
+async fn gen_bridge_with_manifest_mode_filter_and_additional_collision_targets(
+    ctx: &BuildContext<'_>,
+    manifest_bridge_mode_filter: Option<BridgeMode>,
+    additional_collision_targets: &[BridgeSdkTarget],
+) -> anyhow::Result<()> {
+    let plan = plan_bridge_generation(ctx, manifest_bridge_mode_filter).await?;
+
+    if plan.targets.is_empty() {
+        if !additional_collision_targets.is_empty() {
+            validate_no_output_dir_collisions(additional_collision_targets)?;
+        }
+        return Ok(());
+    }
+
+    let mut collision_targets = additional_collision_targets.to_vec();
+    collision_targets.extend(plan.targets.iter().cloned());
+    validate_supported_bridge_targets(&collision_targets)?;
+    validate_no_output_dir_collisions(&collision_targets)?;
+
+    write_repl_metadata(ctx, &plan).await?;
+
+    log_action("Generating", "bridge SDKs");
+    let _indent = LogIndent::new();
+
+    gen_bridge_sdk_targets(ctx, plan.targets).await?;
+
+    Ok(())
+}
+
+pub(crate) async fn plan_bridge_generation(
+    ctx: &BuildContext<'_>,
+    manifest_bridge_mode_filter: Option<BridgeMode>,
+) -> anyhow::Result<BridgeGenerationPlan> {
+    let mut agent_metadata_cache = AgentMetadataCache::default();
+    plan_bridge_generation_with_metadata_cache(
+        ctx,
+        manifest_bridge_mode_filter,
+        &mut agent_metadata_cache,
+    )
+    .await
+}
+
+pub(crate) async fn plan_bridge_generation_with_metadata_cache(
+    ctx: &BuildContext<'_>,
+    manifest_bridge_mode_filter: Option<BridgeMode>,
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<BridgeGenerationPlan> {
+    let mut plan = BridgeGenerationPlan::default();
+
+    plan.targets = match &ctx.custom_bridge_sdk_target() {
+        Some(custom_target) => {
+            collect_custom_targets(ctx, custom_target, agent_metadata_cache).await?
+        }
+        None => {
+            collect_manifest_targets(ctx, manifest_bridge_mode_filter, agent_metadata_cache).await?
+        }
     };
 
     if let Some(target) = ctx.repl_bridge_sdk_target() {
-        let repl_targets = collect_custom_targets(ctx, target).await?;
+        let repl_targets = collect_custom_targets(ctx, target, agent_metadata_cache).await?;
 
-        let mut repl_meta_by_lang = BTreeMap::<GuestLanguage, ReplMetadata>::new();
         for target in &repl_targets {
-            repl_meta_by_lang
+            plan.repl_metadata_by_language
                 .entry(target.target_language)
                 .or_default()
                 .agents
@@ -43,30 +155,179 @@ pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
                     },
                 );
         }
-        for (language, repl_meta) in repl_meta_by_lang {
-            fs::write_str(
-                ctx.application().repl_metadata_json(language),
-                &serde_json::to_string(&repl_meta)?,
-            )?;
-            // TODO: from golden file, with "auto-exported static asset" support
-            fs::write_str(
-                ctx.application().repl_cli_commands_metadata_json(language),
-                &serde_json::to_string(&GolemCliCommand::collect_metadata_for_repl())?,
-            )?;
+
+        plan.targets.extend(repl_targets);
+    }
+
+    Ok(plan)
+}
+
+pub(crate) async fn write_repl_metadata(
+    ctx: &BuildContext<'_>,
+    plan: &BridgeGenerationPlan,
+) -> anyhow::Result<()> {
+    for (language, repl_meta) in &plan.repl_metadata_by_language {
+        fs::write_str(
+            ctx.application().repl_metadata_json(*language),
+            &serde_json::to_string(repl_meta)?,
+        )?;
+        // TODO: from golden file, with "auto-exported static asset" support
+        fs::write_str(
+            ctx.application().repl_cli_commands_metadata_json(*language),
+            &serde_json::to_string(&GolemCliCommand::collect_metadata_for_repl())?,
+        )?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn plan_manifest_guest_bridge_generation_for_components_lenient(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<BridgeGenerationPlan> {
+    Ok(BridgeGenerationPlan {
+        targets: collect_manifest_targets_for_components_and_mode(
+            ctx,
+            component_names,
+            Some(BridgeMode::Guest),
+            true,
+            false,
+            agent_metadata_cache,
+        )
+        .await?,
+        repl_metadata_by_language: BTreeMap::new(),
+    })
+}
+
+pub(crate) async fn plan_manifest_external_bridge_generation_for_components_lenient(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<BridgeGenerationPlan> {
+    Ok(BridgeGenerationPlan {
+        targets: collect_manifest_external_bridge_targets_for_components_lenient(
+            ctx,
+            component_names,
+            agent_metadata_cache,
+        )
+        .await?,
+        repl_metadata_by_language: BTreeMap::new(),
+    })
+}
+
+pub(crate) async fn plan_custom_bridge_generation_lenient(
+    ctx: &BuildContext<'_>,
+    custom_target: &CustomBridgeSdkTarget,
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<BridgeGenerationPlan> {
+    Ok(BridgeGenerationPlan {
+        targets: collect_custom_targets_lenient(ctx, custom_target, agent_metadata_cache).await?,
+        repl_metadata_by_language: BTreeMap::new(),
+    })
+}
+
+pub(crate) async fn plan_repl_bridge_generation_lenient(
+    ctx: &BuildContext<'_>,
+    repl_target: &CustomBridgeSdkTarget,
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<BridgeGenerationPlan> {
+    let targets = collect_custom_targets_lenient(ctx, repl_target, agent_metadata_cache).await?;
+    let mut repl_metadata_by_language = BTreeMap::<GuestLanguage, ReplMetadata>::new();
+
+    for target in &targets {
+        repl_metadata_by_language
+            .entry(target.target_language)
+            .or_default()
+            .agents
+            .insert(
+                target.agent_type.type_name.clone(),
+                ReplAgentMetadata {
+                    client_dir: target.output_dir.clone(),
+                    mode: target.agent_type.mode,
+                },
+            );
+    }
+
+    Ok(BridgeGenerationPlan {
+        targets,
+        repl_metadata_by_language,
+    })
+}
+
+pub(crate) async fn collect_manifest_external_bridge_targets_for_components_lenient(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    collect_manifest_targets_for_components_and_mode(
+        ctx,
+        component_names,
+        Some(BridgeMode::External),
+        true,
+        false,
+        agent_metadata_cache,
+    )
+    .await
+}
+
+pub(crate) async fn collect_custom_targets_lenient(
+    ctx: &BuildContext<'_>,
+    custom_target: &CustomBridgeSdkTarget,
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let mut targets = vec![];
+
+    let should_filter_by_agent_type_name = !custom_target.agent_type_names.is_empty();
+    let mut agent_type_names = custom_target.agent_type_names.clone();
+    for component_name in ctx.application_context().selected_component_names() {
+        let component = ctx.application().component(component_name);
+        if !component.agent_type_extraction_source_wasm().exists() {
+            continue;
         }
 
-        targets.extend(repl_targets);
+        let target_language = custom_target
+            .target_language
+            .or_else(|| component.guess_language())
+            .unwrap_or(GuestLanguage::TypeScript);
+
+        let mut agent_types = agent_metadata_cache.get(ctx, component_name).await?;
+        if should_filter_by_agent_type_name {
+            agent_types.retain(|agent_type| agent_type_names.remove(&agent_type.type_name));
+        }
+
+        for agent_type in agent_types {
+            let output_dir = custom_target
+                .output_dir
+                .as_ref()
+                .map(|output_dir| {
+                    output_dir.join(bridge_client_directory_name(&agent_type.type_name))
+                })
+                .unwrap_or_else(|| {
+                    ctx.application().bridge_sdk_dir(
+                        &agent_type.type_name,
+                        target_language,
+                        BridgeMode::External,
+                    )
+                });
+
+            targets.push(BridgeSdkTarget {
+                component_name: component_name.clone(),
+                agent_type,
+                target_language,
+                bridge_mode: BridgeMode::External,
+                output_dir,
+            });
+        }
     }
 
-    if targets.is_empty() {
-        return Ok(());
-    }
+    Ok(targets)
+}
 
-    validate_no_output_dir_collisions(&targets)?;
-
-    log_action("Generating", "bridge SDKs");
-    let _indent = LogIndent::new();
-
+pub(crate) async fn gen_bridge_sdk_targets(
+    ctx: &BuildContext<'_>,
+    targets: Vec<BridgeSdkTarget>,
+) -> anyhow::Result<()> {
     for target in targets {
         gen_bridge_sdk_target(ctx, target).await?;
     }
@@ -74,12 +335,50 @@ pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn collect_manifest_targets(ctx: &BuildContext<'_>) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+async fn collect_manifest_targets(
+    ctx: &BuildContext<'_>,
+    bridge_mode_filter: Option<BridgeMode>,
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let component_names = ctx
+        .application_context()
+        .selected_component_names()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    collect_manifest_targets_for_components_and_mode(
+        ctx,
+        &component_names,
+        bridge_mode_filter,
+        false,
+        false,
+        agent_metadata_cache,
+    )
+    .await
+}
+
+async fn collect_manifest_targets_for_components_and_mode(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+    bridge_mode_filter: Option<BridgeMode>,
+    ignore_unmatched_matchers: bool,
+    skip_missing_sources: bool,
+    agent_metadata_cache: &mut AgentMetadataCache,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
+    let application_component_names = ctx
+        .application()
+        .component_names()
+        .map(|component_name| component_name.as_str().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
 
     for (target_language, bridge_mode, sdk_targets) in
         ctx.application().bridge_sdks().for_all_used_modes()
     {
+        if bridge_mode_filter.is_some_and(|bridge_mode_filter| bridge_mode_filter != bridge_mode) {
+            continue;
+        }
+
         let mut matchers = sdk_targets.agents.clone().into_set();
 
         if matchers.is_empty() {
@@ -88,10 +387,29 @@ async fn collect_manifest_targets(ctx: &BuildContext<'_>) -> anyhow::Result<Vec<
 
         let is_matching_all = matchers.remove("*");
 
-        for component_name in ctx.application_context().selected_component_names() {
+        for component_name in component_names {
+            if skip_missing_sources
+                && !ctx
+                    .application()
+                    .component(component_name)
+                    .agent_type_extraction_source_wasm()
+                    .exists()
+            {
+                continue;
+            }
+
             let is_matching_component = matchers.remove(component_name.as_str());
 
-            let mut agent_types = extract_and_store_agent_types(ctx, component_name).await?;
+            if !is_matching_all
+                && !is_matching_component
+                && matchers
+                    .iter()
+                    .all(|matcher| application_component_names.contains(matcher.as_str()))
+            {
+                continue;
+            }
+
+            let mut agent_types = agent_metadata_cache.get(ctx, component_name).await?;
 
             if !is_matching_all && !is_matching_component {
                 agent_types.retain(|agent_type| matchers.contains(agent_type.type_name.as_str()));
@@ -115,14 +433,20 @@ async fn collect_manifest_targets(ctx: &BuildContext<'_>) -> anyhow::Result<Vec<
             }
         }
 
-        if !matchers.is_empty() {
+        if !ignore_unmatched_matchers && !matchers.is_empty() {
             // Remove "non-selected" components
             for component_name in ctx.application().component_names() {
-                matchers.remove(component_name.as_str());
+                if !ctx
+                    .application_context()
+                    .selected_component_names()
+                    .contains(component_name)
+                {
+                    matchers.remove(component_name.as_str());
+                }
             }
         }
 
-        if !matchers.is_empty() {
+        if !ignore_unmatched_matchers && !matchers.is_empty() {
             logln("");
             log_error(format!(
                 "The following agent matchers were not found during {} bridge SDK generation: {}",
@@ -142,6 +466,7 @@ async fn collect_manifest_targets(ctx: &BuildContext<'_>) -> anyhow::Result<Vec<
 async fn collect_custom_targets(
     ctx: &BuildContext<'_>,
     custom_target: &CustomBridgeSdkTarget,
+    agent_metadata_cache: &mut AgentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
 
@@ -155,7 +480,7 @@ async fn collect_custom_targets(
             .unwrap_or(GuestLanguage::TypeScript);
 
         let agent_types = {
-            let mut agent_types = extract_and_store_agent_types(ctx, component_name).await?;
+            let mut agent_types = agent_metadata_cache.get(ctx, component_name).await?;
 
             if should_filter_by_agent_type_name {
                 agent_types.retain(|agent_type| agent_type_names.remove(&agent_type.type_name));
@@ -292,7 +617,7 @@ fn bridge_sdk_target_name(language: GuestLanguage, bridge_mode: BridgeMode) -> S
     }
 }
 
-fn validate_no_output_dir_collisions(targets: &[BridgeSdkTarget]) -> anyhow::Result<()> {
+pub(crate) fn validate_no_output_dir_collisions(targets: &[BridgeSdkTarget]) -> anyhow::Result<()> {
     let mut resolved_targets = Vec::new();
 
     for target in targets {
@@ -326,6 +651,20 @@ fn validate_no_output_dir_collisions(targets: &[BridgeSdkTarget]) -> anyhow::Res
             ));
         }
         bail!(NonSuccessfulExit)
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> anyhow::Result<()> {
+    for target in targets {
+        if target.bridge_mode == BridgeMode::Guest && target.target_language != GuestLanguage::Rust
+        {
+            bail!(
+                "guest bridge mode is not supported for {} yet",
+                target.target_language.to_string().log_color_highlight()
+            );
+        }
     }
 
     Ok(())

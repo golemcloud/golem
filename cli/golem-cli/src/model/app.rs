@@ -835,6 +835,10 @@ impl Application {
         &self.bridge_sdks.value
     }
 
+    pub fn bridge_sdks_source(&self) -> &Path {
+        &self.bridge_sdks.source
+    }
+
     pub fn bridge_sdk_dir(
         &self,
         agent_type_name: &AgentTypeName,

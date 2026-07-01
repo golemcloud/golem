@@ -65,10 +65,23 @@ fn add_metadata(
 }
 
 pub async fn add_metadata_to_selected_components(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    let component_names = ctx
+        .application_context()
+        .selected_component_names()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    add_metadata_to_components(ctx, &component_names).await
+}
+
+pub async fn add_metadata_to_components(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+) -> anyhow::Result<()> {
     log_action("Adding", "metadata to components");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.application_context().selected_component_names() {
+    for component_name in component_names {
         let component = ctx.application().component(component_name);
         let source_wasm = component.wasm();
         let final_wasm = component.final_wasm();

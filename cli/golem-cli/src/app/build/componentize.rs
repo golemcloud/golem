@@ -15,12 +15,26 @@
 use crate::app::build::command::execute_build_command;
 use crate::app::context::BuildContext;
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
+use golem_common::model::component::ComponentName;
 
 pub async fn build_components(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    let component_names = ctx
+        .application_context()
+        .selected_component_names()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    build_selected_components(ctx, &component_names).await
+}
+
+pub async fn build_selected_components(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+) -> anyhow::Result<()> {
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.application_context().selected_component_names() {
+    for component_name in component_names {
         let build_commands = ctx
             .application()
             .component(component_name)
