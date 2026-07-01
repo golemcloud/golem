@@ -27,14 +27,14 @@ use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{LogEvent, StdErrLog, StdOutLog, log_event};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{AgentId, PromiseId};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::component::{
-    AgentFilePermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
-    CanonicalFilePath, ComponentDto, ComponentId, ComponentRevision, PluginInstallation,
-    PluginPriority,
+    AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
+    AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
+    ComponentRevision, PluginInstallation, PluginPriority,
 };
 use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 
@@ -69,6 +69,22 @@ pub struct PrecompiledComponent {
     pub wasm_name: String,
     /// The WIT package name used as the component name (passed to `.name()`)
     pub package_name: String,
+}
+
+pub(crate) fn default_agent_type_provision_config_creation_for_account(
+    account_email: AccountEmail,
+) -> AgentTypeProvisionConfigCreation {
+    AgentTypeProvisionConfigCreation {
+        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+            golem_common::model::card::recipient::RecipientPattern::Account {
+                account: account_email,
+            },
+        ),
+        env: BTreeMap::new(),
+        config: Vec::new(),
+        plugin_installations: Vec::new(),
+        files: BTreeMap::new(),
+    }
 }
 
 impl PrecompiledComponent {
@@ -158,6 +174,8 @@ pub trait TestDsl {
     type WorkerError: std::error::Error + Sync + Send + 'static;
 
     fn redis(&self) -> Arc<dyn Redis>;
+
+    fn account_email(&self) -> AccountEmail;
 
     fn component(
         &self,
@@ -876,9 +894,12 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         &mut self,
         agent_type: &str,
     ) -> &mut AgentTypeProvisionConfigCreation {
+        let account_email = self.dsl.account_email();
         self.agent_type_provision_configs
             .entry(AgentTypeName(agent_type.to_string()))
-            .or_default()
+            .or_insert_with(|| {
+                default_agent_type_provision_config_creation_for_account(account_email)
+            })
     }
 
     /// Set the initial files for an agent type.

@@ -15,7 +15,7 @@
 use crate::Tracing;
 use futures::FutureExt;
 use golem_common::model::account::AccountId;
-use golem_common::model::card::{CardId, CardManagedBy};
+use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::agent_secret::AgentSecretRepo;
@@ -210,9 +210,9 @@ impl Deps {
                     Vec::new(),
                     None,
                     true,
-                    Some(CardManagedBy::AccountRoot {
+                    Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot {
                         account_id: AccountId(account_id),
-                    }),
+                    })),
                 ),
             )
             .await

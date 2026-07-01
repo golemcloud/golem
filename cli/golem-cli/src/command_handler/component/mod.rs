@@ -31,6 +31,7 @@ use crate::model::app_raw;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, SelectedComponents,
+    initial_permission_from_manifest_card, initial_permission_recipient_context,
 };
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
@@ -892,6 +893,16 @@ impl ComponentCommandHandler {
                         &agent_type.type_name,
                         materialize_agent_config_entries(agent_type, resolved_agent.config()),
                     )?,
+                    initial_card: resolved_agent
+                        .initial_card()
+                        .map(initial_permission_from_manifest_card)
+                        .transpose()
+                        .with_context(|| {
+                            format!(
+                                "Invalid initialCard for component {} and agent {}",
+                                component_name.0, agent_type.type_name.0
+                            )
+                        })?,
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
                     plugins: resolve_plugin_parameters(component_name, resolved_agent.plugins())?,
@@ -1060,6 +1071,20 @@ impl ComponentCommandHandler {
                 config,
                 files_by_path,
                 plugins_by_grant_id,
+                initial_permissions: {
+                    let context = initial_permission_recipient_context(
+                        environment,
+                        component_name,
+                        agent_type_name,
+                    );
+                    let initial_permission = manifest_config.to_initial_permission(&context);
+                    diff::AgentTypeInitialPermission {
+                        lower_positive: initial_permission.lower_bound.positive,
+                        lower_negative: initial_permission.lower_bound.negative,
+                        upper_positive: initial_permission.upper_bound.positive,
+                        upper_negative: initial_permission.upper_bound.negative,
+                    }
+                },
             };
 
             agent_type_provision_configs.insert(agent_type_name.0.clone(), provision_config.into());
@@ -1091,7 +1116,7 @@ impl ComponentCommandHandler {
                 .plugin_grants(environment)
                 .await?,
             None,
-        );
+        )?;
 
         let wasm = component_stager.open_wasm().await?;
         let agent_types: Vec<AgentTypeSchema> = component_stager.agent_types().clone();
@@ -1110,7 +1135,7 @@ impl ComponentCommandHandler {
                     component_name: component_name.clone(),
                     agent_types,
                     agent_type_provision_configs: component_stager
-                        .agent_type_provision_configs()
+                        .agent_type_provision_configs(environment, component_name)
                         .await?,
                 },
                 wasm,
@@ -1186,7 +1211,8 @@ impl ComponentCommandHandler {
                 .await
                 .map_err(UpdateStagedComponentError::Other)?,
             Some(diff),
-        );
+        )
+        .map_err(UpdateStagedComponentError::Other)?;
 
         let wasm = component_stager
             .open_wasm_if_changed()
@@ -1212,7 +1238,11 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     agent_types,
                     agent_type_provision_config_updates: component_stager
-                        .agent_type_provision_config_updates(&changed_files)
+                        .agent_type_provision_config_updates(
+                            environment,
+                            &component.name,
+                            &changed_files,
+                        )
                         .await
                         .map_err(UpdateStagedComponentError::Other)?,
                     allow_incompatible_config,

@@ -84,12 +84,17 @@ pub enum ComponentError {
         "Agent type '{0}' is referenced in provision config but not declared in the component's agent types"
     )]
     UndeclaredAgentTypeInProvisionConfig(AgentTypeName),
-    #[error("Agent type '{0}' has no initial permission card")]
-    MissingAgentInitialPermissionCard(AgentTypeName),
+    #[error("Agent type '{0}' has no provision config")]
+    MissingAgentTypeProvisionConfig(AgentTypeName),
     #[error(
-        "Agent type '{0}' is referenced in initial permissions but not declared in the component's agent types"
+        "Update introducing new agent type '{0}' is missing initial permissions in its provision config"
     )]
-    UndeclaredAgentTypeInInitialPermissionCard(AgentTypeName),
+    NewAgentTypeMissingInitialPermissions(AgentTypeName),
+    #[error("Invalid initial permission card for agent type '{agent_type}': {message}")]
+    InvalidAgentInitialPermissionCard {
+        agent_type: AgentTypeName,
+        message: String,
+    },
     #[error("Config for agent {agent} at key {rendered_key} is not declared", rendered_key = key.join("."))]
     AgentConfigNotDeclared {
         agent: AgentTypeName,
@@ -161,8 +166,9 @@ impl SafeDisplay for ComponentError {
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
             Self::DuplicateAgentTypeName(_) => self.to_string(),
             Self::UndeclaredAgentTypeInProvisionConfig(_) => self.to_string(),
-            Self::MissingAgentInitialPermissionCard(_) => self.to_string(),
-            Self::UndeclaredAgentTypeInInitialPermissionCard(_) => self.to_string(),
+            Self::MissingAgentTypeProvisionConfig(_) => self.to_string(),
+            Self::NewAgentTypeMissingInitialPermissions(_) => self.to_string(),
+            Self::InvalidAgentInitialPermissionCard { .. } => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),
             Self::AgentConfigTypeMismatch { .. } => self.to_string(),
             Self::AgentConfigProvidedSecretWhereOnlyLocalAllowed { .. } => self.to_string(),
