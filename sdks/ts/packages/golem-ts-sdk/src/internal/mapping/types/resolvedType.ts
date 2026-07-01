@@ -47,6 +47,7 @@ import type {
   PathSpec,
   QuantitySpec,
   QuotaTokenSpec,
+  SecretSpec,
   TypeId,
   UrlRestrictions,
 } from '../../schema-model';
@@ -128,6 +129,7 @@ export type ResolvedTypeBody =
   // The opaque `quota-token` capability. Carries only its spec; the runtime
   // value is an unforgeable owned handle (see `GuestQuotaTokenHandle`), never a
   // structural record.
+  | { tag: 'secret'; inner: ResolvedType; spec: Omit<SecretSpec, 'inner'> }
   | { tag: 'quota-token'; spec: QuotaTokenSpec }
   | { tag: 'path'; spec: PathSpec }
   | { tag: 'url'; restrictions: UrlRestrictions }
@@ -212,6 +214,8 @@ export const r = {
     name?: string,
     owner?: string,
   ): ResolvedType => resolved({ tag: 'result', ok, err, repr }, name, owner),
+  secret: (inner: ResolvedType, spec: Omit<SecretSpec, 'inner'> = {}): ResolvedType =>
+    resolved({ tag: 'secret', inner, spec }),
   quotaToken: (spec: QuotaTokenSpec): ResolvedType => resolved({ tag: 'quota-token', spec }),
   path: (spec: PathSpec): ResolvedType => resolved({ tag: 'path', spec }),
   url: (restrictions: UrlRestrictions): ResolvedType => resolved({ tag: 'url', restrictions }),

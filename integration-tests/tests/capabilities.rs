@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! End-to-end round-trip of the host-managed capability schema types (`Secret`,
-//! `QuotaToken`) through SDK -> REST/RPC -> executor, asserting that capability
-//! material is reconstructed on the receiver side while the rendering surfaces
-//! redact it (CLI display via [`value_to_cli_text`], tracing/`Debug` via
-//! [`redacted_schema_value_debug`]) (Task 30, item 5).
+//! End-to-end round-trip of host-managed capability schema types through SDK ->
+//! REST/RPC -> executor, asserting that capability material is reconstructed on
+//! the receiver side while the rendering surfaces redact it (CLI display via
+//! [`value_to_cli_text`], tracing/`Debug` via [`redacted_schema_value_debug`]).
 
 use crate::Tracing;
 use anyhow::anyhow;
@@ -28,8 +27,7 @@ use golem_common::model::quota::{EnforcementAction, TimePeriod};
 use golem_common::model::{AgentId, AgentStatus};
 use golem_common::schema::render::value_to_cli_text;
 use golem_common::schema::{
-    QuotaTokenSpec, SchemaGraph, SchemaType, SchemaValue, SecretRef, SecretSpec,
-    SecretValuePayload, redacted_schema_value_debug,
+    QuotaTokenSpec, SchemaGraph, SchemaType, SchemaValue, redacted_schema_value_debug,
 };
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -42,7 +40,6 @@ use test_r::{inherit_test_dep, test, timeout};
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
-const SECRET_PLACEHOLDER: &str = "<redacted: secret>";
 const QUOTA_TOKEN_PLACEHOLDER: &str = "<redacted: quota-token>";
 
 /// Returns the raw recorded argument record of the first
@@ -66,72 +63,6 @@ fn started_input_fields<'a>(
         SchemaValue::Record { fields } => fields,
         other => panic!("expected record input value for {method}, got {other:?}"),
     }
-}
-
-/// A `Secret` capability passed into an agent method must be reconstructed
-/// intact on the receiver side (the SDK echoes the reference back to the
-/// caller), while the CLI display and tracing/`Debug` surfaces redact it.
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn secret_capability_round_trips_and_is_redacted(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let user = deps.user().await?;
-    let (_, env) = user.app_and_env().await?;
-
-    let component = user
-        .component(&env.id, "golem_it_agent_sdk_rust_release")
-        .name("golem-it:agent-sdk-rust")
-        .store()
-        .await?;
-
-    let parsed_agent_id = agent_id!("CapabilityEchoAgent", "secret-echo-1");
-    user.start_agent(&component.id, parsed_agent_id.clone())
-        .await?;
-
-    let secret_ref_text = "env/db/password";
-    let secret_ref = SecretRef::new(secret_ref_text).map_err(|e| anyhow!("{e:?}"))?;
-
-    let returned = user
-        .invoke_and_await_agent(
-            &component,
-            &parsed_agent_id,
-            "echo_secret",
-            data_value!(secret_ref),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("echo_secret: expected a return value"))?;
-
-    // Reconstruction on the receiver side: the opaque reference is preserved
-    // verbatim through the round-trip (the caller legitimately receives it).
-    assert_eq!(
-        returned,
-        SchemaValue::Secret(SecretValuePayload {
-            secret_ref: secret_ref_text.to_string()
-        }),
-        "echo_secret: returned secret reference was not reconstructed intact"
-    );
-
-    // CLI display redaction of the real reconstructed value.
-    let secret_type = SchemaType::secret(SecretSpec::default());
-    let graph = SchemaGraph::anonymous(secret_type.clone());
-    let cli_text = value_to_cli_text(&graph, &secret_type, &returned)?;
-    assert_eq!(
-        cli_text, SECRET_PLACEHOLDER,
-        "echo_secret: CLI rendering must redact the secret"
-    );
-
-    // Tracing / Debug redaction of the real reconstructed value.
-    let debug_text = format!("{:?}", redacted_schema_value_debug(&returned));
-    assert_eq!(
-        debug_text, SECRET_PLACEHOLDER,
-        "echo_secret: tracing/Debug rendering must redact the secret"
-    );
-
-    Ok(())
 }
 
 /// A `QuotaToken` capability split off and sent to a second agent over RPC must

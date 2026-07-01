@@ -570,15 +570,11 @@ pub enum PublicRetryPolicyState {
     Pair(PublicRetryPolicyStatePair),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct QueuedCardEventCard {
     pub card_id: CardId,
-    #[cfg_attr(feature = "full", oai(skip))]
     pub card: Option<StoredCard>,
 }
 
@@ -592,10 +588,7 @@ pub struct PublicQueuedCardEventCard {
     pub card_id: CardId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum QueuedCardEvent {

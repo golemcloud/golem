@@ -2,7 +2,7 @@ test_r::enable!();
 
 use golem_rust::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaValue,
-    SecretRef, decode_typed_schema_value, encode_typed_schema_value, schema::try_into_schema_graph,
+    decode_typed_schema_value, encode_typed_schema_value, schema::try_into_schema_graph,
 };
 use test_r::test;
 
@@ -150,15 +150,4 @@ fn quantity_schema_round_trip() {
 #[test]
 fn quantity_rejects_disallowed_unit() {
     assert!(Quantity::<TestBytes>::new(1, 0, "kg").is_err());
-}
-
-#[test]
-fn secret_ref_schema_round_trip() {
-    let value = SecretRef::new("secret-ref-abc").unwrap();
-    let encoded = value.to_value();
-    assert!(
-        matches!(encoded, SchemaValue::Secret(_)),
-        "SecretRef must encode to the rich Secret schema value, got {encoded:?}"
-    );
-    assert_eq!(SecretRef::from_value(&encoded).unwrap(), value);
 }

@@ -24,8 +24,8 @@ use golem_common::model::card::{
     AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern,
     AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern,
     AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern,
-    BlobResourcePattern, CardId, CardManagedBy, CardResourcePattern, ClassPermissionPattern,
-    ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
+    BlobResourcePattern, CardId, CardManagedBy, CardManagedByAccountRoot, CardResourcePattern,
+    ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
     EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
     EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern,
     EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern,
@@ -63,7 +63,9 @@ pub(super) fn account_root_card_record(
         Vec::new(),
         None,
         true,
-        Some(CardManagedBy::AccountRoot { account_id }),
+        Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot {
+            account_id,
+        })),
     )
 }
 

@@ -97,6 +97,12 @@ vi.mock('golem:api/oplog@1.5.0', () => ({
 
 vi.mock('golem:quota/types@1.5.0', () => ({}));
 
+vi.mock('golem:secrets/reveal@0.1.0', () => ({
+  reveal: () => {
+    throw new Error('reveal is not mocked in this test setup');
+  },
+}));
+
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
 vi.mock('wasi:cli/environment@0.2.3', () => ({

@@ -19,19 +19,28 @@ use futures::future::join_all;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::card::{CardId, CardManagedBy};
+use golem_common::model::account::AccountId;
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
+use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_registry_service::repo::environment::{
-    EnvironmentRevisionRecord, EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
+    EnvironmentExtRevisionRecord, EnvironmentRevisionRecord, EnvironmentVisibilityFilter,
+    EnvironmentVisibilityScope,
 };
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
 use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
+use golem_registry_service::repo::model::agent_secrets::{
+    AgentSecretCreationRecord, AgentSecretRevisionRecord,
+};
 use golem_registry_service::repo::model::application::{
-    ApplicationRepoError, ApplicationRevisionRecord,
+    ApplicationExtRevisionRecord, ApplicationRepoError, ApplicationRevisionRecord,
 };
 use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, ImmutableAuditFields,
@@ -453,6 +462,133 @@ fn environment_ids(
         .into_iter()
         .map(|record| record.environment_id)
         .collect()
+}
+
+struct TestAgentSecret {
+    owner: AccountExtRevisionRecord,
+    app: ApplicationExtRevisionRecord,
+    env: EnvironmentExtRevisionRecord,
+    id: AgentSecretId,
+    path: CanonicalAgentSecretPath,
+}
+
+async fn create_test_agent_secret(deps: &Deps) -> TestAgentSecret {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let id = AgentSecretId::new();
+    let path = CanonicalAgentSecretPath(vec![format!("secret-{}", new_repo_uuid())]);
+
+    let _ = deps
+        .agent_secret_repo
+        .create(AgentSecretCreationRecord::new(
+            id,
+            EnvironmentId(env.revision.environment_id),
+            path.clone(),
+            SchemaGraph::empty(),
+            None,
+            AccountId(owner.revision.account_id),
+        ))
+        .await
+        .unwrap();
+
+    TestAgentSecret {
+        owner,
+        app,
+        env,
+        id,
+        path,
+    }
+}
+
+async fn get_agent_secret_initial_revision(
+    deps: &Deps,
+    secret: &TestAgentSecret,
+    include_deleted: bool,
+) -> bool {
+    deps.agent_secret_repo
+        .get_revision(
+            secret.env.revision.environment_id,
+            secret.id,
+            secret.path.0.clone(),
+            AgentSecretRevision::INITIAL,
+            include_deleted,
+        )
+        .await
+        .unwrap()
+        .is_some()
+}
+
+pub async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
+    let secret = create_test_agent_secret(deps).await;
+    check!(get_agent_secret_initial_revision(deps, &secret, false).await);
+    check!(get_agent_secret_initial_revision(deps, &secret, true).await);
+
+    let secret = create_test_agent_secret(deps).await;
+    let deleted_revision = AgentSecretRevision::INITIAL.next().unwrap();
+    let _ = deps
+        .agent_secret_repo
+        .delete(
+            AgentSecretRevisionRecord::delete(
+                secret.id,
+                AgentSecretRevision::INITIAL,
+                AccountId(secret.owner.revision.account_id),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    check!(!get_agent_secret_initial_revision(deps, &secret, false).await);
+    check!(get_agent_secret_initial_revision(deps, &secret, true).await);
+    check!(
+        deps.agent_secret_repo
+            .get_revision(
+                secret.env.revision.environment_id,
+                secret.id,
+                secret.path.0.clone(),
+                deleted_revision,
+                true,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let secret = create_test_agent_secret(deps).await;
+    let _ = deps
+        .environment_repo
+        .delete(EnvironmentRevisionRecord {
+            revision_id: secret.env.revision.revision_id + 1,
+            ..secret.env.revision.clone()
+        })
+        .await
+        .unwrap();
+    check!(!get_agent_secret_initial_revision(deps, &secret, false).await);
+    check!(get_agent_secret_initial_revision(deps, &secret, true).await);
+
+    let secret = create_test_agent_secret(deps).await;
+    let _ = deps
+        .application_repo
+        .delete(ApplicationRevisionRecord {
+            revision_id: secret.app.revision.revision_id + 1,
+            ..secret.app.revision.clone()
+        })
+        .await
+        .unwrap();
+    check!(!get_agent_secret_initial_revision(deps, &secret, false).await);
+    check!(get_agent_secret_initial_revision(deps, &secret, true).await);
+
+    let secret = create_test_agent_secret(deps).await;
+    let _ = deps
+        .account_repo
+        .delete(AccountRevisionRecord {
+            revision_id: secret.owner.revision.revision_id + 1,
+            ..secret.owner.revision.clone()
+        })
+        .await
+        .unwrap();
+    check!(!get_agent_secret_initial_revision(deps, &secret, false).await);
+    check!(get_agent_secret_initial_revision(deps, &secret, true).await);
 }
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {
@@ -1225,9 +1361,9 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
         Vec::new(),
         None,
         true,
-        Some(CardManagedBy::AccountRoot {
+        Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot {
             account_id: golem_common::model::account::AccountId(account_id),
-        }),
+        })),
     )
 }
 

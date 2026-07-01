@@ -15,7 +15,9 @@
 use crate::repo::card::CardRepo;
 use crate::repo::model::card::{CardRecord, CardRepoError};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::card::{CardId, CardManagedBy, PolymorphicCard, StoredCard};
+use golem_common::model::card::{
+    CardId, CardManagedBy, CardManagedByAgentInitial, PolymorphicCard, StoredCard,
+};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use std::sync::Arc;
 
@@ -46,11 +48,11 @@ impl CardService {
                 card.upper_negative.clone(),
                 card.expires_at,
                 card.system_card,
-                Some(CardManagedBy::AgentInitial {
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision,
                     agent_type,
-                }),
+                })),
             ))
             .await?;
 

@@ -19,9 +19,10 @@ use crate::model::EnvironmentId;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,
-    PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
+    NumericRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue,
+    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
+    UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
@@ -209,16 +210,16 @@ impl From<SchemaType> for proto::SchemaType {
         let body = match value {
             SchemaType::Ref { id, .. } => Body::RefType(id.0),
             SchemaType::Bool { .. } => Body::BoolType(ProtoEmpty {}),
-            SchemaType::S8 { .. } => Body::S8Type(ProtoEmpty {}),
-            SchemaType::S16 { .. } => Body::S16Type(ProtoEmpty {}),
-            SchemaType::S32 { .. } => Body::S32Type(ProtoEmpty {}),
-            SchemaType::S64 { .. } => Body::S64Type(ProtoEmpty {}),
-            SchemaType::U8 { .. } => Body::U8Type(ProtoEmpty {}),
-            SchemaType::U16 { .. } => Body::U16Type(ProtoEmpty {}),
-            SchemaType::U32 { .. } => Body::U32Type(ProtoEmpty {}),
-            SchemaType::U64 { .. } => Body::U64Type(ProtoEmpty {}),
-            SchemaType::F32 { .. } => Body::F32Type(ProtoEmpty {}),
-            SchemaType::F64 { .. } => Body::F64Type(ProtoEmpty {}),
+            SchemaType::S8 { restrictions, .. } => Body::S8Type(numeric_to_proto(restrictions)),
+            SchemaType::S16 { restrictions, .. } => Body::S16Type(numeric_to_proto(restrictions)),
+            SchemaType::S32 { restrictions, .. } => Body::S32Type(numeric_to_proto(restrictions)),
+            SchemaType::S64 { restrictions, .. } => Body::S64Type(numeric_to_proto(restrictions)),
+            SchemaType::U8 { restrictions, .. } => Body::U8Type(numeric_to_proto(restrictions)),
+            SchemaType::U16 { restrictions, .. } => Body::U16Type(numeric_to_proto(restrictions)),
+            SchemaType::U32 { restrictions, .. } => Body::U32Type(numeric_to_proto(restrictions)),
+            SchemaType::U64 { restrictions, .. } => Body::U64Type(numeric_to_proto(restrictions)),
+            SchemaType::F32 { restrictions, .. } => Body::F32Type(numeric_to_proto(restrictions)),
+            SchemaType::F64 { restrictions, .. } => Body::F64Type(numeric_to_proto(restrictions)),
             SchemaType::Char { .. } => Body::CharType(ProtoEmpty {}),
             SchemaType::String { .. } => Body::StringType(ProtoEmpty {}),
             SchemaType::Record { fields, .. } => Body::RecordType(proto::RecordType {
@@ -260,7 +261,7 @@ impl From<SchemaType> for proto::SchemaType {
             SchemaType::Duration { .. } => Body::DurationType(ProtoEmpty {}),
             SchemaType::Quantity { spec, .. } => Body::QuantityType(spec.into()),
             SchemaType::Union { spec, .. } => Body::UnionType(spec.into()),
-            SchemaType::Secret { spec, .. } => Body::SecretType(spec.into()),
+            SchemaType::Secret { spec, .. } => Body::SecretType(Box::new(spec.into())),
             SchemaType::QuotaToken { spec, .. } => Body::QuotaTokenType(spec.into()),
             SchemaType::Future { inner, .. } => Body::FutureType(Box::new(proto::WasiStubType {
                 element: opt_box_to_proto(inner),
@@ -290,16 +291,46 @@ impl TryFrom<proto::SchemaType> for SchemaType {
                 metadata,
             },
             Body::BoolType(_) => SchemaType::Bool { metadata },
-            Body::S8Type(_) => SchemaType::S8 { metadata },
-            Body::S16Type(_) => SchemaType::S16 { metadata },
-            Body::S32Type(_) => SchemaType::S32 { metadata },
-            Body::S64Type(_) => SchemaType::S64 { metadata },
-            Body::U8Type(_) => SchemaType::U8 { metadata },
-            Body::U16Type(_) => SchemaType::U16 { metadata },
-            Body::U32Type(_) => SchemaType::U32 { metadata },
-            Body::U64Type(_) => SchemaType::U64 { metadata },
-            Body::F32Type(_) => SchemaType::F32 { metadata },
-            Body::F64Type(_) => SchemaType::F64 { metadata },
+            Body::S8Type(r) => SchemaType::S8 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::S16Type(r) => SchemaType::S16 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::S32Type(r) => SchemaType::S32 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::S64Type(r) => SchemaType::S64 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::U8Type(r) => SchemaType::U8 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::U16Type(r) => SchemaType::U16 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::U32Type(r) => SchemaType::U32 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::U64Type(r) => SchemaType::U64 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::F32Type(r) => SchemaType::F32 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
+            Body::F64Type(r) => SchemaType::F64 {
+                restrictions: numeric_from_proto(r)?,
+                metadata,
+            },
             Body::CharType(_) => SchemaType::Char { metadata },
             Body::StringType(_) => SchemaType::String { metadata },
             Body::RecordType(rt) => SchemaType::Record {
@@ -386,7 +417,7 @@ impl TryFrom<proto::SchemaType> for SchemaType {
                 metadata,
             },
             Body::SecretType(s) => SchemaType::Secret {
-                spec: s.into(),
+                spec: (*s).try_into()?,
                 metadata,
             },
             Body::QuotaTokenType(q) => SchemaType::QuotaToken {
@@ -456,6 +487,53 @@ impl TryFrom<proto::VariantCaseType> for VariantCaseType {
 }
 
 // --- rich scalar specs -------------------------------------------------------
+
+fn numeric_to_proto(r: Option<NumericRestrictions>) -> proto::NumericRestrictions {
+    match r {
+        Some(r) => proto::NumericRestrictions {
+            min: r.min.map(numeric_bound_to_proto),
+            max: r.max.map(numeric_bound_to_proto),
+            unit: r.unit,
+        },
+        None => proto::NumericRestrictions::default(),
+    }
+}
+
+fn numeric_bound_to_proto(b: NumericBound) -> proto::NumericBound {
+    use proto::numeric_bound::Bound;
+    proto::NumericBound {
+        bound: Some(match b {
+            NumericBound::Signed(v) => Bound::Signed(v),
+            NumericBound::Unsigned(v) => Bound::Unsigned(v),
+            NumericBound::FloatBits(bits) => Bound::FloatBits(bits),
+        }),
+    }
+}
+
+/// Decode a proto numeric restriction, normalizing a decoded empty restriction
+/// set to `None`. A present `NumericBound` with no `bound` arm set is an error.
+fn numeric_from_proto(
+    r: proto::NumericRestrictions,
+) -> Result<Option<NumericRestrictions>, String> {
+    let min = r.min.map(numeric_bound_from_proto).transpose()?;
+    let max = r.max.map(numeric_bound_from_proto).transpose()?;
+    Ok(NumericRestrictions {
+        min,
+        max,
+        unit: r.unit,
+    }
+    .normalize())
+}
+
+fn numeric_bound_from_proto(b: proto::NumericBound) -> Result<NumericBound, String> {
+    use proto::numeric_bound::Bound;
+    match b.bound {
+        Some(Bound::Signed(v)) => Ok(NumericBound::Signed(v)),
+        Some(Bound::Unsigned(v)) => Ok(NumericBound::Unsigned(v)),
+        Some(Bound::FloatBits(bits)) => Ok(NumericBound::FloatBits(bits)),
+        None => Err("numeric bound message has no value set".to_string()),
+    }
+}
 
 impl From<TextRestrictions> for proto::TextRestrictions {
     fn from(value: TextRestrictions) -> Self {
@@ -633,15 +711,22 @@ impl From<SecretSpec> for proto::SecretSpec {
     fn from(value: SecretSpec) -> Self {
         Self {
             category: value.category,
+            inner: Some(box_to_proto(value.inner)),
         }
     }
 }
 
-impl From<proto::SecretSpec> for SecretSpec {
-    fn from(value: proto::SecretSpec) -> Self {
-        Self {
+impl TryFrom<proto::SecretSpec> for SecretSpec {
+    type Error = String;
+
+    fn try_from(value: proto::SecretSpec) -> Result<Self, Self::Error> {
+        Ok(Self {
             category: value.category,
-        }
+            inner: match value.inner {
+                Some(inner) => box_from_proto(inner)?,
+                None => Box::new(SchemaType::string()),
+            },
+        })
     }
 }
 
@@ -903,7 +988,11 @@ impl From<SchemaValue> for proto::SchemaValue {
                 body: Some(value_to_boxed_proto(*u.body)),
             })),
             SchemaValue::Secret(s) => ValueBody::SecretValue(proto::SecretValue {
-                secret_ref: s.secret_ref,
+                secret_id: Some(s.secret_id.into()),
+                config_key: s.config_key.map(|items| proto::StringList { items }),
+                version: s.version,
+                resolved_at: Some(datetime_to_proto(s.resolved_at)),
+                category: s.category,
             }),
             SchemaValue::QuotaToken(q) => ValueBody::QuotaTokenValue(proto::QuotaTokenValue {
                 environment_id: Some(q.environment_id.uuid.into()),
@@ -1021,7 +1110,17 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                 })
             }
             ValueBody::SecretValue(s) => SchemaValue::Secret(SecretValuePayload {
-                secret_ref: s.secret_ref,
+                secret_id: s
+                    .secret_id
+                    .ok_or_else(|| "Missing field: SecretValue.secret_id".to_string())?
+                    .into(),
+                config_key: s.config_key.map(|sl| sl.items),
+                version: s.version,
+                resolved_at: datetime_from_proto(
+                    s.resolved_at
+                        .ok_or_else(|| "Missing field: SecretValue.resolved_at".to_string())?,
+                )?,
+                category: s.category,
             }),
             ValueBody::QuotaTokenValue(q) => SchemaValue::QuotaToken(QuotaTokenValuePayload {
                 environment_id: EnvironmentId::new(
@@ -1066,6 +1165,33 @@ impl TryFrom<proto::TypedSchemaValue> for TypedSchemaValue {
             .ok_or_else(|| "Missing field: TypedSchemaValue.value".to_string())?
             .try_into()?;
         Ok(TypedSchemaValue::new(graph, val))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn proto_secret_spec_defaults_inner_to_string_when_absent() {
+        let proto = proto::SchemaType {
+            metadata: None,
+            body: Some(Body::SecretType(Box::new(proto::SecretSpec {
+                category: Some("api-key".to_string()),
+                inner: None,
+            }))),
+        };
+
+        let decoded = SchemaType::try_from(proto).expect("SecretSpec without inner");
+
+        assert_eq!(
+            decoded,
+            SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: Some("api-key".to_string()),
+            })
+        );
     }
 }
 

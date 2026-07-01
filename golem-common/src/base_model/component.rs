@@ -24,6 +24,10 @@ use crate::base_model::plugin_registration::PluginRegistrationId;
 use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::base_model::worker::AgentConfigEntryDto;
 use crate::model::agent::AgentTypeName;
+use crate::model::card::recipient::RecipientPattern;
+use crate::model::card::{
+    PolymorphicCard, PolymorphicPermissionPattern, default_agent_initial_permission_grants,
+};
 use crate::schema::agent::AgentTypeSchema;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -144,8 +148,8 @@ declare_structs! {
         pub allow_incompatible_config: bool,
     }
 
-    #[derive(Default)]
     pub struct AgentTypeProvisionConfigCreation {
+        pub initial_permissions: AgentTypeInitialPermissions,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,
@@ -163,6 +167,9 @@ declare_structs! {
 
     #[derive(Default)]
     pub struct AgentTypeProvisionConfigUpdate {
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub initial_permissions: Option<AgentTypeInitialPermissions>,
         pub env: Option<BTreeMap<String, String>>,
         pub config: Option<Vec<AgentConfigEntryDto>>,
         #[serde(default)]
@@ -177,6 +184,26 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub file_permission_updates: BTreeMap<AgentFilePath, AgentFilePermissions>,
+    }
+
+    #[derive(Default, Eq)]
+    pub struct AgentTypeInitialPermissions {
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub lower_bound: AgentTypeInitialPermissionsBound,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub upper_bound: AgentTypeInitialPermissionsBound,
+    }
+
+    #[derive(Default, Eq)]
+    pub struct AgentTypeInitialPermissionsBound {
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub positive: Vec<PolymorphicPermissionPattern>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub negative: Vec<PolymorphicPermissionPattern>,
     }
 
     pub struct AgentFileOptions {
@@ -231,6 +258,49 @@ declare_structs! {
     }
 }
 
+impl AgentTypeInitialPermissions {
+    pub fn from_patterns(
+        lower_positive: Vec<PolymorphicPermissionPattern>,
+        lower_negative: Vec<PolymorphicPermissionPattern>,
+        upper_positive: Vec<PolymorphicPermissionPattern>,
+        upper_negative: Vec<PolymorphicPermissionPattern>,
+    ) -> Self {
+        Self {
+            lower_bound: AgentTypeInitialPermissionsBound {
+                positive: lower_positive,
+                negative: lower_negative,
+            },
+            upper_bound: AgentTypeInitialPermissionsBound {
+                positive: upper_positive,
+                negative: upper_negative,
+            },
+        }
+    }
+
+    pub fn default_for_recipient(recipient: RecipientPattern) -> Self {
+        Self::from_patterns(
+            default_agent_initial_permission_grants(recipient),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    pub fn to_polymorphic_card(&self) -> PolymorphicCard {
+        PolymorphicCard {
+            card_id: crate::model::card::CardId::new(),
+            parent_ids: Vec::new(),
+            lower_positive: self.lower_bound.positive.clone(),
+            lower_negative: self.lower_bound.negative.clone(),
+            upper_positive: self.upper_bound.positive.clone(),
+            upper_negative: self.upper_bound.negative.clone(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+        }
+    }
+}
+
 declare_unions! {
     pub enum PluginInstallationAction {
         Install(PluginInstallation),
@@ -262,5 +332,72 @@ impl AgentFilePermissions {
             "rw" => Ok(AgentFilePermissions::ReadWrite),
             _ => Err(format!("Unknown permissions: {s}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, ComponentCreation};
+    use crate::model::agent::AgentTypeName;
+    use crate::model::card::recipient::RecipientPattern;
+    use crate::model::component::ComponentName;
+    use std::collections::BTreeMap;
+    use test_r::test;
+
+    #[test]
+    fn initial_permission_creation_renders_typed_default_card() {
+        let creation = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
+
+        assert_eq!(
+            creation
+                .lower_bound
+                .positive
+                .into_iter()
+                .map(|p| p.render().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "environment(?env) @ * : view : *",
+                "component(?component) @ * : view : *",
+                "agent(?env/*/*) @ * : view : *",
+                "agent(?env/*/*) @ * : invoke : *",
+                "agent(?env/*/*) @ * : resume : *",
+                "agent(?env/*/*) @ * : update-revision : *",
+            ]
+        );
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn component_creation_with_initial_permission_parses_from_openapi_json() {
+        let creation = ComponentCreation {
+            component_name: ComponentName("counter:ts-main".to_string()),
+            agent_types: Vec::new(),
+            agent_type_provision_configs: BTreeMap::from([(
+                AgentTypeName("CounterAgent".to_string()),
+                AgentTypeProvisionConfigCreation {
+                    initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+                        RecipientPattern::Agent {
+                            account: crate::model::account::AccountEmail::new("initial@user"),
+                            application: crate::model::application::ApplicationName(
+                                "counter".to_string(),
+                            ),
+                            environment: crate::model::environment::EnvironmentName(
+                                "local".to_string(),
+                            ),
+                            component: ComponentName("counter:ts-main".to_string()),
+                            agent_type: AgentTypeName("CounterAgent".to_string()),
+                        },
+                    ),
+                    env: BTreeMap::new(),
+                    config: Vec::new(),
+                    plugin_installations: Vec::new(),
+                    files: BTreeMap::new(),
+                },
+            )]),
+        };
+        let value = serde_json::to_value(&creation).unwrap();
+
+        <ComponentCreation as poem_openapi::types::ParseFromJSON>::parse_from_json(Some(value))
+            .unwrap();
     }
 }

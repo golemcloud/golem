@@ -221,6 +221,7 @@ fn check_type(
     Text(restrictions) => check_text_restrictions(restrictions, errors)
     Binary(restrictions) => check_binary_restrictions(restrictions, errors)
     Union(branches) => validate_union(graph, branches, known, errors)
+    Secret(spec) => check_type(graph, spec.inner, known, errors)
     Future(inner) =>
       match inner {
         Some(t) => check_type(graph, t, known, errors)
@@ -232,7 +233,7 @@ fn check_type(
         None => ()
       }
     // Leaves with no structural constraints: primitives, Char, String,
-    // Datetime, Duration, Path, Url, Secret, QuotaToken.
+    // Datetime, Duration, Path, Url, QuotaToken.
     _ => ()
   }
 }
@@ -268,16 +269,16 @@ fn is_primitive_key_resolved(graph : SchemaGraph, ty : SchemaType) -> Bool {
 fn is_primitive_key(body : SchemaTypeBody) -> Bool {
   match body {
     Bool
-    | S8
-    | S16
-    | S32
-    | S64
-    | U8
-    | U16
-    | U32
-    | U64
-    | F32
-    | F64
+    | S8(_)
+    | S16(_)
+    | S32(_)
+    | S64(_)
+    | U8(_)
+    | U16(_)
+    | U32(_)
+    | U64(_)
+    | F32(_)
+    | F64(_)
     | Char
     | String => true
     _ => false

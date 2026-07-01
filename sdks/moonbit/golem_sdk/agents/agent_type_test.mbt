@@ -16,7 +16,10 @@ fn foo_graph() -> @model.SchemaGraph raise {
     () => {
       @model.schema_type(
         @model.SchemaTypeBody::Record([
-          @model.field("a", @model.schema_type(@model.SchemaTypeBody::S32)),
+          @model.field(
+            "a",
+            @model.schema_type(@model.SchemaTypeBody::S32(None)),
+          ),
         ]),
       )
     },
@@ -28,7 +31,7 @@ fn foo_graph() -> @model.SchemaGraph raise {
 ///|
 /// A primitive s32 graph (no named defs).
 fn s32_graph() -> @model.SchemaGraph {
-  { defs: [], root: @model.schema_type(@model.SchemaTypeBody::S32) }
+  { defs: [], root: @model.schema_type(@model.SchemaTypeBody::S32(None)) }
 }
 
 ///|

@@ -2164,7 +2164,8 @@
         "pluginsMergeMode": { "$ref": "#/definitions/VecMergeMode" },
         "plugins": { "$ref": "#/definitions/ComponentLayerManifestPluginVecProperty" },
         "filesMergeMode": { "$ref": "#/definitions/VecMergeMode" },
-        "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" }
+        "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" },
+        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" }
       },
       "additionalProperties": false
     },
@@ -2446,6 +2447,48 @@
       },
       "additionalProperties": false
     },
+    "ComponentLayerManifestInitialCardProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "$ref": "#/definitions/ComponentLayerManifestInitialCardValue" },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerManifestInitialCardTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestInitialCardValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/definitions/ManifestInitialCard" }
+      ]
+    },
+    "ComponentLayerManifestInitialCardTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerOptionalStringOverrideTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+      ]
+    },
+    "ComponentLayerManifestInitialCardOverrideTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "value"],
+      "properties": {
+        "type": { "const": "override" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "value": { "$ref": "#/definitions/ManifestInitialCard" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestInitialCardSkipTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "skip" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "ComponentLayerCustomCommandsMapProperty": {
       "type": "object",
       "required": ["value", "trace"],
@@ -2699,6 +2742,24 @@
       },
       "additionalProperties": false
     },
+    "ManifestInitialCard": {
+      "type": "object",
+      "required": ["lower_bound", "upper_bound"],
+      "properties": {
+        "lower_bound": { "$ref": "#/definitions/ManifestInitialCardBound" },
+        "upper_bound": { "$ref": "#/definitions/ManifestInitialCardBound" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestInitialCardBound": {
+      "type": "object",
+      "required": ["positive", "negative"],
+      "properties": {
+        "positive": { "type": "array", "items": { "type": "string" } },
+        "negative": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
     "TemplateDescription": {
       "type": "object",
       "required": ["name", "language", "description"],
@@ -2743,12 +2804,13 @@
     },
     "AgentTypeProvisionConfig": {
       "type": "object",
-      "required": ["env", "config", "plugins", "files"],
+      "required": ["env", "config", "plugins", "files", "initialPermissions"],
       "properties": {
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
         "config": { "type": "array", "items": { "$ref": "#/definitions/TypedAgentConfigEntry" } },
         "plugins": { "type": "array", "items": { "$ref": "#/definitions/InstalledPlugin" } },
-        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } }
+        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } },
+        "initialPermissions": { "$ref": "#/definitions/PolymorphicCard" }
       },
       "additionalProperties": false
     },
@@ -2797,6 +2859,30 @@
     "AgentFilePermissions": {
       "type": "string",
       "enum": ["read-only", "read-write"]
+    },
+    "CardId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "PolymorphicCardPermissionPattern": {
+      "type": "string",
+      "description": "Rendered form of a card permission entry"
+    },
+    "PolymorphicCard": {
+      "type": "object",
+      "required": [ "cardId", "parentIds", "lowerPositive", "lowerNegative", "upperPositive", "upperNegative", "createdAt", "systemCard" ],
+      "properties": {
+        "cardId": { "$ref": "#/definitions/CardId" },
+        "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } },
+        "lowerPositive": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "lowerNegative": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "upperPositive": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "upperNegative": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "createdAt": { "type": "string" },
+        "expiresAt": { "type": [ "string", "null" ] },
+        "systemCard": { "type": "boolean" }
+      },
+      "additionalProperties": false
     },
     "EnvironmentWithDetails": {
       "type": "object",
@@ -5546,7 +5632,11 @@
     },
     "SecretSpec": {
       "type": "object",
-      "properties": { "category": { "type": "string" } },
+      "required": ["inner"],
+      "properties": {
+        "inner": { "$ref": "#/definitions/SchemaType" },
+        "category": { "type": "string" }
+      },
       "additionalProperties": false
     },
     "QuotaTokenSpec": {
@@ -5796,8 +5886,14 @@
     },
     "SecretValuePayload": {
       "type": "object",
-      "required": ["secretRef"],
-      "properties": { "secretRef": { "type": "string" } },
+      "required": ["secretId", "version", "resolvedAt"],
+      "properties": {
+        "secretId": { "type": "string" },
+        "configKey": { "type": "array", "items": { "type": "string" } },
+        "version": { "type": "integer", "minimum": 0 },
+        "resolvedAt": { "type": "string" },
+        "category": { "type": "string" }
+      },
       "additionalProperties": false
     },
     "QuotaTokenValuePayload": {

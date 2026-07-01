@@ -193,8 +193,12 @@ fn assignable(
             ok_ok && err_ok
         }
 
-        // Capabilities are invariant on kind and on their typed spec.
-        (SchemaType::Secret { spec: a, .. }, SchemaType::Secret { spec: b, .. }) => a == b,
+        // Capabilities are invariant on kind/category; secret payload types are
+        // compared recursively so refs in `inner` resolve like every other
+        // nested schema type.
+        (SchemaType::Secret { spec: a, .. }, SchemaType::Secret { spec: b, .. }) => {
+            a.category == b.category && assignable(graph, &a.inner, &b.inner, visited)
+        }
         (SchemaType::QuotaToken { spec: a, .. }, SchemaType::QuotaToken { spec: b, .. }) => a == b,
 
         // Unions: exact match by tag set and per-branch body assignability.

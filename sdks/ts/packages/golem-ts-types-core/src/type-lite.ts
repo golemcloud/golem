@@ -18,6 +18,7 @@ export type ConfigProperty = {
   path: string[];
   secret: boolean;
   type: Type;
+  secretHandleOptional?: boolean;
 };
 
 export type QuantityValue = { mantissa: bigint; scale: number; unit: string };
@@ -76,6 +77,7 @@ export type Type =
       properties: ConfigProperty[];
       requiredMembers: { path: string[]; requiredKeys: string[] }[];
     }
+  | { kind: 'secret'; name?: string; owner?: string; element: Type; optional: boolean }
   | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | { kind: 'principal'; name?: string; owner?: string; optional: boolean }
   | { kind: 'path'; name?: string; owner?: string; optional: boolean }

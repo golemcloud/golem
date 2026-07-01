@@ -132,10 +132,6 @@ impl Debug for ComponentMetadata {
                 "agent_type_provision_configs",
                 &self.data.agent_type_provision_configs,
             )
-            .field(
-                "agent_type_initial_permissions",
-                &self.data.agent_type_initial_permissions,
-            )
             .finish()
     }
 }
@@ -193,15 +189,11 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
-
-    #[serde(default)]
-    #[cfg_attr(feature = "full", oai(skip))]
-    pub agent_type_initial_permissions: BTreeMap<AgentTypeName, PolymorphicCard>,
 }
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations
 /// in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -211,16 +203,13 @@ pub struct ComponentMetadataInnerData {
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct AgentTypeProvisionConfig {
+    pub initial_permissions: PolymorphicCard,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub config: Vec<TypedAgentConfigEntry>,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub files: Vec<InitialAgentFile>,
 }

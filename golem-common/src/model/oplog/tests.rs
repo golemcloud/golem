@@ -17,6 +17,8 @@ use crate::model::card::{Card, CardId};
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
+use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
+use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
@@ -313,6 +315,66 @@ fn matcher_matches_variant_payload_under_case_path() {
 
     assert!(entry.matches(&Query::parse("some").unwrap()));
     assert!(entry.matches(&Query::parse("request.some:42").unwrap()));
+}
+
+#[test]
+fn matcher_matches_secret_reveal_request_payload() {
+    let secret_id = Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap();
+    let request = HostRequestSecretReveal {
+        secret_id,
+        expected_type: SchemaGraph::anonymous(SchemaType::string()),
+    }
+    .into_typed_schema_value()
+    .expect("secret reveal request must be schema-encodable");
+
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "golem::secrets::reveal".to_string(),
+        request: Some(request),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+
+    assert!(entry.matches(&Query::parse("reveal").unwrap()));
+    assert!(entry.matches(&Query::parse("request.secret_id.low-bits:291").unwrap()));
+}
+
+#[test]
+fn matcher_matches_secret_revealed_response_payload() {
+    let secret_id = Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap();
+    let response = HostResponseSecretRevealed {
+        secret_id,
+        pinned_revision: 7,
+        resolved_at: SerializableDateTime {
+            seconds: 1_700_000_000,
+            nanoseconds: 0,
+        },
+        result: Ok(()),
+        audit: SecretRevealAudit {
+            calling_agent: AgentId {
+                component_id: ComponentId(Uuid::nil()),
+                agent_id: "agent-1".to_string(),
+            },
+            config_key: Some(vec!["db".to_string(), "password".to_string()]),
+            timestamp: SerializableDateTime {
+                seconds: 1_700_000_001,
+                nanoseconds: 0,
+            },
+        },
+    }
+    .into_typed_schema_value()
+    .expect("secret revealed response must be schema-encodable");
+
+    let entry = PublicOplogEntry::End(EndParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        start_index: OplogIndex::from_u64(2),
+        response: Some(response),
+        forced_commit: false,
+    });
+
+    assert!(entry.matches(&Query::parse("response.secret_id.low-bits:291").unwrap()));
+    assert!(entry.matches(&Query::parse("response.pinned_revision:7").unwrap()));
+    assert!(entry.matches(&Query::parse("response.audit.config_key:password").unwrap()));
 }
 
 #[test]

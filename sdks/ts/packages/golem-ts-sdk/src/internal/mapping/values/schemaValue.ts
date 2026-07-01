@@ -38,7 +38,14 @@ import {
   TypedArrayKind,
   TypeId,
 } from '../types/resolvedType';
-import { SchemaValue, v } from '../../schema-model';
+import {
+  drainUnconsumedQuotaHandles,
+  GuestSecretHandle,
+  preflightWitValueTree,
+  SchemaValue,
+  v,
+} from '../../schema-model';
+import { SECRET_INTERNAL } from '../../schema-model/secretInternal';
 import { QUOTA_INTERNAL } from '../../schema-model/quotaInternal';
 import { GuestQuotaTokenHandle } from '../../schema-model/quotaTokenHandle';
 import type {
@@ -48,6 +55,7 @@ import type {
 } from 'golem:core/types@2.0.0';
 import { SchemaDecodeError } from '../../schema-model';
 import { Result } from '../../../host/result';
+import { Secret } from '../../../agentConfig';
 import { QuotaToken } from '../../../host/quota';
 import { Duration, Path, Quantity } from '../../../richTypes';
 
@@ -67,6 +75,45 @@ function deserializeMismatch(value: SchemaValue, expected: string): Error {
   return new Error(
     `Failed to deserialize schema value with tag \`${value.tag}\` to TypeScript type \`${expected}\``,
   );
+}
+
+type NarrowIntTag = 's8' | 's16' | 's32' | 'u8' | 'u16' | 'u32';
+type WideIntTag = 's64' | 'u64';
+
+const INT_RANGES: Record<NarrowIntTag, readonly [number, number]> = {
+  s8: [-128, 127],
+  s16: [-32768, 32767],
+  s32: [-2147483648, 2147483647],
+  u8: [0, 255],
+  u16: [0, 65535],
+  u32: [0, 4294967295],
+};
+
+const BIGINT_RANGES: Record<WideIntTag, readonly [bigint, bigint]> = {
+  s64: [-(1n << 63n), (1n << 63n) - 1n],
+  u64: [0n, (1n << 64n) - 1n],
+};
+
+function checkIntRange(tag: NarrowIntTag, value: number): void {
+  const [min, max] = INT_RANGES[tag];
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${tag} value out of range: ${value}`);
+  }
+}
+
+function checkBigIntRange(tag: WideIntTag, value: bigint): void {
+  const [min, max] = BIGINT_RANGES[tag];
+  if (value < min || value > max) {
+    throw new Error(`${tag} value out of range: ${value}`);
+  }
+}
+
+function checkCharValue(value: string): void {
+  const codePoints = [...value];
+  const cp = codePoints.length === 1 ? codePoints[0]!.codePointAt(0)! : undefined;
+  if (cp === undefined || (cp >= 0xd800 && cp <= 0xdfff)) {
+    throw new Error(`char value must be a single Unicode scalar value: ${JSON.stringify(value)}`);
+  }
 }
 
 function missingKey(key: string, value: unknown): Error {
@@ -264,11 +311,19 @@ export function serialize(tsValue: any, rt: ResolvedType, defs: Defs = EMPTY_DEF
       return { tag: 's32', value: tsValue };
 
     case 'u64':
-      if (typeof tsValue === 'bigint') return { tag: 'u64', value: tsValue };
-      if (typeof tsValue === 'number') return { tag: 'u64', value: BigInt(tsValue) };
+      if (typeof tsValue === 'bigint') {
+        checkBigIntRange('u64', tsValue);
+        return { tag: 'u64', value: tsValue };
+      }
+      if (typeof tsValue === 'number') {
+        const value = BigInt(tsValue);
+        checkBigIntRange('u64', value);
+        return { tag: 'u64', value };
+      }
       throw typeMismatch(tsValue, 'bigint');
     case 's64':
       if (typeof tsValue !== 'bigint') throw typeMismatch(tsValue, 'bigint');
+      checkBigIntRange('s64', tsValue);
       return { tag: 's64', value: tsValue };
 
     case 'char':
@@ -323,6 +378,10 @@ export function serialize(tsValue: any, rt: ResolvedType, defs: Defs = EMPTY_DEF
 
     case 'result':
       return serializeResult(tsValue, b, defs);
+
+    case 'secret':
+      if (!(tsValue instanceof Secret)) throw typeMismatch(tsValue, 'Secret');
+      return tsValue._toSchemaValue(SECRET_INTERNAL);
 
     case 'quota-token':
       if (!(tsValue instanceof QuotaToken)) throw typeMismatch(tsValue, 'QuotaToken');
@@ -518,7 +577,7 @@ export function createWireEncoder(): WireEncoder {
   // intact — atomic, matching the non-fused `schemaValueToWit` preflight.
   // `seenRaw` rejects the same handle appearing twice in one tree before any
   // move. Both are reset for every `emitGraph` call (each call is one tree).
-  let pendingTakes: { idx: number; handle: GuestQuotaTokenHandle }[] = [];
+  let pendingTakes: { idx: number; handle: GuestSecretHandle | GuestQuotaTokenHandle }[] = [];
   let seenRaw: Set<unknown> = new Set();
 
   function push(node: WitSchemaValueNode): ValueNodeIndex {
@@ -543,6 +602,10 @@ export function createWireEncoder(): WireEncoder {
         };
       case 'f32':
       case 'f64':
+        return (x) => {
+          if (typeof x !== 'number') throw typeMismatch(x, 'number');
+          return valueNodes.push({ tag: `${eb.tag}-value`, val: x } as WitSchemaValueNode) - 1;
+        };
       case 'u8':
       case 'u16':
       case 'u32':
@@ -552,24 +615,33 @@ export function createWireEncoder(): WireEncoder {
         const wireTag = `${eb.tag}-value` as WitSchemaValueNode['tag'];
         return (x) => {
           if (typeof x !== 'number') throw typeMismatch(x, 'number');
+          checkIntRange(eb.tag, x);
           return valueNodes.push({ tag: wireTag, val: x } as WitSchemaValueNode) - 1;
         };
       }
       case 'u64':
         return (x) => {
-          if (typeof x === 'bigint') return valueNodes.push({ tag: 'u64-value', val: x }) - 1;
-          if (typeof x === 'number')
-            return valueNodes.push({ tag: 'u64-value', val: BigInt(x) }) - 1;
+          if (typeof x === 'bigint') {
+            checkBigIntRange('u64', x);
+            return valueNodes.push({ tag: 'u64-value', val: x }) - 1;
+          }
+          if (typeof x === 'number') {
+            const value = BigInt(x);
+            checkBigIntRange('u64', value);
+            return valueNodes.push({ tag: 'u64-value', val: value }) - 1;
+          }
           throw typeMismatch(x, 'bigint');
         };
       case 's64':
         return (x) => {
           if (typeof x !== 'bigint') throw typeMismatch(x, 'bigint');
+          checkBigIntRange('s64', x);
           return valueNodes.push({ tag: 's64-value', val: x }) - 1;
         };
       case 'char':
         return (x) => {
           if (typeof x !== 'string') throw typeMismatch(x, 'string');
+          checkCharValue(x);
           return valueNodes.push({ tag: 'char-value', val: x }) - 1;
         };
       case 'string':
@@ -609,33 +681,48 @@ export function createWireEncoder(): WireEncoder {
         return push({ tag: 'f64-value', val: value });
       case 'u8':
         if (typeof value !== 'number') throw typeMismatch(value, 'number');
+        checkIntRange('u8', value);
         return push({ tag: 'u8-value', val: value });
       case 'u16':
         if (typeof value !== 'number') throw typeMismatch(value, 'number');
+        checkIntRange('u16', value);
         return push({ tag: 'u16-value', val: value });
       case 'u32':
         if (typeof value !== 'number') throw typeMismatch(value, 'number');
+        checkIntRange('u32', value);
         return push({ tag: 'u32-value', val: value });
       case 's8':
         if (typeof value !== 'number') throw typeMismatch(value, 'number');
+        checkIntRange('s8', value);
         return push({ tag: 's8-value', val: value });
       case 's16':
         if (typeof value !== 'number') throw typeMismatch(value, 'number');
+        checkIntRange('s16', value);
         return push({ tag: 's16-value', val: value });
       case 's32':
         if (typeof value !== 'number') throw typeMismatch(value, 'number');
+        checkIntRange('s32', value);
         return push({ tag: 's32-value', val: value });
 
       case 'u64':
-        if (typeof value === 'bigint') return push({ tag: 'u64-value', val: value });
-        if (typeof value === 'number') return push({ tag: 'u64-value', val: BigInt(value) });
+        if (typeof value === 'bigint') {
+          checkBigIntRange('u64', value);
+          return push({ tag: 'u64-value', val: value });
+        }
+        if (typeof value === 'number') {
+          const bigintValue = BigInt(value);
+          checkBigIntRange('u64', bigintValue);
+          return push({ tag: 'u64-value', val: bigintValue });
+        }
         throw typeMismatch(value, 'bigint');
       case 's64':
         if (typeof value !== 'bigint') throw typeMismatch(value, 'bigint');
+        checkBigIntRange('s64', value);
         return push({ tag: 's64-value', val: value });
 
       case 'char':
         if (typeof value !== 'string') throw typeMismatch(value, 'string');
+        checkCharValue(value);
         return push({ tag: 'char-value', val: value });
       case 'string':
         if (typeof value !== 'string') throw typeMismatch(value, 'string');
@@ -717,6 +804,26 @@ export function createWireEncoder(): WireEncoder {
 
       case 'result':
         return emitResult(value, b);
+
+      case 'secret': {
+        if (!(value instanceof Secret)) throw typeMismatch(value, 'Secret');
+        const secretValue = value._toSchemaValue(SECRET_INTERNAL);
+        if (secretValue.tag !== 'secret') throw internalError('expected secret value');
+        const handle = secretValue.handle;
+        const raw = handle.withHandle((r) => r);
+        if (raw === undefined) {
+          throw new Error(
+            'secret handle was already transferred; an owned secret can only be sent once',
+          );
+        }
+        if (seenRaw.has(raw)) {
+          throw new Error('the same secret handle appeared more than once in one value tree');
+        }
+        seenRaw.add(raw);
+        const idx = push({ tag: 'secret-value', val: undefined } as unknown as WitSchemaValueNode);
+        pendingTakes.push({ idx, handle });
+        return idx;
+      }
 
       case 'quota-token': {
         if (!(value instanceof QuotaToken)) throw typeMismatch(value, 'QuotaToken');
@@ -894,7 +1001,7 @@ export function createWireEncoder(): WireEncoder {
         const raw = handle.take();
         if (raw === undefined) {
           throw new Error(
-            'quota-token handle was already transferred; an owned quota-token can only be sent once',
+            'owned handle was already transferred; an owned resource can only be sent once',
           );
         }
         (valueNodes[idx] as { val: unknown }).val = raw;
@@ -988,6 +1095,7 @@ export function deserialize(value: SchemaValue, rt: ResolvedType, defs: Defs = E
 
     case 'record': {
       if (value.tag !== 'record') throw deserializeMismatch(value, 'record');
+      if (value.fields.length !== b.fields.length) throw deserializeMismatch(value, 'record');
       const obj: Record<string, any> = {};
       for (let i = 0; i < b.fields.length; i++) {
         obj[b.fields[i].name] = deserialize(value.fields[i], b.fields[i].type, defs);
@@ -1000,13 +1108,31 @@ export function deserialize(value: SchemaValue, rt: ResolvedType, defs: Defs = E
 
     case 'enum':
       if (value.tag !== 'enum') throw deserializeMismatch(value, 'enum');
+      if (
+        !Number.isInteger(value.caseIndex) ||
+        value.caseIndex < 0 ||
+        value.caseIndex >= b.cases.length
+      ) {
+        throw deserializeMismatch(value, 'enum');
+      }
       return b.cases[value.caseIndex];
 
     case 'result':
       return deserializeResult(value, b, defs);
 
+    case 'secret':
+      if (value.tag !== 'secret') throw deserializeMismatch(value, 'Secret');
+      if (!(value.handle instanceof GuestSecretHandle)) throw deserializeMismatch(value, 'Secret');
+      return Secret._fromSchemaValue(SECRET_INTERNAL, value, {
+        defs: new Map(defs),
+        root: b.inner,
+      });
+
     case 'quota-token':
       if (value.tag !== 'quota-token') throw deserializeMismatch(value, 'QuotaToken');
+      if (!(value.handle instanceof GuestQuotaTokenHandle)) {
+        throw deserializeMismatch(value, 'QuotaToken');
+      }
       return QuotaToken._fromSchemaValue(QUOTA_INTERNAL, value);
 
     case 'path':
@@ -1068,9 +1194,11 @@ function deserializeVariant(
   if (!c) throw deserializeMismatch(value, 'variant');
 
   if (b.tagged) {
-    if (!c.payload) return { tag: c.name };
+    if (!c.payload) {
+      if (value.payload !== undefined) throw deserializeMismatch(value, 'variant');
+      return { tag: c.name };
+    }
     if (value.payload === undefined) {
-      if (c.payload.body.tag === 'option') return { tag: c.name };
       throw deserializeMismatch(value, 'variant');
     }
     if (!c.valueKey) throw deserializeMismatch(value, 'variant');
@@ -1078,7 +1206,10 @@ function deserializeVariant(
   }
 
   // Plain union
-  if (!c.payload) return c.name;
+  if (!c.payload) {
+    if (value.payload !== undefined) throw deserializeMismatch(value, 'variant');
+    return c.name;
+  }
   if (value.payload === undefined) throw deserializeMismatch(value, 'variant');
   return deserialize(value.payload, c.payload, defs);
 }
@@ -1127,14 +1258,16 @@ function deserializeResult(
     if (res.tag === 'ok' && res.value !== undefined) {
       return { tag: 'ok', [okName]: deserialize(res.value, okType, defs) };
     }
-    return { tag: 'err' };
+    if (res.tag === 'err' && res.value === undefined) return { tag: 'err' };
+    throw deserializeMismatch(value, 'result');
   }
 
   if (errName && errType && !okType) {
     if (res.tag === 'err' && res.value !== undefined) {
       return { tag: 'err', [errName]: deserialize(res.value, errType, defs) };
     }
-    return { tag: 'ok' };
+    if (res.tag === 'ok' && res.value === undefined) return { tag: 'ok' };
+    throw deserializeMismatch(value, 'result');
   }
 
   if (okName && !okType && res.tag === 'ok' && res.value === undefined) {
@@ -1233,9 +1366,11 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
       throw new SchemaDecodeError(`cyclic value node reference at index ${idx}`);
     }
     onPath[idx] = 1;
-    const result = fromNode(nodes[idx], rt);
-    onPath[idx] = 0;
-    return result;
+    try {
+      return fromNode(nodes[idx], rt);
+    } finally {
+      onPath[idx] = 0;
+    }
   }
 
   // Specialized per-element decoder for a list whose (already `resolveRef`-ed)
@@ -1320,6 +1455,9 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
         return (idx) => {
           const n = nodeAt(idx);
           if (n.tag !== 'enum-value') throw wireMismatch(n, 'enum');
+          if (!Number.isInteger(n.val) || n.val < 0 || n.val >= cases.length) {
+            throw wireMismatch(n, 'enum');
+          }
           return cases[n.val];
         };
       }
@@ -1407,6 +1545,7 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
 
       case 'record': {
         if (n.tag !== 'record-value') throw wireMismatch(n, 'record');
+        if (n.val.length !== b.fields.length) throw wireMismatch(n, 'record');
         const obj: Record<string, any> = {};
         for (let i = 0; i < b.fields.length; i++) {
           obj[b.fields[i].name] = fromIdx(n.val[i], b.fields[i].type);
@@ -1419,10 +1558,32 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
 
       case 'enum':
         if (n.tag !== 'enum-value') throw wireMismatch(n, 'enum');
+        if (!Number.isInteger(n.val) || n.val < 0 || n.val >= b.cases.length) {
+          throw wireMismatch(n, 'enum');
+        }
         return b.cases[n.val];
 
       case 'result':
         return fromResult(n, b);
+
+      case 'secret': {
+        if (n.tag !== 'secret-value') throw wireMismatch(n, 'Secret');
+        const raw = n.val as typeof n.val | undefined;
+        if (raw === undefined) {
+          throw new SchemaDecodeError('secret handle referenced more than once');
+        }
+        if (seenRaw.has(raw)) {
+          throw new SchemaDecodeError('the same secret resource appeared more than once');
+        }
+        seenRaw.add(raw);
+        (n as { val: unknown }).val = undefined;
+        pendingLifts.push({ node: n, raw });
+        return Secret._fromHandle(
+          SECRET_INTERNAL,
+          GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw),
+          { defs: new Map(defs), root: b.inner },
+        );
+      }
 
       case 'quota-token': {
         if (n.tag !== 'quota-token-handle') throw wireMismatch(n, 'QuotaToken');
@@ -1479,9 +1640,11 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
     if (!c) throw wireMismatch(n, 'variant');
 
     if (b.tagged) {
-      if (!c.payload) return { tag: c.name };
+      if (!c.payload) {
+        if (nv.payload !== undefined) throw wireMismatch(n, 'variant');
+        return { tag: c.name };
+      }
       if (nv.payload === undefined) {
-        if (c.payload.body.tag === 'option') return { tag: c.name };
         throw wireMismatch(n, 'variant');
       }
       if (!c.valueKey) throw wireMismatch(n, 'variant');
@@ -1489,7 +1652,10 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
     }
 
     // Plain union
-    if (!c.payload) return c.name;
+    if (!c.payload) {
+      if (nv.payload !== undefined) throw wireMismatch(n, 'variant');
+      return c.name;
+    }
     if (nv.payload === undefined) throw wireMismatch(n, 'variant');
     return fromIdx(nv.payload, c.payload);
   }
@@ -1536,12 +1702,14 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
 
     if (okName && okType && !errType) {
       if (isOk && hasVal) return { tag: 'ok', [okName]: fromIdx(r.val!, okType) };
-      return { tag: 'err' };
+      if (!isOk && !hasVal) return { tag: 'err' };
+      throw wireMismatch(n, 'result');
     }
 
     if (errName && errType && !okType) {
       if (!isOk && hasVal) return { tag: 'err', [errName]: fromIdx(r.val!, errType) };
-      return { tag: 'ok' };
+      if (isOk && !hasVal) return { tag: 'ok' };
+      throw wireMismatch(n, 'result');
     }
 
     if (okName && !okType && isOk && !hasVal) {
@@ -1586,6 +1754,7 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
 
 /** Fused decode: flat wire `schema-value-tree` -> TS value, guided by a `ResolvedGraph`. */
 export function deserializeGraphFromWit(wit: WitSchemaValueTree, graph: ResolvedGraph): any {
+  preflightGraphDecode(wit.valueNodes, wit.root);
   return createWireDecoder(wit.valueNodes).readGraph(wit.root, graph);
 }
 
@@ -1662,6 +1831,8 @@ export function matchesResolved(value: any, rt: ResolvedType, defs: Defs = EMPTY
       return false;
     }
 
+    case 'secret':
+      return value instanceof Secret;
     case 'quota-token':
       return value instanceof QuotaToken;
     case 'path':
@@ -1765,6 +1936,7 @@ interface GenCtx {
   fresh: () => string;
   defName: (id: TypeId) => string;
   consts: any[];
+  defs: Defs;
 }
 
 function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): string {
@@ -1777,6 +1949,8 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
       return `(nodes.push({ tag: 'bool-value', val: ${valExpr} }) - 1)`;
     case 'f32':
     case 'f64':
+      out.push(`if (typeof ${valExpr} !== 'number') throw typeMismatch(${valExpr}, 'number');`);
+      return `(nodes.push({ tag: '${b.tag}-value', val: ${valExpr} }) - 1)`;
     case 'u8':
     case 'u16':
     case 'u32':
@@ -1784,22 +1958,25 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
     case 's16':
     case 's32':
       out.push(`if (typeof ${valExpr} !== 'number') throw typeMismatch(${valExpr}, 'number');`);
+      out.push(`checkIntRange('${b.tag}', ${valExpr});`);
       return `(nodes.push({ tag: '${b.tag}-value', val: ${valExpr} }) - 1)`;
     case 'u64': {
       const iv = ctx.fresh();
       out.push(`let ${iv};`);
       out.push(
-        `if (typeof ${valExpr} === 'bigint') { ${iv} = nodes.push({ tag: 'u64-value', val: ${valExpr} }) - 1; } ` +
-          `else if (typeof ${valExpr} === 'number') { ${iv} = nodes.push({ tag: 'u64-value', val: BigInt(${valExpr}) }) - 1; } ` +
+        `if (typeof ${valExpr} === 'bigint') { checkBigIntRange('u64', ${valExpr}); ${iv} = nodes.push({ tag: 'u64-value', val: ${valExpr} }) - 1; } ` +
+          `else if (typeof ${valExpr} === 'number') { const ${iv}b = BigInt(${valExpr}); checkBigIntRange('u64', ${iv}b); ${iv} = nodes.push({ tag: 'u64-value', val: ${iv}b }) - 1; } ` +
           `else { throw typeMismatch(${valExpr}, 'bigint'); }`,
       );
       return iv;
     }
     case 's64':
       out.push(`if (typeof ${valExpr} !== 'bigint') throw typeMismatch(${valExpr}, 'bigint');`);
+      out.push(`checkBigIntRange('s64', ${valExpr});`);
       return `(nodes.push({ tag: 's64-value', val: ${valExpr} }) - 1)`;
     case 'char':
       out.push(`if (typeof ${valExpr} !== 'string') throw typeMismatch(${valExpr}, 'string');`);
+      out.push(`checkCharValue(${valExpr});`);
       return `(nodes.push({ tag: 'char-value', val: ${valExpr} }) - 1)`;
     case 'string':
       out.push(`if (typeof ${valExpr} !== 'string') throw typeMismatch(${valExpr}, 'string');`);
@@ -2066,6 +2243,26 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
       }
       return resIdx;
     }
+    case 'secret': {
+      const sv = ctx.fresh();
+      const handle = ctx.fresh();
+      const raw = ctx.fresh();
+      const idx = ctx.fresh();
+      out.push(`const ${sv} = ${valExpr};`);
+      out.push(`if (!(${sv} instanceof Secret)) throw typeMismatch(${sv}, 'Secret');`);
+      out.push(`const ${handle} = ${sv}._toSchemaValue(SECRET_INTERNAL).handle;`);
+      out.push(`const ${raw} = ${handle}.withHandle((r) => r);`);
+      out.push(
+        `if (${raw} === undefined) throw new Error('secret handle was already transferred; an owned secret can only be sent once');`,
+      );
+      out.push(
+        `if (__seen.has(${raw})) throw new Error('the same secret handle appeared more than once in one value tree');`,
+      );
+      out.push(`__seen.add(${raw});`);
+      out.push(`const ${idx} = nodes.push({ tag: 'secret-value', val: undefined }) - 1;`);
+      out.push(`__pending.push({ idx: ${idx}, handle: ${handle} });`);
+      return idx;
+    }
     case 'quota-token': {
       const qv = ctx.fresh();
       const handle = ctx.fresh();
@@ -2203,6 +2400,9 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       const nv = ctx.fresh();
       out.push(`const ${nv} = nodes[${iv}];`);
       out.push(`if (${nv}.tag !== 'enum-value') throw wireMismatch(${nv}, 'enum');`);
+      out.push(
+        `if (!Number.isInteger(${nv}.val) || ${nv}.val < 0 || ${nv}.val >= C[${k}].length) throw wireMismatch(${nv}, 'enum');`,
+      );
       return `C[${k}][${nv}.val]`;
     }
     case 'option': {
@@ -2259,6 +2459,7 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       const nv = ctx.fresh();
       out.push(`const ${nv} = nodes[${iv}];`);
       out.push(`if (${nv}.tag !== 'record-value') throw wireMismatch(${nv}, 'record');`);
+      out.push(`if (${nv}.val.length !== ${b.fields.length}) throw wireMismatch(${nv}, 'record');`);
       const ov = ctx.fresh();
       out.push(`const ${ov} = {};`);
       for (let i = 0; i < b.fields.length; i++) {
@@ -2335,15 +2536,15 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
         const nameLit = JSON.stringify(c.name);
         if (b.tagged) {
           if (!c.payload) {
-            out.push(`case ${i}: { ${resVar} = { tag: ${nameLit} }; break; }`);
+            out.push(
+              `case ${i}: { if (${vv}.payload !== undefined) throw wireMismatch(${nv}, 'variant'); ${resVar} = { tag: ${nameLit} }; break; }`,
+            );
             continue;
           }
           const keyLit = c.valueKey === undefined ? undefined : JSON.stringify(c.valueKey);
           const sub: string[] = [];
           const pe = genDec(c.payload, `${vv}.payload`, sub, ctx);
-          const emptyTagged = `${resVar} = { tag: ${nameLit} };`;
-          const undefinedCase =
-            c.payload.body.tag === 'option' ? emptyTagged : `throw wireMismatch(${nv}, 'variant');`;
+          const undefinedCase = `throw wireMismatch(${nv}, 'variant');`;
           const presentCase =
             keyLit === undefined
               ? `throw wireMismatch(${nv}, 'variant');`
@@ -2355,7 +2556,9 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
         }
         // Plain union
         if (!c.payload) {
-          out.push(`case ${i}: { ${resVar} = ${nameLit}; break; }`);
+          out.push(
+            `case ${i}: { if (${vv}.payload !== undefined) throw wireMismatch(${nv}, 'variant'); ${resVar} = ${nameLit}; break; }`,
+          );
           continue;
         }
         const sub: string[] = [];
@@ -2437,14 +2640,14 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
           const okE = genDec(b.ok!, `${rr}.val`, okSub, ctx);
           out.push(
             `if (${isOk} && ${hasVal}) { ${okSub.join(' ')} ${resVar} = { tag: 'ok', [${okNameLit}]: ${okE} }; ${done} = true; } ` +
-              `else { ${resVar} = { tag: 'err' }; ${done} = true; }`,
+              `else if (!${isOk} && !${hasVal}) { ${resVar} = { tag: 'err' }; ${done} = true; }`,
           );
         } else if (errName && hasErr && !hasOk) {
           const errSub: string[] = [];
           const errE = genDec(b.err!, `${rr}.val`, errSub, ctx);
           out.push(
             `if (!${isOk} && ${hasVal}) { ${errSub.join(' ')} ${resVar} = { tag: 'err', [${errNameLit}]: ${errE} }; ${done} = true; } ` +
-              `else { ${resVar} = { tag: 'ok' }; ${done} = true; }`,
+              `else if (${isOk} && !${hasVal}) { ${resVar} = { tag: 'ok' }; ${done} = true; }`,
           );
         } else {
           if (okName && !hasOk) {
@@ -2463,6 +2666,27 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       out.push(`if (!${done}) throw wireMismatch(${nv}, 'result');`);
       out.push(`onPath[${iv}] = 0;`);
       return resVar;
+    }
+    case 'secret': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'secret-value') throw wireMismatch(${nv}, 'Secret');`);
+      const raw = ctx.fresh();
+      out.push(`const ${raw} = ${nv}.val;`);
+      out.push(
+        `if (${raw} === undefined) throw new SchemaDecodeError('secret handle referenced more than once');`,
+      );
+      out.push(
+        `if (__seen.has(${raw})) throw new SchemaDecodeError('the same secret resource appeared more than once');`,
+      );
+      out.push(`__seen.add(${raw});`);
+      out.push(`${nv}.val = undefined;`);
+      out.push(`__pending.push({ idx: ${iv}, raw: ${raw} });`);
+      const graphIdx = ctx.consts.push({ defs: ctx.defs, root: b.inner }) - 1;
+      return `Secret._fromHandle(SECRET_INTERNAL, GuestSecretHandle.fromRaw(SECRET_INTERNAL, ${raw}), C[${graphIdx}])`;
     }
     case 'quota-token': {
       const iv = ctx.fresh();
@@ -2533,6 +2757,7 @@ function makeGenCtx(graph: ResolvedGraph, prefix: string): GenCtx {
       return `${prefix}${k}`;
     },
     consts: [],
+    defs: graph.defs,
   };
 }
 
@@ -2569,19 +2794,24 @@ function genGraphEmitFn(
     // Commit every deferred take now that the whole walk succeeded. `take()`
     // cannot return undefined here: the peek confirmed presence/uniqueness and
     // nothing else moves the handle on this thread.
-    `for (const __p of __pending) { const __raw = __p.handle.take(); if (__raw === undefined) throw new Error('quota-token handle was already transferred; an owned quota-token can only be sent once'); nodes[__p.idx].val = __raw; }`,
+    `for (const __p of __pending) { const __raw = __p.handle.take(); if (__raw === undefined) throw new Error('owned handle was already transferred; an owned resource can only be sent once'); nodes[__p.idx].val = __raw; }`,
     `return __rootIdx;`,
     `};`,
     `return __root;`,
   );
   const factory = new Function(
     'typeMismatch',
+    'checkIntRange',
+    'checkBigIntRange',
+    'checkCharValue',
     'missingKey',
     'unionMismatch',
     'internalError',
     'matchesResolved',
     'display',
     'TYPED_ARRAYS',
+    'Secret',
+    'SECRET_INTERNAL',
     'QuotaToken',
     'QUOTA_INTERNAL',
     'Path',
@@ -2594,12 +2824,17 @@ function genGraphEmitFn(
   ) as (...a: any[]) => (v: any, nodes: WitSchemaValueNode[]) => ValueNodeIndex;
   return factory(
     typeMismatch,
+    checkIntRange,
+    checkBigIntRange,
+    checkCharValue,
     missingKey,
     unionMismatch,
     internalError,
     matchesResolved,
     display,
     TYPED_ARRAYS,
+    Secret,
+    SECRET_INTERNAL,
     QuotaToken,
     QUOTA_INTERNAL,
     Path,
@@ -2651,6 +2886,7 @@ function genGraphReadFn(
     // failure leaves the input wire exactly as it was, for the runtime to
     // release the owned resources.
     `for (const __p of __pending) { nodes[__p.idx].val = __p.raw; }`,
+    `onPath.fill(0);`,
     `throw __e;`,
     `}`,
     `};`,
@@ -2661,6 +2897,9 @@ function genGraphReadFn(
     'SchemaDecodeError',
     'Result',
     'TYPED_ARRAYS',
+    'Secret',
+    'GuestSecretHandle',
+    'SECRET_INTERNAL',
     'QuotaToken',
     'GuestQuotaTokenHandle',
     'QUOTA_INTERNAL',
@@ -2678,6 +2917,9 @@ function genGraphReadFn(
     SchemaDecodeError,
     Result,
     TYPED_ARRAYS,
+    Secret,
+    GuestSecretHandle,
+    SECRET_INTERNAL,
     QuotaToken,
     GuestQuotaTokenHandle,
     QUOTA_INTERNAL,
@@ -2703,9 +2945,19 @@ export function compileGraphEncoder(graph: ResolvedGraph): (value: any) => WitSc
 export function compileGraphDecoder(graph: ResolvedGraph): (wit: WitSchemaValueTree) => any {
   const rootFn = genGraphReadFn(graph);
   return (wit) => {
+    preflightGraphDecode(wit.valueNodes, wit.root);
     const onPath = new Uint8Array(wit.valueNodes.length);
     return rootFn(wit.root, wit.valueNodes, onPath);
   };
+}
+
+function preflightGraphDecode(nodes: WitSchemaValueNode[], root: ValueNodeIndex): void {
+  try {
+    preflightWitValueTree(nodes, root);
+  } catch (e) {
+    drainUnconsumedQuotaHandles(nodes);
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2740,6 +2992,7 @@ function buildGraphCodec(graph: ResolvedGraph): GraphCodec {
       return { valueNodes: nodes, root };
     },
     decode(wit) {
+      preflightGraphDecode(wit.valueNodes, wit.root);
       const onPath = new Uint8Array(wit.valueNodes.length);
       return read(wit.root, wit.valueNodes, onPath);
     },

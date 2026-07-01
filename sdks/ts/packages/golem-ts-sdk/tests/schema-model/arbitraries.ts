@@ -160,6 +160,10 @@ function leafBodyArbs(ids: string[]): Arbitrary<SchemaTypeBody>[] {
     fc.record({
       tag: fc.constant<'secret'>('secret'),
       spec: fc.record({ category: fc.option(fc.string({ maxLength: 6 }), { nil: undefined }) }),
+      inner: fc.record({
+        body: fc.constant({ tag: 'string' } as SchemaTypeBody),
+        metadata: arbMetadata,
+      }),
     }),
     fc.record({
       tag: fc.constant<'quota-token'>('quota-token'),
@@ -317,7 +321,6 @@ function leafValueArbs(): Arbitrary<SchemaValue>[] {
     fc.record({ tag: fc.constant<'datetime'>('datetime'), value: arbDatetime }),
     fc.record({ tag: fc.constant<'duration'>('duration'), nanoseconds: arbS64 }),
     fc.record({ tag: fc.constant<'quantity'>('quantity'), value: arbQuantityValue }),
-    fc.record({ tag: fc.constant<'secret'>('secret'), secretRef: fc.string({ maxLength: 10 }) }),
   ];
 }
 

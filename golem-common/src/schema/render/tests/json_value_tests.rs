@@ -678,7 +678,11 @@ fn multimodal_variant_list_round_trips_through_json() {
 
 fn secret_value() -> SchemaValue {
     SchemaValue::Secret(SecretValuePayload {
-        secret_ref: "shhh-do-not-log".to_string(),
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        category: None,
     })
 }
 
@@ -699,8 +703,25 @@ fn quota_token_value() -> SchemaValue {
 fn to_json_value_emits_canonical_capability_form() {
     let ty = SchemaType::secret(SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
-    let json = to_json_value(&graph, &ty, &secret_value()).expect("to_json_value");
-    assert_eq!(json, json!({ "secretRef": "shhh-do-not-log" }));
+    let value = secret_value();
+    let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
+    let SchemaValue::Secret(secret) = value else {
+        panic!("secret_value must construct a secret")
+    };
+    let mut expected = serde_json::Map::new();
+    expected.insert("secretId".to_string(), json!(secret.secret_id.to_string()));
+    if let Some(config_key) = secret.config_key {
+        expected.insert("configKey".to_string(), json!(config_key));
+    }
+    expected.insert("version".to_string(), json!(secret.version));
+    expected.insert(
+        "resolvedAt".to_string(),
+        json!(secret.resolved_at.to_rfc3339()),
+    );
+    if let Some(category) = secret.category {
+        expected.insert("category".to_string(), json!(category));
+    }
+    assert_eq!(json, serde_json::Value::Object(expected));
 }
 
 #[test]

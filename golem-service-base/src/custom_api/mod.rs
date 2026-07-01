@@ -87,16 +87,46 @@ impl From<&PathSegmentType> for SchemaType {
         match value {
             PathSegmentType::Str => SchemaType::String { metadata },
             PathSegmentType::Chr => SchemaType::Char { metadata },
-            PathSegmentType::F64 => SchemaType::F64 { metadata },
-            PathSegmentType::F32 => SchemaType::F32 { metadata },
-            PathSegmentType::U64 => SchemaType::U64 { metadata },
-            PathSegmentType::S64 => SchemaType::S64 { metadata },
-            PathSegmentType::U32 => SchemaType::U32 { metadata },
-            PathSegmentType::S32 => SchemaType::S32 { metadata },
-            PathSegmentType::U16 => SchemaType::U16 { metadata },
-            PathSegmentType::S16 => SchemaType::S16 { metadata },
-            PathSegmentType::U8 => SchemaType::U8 { metadata },
-            PathSegmentType::S8 => SchemaType::S8 { metadata },
+            PathSegmentType::F64 => SchemaType::F64 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::F32 => SchemaType::F32 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::U64 => SchemaType::U64 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::S64 => SchemaType::S64 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::U32 => SchemaType::U32 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::S32 => SchemaType::S32 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::U16 => SchemaType::U16 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::S16 => SchemaType::S16 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::U8 => SchemaType::U8 {
+                restrictions: None,
+                metadata,
+            },
+            PathSegmentType::S8 => SchemaType::S8 {
+                restrictions: None,
+                metadata,
+            },
             PathSegmentType::Bool => SchemaType::Bool { metadata },
             PathSegmentType::Enum(cases) => SchemaType::Enum {
                 cases: cases.clone(),

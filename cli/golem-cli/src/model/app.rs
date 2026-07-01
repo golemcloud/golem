@@ -655,6 +655,7 @@ impl Application {
 
                     let template_agent_props = app_raw::AgentLayerProperties {
                         config: template_layer_props.config.value().clone(),
+                        initial_card: template_layer_props.initial_card.value().clone(),
                         env_merge_mode: None,
                         env: Some(template_layer_props.env.value().clone()),
                         plugins_merge_mode: None,
@@ -1512,6 +1513,10 @@ impl<'a> Agent<'a> {
         self.resolved.properties.config.as_ref()
     }
 
+    pub fn initial_card(&self) -> Option<&app_raw::ManifestInitialCard> {
+        self.resolved.properties.initial_card.as_ref()
+    }
+
     pub fn env(&self) -> &BTreeMap<String, String> {
         &self.resolved.properties.env
     }
@@ -1678,6 +1683,7 @@ impl<'a> Component<'a> {
     pub fn agent_base_properties(&self) -> app_raw::AgentLayerProperties {
         app_raw::AgentLayerProperties {
             config: self.layer_properties().config.value().clone(),
+            initial_card: self.layer_properties().initial_card.value().clone(),
             env_merge_mode: None,
             env: Some(self.layer_properties().env.value().clone()),
             plugins_merge_mode: None,
@@ -1705,6 +1711,7 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config: JsonProperty<ComponentLayer>,
+    pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
@@ -1727,6 +1734,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
             config: value.agent_properties.config.into(),
+            initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
             env: value.agent_properties.env.unwrap_or_default().into(),
             plugins_merge_mode: value.agent_properties.plugins_merge_mode,
@@ -1745,6 +1753,7 @@ impl ComponentLayerProperties {
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
         self.config.compact_trace();
+        self.initial_card.compact_trace();
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
@@ -1911,6 +1920,9 @@ impl Layer for AgentLayer {
             value
                 .config
                 .apply_layer(id, selection, properties.config.clone());
+            value
+                .initial_card
+                .apply_layer(id, selection, properties.initial_card.clone());
             value.env.apply_layer(
                 id,
                 selection,
@@ -1949,6 +1961,7 @@ pub struct AgentLayerProperties {
     )]
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
     config: JsonProperty<AgentLayer>,
+    initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
     env: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
     files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
@@ -1967,6 +1980,7 @@ impl AgentLayerProperties {
 
     pub fn compact_traces(&mut self) {
         self.config.compact_trace();
+        self.initial_card.compact_trace();
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
@@ -2001,6 +2015,7 @@ impl AgentLayerProperties {
 #[derive(Clone, Debug)]
 pub struct AgentProperties {
     pub config: Option<JsonValue>,
+    pub initial_card: Option<app_raw::ManifestInitialCard>,
     pub env: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
     pub files: Vec<app_raw::InitialComponentFile>,
@@ -2010,6 +2025,7 @@ impl AgentProperties {
     fn from_resolved(layer_properties: &AgentLayerProperties) -> Self {
         Self {
             config: layer_properties.config.value().clone(),
+            initial_card: layer_properties.initial_card.value().clone(),
             env: layer_properties
                 .env
                 .value()
@@ -2035,6 +2051,7 @@ pub struct ComponentProperties {
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
     pub config: Option<JsonValue>,
+    pub initial_card: Option<app_raw::ManifestInitialCard>,
 }
 
 impl ComponentProperties {
@@ -2067,6 +2084,7 @@ impl ComponentProperties {
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
             config: merged.config.value().clone(),
+            initial_card: merged.initial_card.value().clone(),
         };
 
         for (name, value) in [("componentWasm", &properties.component_wasm)] {

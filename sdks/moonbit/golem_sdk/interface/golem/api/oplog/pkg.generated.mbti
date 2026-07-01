@@ -127,6 +127,39 @@ pub(all) struct CancelledParameters {
   partial : @types.TypedSchemaValue?
 } derive(Eq, Show)
 
+pub(all) struct CardEventQueuedParameters {
+  timestamp : @wallClock.Datetime
+  event : PublicQueuedCardEvent
+} derive(Eq, Show)
+
+pub(all) struct CardInstallFailedParameters {
+  timestamp : @wallClock.Datetime
+  queued_event_index : UInt64
+  card_id : @types.CardId
+  reason : CardInstallFailure
+} derive(Eq, Show)
+
+pub(all) enum CardInstallFailure {
+  CARD_REVOKED
+  NOT_FOUND
+  RECIPIENT_MISMATCH
+  NOT_PERMITTED
+} derive(Eq, Show)
+pub fn CardInstallFailure::from(Int) -> Self
+pub fn CardInstallFailure::ordinal(Self) -> Int
+
+pub(all) struct CardInstalledParameters {
+  timestamp : @wallClock.Datetime
+  queued_event_index : UInt64?
+  card_id : @types.CardId
+} derive(Eq, Show)
+
+pub(all) struct CardRevokedParameters {
+  timestamp : @wallClock.Datetime
+  queued_event_index : UInt64
+  card_id : @types.CardId
+} derive(Eq, Show)
+
 pub(all) struct ChangePersistenceLevelParameters {
   timestamp : @wallClock.Datetime
   persistence_level : @host.PersistenceLevel
@@ -333,6 +366,10 @@ pub(all) enum OplogEntry {
   OplogProcessorCheckpoint(RawOplogProcessorCheckpointParameters)
   SetRetryPolicy(SetRetryPolicyParameters)
   RemoveRetryPolicy(RemoveRetryPolicyParameters)
+  CardEventQueued(RawCardEventQueuedParameters)
+  CardInstalled(RawCardInstalledParameters)
+  CardInstallFailed(CardInstallFailedParameters)
+  CardRevoked(CardRevokedParameters)
 } derive(Eq, Show)
 
 pub(all) struct OplogExternalPayload {
@@ -429,6 +466,29 @@ pub(all) enum PublicOplogEntry {
   OplogProcessorCheckpoint(OplogProcessorCheckpointParameters)
   SetRetryPolicy(SetRetryPolicyParameters)
   RemoveRetryPolicy(RemoveRetryPolicyParameters)
+  CardEventQueued(CardEventQueuedParameters)
+  CardInstalled(CardInstalledParameters)
+  CardInstallFailed(CardInstallFailedParameters)
+  CardRevoked(CardRevokedParameters)
+} derive(Eq, Show)
+
+pub(all) enum PublicQueuedCardEvent {
+  Install(PublicQueuedCardEventCard)
+  Revoke(PublicQueuedCardEventCard)
+} derive(Eq, Show)
+
+pub(all) struct PublicQueuedCardEventCard {
+  card_id : @types.CardId
+} derive(Eq, Show)
+
+pub(all) enum QueuedCardEvent {
+  Install(QueuedCardEventCard)
+  Revoke(QueuedCardEventCard)
+} derive(Eq, Show)
+
+pub(all) struct QueuedCardEventCard {
+  card_id : @types.CardId
+  card : FixedArray[Byte]?
 } derive(Eq, Show)
 
 pub(all) struct RawActivatePluginParameters {
@@ -463,6 +523,17 @@ pub(all) struct RawCancelledParameters {
   timestamp : @wallClock.Datetime
   start_index : UInt64
   partial : OplogPayload?
+} derive(Eq, Show)
+
+pub(all) struct RawCardEventQueuedParameters {
+  timestamp : @wallClock.Datetime
+  event : QueuedCardEvent
+} derive(Eq, Show)
+
+pub(all) struct RawCardInstalledParameters {
+  timestamp : @wallClock.Datetime
+  queued_event_index : UInt64?
+  card : FixedArray[Byte]
 } derive(Eq, Show)
 
 pub(all) struct RawCreateParameters {

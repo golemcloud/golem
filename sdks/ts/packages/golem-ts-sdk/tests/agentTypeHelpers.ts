@@ -96,6 +96,8 @@ function normalizeBody(type: SchemaType, defs: Map<TypeId, SchemaTypeDef>, seen:
       return { binary: b.restrictions };
     case 'url':
       return { url: b.restrictions };
+    case 'secret':
+      return { secret: normalizeSchema(b.inner, defs, seen) };
     default:
       // Primitives ('string', 'f64', 'bool', 'u8', ...) and other leaves.
       return b.tag;

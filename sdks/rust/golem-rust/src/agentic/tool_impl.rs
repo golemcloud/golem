@@ -12,14 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Placeholder implementation of the `golem:tool/guest@0.1.0` export.
-//!
-//! Every agentic component exports `golem:tool/guest` alongside
-//! `golem:agent/guest`, mirroring the agent guest surface. The tool runtime is
-//! not implemented yet, so this component currently exposes no tools: discovery
-//! returns an empty list and lookups/invocations report the tool as unknown.
-
 use crate::agentic::agent_impl::Component;
+use crate::agentic::tool_registry::{get_all_tools, get_tool_by_name};
 use crate::golem_agentic::exports::golem::tool::guest::{
     Guest, InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
@@ -28,11 +22,11 @@ use crate::golem_agentic::wasi::io::streams::InputStream;
 
 impl Guest for Component {
     fn discover_tools() -> Result<Vec<Tool>, ToolError> {
-        Ok(Vec::new())
+        Ok(get_all_tools())
     }
 
     fn get_tool(name: String) -> Result<Tool, ToolError> {
-        Err(ToolError::InvalidToolName(name))
+        get_tool_by_name(&name).ok_or(ToolError::InvalidToolName(name))
     }
 
     fn invoke(
@@ -42,6 +36,7 @@ impl Guest for Component {
         _stdin: Option<InputStream>,
         _principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
+        // Tool invocation dispatch is not wired yet; metadata discovery is available.
         Err(ToolError::InvalidToolName(tool_name))
     }
 }

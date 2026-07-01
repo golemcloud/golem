@@ -20,7 +20,7 @@ import golem.BaseAgent
 import golem.runtime.annotations.agentDefinition
 import golem.runtime.macros.AgentMacros
 import golem.runtime.AgentMetadata
-import golem.schema.IntoSchema
+import golem.schema.{IntoSchema, SchemaGraph, SchemaType, SchemaTypeBody, SecretSpec}
 import zio.test._
 
 import zio.blocks.schema.Schema
@@ -28,6 +28,9 @@ import zio.blocks.schema.Schema
 import scala.concurrent.Future
 
 object ConfigMetadataSpec extends ZIOSpecDefault {
+
+  private def secretGraph[A](implicit into: IntoSchema[A]): SchemaGraph =
+    SchemaGraph(into.graph.defs, SchemaType(SchemaTypeBody.SecretType(SecretSpec(into.graph.root))))
 
   // ---------------------------------------------------------------------------
   // Config types — Schema instances provide ConfigSchema automatically
@@ -97,9 +100,9 @@ object ConfigMetadataSpec extends ZIOSpecDefault {
           configMeta.config.exists(d => d.path == List("host") && d.valueType == IntoSchema[String].graph)
         )
       },
-      test("secret field has schema-native value type (inner type)") {
+      test("secret field has schema-native secret handle value type") {
         assertTrue(
-          configMeta.config.exists(d => d.path == List("secret") && d.valueType == IntoSchema[String].graph)
+          configMeta.config.exists(d => d.path == List("secret") && d.valueType == secretGraph[String])
         )
       }
     ),

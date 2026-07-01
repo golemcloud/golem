@@ -935,8 +935,10 @@ fn parse_serde_field_attrs(attrs: &[Attribute]) -> syn::Result<SerdeFieldAttrs> 
                         let _: LitStr = meta.value()?.parse()?;
                     }
                 }
-                // Parsed but irrelevant to the schema shape this derive models.
-                "skip_serializing_if" => {
+                // Parsed but irrelevant to the schema shape this derive models:
+                // both customize (de)serialization behavior, not the field type
+                // exposed in the generated OpenAPI schema.
+                "skip_serializing_if" | "deserialize_with" => {
                     let _: LitStr = meta.value()?.parse()?;
                 }
                 other => {

@@ -14,11 +14,10 @@
 
 use super::class::card_permission_classes;
 use super::class::*;
-use serde::{Deserialize, Serialize};
 
 macro_rules! define_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PermissionPattern {
             $($variant(ClassPermissionPattern<$class>),)+
@@ -26,9 +25,11 @@ macro_rules! define_permission_pattern {
     };
 }
 
+card_permission_classes!(define_permission_pattern);
+
 macro_rules! define_permission_target {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PermissionTarget {
             $($variant(ClassPermissionTarget<$class>),)+
@@ -36,9 +37,11 @@ macro_rules! define_permission_target {
     };
 }
 
+card_permission_classes!(define_permission_target);
+
 macro_rules! define_polymorphic_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PolymorphicPermissionPattern {
             $($variant(PolymorphicClassPermissionPattern<$class>),)+
@@ -46,9 +49,11 @@ macro_rules! define_polymorphic_permission_pattern {
     };
 }
 
+card_permission_classes!(define_polymorphic_permission_pattern);
+
 macro_rules! define_polymorphic_manifest_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PolymorphicManifestPermissionPattern {
             $($variant(PolymorphicManifestClassPermissionPattern<$class>),)+
@@ -56,9 +61,6 @@ macro_rules! define_polymorphic_manifest_permission_pattern {
     };
 }
 
-card_permission_classes!(define_permission_pattern);
-card_permission_classes!(define_permission_target);
-card_permission_classes!(define_polymorphic_permission_pattern);
 card_permission_classes!(define_polymorphic_manifest_permission_pattern);
 
 macro_rules! define_class_name_match {
@@ -179,8 +181,57 @@ impl PermissionPattern {
         recipient_match!(self)
     }
 
+    pub fn render(&self) -> Result<String, String> {
+        super::rendering::render_permission(self)
+    }
+
     pub(crate) fn to_target(&self) -> PermissionTarget {
         permission_pattern_to_target_match!(self)
+    }
+}
+
+impl PolymorphicPermissionPattern {
+    pub fn class_name(&self) -> &'static str {
+        class_name_match!(self)
+    }
+
+    pub fn recipient(&self) -> &crate::model::card::recipient::RecipientPattern {
+        recipient_match!(self)
+    }
+
+    pub fn render(&self) -> Result<String, String> {
+        super::rendering::render_polymorphic_permission(self)
+    }
+}
+
+impl PolymorphicManifestPermissionPattern {
+    pub fn class_name(&self) -> &'static str {
+        class_name_match!(self)
+    }
+
+    pub fn render(&self) -> Result<String, String> {
+        super::rendering::render_polymorphic_manifest_permission(self)
+    }
+
+    pub fn monomorphize_recipient(
+        self,
+        context: &crate::model::card::recipient::RecipientMonomorphizationContext,
+    ) -> PolymorphicPermissionPattern {
+        macro_rules! manifest_monomorphize_recipient {
+            ($($variant:ident: $class:ty,)+) => {
+                match self {
+                    $(
+                        Self::$variant(pattern) => PolymorphicPermissionPattern::$variant(PolymorphicClassPermissionPattern {
+                            verb: pattern.verb,
+                            owner: pattern.owner,
+                            recipient: pattern.recipient.monomorphize(context),
+                            resource: pattern.resource,
+                        }),
+                    )+
+                }
+            };
+        }
+        card_permission_classes!(manifest_monomorphize_recipient)
     }
 }
 
@@ -191,17 +242,5 @@ impl PermissionTarget {
 
     pub fn subsumes(&self, other: &Self) -> bool {
         same_variant_target_subsumes_match!(self, other)
-    }
-}
-
-impl PolymorphicPermissionPattern {
-    pub fn class_name(&self) -> &'static str {
-        class_name_match!(self)
-    }
-}
-
-impl PolymorphicManifestPermissionPattern {
-    pub fn class_name(&self) -> &'static str {
-        class_name_match!(self)
     }
 }

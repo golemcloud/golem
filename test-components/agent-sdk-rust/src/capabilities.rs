@@ -16,14 +16,14 @@
 //! The `QuotaToken` capability is exercised separately via the
 //! `quota_rpc` agents.
 
-use golem_rust::SecretRef;
+use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
 pub trait CapabilityEchoAgent {
     fn new(name: String) -> Self;
 
-    fn echo_secret(&self, value: SecretRef) -> SecretRef;
+    fn echo_secret(&self, value: GuestSecretHandle) -> GuestSecretHandle;
 }
 
 pub struct CapabilityEchoAgentImpl {
@@ -36,7 +36,7 @@ impl CapabilityEchoAgent for CapabilityEchoAgentImpl {
         Self { _name: name }
     }
 
-    fn echo_secret(&self, value: SecretRef) -> SecretRef {
+    fn echo_secret(&self, value: GuestSecretHandle) -> GuestSecretHandle {
         value
     }
 }

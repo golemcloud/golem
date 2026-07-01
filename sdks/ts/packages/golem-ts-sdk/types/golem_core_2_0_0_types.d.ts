@@ -10,6 +10,8 @@ declare module 'golem:core/types@2.0.0' {
   export function uuidToString(uuid: Uuid): string;
   export class QuotaToken {
   }
+  export class Secret {
+  }
   /**
    * ============================================================
    * Carrier indices
@@ -180,6 +182,36 @@ declare module 'golem:core/types@2.0.0' {
     err?: TypeNodeIndex;
   };
   /**
+   * --- Numeric restrictions ---
+   * A numeric bound usable across every numeric representation. Float bounds
+   * carry canonical IEEE-754 `f64` bits (NaN/inf rejected, -0.0 normalized);
+   * comparisons decode the bits to `f64` and compare numerically.
+   */
+  export type NumericBound = 
+  {
+    tag: 'signed'
+    val: bigint
+  } |
+  {
+    tag: 'unsigned'
+    val: bigint
+  } |
+  {
+    tag: 'float-bits'
+    val: bigint
+  };
+  /**
+   * Inline numeric refinement. `none` on a numeric type means unconstrained
+   * (the common case). The empty restriction set is never encoded as `some`:
+   * producers normalize it to `none`, decoders normalize a decoded empty to
+   * `none`. `unit` is schema/help metadata only.
+   */
+  export type NumericRestrictions = {
+    min?: NumericBound;
+    max?: NumericBound;
+    unit?: string;
+  };
+  /**
    * --- Text / Binary restrictions ---
    */
   export type TextRestrictions = {
@@ -316,6 +348,8 @@ declare module 'golem:core/types@2.0.0' {
    * --- Capability nodes ---
    */
   export type SecretSpec = {
+    /** Revealed payload type carried by this secret handle. */
+    inner: TypeNodeIndex;
     /** Optional categorisation (e.g., `"api-key"`, `"oauth-token"`). */
     category?: string;
   };
@@ -356,33 +390,43 @@ declare module 'golem:core/types@2.0.0' {
   } |
   {
     tag: 's8-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 's16-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 's32-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 's64-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u8-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u16-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u32-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'u64-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'f32-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'f64-type'
+    val: NumericRestrictions | undefined
   } |
   {
     tag: 'char-type'
@@ -570,16 +614,6 @@ declare module 'golem:core/types@2.0.0' {
      */
     body: ValueNodeIndex;
   };
-  /**
-   * Capability value: secret transport is **by reference**. The schema side
-   * declares the secret; the value side carries an opaque reference that the
-   * authority resolves on read. The literal secret material never crosses
-   * this carrier.
-   */
-  export type SecretValuePayload = {
-    /** Opaque, authority-resolved reference. */
-    secretRef: string;
-  };
   export type SchemaValueNode = 
   /** Primitives */
   {
@@ -712,7 +746,7 @@ declare module 'golem:core/types@2.0.0' {
   /** Capability nodes */
   {
     tag: 'secret-value'
-    val: SecretValuePayload
+    val: Secret
   } |
   {
     tag: 'quota-token-handle'

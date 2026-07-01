@@ -124,6 +124,16 @@ fn system_authorization_bypasses_roles_and_effective_surface() {
 }
 
 #[test]
+fn system_auth_cannot_validate_card_derivation() {
+    let ctx = AuthCtx::System;
+
+    assert!(matches!(
+        ctx.effective_surface_for_card_derivation("test"),
+        Err(super::AuthorizationError::AuthContextHasNoCards(_))
+    ));
+}
+
+#[test]
 fn user_with_effective_surface_can_authorize_permission() {
     let account_id = AccountId::new();
     let grant = report_grant(RecipientPattern::Account {

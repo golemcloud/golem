@@ -158,6 +158,8 @@ pub enum AuthorizationError {
         target: Box<PermissionTarget>,
         error: CardAlgebraError,
     },
+    #[error("The action {0} requires an auth context with cards")]
+    AuthContextHasNoCards(String),
 }
 
 impl SafeDisplay for AuthorizationError {
@@ -332,6 +334,18 @@ impl AuthCtx {
             Self::Agent(agent) => {
                 authorize_effective_surface_permission(&agent.effective_surface, target)
             }
+        }
+    }
+
+    pub fn effective_surface_for_card_derivation(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<&EffectiveSurface, AuthorizationError> {
+        match self {
+            Self::System => Err(AuthorizationError::AuthContextHasNoCards(action.into())),
+            Self::User(user) => Ok(&user.effective_surface),
+            Self::Agent(agent) => Ok(&agent.effective_surface),
+            Self::AdminImpersonation(ctx) => Ok(&ctx.effective_surface),
         }
     }
 }

@@ -512,7 +512,11 @@ fn agent_invocation_result_redacted_debug_hides_capability_material() {
             fields: vec![
                 SchemaValue::String("svc".to_string()),
                 SchemaValue::Secret(SecretValuePayload {
-                    secret_ref: "shhh-do-not-log".to_string(),
+                    secret_id: uuid::Uuid::nil(),
+                    config_key: None,
+                    version: 0,
+                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    category: None,
                 }),
             ],
         },

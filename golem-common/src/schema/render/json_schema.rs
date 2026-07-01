@@ -1111,18 +1111,43 @@ fn render_quantity(q: &QuantityValue) -> String {
 }
 
 fn secret_schema(_spec: &SecretSpec) -> Map<String, Value> {
-    // Canonical Secret JSON shape: `{ secretRef: string-non-empty }`.
-    let mut secret_ref = Map::new();
-    secret_ref.insert("type".to_string(), Value::String("string".to_string()));
-    secret_ref.insert("minLength".to_string(), Value::Number(1.into()));
+    // Canonical Secret JSON shape: see canonical/secret.rs.
+    let secret_id = obj_inline([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("uuid".to_string())),
+    ]);
+    let config_key = obj_inline([
+        ("type", Value::String("array".to_string())),
+        (
+            "items",
+            obj_inline([("type", Value::String("string".to_string()))]),
+        ),
+    ]);
+    let version = obj_inline([
+        ("type", Value::String("integer".to_string())),
+        ("minimum", Value::Number(0.into())),
+    ]);
+    let resolved_at = obj_inline([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("date-time".to_string())),
+    ]);
+    let category = obj_inline([("type", Value::String("string".to_string()))]);
     let mut properties = Map::new();
-    properties.insert("secretRef".to_string(), Value::Object(secret_ref));
+    properties.insert("secretId".to_string(), secret_id);
+    properties.insert("configKey".to_string(), config_key);
+    properties.insert("version".to_string(), version);
+    properties.insert("resolvedAt".to_string(), resolved_at);
+    properties.insert("category".to_string(), category);
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("object".to_string()));
     m.insert("properties".to_string(), Value::Object(properties));
     m.insert(
         "required".to_string(),
-        Value::Array(vec![Value::String("secretRef".to_string())]),
+        Value::Array(vec![
+            Value::String("secretId".to_string()),
+            Value::String("version".to_string()),
+            Value::String("resolvedAt".to_string()),
+        ]),
     );
     m.insert("additionalProperties".to_string(), Value::Bool(false));
     m

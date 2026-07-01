@@ -1,11 +1,11 @@
 import {
-  "golemcloud/golem_sdk/schema" @schema,
+  "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
-  "golemcloud/golem_sdk/interface/golem/core/types" @types,
+  "golemcloud/golem_sdk/interface/golem/core/types",
 }
 
 import {
-  "golemcloud/golem_sdk/schema" @schema,
+  "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
-  "golemcloud/golem_sdk/interface/golem/core/types" @types,
+  "golemcloud/golem_sdk/interface/golem/core/types",
 } for "test"

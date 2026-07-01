@@ -7,7 +7,7 @@ description: "Adding secrets to TypeScript Golem agents. Use when the user asks 
 
 ## Overview
 
-Secrets are sensitive configuration values (API keys, passwords, tokens) stored per-environment and accessed via `Secret<T>` from `@golemcloud/golem-ts-sdk`. Unlike regular config fields, secret values are fetched on demand and managed separately from the agent config.
+Secrets are sensitive configuration values (API keys, passwords, tokens) stored per-environment and accessed via `Secret<T>` from `@golemcloud/golem-ts-sdk`. Unlike regular config fields, the config value carries an opaque secret handle; plaintext is revealed only when agent code calls `.get()`.
 
 ## Declaring Secrets in the Config Type
 
@@ -29,7 +29,7 @@ type MyAgentConfig = {
 
 ## Using Secrets in Agent Code
 
-Call `.get()` on a `Secret<T>` field to fetch the current value:
+Call `.get()` on a `Secret<T>` field to explicitly reveal the current value:
 
 ```typescript
 import { agent, BaseAgent, Config, Secret } from "@golemcloud/golem-ts-sdk";
@@ -78,7 +78,8 @@ secretDefaults:
 
 ## Key Points
 
-- `Secret<T>` fields are **not** loaded eagerly — call `.get()` to fetch the current value.
+- `Secret<T>` fields are **not** loaded eagerly — call `.get()` to reveal the current value.
+- Each reveal pins the resolved secret revision for deterministic retries and replay; a fresh `.get()` after an update can observe the new value.
 - Secret values are stored **per-environment**, not per-agent-instance.
 - Secrets are **not** stored in the `config` section of `golem.yaml` — use `secretDefaults` for dev environments only.
 - Missing required secrets cause agent creation to fail.

@@ -117,6 +117,8 @@ golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true }
 axum = { workspace = true }
 futures-concurrency = { workspace = true }
@@ -127,5 +129,7 @@ rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
 test-r = { workspace = true }
+testcontainers = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tryhard = { workspace = true }
 system-interface = { workspace = true }

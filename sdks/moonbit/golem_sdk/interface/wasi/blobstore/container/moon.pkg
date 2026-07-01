@@ -1,5 +1,5 @@
 import {
-  "golemcloud/golem_sdk/interface/wasi/blobstore/types" @types,
+  "golemcloud/golem_sdk/interface/wasi/blobstore/types",
 }
 
 warnings = "-44"

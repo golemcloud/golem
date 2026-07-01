@@ -67,10 +67,10 @@ fn monomorphize_stored_card(
         StoredCard::Polymorphic(card) => Card {
             card_id: card.card_id,
             parent_ids: card.parent_ids.clone(),
-            lower_positive: monomorphize_permissions(&card.lower_positive, context),
-            lower_negative: monomorphize_permissions(&card.lower_negative, context),
-            upper_positive: monomorphize_permissions(&card.upper_positive, context),
-            upper_negative: monomorphize_permissions(&card.upper_negative, context),
+            lower_positive: resolve_permissions_for_agent_context(&card.lower_positive, context),
+            lower_negative: resolve_permissions_for_agent_context(&card.lower_negative, context),
+            upper_positive: resolve_permissions_for_agent_context(&card.upper_positive, context),
+            upper_negative: resolve_permissions_for_agent_context(&card.upper_negative, context),
             created_at: card.created_at,
             expires_at: card.expires_at,
             system_card: card.system_card,
@@ -79,7 +79,7 @@ fn monomorphize_stored_card(
     }
 }
 
-fn monomorphize_permissions(
+pub(crate) fn resolve_permissions_for_agent_context(
     permissions: &[PolymorphicPermissionPattern],
     context: &AgentPermissionMonomorphizationContext,
 ) -> Vec<PermissionPattern> {
@@ -565,6 +565,7 @@ mod tests {
     use crate::model::account::AccountEmail;
     use crate::model::agent::AgentTypeName;
     use crate::model::application::ApplicationName;
+    use crate::model::card::default_agent_initial_permission_grants;
     use crate::model::card::recipient::RecipientPattern;
     use crate::model::card::{
         AgentClass, AgentResourcePattern, AgentVerb, CardId, ClassPermissionTarget, ComponentClass,
@@ -573,7 +574,6 @@ mod tests {
         PolymorphicPermissionPattern, StoredCard,
     };
     use crate::model::component::ComponentName;
-    use crate::model::component_metadata::default_agent_initial_card;
     use crate::model::environment::EnvironmentName;
 
     use test_r::test;
@@ -691,9 +691,26 @@ mod tests {
     }
 
     #[test]
-    fn default_agent_initial_template_is_current_environment_scoped() {
+    fn default_agent_initial_permission_is_current_environment_scoped() {
         let context = context();
-        let card = default_agent_initial_card();
+        let recipient = RecipientPattern::Agent {
+            account: context.account.clone(),
+            application: context.application.clone(),
+            environment: context.environment.clone(),
+            component: context.component.clone(),
+            agent_type: context.agent_type.clone(),
+        };
+        let card = PolymorphicCard {
+            card_id: CardId::new(),
+            parent_ids: Vec::new(),
+            lower_positive: default_agent_initial_permission_grants(recipient),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+        };
         let surface =
             agent_effective_surface_from_wallet(&context, [&StoredCard::Polymorphic(card)]);
 

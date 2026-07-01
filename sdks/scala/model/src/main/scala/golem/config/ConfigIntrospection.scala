@@ -16,7 +16,7 @@
 
 package golem.config
 
-import golem.schema.Derivation
+import golem.schema.{Derivation, SchemaGraph, SchemaType, SchemaTypeBody, SecretSpec}
 import zio.blocks.schema.{Reflect, Schema}
 import zio.blocks.schema.binding.Binding
 import zio.blocks.typeid.TypeId
@@ -48,7 +48,7 @@ private[golem] object ConfigIntrospection {
         AgentConfigDeclaration(
           AgentConfigSource.Secret,
           path,
-          Derivation.graphOf(new Schema(inner))
+          secretGraph(Derivation.graphOf(new Schema(inner)))
         )
       )
     } else {
@@ -72,4 +72,7 @@ private[golem] object ConfigIntrospection {
           }
       }
     }
+
+  private def secretGraph(inner: SchemaGraph): SchemaGraph =
+    SchemaGraph(inner.defs, SchemaType(SchemaTypeBody.SecretType(SecretSpec(inner.root))))
 }

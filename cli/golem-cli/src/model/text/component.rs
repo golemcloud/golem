@@ -18,6 +18,7 @@ use crate::model::component::ComponentView;
 use crate::model::masking::{Masked, MaskingConfig, is_sensitive_key, mask_secret};
 use crate::model::text::fmt::*;
 use colored::control::SHOULD_COLORIZE;
+use golem_common::model::card::PolymorphicCard;
 use golem_common::model::component::ComponentName;
 use serde::Serializer;
 use serde::ser::Error;
@@ -120,10 +121,54 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
                 provision_config.plugins.as_slice(),
                 !provision_config.plugins.is_empty(),
                 format_plugins,
+            )
+            .fmt_field_optional(
+                &format!("{}Initial permissions", prefix),
+                &provision_config.initial_permissions,
+                !initial_permission_is_empty(&provision_config.initial_permissions),
+                format_initial_permission,
             );
     }
 
     fields.build()
+}
+
+fn initial_permission_is_empty(card: &PolymorphicCard) -> bool {
+    card.lower_positive.is_empty()
+        && card.lower_negative.is_empty()
+        && card.upper_positive.is_empty()
+        && card.upper_negative.is_empty()
+}
+
+fn format_initial_permission(card: &PolymorphicCard) -> String {
+    let mut sections = Vec::new();
+    push_initial_permission_section(&mut sections, "lower positive", &card.lower_positive);
+    push_initial_permission_section(&mut sections, "lower negative", &card.lower_negative);
+    push_initial_permission_section(&mut sections, "upper positive", &card.upper_positive);
+    push_initial_permission_section(&mut sections, "upper negative", &card.upper_negative);
+    sections.join("\n")
+}
+
+fn push_initial_permission_section(
+    sections: &mut Vec<String>,
+    name: &str,
+    permissions: &[golem_common::model::card::PolymorphicPermissionPattern],
+) {
+    if permissions.is_empty() {
+        return;
+    }
+
+    let grants = permissions
+        .iter()
+        .map(|permission| {
+            permission
+                .render()
+                .unwrap_or_else(|error| format!("<failed to render grant: {error}>"))
+        })
+        .map(|grant| format!("  - {grant}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    sections.push(format!("{name}:\n{grants}"));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

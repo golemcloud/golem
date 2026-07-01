@@ -126,6 +126,10 @@ pub enum DeployValidationError {
         errors: Vec<String>,
     },
     #[error(
+        "Agent secret config at path {path} must be declared as secret<T> or option<secret<T>> with plaintext T"
+    )]
+    AgentSecretInvalidConfigType { path: CanonicalAgentSecretPath },
+    #[error(
         "Agent secret at path {path} is not compatible with existing secret in the environment. agent: {agent_secret_type:?}; environment: {environment_secret_type:?}"
     )]
     AgentSecretNotCompatibleWithEnvironmentSecret {

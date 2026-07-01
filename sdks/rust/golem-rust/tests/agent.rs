@@ -1462,22 +1462,26 @@ mod tests {
         let agent =
             golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
 
-        fn project_for_comparsion(
+        fn project_for_comparison(
             schema: &golem_rust::schema::wit::wire::SchemaGraph,
             value: AgentConfigDeclaration,
         ) -> (AgentConfigSource, Vec<String>, String) {
-            (
-                value.source,
-                value.path,
-                format!("{:?}", schema.type_nodes[value.value_type as usize].body),
-            )
+            let body = &schema.type_nodes[value.value_type as usize].body;
+            let body = match body {
+                golem_rust::schema::wit::wire::SchemaTypeBody::SecretType(spec) => {
+                    format!("Secret({:?})", schema.type_nodes[spec.inner as usize].body)
+                }
+                other => format!("{other:?}"),
+            };
+
+            (value.source, value.path, body)
         }
 
         assert_eq!(
             agent
                 .config
                 .into_iter()
-                .map(|entry| project_for_comparsion(&agent.schema, entry))
+                .map(|entry| project_for_comparison(&agent.schema, entry))
                 .collect::<Vec<_>>(),
             vec![
                 (
@@ -1488,7 +1492,7 @@ mod tests {
                 (
                     AgentConfigSource::Local,
                     vec!["port".to_string()],
-                    "SchemaTypeBody::U32Type".to_string()
+                    "SchemaTypeBody::U32Type(None)".to_string()
                 ),
                 (
                     AgentConfigSource::Local,
@@ -1498,17 +1502,17 @@ mod tests {
                 (
                     AgentConfigSource::Local,
                     vec!["nested".to_string(), "bar".to_string(),],
-                    "SchemaTypeBody::S32Type".to_string()
+                    "SchemaTypeBody::S32Type(None)".to_string()
                 ),
                 (
                     AgentConfigSource::Secret,
                     vec!["nested".to_string(), "nested_secret".to_string(),],
-                    "SchemaTypeBody::BoolType".to_string()
+                    "Secret(SchemaTypeBody::BoolType)".to_string()
                 ),
                 (
                     AgentConfigSource::Secret,
                     vec!["api_key".to_string()],
-                    "SchemaTypeBody::StringType".to_string()
+                    "Secret(SchemaTypeBody::StringType)".to_string()
                 )
             ]
         );

@@ -17,6 +17,14 @@ name = "agent"
 harness = false
 
 [[test]]
+name = "tool"
+harness = false
+
+[[test]]
+name = "tool_canonical"
+harness = false
+
+[[test]]
 name = "ui"
 harness = false
 

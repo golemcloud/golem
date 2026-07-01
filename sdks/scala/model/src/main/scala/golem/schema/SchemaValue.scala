@@ -72,7 +72,7 @@ object SchemaValue {
   final case class UnionValue(unionTag: String, body: SchemaValue) extends SchemaValue
 
   // Capability nodes
-  final case class SecretValue(secretRef: String) extends SchemaValue
+  final case class SecretValue(handle: GuestSecretHandle) extends SchemaValue
 
   /**
    * An owned `golem:core/types@2.0.0` `quota-token` resource travelling inside
@@ -125,5 +125,6 @@ object v {
   def ok(value: Option[SchemaValue]): SchemaValue         = ResultValue(SchemaResult.Ok(value))
   def err(value: Option[SchemaValue]): SchemaValue        = ResultValue(SchemaResult.Err(value))
 
+  def secret(handle: GuestSecretHandle): SchemaValue         = SecretValue(handle)
   def quotaToken(handle: GuestQuotaTokenHandle): SchemaValue = QuotaTokenHandle(handle)
 }

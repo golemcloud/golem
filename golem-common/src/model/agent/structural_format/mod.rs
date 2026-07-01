@@ -26,12 +26,12 @@
 use crate::model::agent::text_utils::{
     write_json_escaped, write_json_escaped_char, write_with_decimal_point,
 };
-use crate::schema::canonical::{datetime, duration, quantity, quota_token};
+use crate::schema::canonical::{datetime, duration, quantity, quota_token, secret};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_type::{SchemaType, UnionSpec};
 use crate::schema::schema_value::{
-    BinaryValuePayload, ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
-    UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, ResultValuePayload, SchemaValue, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 use base64::Engine;
 use std::fmt::Write;
@@ -487,7 +487,7 @@ fn format_schema_value(
             format_tagged_string(buf, "qty", &quantity::to_text(v).map_err(canonical_err)?)
         }
         (SchemaValue::Secret(v), SchemaType::Secret { .. }) => {
-            format_tagged_string(buf, "secret", &v.secret_ref)
+            format_tagged_string(buf, "secret", &secret::to_text(v).map_err(canonical_err)?)
         }
         (SchemaValue::QuotaToken(v), SchemaType::QuotaToken { .. }) => {
             format_tagged_string(buf, "qt", &quota_token::to_text(v).map_err(canonical_err)?)
@@ -785,9 +785,10 @@ impl<'a> Parser<'a> {
                 quantity::from_text(&self.parse_tagged_string("qty")?)
                     .map_err(|e| self.error(&format!("Invalid quantity: {e}")))?,
             )),
-            SchemaType::Secret { .. } => Ok(SchemaValue::Secret(SecretValuePayload {
-                secret_ref: self.parse_tagged_string("secret")?,
-            })),
+            SchemaType::Secret { .. } => Ok(SchemaValue::Secret(
+                secret::from_text(&self.parse_tagged_string("secret")?)
+                    .map_err(|e| self.error(&format!("Invalid secret: {e}")))?,
+            )),
             SchemaType::QuotaToken { .. } => Ok(SchemaValue::QuotaToken(
                 quota_token::from_text(&self.parse_tagged_string("qt")?)
                     .map_err(|e| self.error(&format!("Invalid quota token: {e}")))?,

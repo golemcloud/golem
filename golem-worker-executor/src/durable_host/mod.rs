@@ -31,6 +31,7 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 mod replay_state;
+mod secrets;
 mod sockets;
 pub mod tool;
 pub mod wasm_rpc;

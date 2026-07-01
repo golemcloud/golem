@@ -26,6 +26,7 @@ use crate::model::agent_secret::{
 };
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
+use crate::services::agent_secret::schema_contains_host_managed_capability;
 use crate::services::deployment::route_compilation::validate_path_segments;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
@@ -42,8 +43,10 @@ use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation,
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::agent::reachable_defs;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::render;
+use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -355,10 +358,14 @@ impl DeploymentContext {
                 // The agent-type-declared secret value type is already a
                 // schema-native `SchemaType`; pair it with the agent's shared
                 // graph defs so any `SchemaType::Ref` inside resolves.
-                let config_secret_schema = SchemaGraph {
-                    defs: agent_type.agent_type.schema.defs.clone(),
-                    root: config.value_type.clone(),
-                };
+                let config_secret_schema = ok_or_continue!(
+                    stored_agent_secret_schema(
+                        &canonical_agent_secret_path,
+                        &agent_type.agent_type.schema,
+                        &config.value_type,
+                    ),
+                    errors
+                );
 
                 match seen_secrets.entry(canonical_agent_secret_path.clone()) {
                     hash_map::Entry::Vacant(e) => {
@@ -598,6 +605,52 @@ fn parse_default_secret_value(
         .transpose()
 }
 
+fn stored_agent_secret_schema(
+    path: &CanonicalAgentSecretPath,
+    agent_graph: &SchemaGraph,
+    config_type: &SchemaType,
+) -> Result<SchemaGraph, DeployValidationError> {
+    let root = match resolve_schema_ref(agent_graph, config_type) {
+        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
+        SchemaType::Option { inner, .. } => match resolve_schema_ref(agent_graph, inner) {
+            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
+            _ => {
+                return Err(DeployValidationError::AgentSecretInvalidConfigType {
+                    path: path.clone(),
+                });
+            }
+        },
+        _ => {
+            return Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() });
+        }
+    };
+
+    let schema = SchemaGraph {
+        defs: reachable_defs(agent_graph, &root),
+        root,
+    };
+
+    if schema_contains_host_managed_capability(&schema) {
+        Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() })
+    } else {
+        Ok(schema)
+    }
+}
+
+fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
+    let mut seen = std::collections::HashSet::new();
+    while let SchemaType::Ref { id, .. } = ty {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        match graph.lookup(id) {
+            Some(def) => ty = &def.body,
+            None => break,
+        }
+    }
+    ty
+}
+
 pub fn extract_registered_agent_types(
     components: &BTreeMap<ComponentName, Component>,
     http_api_deployments: &BTreeMap<Domain, HttpApiDeployment>,
@@ -712,5 +765,370 @@ fn validate_final_http_api_router(
                 path: compiled_route.path.clone(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{AgentMode, Snapshotting};
+    use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath, AgentSecretRevision};
+    use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName, EnvironmentRevision};
+    use golem_common::schema::agent::{
+        AgentConfigDeclarationSchema, AgentConstructorSchema, InputSchema,
+    };
+    use golem_common::schema::graph::SchemaTypeDef;
+    use golem_common::schema::metadata::TypeId;
+    use golem_common::schema::schema_type::{QuotaTokenSpec, SchemaType, SecretSpec};
+    use golem_common::schema::schema_value::SchemaValue;
+    use serde_json::json;
+    use test_r::test;
+
+    fn test_environment() -> Environment {
+        Environment {
+            id: EnvironmentId::new(),
+            revision: EnvironmentRevision::INITIAL,
+            application_id: ApplicationId::new(),
+            application_name: ApplicationName::try_from("app").unwrap(),
+            name: EnvironmentName::try_from("dev").unwrap(),
+            diff_model_version: 0,
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            current_deployment: None,
+        }
+    }
+
+    fn test_implementer() -> RegisteredAgentTypeImplementer {
+        RegisteredAgentTypeImplementer {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::INITIAL,
+            component_name: "component".to_string(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+        }
+    }
+
+    fn agent_type_with_secret_config(
+        agent_type_name: AgentTypeName,
+        path: Vec<String>,
+        value_type: SchemaType,
+    ) -> AgentTypeSchema {
+        AgentTypeSchema {
+            type_name: agent_type_name,
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: Vec::new(),
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Secret,
+                path,
+                value_type,
+            }],
+        }
+    }
+
+    fn stored_agent_secret(
+        path: &[String],
+        secret_type: SchemaGraph,
+        secret_value: Option<SchemaValue>,
+    ) -> AgentSecret {
+        AgentSecret {
+            id: AgentSecretId::new(),
+            environment_id: EnvironmentId::new(),
+            path: CanonicalAgentSecretPath::from_path_in_unknown_casing(path),
+            revision: AgentSecretRevision::INITIAL,
+            secret_type,
+            secret_value,
+        }
+    }
+
+    #[test]
+    fn secret_default_plaintext_value_is_parsed_against_secret_inner_type() {
+        let path = CanonicalAgentSecretPath(vec!["apiKey".to_string()]);
+        let default = DeploymentAgentSecretDefault {
+            path: AgentSecretPath(vec!["apiKey".to_string()]),
+            secret_value: json!("s3cr3t"),
+        };
+        let schema = SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::string()),
+            category: None,
+        }));
+        let schema = stored_agent_secret_schema(&path, &schema, &schema.root)
+            .expect("secret<T> config declarations should be accepted");
+
+        let parsed = parse_default_secret_value(&path, Some(&&default), &schema)
+            .expect("plaintext defaults for secret<T> should be parsed as T");
+
+        assert_eq!(parsed, Some(SchemaValue::String("s3cr3t".to_string())));
+    }
+
+    #[test]
+    fn optional_secret_default_plaintext_value_is_parsed_against_secret_inner_type() {
+        let path = CanonicalAgentSecretPath(vec!["apiKey".to_string()]);
+        let default = DeploymentAgentSecretDefault {
+            path: AgentSecretPath(vec!["apiKey".to_string()]),
+            secret_value: json!("s3cr3t"),
+        };
+        let schema = SchemaGraph::anonymous(SchemaType::option(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::string()),
+            category: None,
+        })));
+        let schema = stored_agent_secret_schema(&path, &schema, &schema.root)
+            .expect("option<secret<T>> config declarations should be accepted");
+
+        let parsed = parse_default_secret_value(&path, Some(&&default), &schema)
+            .expect("plaintext defaults for option<secret<T>> should be parsed as T");
+
+        assert_eq!(parsed, Some(SchemaValue::String("s3cr3t".to_string())));
+    }
+
+    #[test]
+    fn non_secret_config_declaration_is_rejected() {
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        let agent_type = agent_type_with_secret_config(
+            agent_type_name.clone(),
+            config_path.clone(),
+            SchemaType::string(),
+        );
+        let mut registered_agent_types = HashMap::new();
+        registered_agent_types.insert(
+            agent_type_name,
+            InProgressDeployedRegisteredAgentType {
+                agent_type,
+                implemented_by: test_implementer(),
+                webhook_domain_and_segments: None,
+            },
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types,
+        };
+        let mut errors = Vec::new();
+
+        let (creations, updates, replacements) = context
+            .deployment_agent_secret_creations_and_updates(
+                Vec::new(),
+                Vec::new(),
+                false,
+                &mut errors,
+            );
+
+        assert!(creations.is_empty());
+        assert!(updates.is_empty());
+        assert!(replacements.is_empty());
+        assert_eq!(
+            errors,
+            vec![DeployValidationError::AgentSecretInvalidConfigType {
+                path: CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+            }]
+        );
+    }
+
+    #[test]
+    fn nested_secret_payload_config_declaration_is_rejected() {
+        let path = CanonicalAgentSecretPath(vec!["apiKey".to_string()]);
+        let schema = SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: None,
+            })),
+            category: None,
+        }));
+
+        let result = stored_agent_secret_schema(&path, &schema, &schema.root);
+
+        assert_eq!(
+            result,
+            Err(DeployValidationError::AgentSecretInvalidConfigType { path })
+        );
+    }
+
+    #[test]
+    fn nested_quota_token_payload_config_declaration_is_rejected() {
+        let path = CanonicalAgentSecretPath(vec!["quota".to_string()]);
+        let schema = SchemaGraph::anonymous(SchemaType::option(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::quota_token(QuotaTokenSpec {
+                resource_name: Some("credits".to_string()),
+            })),
+            category: None,
+        })));
+
+        let result = stored_agent_secret_schema(&path, &schema, &schema.root);
+
+        assert_eq!(
+            result,
+            Err(DeployValidationError::AgentSecretInvalidConfigType { path })
+        );
+    }
+
+    #[test]
+    fn referenced_secret_declaration_projects_away_outer_secret_def() {
+        let path = CanonicalAgentSecretPath(vec!["apiKey".to_string()]);
+        let outer_id = TypeId::new("api-key-secret");
+        let inner_id = TypeId::new("api-key-inner");
+        let schema = SchemaGraph {
+            defs: vec![
+                SchemaTypeDef {
+                    id: outer_id.clone(),
+                    name: None,
+                    body: SchemaType::secret(SecretSpec {
+                        inner: Box::new(SchemaType::ref_to(inner_id.clone())),
+                        category: None,
+                    }),
+                },
+                SchemaTypeDef {
+                    id: inner_id.clone(),
+                    name: None,
+                    body: SchemaType::string(),
+                },
+            ],
+            root: SchemaType::string(),
+        };
+
+        let stored_schema =
+            stored_agent_secret_schema(&path, &schema, &SchemaType::ref_to(outer_id))
+                .expect("ref to secret<T> should be accepted and stored as plaintext T");
+
+        assert!(matches!(stored_schema.root, SchemaType::Ref { .. }));
+        assert_eq!(stored_schema.defs.len(), 1);
+        assert_eq!(stored_schema.defs[0].id, inner_id);
+        assert!(matches!(
+            stored_schema.defs[0].body,
+            SchemaType::String { .. }
+        ));
+    }
+
+    #[test]
+    fn optional_secret_default_creation_stores_plaintext_inner_schema_not_option_schema() {
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        let agent_type = agent_type_with_secret_config(
+            agent_type_name.clone(),
+            config_path.clone(),
+            SchemaType::option(SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: None,
+            })),
+        );
+        let mut registered_agent_types = HashMap::new();
+        registered_agent_types.insert(
+            agent_type_name,
+            InProgressDeployedRegisteredAgentType {
+                agent_type,
+                implemented_by: test_implementer(),
+                webhook_domain_and_segments: None,
+            },
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types,
+        };
+        let default = DeploymentAgentSecretDefault {
+            path: AgentSecretPath(config_path),
+            secret_value: json!("s3cr3t"),
+        };
+        let mut errors = Vec::new();
+
+        let (creations, updates, replacements) = context
+            .deployment_agent_secret_creations_and_updates(
+                Vec::new(),
+                vec![default],
+                false,
+                &mut errors,
+            );
+
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+        assert_eq!(updates.len(), 0);
+        assert_eq!(replacements.len(), 0);
+        assert_eq!(creations.len(), 1);
+        assert_eq!(
+            creations[0].secret_value,
+            Some(SchemaValue::String("s3cr3t".to_string()))
+        );
+        match resolve_schema_ref(&creations[0].secret_type, &creations[0].secret_type.root) {
+            SchemaType::String { .. } => {}
+            other => panic!(
+                "deployment-created agent secrets must be stored as plaintext T, not {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn optional_secret_declaration_accepts_existing_stored_plaintext_schema() {
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        let agent_type = agent_type_with_secret_config(
+            agent_type_name.clone(),
+            config_path.clone(),
+            SchemaType::option(SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: None,
+            })),
+        );
+        let mut registered_agent_types = HashMap::new();
+        registered_agent_types.insert(
+            agent_type_name,
+            InProgressDeployedRegisteredAgentType {
+                agent_type,
+                implemented_by: test_implementer(),
+                webhook_domain_and_segments: None,
+            },
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types,
+        };
+        let existing_secret = stored_agent_secret(
+            &config_path,
+            SchemaGraph::anonymous(SchemaType::string()),
+            Some(SchemaValue::String("already-set".to_string())),
+        );
+        let mut errors = Vec::new();
+
+        let (creations, updates, replacements) = context
+            .deployment_agent_secret_creations_and_updates(
+                vec![existing_secret],
+                Vec::new(),
+                false,
+                &mut errors,
+            );
+
+        assert!(
+            errors.is_empty(),
+            "option<secret<T>> declarations should accept existing stored plaintext T; got {errors:?}"
+        );
+        assert_eq!(creations.len(), 0);
+        assert_eq!(updates.len(), 0);
+        assert_eq!(replacements.len(), 0);
     }
 }

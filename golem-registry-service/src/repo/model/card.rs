@@ -187,12 +187,23 @@ impl CardRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::component_metadata::default_agent_initial_card;
+    use golem_common::model::card::default_agent_initial_permission_grants;
+    use golem_common::model::card::recipient::RecipientPattern;
     use test_r::test;
 
     #[test]
     fn polymorphic_creation_persists_agent_initial_card_grants() {
-        let initial_card = default_agent_initial_card();
+        let initial_card = PolymorphicCard {
+            card_id: CardId::new(),
+            parent_ids: Vec::new(),
+            lower_positive: default_agent_initial_permission_grants(RecipientPattern::Any),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+        };
 
         let record = CardRecord::polymorphic_creation(
             initial_card.card_id,

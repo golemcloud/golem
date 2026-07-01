@@ -50,11 +50,15 @@
  *     no items, is valid).
  *   • A `positional` / `option` / `result` / `error` `type-node-index`
  *     resolves to a node in `tool.schema`.
- *   • A `repeatable` option's `default`, if present, is a list whose
- *     elements are values of the `repeatable-shape.%type` node.
- *   • A `value-is` ref naming a repeatable option, tail positional, or
- *     otherwise list-shaped target means "any occurrence / element
- *     equals this literal"; the literal is a value of the element type.
+ *   • A `repeatable-list` option's `default`, if present, is a `list`
+ *     whose elements are values of the `repeatable-list-shape.item-type`
+ *     node. A `repeatable-map` option's `default`, if present, is a `map`
+ *     value of the `repeatable-map-shape.map-type` node.
+ *   • A `value-is` ref naming a `repeatable-list` option, tail positional,
+ *     or otherwise list-shaped target means "any occurrence / element
+ *     equals this literal"; the literal is a value of the element type. For
+ *     a `repeatable-map` option the literal is a value of the map's value
+ *     type (any entry's value equals this literal).
  *   • The tool's identity is its root command name
  *     (`commands.nodes[0].name`); `get-tool(name)` and
  *     `guest.invoke(tool-name, …)` match against it. `commands.nodes`
@@ -98,6 +102,10 @@ declare module 'golem:tool/common@0.1.0' {
      */
     openWorld: boolean;
   };
+  /**
+   * Resolution policy for a repeated key in a `repeatable-map` option.
+   */
+  export type DuplicateKeyPolicy = "reject" | "last-wins";
   export type Repetition = 
   /** --inc a --inc b */
   {
@@ -113,10 +121,20 @@ declare module 'golem:tool/common@0.1.0' {
     tag: 'either'
     val: string
   };
-  export type RepeatableShape = {
+  export type RepeatableListShape = {
     repetition: Repetition;
-    /** Index into `tool.schema`. */
-    type: TypeNodeIndex;
+    /** Index into `tool.schema`; the element type of the collected `list`. */
+    itemType: TypeNodeIndex;
+  };
+  export type RepeatableMapShape = {
+    repetition: Repetition;
+    /**
+     * Index into `tool.schema`; a `golem:core` `map` (key + value) node. The
+     * collected value is this map.
+     */
+    mapType: TypeNodeIndex;
+    /** What happens when the same key is supplied more than once. */
+    duplicateKeyPolicy: DuplicateKeyPolicy;
   };
   export type OptionShape = 
   /** Required value: --opt VALUE or --opt=VALUE. Index into `tool.schema`. */
@@ -133,10 +151,21 @@ declare module 'golem:tool/common@0.1.0' {
     tag: 'optional-scalar'
     val: TypeNodeIndex
   } |
-  /** Repeatable; value type in the derived signature is list-of-scalar. */
+  /**
+   * Repeatable scalar option (`-e a -e b`); the collected value is a
+   * `list` of the element type.
+   */
   {
-    tag: 'repeatable'
-    val: RepeatableShape
+    tag: 'repeatable-list'
+    val: RepeatableListShape
+  } |
+  /**
+   * Repeatable key-value option (`-c a=1 -c b=2`); the collected value is a
+   * `golem:core` `map` node, never a `list<tuple>`.
+   */
+  {
+    tag: 'repeatable-map'
+    val: RepeatableMapShape
   };
   export type BoolFlagShape = {
     default_: boolean;
@@ -235,6 +264,11 @@ declare module 'golem:tool/common@0.1.0' {
     /** Default value, interpreted against `%type` in `tool.schema`. */
     default_?: SchemaValueTree;
     required: boolean;
+    /**
+     * If true, the positional's value may be read from standard input
+     * (e.g. grep's trailing `files` accepting piped input).
+     */
+    acceptsStdio: boolean;
   };
   export type TailPositional = {
     name: string;
@@ -251,6 +285,11 @@ declare module 'golem:tool/common@0.1.0' {
      * `kubectl exec -- CMD ARGS...`).
      */
     verbatim: boolean;
+    /**
+     * If true, the tail items may be read from standard input
+     * (e.g. grep's trailing `files` accepting piped input).
+     */
+    acceptsStdio: boolean;
   };
   /**
    * Positionals (variadic only at the tail, structurally)

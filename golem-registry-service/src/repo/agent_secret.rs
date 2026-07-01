@@ -24,6 +24,7 @@ use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent}
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
+use golem_common::model::agent_secret::{AgentSecretId, AgentSecretRevision};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -58,6 +59,18 @@ pub trait AgentSecretRepo: Send + Sync {
         &self,
         environment_id: Uuid,
     ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
+
+    /// Gets a stored revision by identity. When `include_deleted` is true, soft-deleted
+    /// secrets and parent environment/application/account records are still considered;
+    /// deleted revision records themselves are never returned.
+    async fn get_revision(
+        &self,
+        environment_id: Uuid,
+        agent_secret_id: AgentSecretId,
+        path: Vec<String>,
+        revision: AgentSecretRevision,
+        include_deleted: bool,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 }
 
 pub struct LoggedAgentSecretRepo<Repo: AgentSecretRepo> {
@@ -125,6 +138,26 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         self.repo
             .get_for_environment(environment_id)
+            .instrument(Self::span_environment_id(environment_id))
+            .await
+    }
+
+    async fn get_revision(
+        &self,
+        environment_id: Uuid,
+        agent_secret_id: AgentSecretId,
+        path: Vec<String>,
+        revision: AgentSecretRevision,
+        include_deleted: bool,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        self.repo
+            .get_revision(
+                environment_id,
+                agent_secret_id,
+                path,
+                revision,
+                include_deleted,
+            )
             .instrument(Self::span_environment_id(environment_id))
             .await
     }
@@ -375,5 +408,61 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
             .await?;
 
         Ok(results)
+    }
+
+    async fn get_revision(
+        &self,
+        environment_id: Uuid,
+        agent_secret_id: AgentSecretId,
+        path: Vec<String>,
+        revision: AgentSecretRevision,
+        include_deleted: bool,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        let revision_id = i64::try_from(revision.get())
+            .map_err(|err| AgentSecretRepoError::InternalError(anyhow::anyhow!(err)))?;
+
+        let result: Option<AgentSecretExtRevisionRecord> = if include_deleted {
+            self.with_ro("get_revision")
+                .fetch_optional_as(
+                    sqlx::query_as(indoc! {r#"
+                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                        FROM agent_secrets sec
+                        JOIN environments e ON e.environment_id = sec.environment_id
+                        JOIN applications ap ON ap.application_id = e.application_id
+                        JOIN accounts a ON a.account_id = ap.account_id
+                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
+                        WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
+                    "#})
+                        .bind(environment_id)
+                        .bind(agent_secret_id.0)
+                        .bind(sqlx::types::Json(path))
+                        .bind(revision_id),
+                )
+                .await?
+        } else {
+            self.with_ro("get_revision")
+                .fetch_optional_as(
+                    sqlx::query_as(indoc! {r#"
+                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                        FROM agent_secrets sec
+                        JOIN environments e ON e.environment_id = sec.environment_id
+                        JOIN applications ap ON ap.application_id = e.application_id
+                        JOIN accounts a ON a.account_id = ap.account_id
+                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
+                        WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
+                            AND sec.deleted_at IS NULL
+                            AND e.deleted_at IS NULL
+                            AND ap.deleted_at IS NULL
+                            AND a.deleted_at IS NULL
+                    "#})
+                        .bind(environment_id)
+                        .bind(agent_secret_id.0)
+                        .bind(sqlx::types::Json(path))
+                        .bind(revision_id),
+                )
+                .await?
+        };
+
+        Ok(result)
     }
 }

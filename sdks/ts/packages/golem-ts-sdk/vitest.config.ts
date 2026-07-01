@@ -19,6 +19,11 @@ export default defineConfig({
       'golem:agent/common@2.0.0': path.resolve(__dirname, 'types/golem_agent_2_0_0_common.d.ts'),
       'golem:agent/host@2.0.0': path.resolve(__dirname, 'types/golem_agent_2_0_0_host.d.ts'),
       'golem:quota/types@1.5.0': path.resolve(__dirname, 'types/golem_quota_1_5_0_types.d.ts'),
+      'golem:secrets/types@0.1.0': path.resolve(__dirname, 'types/golem_secrets_0_1_0_types.d.ts'),
+      'golem:secrets/reveal@0.1.0': path.resolve(
+        __dirname,
+        'types/golem_secrets_0_1_0_reveal.d.ts',
+      ),
       'wasi:clocks/wall-clock@0.2.3': path.resolve(
         __dirname,
         'types/wasi_clocks_0_2_3_wall_clock.d.ts',

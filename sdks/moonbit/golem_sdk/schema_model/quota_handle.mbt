@@ -72,12 +72,12 @@ pub fn[R] GuestQuotaTokenHandle::with_handle(
 /// Identity-based equality: two holders are equal only if they are the same
 /// instance. A `SchemaValue` carrying a token therefore compares by handle
 /// identity rather than by any (non-existent) structural content.
-impl Eq for GuestQuotaTokenHandle with equal(self, other) {
+impl Eq for GuestQuotaTokenHandle with fn equal(self, other) {
   physical_equal(self, other)
 }
 
 ///|
-impl Show for GuestQuotaTokenHandle with output(self, logger) {
+impl Show for GuestQuotaTokenHandle with fn output(self, logger) {
   logger.write_string(
     if self.is_present() {
       "GuestQuotaTokenHandle(present)"

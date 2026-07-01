@@ -139,6 +139,8 @@ pub struct Positional {
     /// Default value, interpreted against [`type_`](Self::type_).
     pub default: Option<SchemaValue>,
     pub required: bool,
+    /// If true, the positional's value may be read from standard input.
+    pub accepts_stdio: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,6 +156,8 @@ pub struct TailPositional {
     pub separator: Option<String>,
     /// If true, tokens after `separator` are not flag-parsed.
     pub verbatim: bool,
+    /// If true, the tail items may be read from standard input.
+    pub accepts_stdio: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,15 +180,37 @@ pub enum OptionShape {
     Scalar(SchemaType),
     /// Bare presence collapses to `default`; with value parses normally.
     OptionalScalar(SchemaType),
-    /// Repeatable; value type in the derived signature is list-of-scalar.
-    Repeatable(RepeatableShape),
+    /// Repeatable scalar option (`-e a -e b`); the collected value is a list
+    /// of the element type.
+    RepeatableList(RepeatableListShape),
+    /// Repeatable key-value option (`-c a=1 -c b=2`); the collected value is a
+    /// [`SchemaType::Map`], never a `list<tuple>`.
+    RepeatableMap(RepeatableMapShape),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RepeatableShape {
+pub struct RepeatableListShape {
     pub repetition: Repetition,
-    /// Schema of a single item.
-    pub type_: SchemaType,
+    /// Schema of a single collected element.
+    pub item_type: SchemaType,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepeatableMapShape {
+    pub repetition: Repetition,
+    /// A [`SchemaType::Map`] node; the collected value is this map.
+    pub map_type: SchemaType,
+    /// What happens when the same key is supplied more than once.
+    pub duplicate_key_policy: DuplicateKeyPolicy,
+}
+
+/// Resolution policy for a repeated key in a [`OptionShape::RepeatableMap`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DuplicateKeyPolicy {
+    /// A repeated key is a usage error.
+    Reject,
+    /// A repeated key takes the last supplied value.
+    LastWins,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

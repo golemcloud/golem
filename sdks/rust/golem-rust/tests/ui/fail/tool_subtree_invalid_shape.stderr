@@ -1,0 +1,5 @@
+error: #[constraint] / #[result] are not supported on a #[command(subtree = ...)] method
+  --> tests/ui/fail/tool_subtree_invalid_shape.rs:11:8
+   |
+11 |     fn remote(&self) -> RemoteSubtree;
+   |        ^^^^^^

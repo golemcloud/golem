@@ -201,6 +201,24 @@ impl From<&wire::Repetition> for Repetition {
     }
 }
 
+impl From<&DuplicateKeyPolicy> for wire::DuplicateKeyPolicy {
+    fn from(p: &DuplicateKeyPolicy) -> Self {
+        match p {
+            DuplicateKeyPolicy::Reject => wire::DuplicateKeyPolicy::Reject,
+            DuplicateKeyPolicy::LastWins => wire::DuplicateKeyPolicy::LastWins,
+        }
+    }
+}
+
+impl From<&wire::DuplicateKeyPolicy> for DuplicateKeyPolicy {
+    fn from(p: &wire::DuplicateKeyPolicy) -> Self {
+        match p {
+            wire::DuplicateKeyPolicy::Reject => DuplicateKeyPolicy::Reject,
+            wire::DuplicateKeyPolicy::LastWins => DuplicateKeyPolicy::LastWins,
+        }
+    }
+}
+
 impl From<&Quantifier> for wire::Quantifier {
     fn from(q: &Quantifier) -> Self {
         match q {
@@ -474,6 +492,7 @@ fn encode_positional(
         type_: enc.encode_type(&p.type_)?,
         default: p.default.as_ref().map(encode_value).transpose()?,
         required: p.required,
+        accepts_stdio: p.accepts_stdio,
     })
 }
 
@@ -490,6 +509,7 @@ fn encode_tail_positional(
         max: t.max,
         separator: t.separator.clone(),
         verbatim: t.verbatim,
+        accepts_stdio: t.accepts_stdio,
     })
 }
 
@@ -517,10 +537,19 @@ fn encode_option_shape(
     Ok(match s {
         OptionShape::Scalar(ty) => wire::OptionShape::Scalar(enc.encode_type(ty)?),
         OptionShape::OptionalScalar(ty) => wire::OptionShape::OptionalScalar(enc.encode_type(ty)?),
-        OptionShape::Repeatable(r) => wire::OptionShape::Repeatable(wire::RepeatableShape {
-            repetition: wire::Repetition::from(&r.repetition),
-            type_: enc.encode_type(&r.type_)?,
-        }),
+        OptionShape::RepeatableList(r) => {
+            wire::OptionShape::RepeatableList(wire::RepeatableListShape {
+                repetition: wire::Repetition::from(&r.repetition),
+                item_type: enc.encode_type(&r.item_type)?,
+            })
+        }
+        OptionShape::RepeatableMap(r) => {
+            wire::OptionShape::RepeatableMap(wire::RepeatableMapShape {
+                repetition: wire::Repetition::from(&r.repetition),
+                map_type: enc.encode_type(&r.map_type)?,
+                duplicate_key_policy: wire::DuplicateKeyPolicy::from(&r.duplicate_key_policy),
+            })
+        }
     })
 }
 
@@ -668,6 +697,7 @@ fn decode_positional(dec: &GraphDecoder, p: &wire::Positional) -> Result<Positio
         type_: dec.decode_type_at(p.type_)?,
         default: p.default.as_ref().map(decode_value).transpose()?,
         required: p.required,
+        accepts_stdio: p.accepts_stdio,
     })
 }
 
@@ -684,6 +714,7 @@ fn decode_tail_positional(
         max: t.max,
         separator: t.separator.clone(),
         verbatim: t.verbatim,
+        accepts_stdio: t.accepts_stdio,
     })
 }
 
@@ -713,9 +744,14 @@ fn decode_option_shape(
         wire::OptionShape::OptionalScalar(ty) => {
             OptionShape::OptionalScalar(dec.decode_type_at(*ty)?)
         }
-        wire::OptionShape::Repeatable(r) => OptionShape::Repeatable(RepeatableShape {
+        wire::OptionShape::RepeatableList(r) => OptionShape::RepeatableList(RepeatableListShape {
             repetition: Repetition::from(&r.repetition),
-            type_: dec.decode_type_at(r.type_)?,
+            item_type: dec.decode_type_at(r.item_type)?,
+        }),
+        wire::OptionShape::RepeatableMap(r) => OptionShape::RepeatableMap(RepeatableMapShape {
+            repetition: Repetition::from(&r.repetition),
+            map_type: dec.decode_type_at(r.map_type)?,
+            duplicate_key_policy: DuplicateKeyPolicy::from(&r.duplicate_key_policy),
         }),
     })
 }

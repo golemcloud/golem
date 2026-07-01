@@ -178,8 +178,21 @@ function getTypeFromTsMorphInternal(
       owner: getTypeOwner(type),
       optional: isOptional,
       properties: result.properties,
-      // Filter out the root entry (empty path) — it has no parent to prune.
-      requiredMembers: result.requiredMembers.filter((e) => e.path.length > 0),
+      requiredMembers: configRequiredMembers(result),
+    };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.secret)) {
+    return {
+      kind: 'secret',
+      name: aliasName,
+      optional: isOptional,
+      element: getTypeFromTsMorphInternal(
+        type.getTypeArguments()[0],
+        false,
+        wellKnownTypes,
+        visitedTypes,
+      ),
     };
   }
 
@@ -523,26 +536,28 @@ function getUnionTypeKindRank(kind: Type.Type['kind']): number {
       return 15;
     case 'config':
       return 16;
-    case 'quota-token':
+    case 'secret':
       return 17;
-    case 'principal':
+    case 'quota-token':
       return 18;
-    case 'path':
+    case 'principal':
       return 19;
-    case 'url':
+    case 'path':
       return 20;
-    case 'datetime':
+    case 'url':
       return 21;
-    case 'duration':
+    case 'datetime':
       return 22;
-    case 'quantity':
+    case 'duration':
       return 23;
-    case 'alias':
+    case 'quantity':
       return 24;
-    case 'others':
+    case 'alias':
       return 25;
-    case 'unresolved-type':
+    case 'others':
       return 26;
+    case 'unresolved-type':
+      return 27;
   }
 }
 
@@ -637,19 +652,47 @@ function extractConfigPropertiesFromTypeLiteral(
     // For optional properties (`field?: T`), ts-morph returns `T | undefined`.
     // Strip the `undefined` member so well-known-type checks work correctly.
     const rawPropType = unwrapAlias(member.getType());
+    const rawUnionTypes = rawPropType.isUnion() ? rawPropType.getUnionTypes() : [];
+    const nonUndefinedUnionMember = singleNonUndefinedUnionMember(rawPropType);
+    const nonNullishUnionMember = singleNonNullishUnionMember(rawPropType);
+    const hasNullUnionMember = rawUnionTypes.some((t) => t.isNull());
+    const hasUndefinedUnionMember = rawUnionTypes.some((t) => t.isUndefined());
+    const isExplicitUndefinedSecret =
+      !memberOptional &&
+      ((nonUndefinedUnionMember !== undefined &&
+        isExactly(nonUndefinedUnionMember, wellKnownTypes.sdk.secret)) ||
+        (hasUndefinedUnionMember &&
+          nonNullishUnionMember !== undefined &&
+          isExactly(nonNullishUnionMember, wellKnownTypes.sdk.secret)));
     const propType =
-      memberOptional && rawPropType.isUnion()
-        ? (rawPropType.getUnionTypes().find((t) => !t.isUndefined()) ?? rawPropType)
-        : rawPropType;
+      memberOptional && nonUndefinedUnionMember
+        ? nonUndefinedUnionMember
+        : nonNullishUnionMember && isExactly(nonNullishUnionMember, wellKnownTypes.sdk.secret)
+          ? nonNullishUnionMember
+          : rawPropType;
+    const isExplicitOptionalSecret =
+      nonNullishUnionMember !== undefined &&
+      isExactly(nonNullishUnionMember, wellKnownTypes.sdk.secret);
+    const secretHandleOptional =
+      isOptional ||
+      (isExplicitOptionalSecret && hasUndefinedUnionMember) ||
+      isExplicitUndefinedSecret;
+    const propertyOptional = isOptional || isExplicitOptionalSecret;
+    const secretPayloadOptional = isExplicitOptionalSecret && hasNullUnionMember;
 
-    if (!memberOptional) requiredKeys.push(name);
+    if (!memberOptional && !isExplicitUndefinedSecret) requiredKeys.push(name);
 
     // 1. secret wrapper
     if (isExactly(propType, wellKnownTypes.sdk.secret)) {
       properties.push({
         path: nextPath,
         secret: true,
-        type: getTypeFromTsMorph(propType.getTypeArguments()[0], isOptional, wellKnownTypes),
+        type: getTypeFromTsMorph(
+          propType.getTypeArguments()[0],
+          secretPayloadOptional,
+          wellKnownTypes,
+        ),
+        secretHandleOptional,
       });
       continue;
     }
@@ -660,7 +703,7 @@ function extractConfigPropertiesFromTypeLiteral(
       const nested = extractConfigPropertiesFromTypeLiteral(
         nestedTypeLiteral,
         nextPath,
-        isOptional,
+        propertyOptional,
         wellKnownTypes,
       );
       if (nested == null) return undefined;
@@ -673,13 +716,73 @@ function extractConfigPropertiesFromTypeLiteral(
     properties.push({
       path: nextPath,
       secret: false,
-      type: getTypeFromTsMorph(propType, isOptional, wellKnownTypes),
+      type: getTypeFromTsMorph(propType, propertyOptional, wellKnownTypes),
     });
   }
 
   const requiredMembers = [...nestedRequiredMembers, { path, requiredKeys }];
 
   return { properties, requiredMembers };
+}
+
+function configRequiredMembers(result: {
+  properties: Type.ConfigProperty[];
+  requiredMembers: { path: string[]; requiredKeys: string[] }[];
+}): { path: string[]; requiredKeys: string[] }[] {
+  const requiredSecretPaths = result.properties
+    .filter((prop) => prop.secret && isRequiredPath(result.requiredMembers, prop.path))
+    .map((prop) => prop.path);
+
+  return result.requiredMembers.flatMap((entry) => {
+    if (entry.path.length > 0) return entry.requiredKeys.length > 0 ? [entry] : [];
+
+    const requiredKeys = entry.requiredKeys.filter((key) =>
+      requiredSecretPaths.some((path) => isPrefixPath([key], path)),
+    );
+
+    return requiredKeys.length > 0 ? [{ path: entry.path, requiredKeys }] : [];
+  });
+}
+
+function isRequiredPath(
+  requiredMembers: { path: string[]; requiredKeys: string[] }[],
+  path: string[],
+): boolean {
+  for (let length = 1; length <= path.length; length++) {
+    const parentPath = path.slice(0, length - 1);
+    const key = path[length - 1];
+    const isRequired = requiredMembers.some(
+      (entry) =>
+        entry.path.length === parentPath.length &&
+        entry.path.every((part, i) => part === parentPath[i]) &&
+        entry.requiredKeys.includes(key),
+    );
+    if (!isRequired) return false;
+  }
+
+  return true;
+}
+
+function isPrefixPath(prefix: string[], path: string[]): boolean {
+  return prefix.length <= path.length && prefix.every((part, i) => part === path[i]);
+}
+
+function singleNonUndefinedUnionMember(type: TsMorphType): TsMorphType | undefined {
+  if (!type.isUnion()) return undefined;
+  const unionTypes = type.getUnionTypes();
+  const nonUndefined = unionTypes.filter((t) => !t.isUndefined());
+  return nonUndefined.length === 1 && nonUndefined.length < unionTypes.length
+    ? nonUndefined[0]
+    : undefined;
+}
+
+function singleNonNullishUnionMember(type: TsMorphType): TsMorphType | undefined {
+  if (!type.isUnion()) return undefined;
+  const unionTypes = type.getUnionTypes();
+  const nonNullish = unionTypes.filter((t) => !t.isUndefined() && !t.isNull());
+  return nonNullish.length === 1 && nonNullish.length < unionTypes.length
+    ? nonNullish[0]
+    : undefined;
 }
 
 type RawName = string;

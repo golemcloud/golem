@@ -1,4 +1,4 @@
-import { agent, BaseAgent, Config, Secret } from "@golemcloud/golem-ts-sdk";
+import { agent, awaitPromise, BaseAgent, Config, createPromise, PromiseId, Secret } from "@golemcloud/golem-ts-sdk";
 
 type AliasedNestedConfig = {
   c?: number;
@@ -94,6 +94,17 @@ export class SharedConfigAgent extends BaseAgent {
       secret: config.secret.get(),
       complexSecret: config.complexSecret.get()
     })
+  }
+
+  createReplayGate(): PromiseId {
+    return createPromise();
+  }
+
+  async revealSecretThenAwaitReplayGate(promiseId: PromiseId): Promise<string> {
+    const config = this.config.value;
+    const secret = config.secret.get();
+    await awaitPromise(promiseId);
+    return secret;
   }
 }
 

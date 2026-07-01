@@ -134,6 +134,9 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::AgentSecretDefaultTypeMismatch { .. } => {
             api::error_code::deployment_validation::AGENT_SECRET_DEFAULT_TYPE_MISMATCH
         }
+        DeployValidationError::AgentSecretInvalidConfigType { .. } => {
+            api::error_code::deployment_validation::AGENT_SECRET_INVALID_CONFIG_TYPE
+        }
         DeployValidationError::NoSecuritySchemeConfigured(_) => {
             api::error_code::deployment_validation::NO_SECURITY_SCHEME_CONFIGURED
         }
@@ -522,10 +525,17 @@ impl From<ComponentError> for ApiError {
             ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
-            ComponentError::MissingAgentInitialPermissionCard(_)
-            | ComponentError::UndeclaredAgentTypeInInitialPermissionCard(_) => {
+            ComponentError::MissingAgentTypeProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
+            ComponentError::NewAgentTypeMissingInitialPermissions(_) => Self::bad_request(
+                api::error_code::NEW_AGENT_TYPE_MISSING_INITIAL_PERMISSIONS,
+                error,
+            ),
+            ComponentError::InvalidAgentInitialPermissionCard { .. } => Self::bad_request(
+                api::error_code::INVALID_AGENT_INITIAL_PERMISSION_CARD,
+                error,
+            ),
             ComponentError::Unauthorized(inner) => inner.into(),
 
             ComponentError::LimitExceeded(inner) => inner.into(),

@@ -17,9 +17,20 @@
 // parity edge cases raised in the oracle review of Slice 2.
 
 import { describe, it, expect } from 'vitest';
+import type { SchemaValueNode as WitSchemaValueNode } from 'golem:core/types@2.0.0';
 import { r, resolvedField } from '../../src/internal/mapping/types/resolvedType';
-import { serialize, deserialize } from '../../src/internal/mapping/values/schemaValue';
+import {
+  createWireDecoder,
+  compileGraphDecoder,
+  getGraphCodec,
+  serialize,
+  deserialize,
+  deserializeGraph,
+  deserializeGraphFromWit,
+} from '../../src/internal/mapping/values/schemaValue';
 import { Result } from '../../src/host/result';
+import { GuestSecretHandle } from '../../src/internal/schema-model/secretHandle';
+import { SECRET_INTERNAL } from '../../src/internal/schema-model/secretInternal';
 
 describe('Slice 2 value codec — result parity', () => {
   const resultType = r.result(r.f64(), r.string(), { tag: 'inbuilt' });
@@ -105,5 +116,199 @@ describe('Slice 2 value codec — record optional fields', () => {
   it('serializes an object including the optional field', () => {
     const sv = serialize({ a: 'x', b: 7 }, rec);
     expect(deserialize(sv, rec)).toEqual({ a: 'x', b: 7 });
+  });
+});
+
+describe('Slice 2 value codec — reusable wire decoder', () => {
+  it('review repro: a failed readGraph call does not poison later reads with a stale cycle marker', () => {
+    const nodes = [
+      { tag: 'record-value', val: [1] },
+      { tag: 'string-value', val: 'not-a-u32' },
+    ] as Parameters<typeof createWireDecoder>[0];
+    const graph = { defs: new Map(), root: r.record([resolvedField('x', r.u32())]) };
+    const decoder = createWireDecoder(nodes);
+
+    expect(() => decoder.readGraph(0, graph)).toThrow(/number/);
+    expect(() => decoder.readGraph(0, graph)).toThrow(/number/);
+  });
+
+  it('review repro: compiled codec read failure does not poison the shared cycle guard', () => {
+    const nodes = [
+      { tag: 'record-value', val: [1] },
+      { tag: 'string-value', val: 'not-a-u32' },
+    ] as Parameters<typeof createWireDecoder>[0];
+    const graph = { defs: new Map(), root: r.record([resolvedField('x', r.u32())]) };
+    const codec = getGraphCodec(graph);
+    expect(codec).not.toBeNull();
+
+    const onPath = new Uint8Array(nodes.length);
+
+    expect(() => codec!.read(0, nodes, onPath)).toThrow(/number/);
+    expect(onPath[0]).toBe(0);
+    expect(() => codec!.read(0, nodes, onPath)).toThrow(/number/);
+  });
+});
+
+describe('Slice 2 value codec — strict enum decode', () => {
+  it('review repro: out-of-range enum indices are rejected on all schema decode paths', () => {
+    const graph = { defs: new Map(), root: r.enum(['red']) };
+    const wit = { valueNodes: [{ tag: 'enum-value', val: 1 }], root: 0 } as Parameters<
+      typeof deserializeGraphFromWit
+    >[0];
+
+    const rejects = (f: () => unknown) => {
+      try {
+        f();
+        return false;
+      } catch {
+        return true;
+      }
+    };
+
+    expect({
+      schemaValue: rejects(() => deserializeGraph({ tag: 'enum', caseIndex: 1 }, graph)),
+      wireValue: rejects(() => deserializeGraphFromWit(wit, graph)),
+      compiledWireValue: rejects(() => compileGraphDecoder(graph)(wit)),
+    }).toEqual({
+      schemaValue: true,
+      wireValue: true,
+      compiledWireValue: true,
+    });
+  });
+
+  it('review repro: non-integer enum indices are rejected on all schema decode paths', () => {
+    const graph = { defs: new Map(), root: r.enum(['red', 'blue']) };
+    const wit = { valueNodes: [{ tag: 'enum-value', val: 0.5 }], root: 0 } as Parameters<
+      typeof deserializeGraphFromWit
+    >[0];
+
+    const rejects = (f: () => unknown) => {
+      try {
+        f();
+        return false;
+      } catch {
+        return true;
+      }
+    };
+
+    expect({
+      schemaValue: rejects(() => deserializeGraph({ tag: 'enum', caseIndex: 0.5 }, graph)),
+      wireValue: rejects(() => deserializeGraphFromWit(wit, graph)),
+      compiledWireValue: rejects(() => compileGraphDecoder(graph)(wit)),
+    }).toEqual({
+      schemaValue: true,
+      wireValue: true,
+      compiledWireValue: true,
+    });
+  });
+});
+
+describe('Slice 2 value codec — strict variant decode', () => {
+  it('review repro: option-payload variant cases reject a missing variant payload', () => {
+    const graph = {
+      defs: new Map(),
+      root: r.variant(true, [
+        { name: 'maybe', payload: r.option(r.u32(), 'undefined'), valueKey: 'value' },
+      ]),
+    };
+    const wit = {
+      valueNodes: [{ tag: 'variant-value', val: { case_: 0, payload: undefined } }],
+      root: 0,
+    } as Parameters<typeof deserializeGraphFromWit>[0];
+
+    const rejects = (f: () => unknown) => {
+      try {
+        f();
+        return false;
+      } catch {
+        return true;
+      }
+    };
+
+    expect({
+      schemaValue: rejects(() => deserializeGraph({ tag: 'variant', caseIndex: 0 }, graph)),
+      wireValue: rejects(() => deserializeGraphFromWit(wit, graph)),
+      compiledWireValue: rejects(() => compileGraphDecoder(graph)(wit)),
+    }).toEqual({
+      schemaValue: true,
+      wireValue: true,
+      compiledWireValue: true,
+    });
+  });
+});
+
+describe('Slice 2 value codec — strict custom result decode', () => {
+  const graph = {
+    defs: new Map(),
+    root: r.result(r.u32(), undefined, {
+      tag: 'custom' as const,
+      okValueName: 'value',
+      errValueName: 'error',
+    }),
+  };
+
+  const rejects = (f: () => unknown) => {
+    try {
+      f();
+      return false;
+    } catch {
+      return true;
+    }
+  };
+
+  it('review repro: absent custom result side rejects unexpected payloads carrying owned secret handles', () => {
+    const raw = { id: 'ignored-secret' } as never;
+    const wit = () => ({
+      valueNodes: [
+        { tag: 'secret-value', val: raw } as WitSchemaValueNode,
+        { tag: 'result-value', val: { tag: 'err-value', val: 0 } } as WitSchemaValueNode,
+      ],
+      root: 1,
+    });
+
+    expect({
+      schemaValue: rejects(() =>
+        deserializeGraph(
+          {
+            tag: 'result',
+            result: {
+              tag: 'err',
+              value: {
+                tag: 'secret',
+                handle: GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw),
+              },
+            },
+          },
+          graph,
+        ),
+      ),
+      wireValue: rejects(() => deserializeGraphFromWit(wit(), graph)),
+      compiledWireValue: rejects(() => compileGraphDecoder(graph)(wit())),
+    }).toEqual({
+      schemaValue: true,
+      wireValue: true,
+      compiledWireValue: true,
+    });
+  });
+
+  it('review repro: present custom result side rejects missing payloads', () => {
+    const wit = {
+      valueNodes: [
+        { tag: 'result-value', val: { tag: 'ok-value', val: undefined } } as WitSchemaValueNode,
+      ],
+      root: 0,
+    };
+
+    expect({
+      schemaValue: rejects(() =>
+        deserializeGraph({ tag: 'result', result: { tag: 'ok', value: undefined } }, graph),
+      ),
+      wireValue: rejects(() => deserializeGraphFromWit(wit, graph)),
+      compiledWireValue: rejects(() => compileGraphDecoder(graph)(wit)),
+    }).toEqual({
+      schemaValue: true,
+      wireValue: true,
+      compiledWireValue: true,
+    });
   });
 });

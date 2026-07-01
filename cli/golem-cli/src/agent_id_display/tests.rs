@@ -731,7 +731,11 @@ fn capability_values_render_as_redacted_in_every_language() {
 
     let secret_ty = SchemaType::secret(SecretSpec::default());
     let secret_val = SchemaValue::Secret(SecretValuePayload {
-        secret_ref: "shhh-do-not-log".to_string(),
+        secret_id: uuid::Uuid::nil(),
+        config_key: Some(vec!["shhh-do-not-log".to_string()]),
+        version: 0,
+        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        category: None,
     });
     let secret_graph = SchemaGraph::anonymous(secret_ty.clone());
 

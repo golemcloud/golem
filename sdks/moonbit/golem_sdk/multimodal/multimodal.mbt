@@ -33,14 +33,14 @@ pub fn[T] Multimodal::new(items : Array[T]) -> Multimodal[T] {
 pub(open) trait MultimodalModality {
   /// Stable schema type-id of the modality enum (used to derive the generic
   /// `Multimodal[T]` type-id).
-  multimodal_type_id() -> @model.TypeId
+  fn multimodal_type_id() -> @model.TypeId
   /// Register each modality's payload type into `builder` and return the
   /// variant cases, in declaration order.
-  multimodal_cases(@model.SchemaBuilder) -> Array[@model.VariantCaseType]
+  fn multimodal_cases(@model.SchemaBuilder) -> Array[@model.VariantCaseType]
   /// Encode an instance to its `(case index, payload value)`.
-  to_modality_value(Self) -> (UInt, @model.SchemaValue)
+  fn to_modality_value(Self) -> (UInt, @model.SchemaValue)
   /// Decode a `(case index, payload value)` back to an instance.
-  from_modality_value(UInt, @model.SchemaValue) -> Self raise @schema.FromSchemaError
+  fn from_modality_value(UInt, @model.SchemaValue) -> Self raise @schema.FromSchemaError
 }
 
 ///|
@@ -56,14 +56,14 @@ fn multimodal_role_metadata() -> @types.MetadataEnvelope {
 }
 
 ///|
-pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with type_id() {
+pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with fn type_id() {
   @schema.type_id_with_args("golem.multimodal.Multimodal", [
     T::multimodal_type_id(),
   ])
 }
 
 ///|
-pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with register_in(
+pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with fn register_in(
   b,
 ) {
   let cases = T::multimodal_cases(b)
@@ -72,7 +72,7 @@ pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with regis
 }
 
 ///|
-pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with to_value(
+pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with fn to_value(
   self,
 ) {
   let elements : Array[@model.SchemaValue] = self.items.map(fn(item) {
@@ -83,7 +83,7 @@ pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T] with to_va
 }
 
 ///|
-pub impl[T : MultimodalModality] @schema.FromSchema for Multimodal[T] with from_value(
+pub impl[T : MultimodalModality] @schema.FromSchema for Multimodal[T] with fn from_value(
   v,
 ) {
   match v {

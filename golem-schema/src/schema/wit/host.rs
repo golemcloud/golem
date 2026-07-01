@@ -27,6 +27,7 @@ pub mod generated {
         wasmtime_crate: ::wasmtime,
         with: {
             "golem:core/types@2.0.0.quota-token": crate::schema::wit::QuotaTokenHandleRep,
+            "golem:core/types@2.0.0.secret": crate::schema::wit::SecretHandleRep,
         },
     });
 }

@@ -197,10 +197,10 @@ private[golem] object Derivation {
 
   private def unsignedBody(reflect: Reflect.Bound[?]): Option[SchemaTypeBody] = {
     val tid = reflect.typeId
-    if (TypeId.structurallyEqual(tid, ubyteTypeId)) Some(SchemaTypeBody.U8Type)
-    else if (TypeId.structurallyEqual(tid, ushortTypeId)) Some(SchemaTypeBody.U16Type)
-    else if (TypeId.structurallyEqual(tid, uintTypeId)) Some(SchemaTypeBody.U32Type)
-    else if (TypeId.structurallyEqual(tid, ulongTypeId)) Some(SchemaTypeBody.U64Type)
+    if (TypeId.structurallyEqual(tid, ubyteTypeId)) Some(SchemaTypeBody.U8Type())
+    else if (TypeId.structurallyEqual(tid, ushortTypeId)) Some(SchemaTypeBody.U16Type())
+    else if (TypeId.structurallyEqual(tid, uintTypeId)) Some(SchemaTypeBody.U32Type())
+    else if (TypeId.structurallyEqual(tid, ulongTypeId)) Some(SchemaTypeBody.U64Type())
     else None
   }
 

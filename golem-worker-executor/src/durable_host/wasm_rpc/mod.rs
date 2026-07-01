@@ -38,7 +38,9 @@ use golem_common::model::oplog::host_functions::{
     GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
     GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
 };
-use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
+use golem_common::model::oplog::types::{
+    SerializableHostFailureKind, SerializableInvokeResult, SerializableScheduleId,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
@@ -220,7 +222,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let span = create_rpc_connection_span(self, &remote_agent_id).await?;
 
-        let mut handle = CallHandle::<GolemRpcWasmRpcNew, NotCancellable>::start(
+        let handle = CallHandle::<GolemRpcWasmRpcNew, NotCancellable>::start(
             self,
             HostRequestGolemRpcCreate {
                 remote_agent_id: remote_agent_id.clone(),
@@ -237,12 +239,25 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         remote_agent_id,
                         response.target_environment_id,
                         response.target_fingerprint,
+                        env,
+                        config,
                         span,
                         remote_agent_type,
                     )
                     .await;
                 }
-                CallReplayOutcome::Incomplete(live) => handle = live,
+                CallReplayOutcome::Incomplete(live) => {
+                    return construct_wasm_rpc_resource(
+                        self,
+                        live,
+                        remote_agent_id,
+                        &env,
+                        config,
+                        span,
+                        remote_agent_type,
+                    )
+                    .await;
+                }
             }
         }
 
@@ -339,6 +354,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     }
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Err(err) = ensure_rpc_target_activated(self, self_).await {
+                handle.abandon_for_trap();
+                return Err(err);
             }
 
             let retry_properties =
@@ -498,6 +518,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            if let Err(err) = ensure_rpc_target_activated(self, self_).await {
+                handle.abandon_for_trap();
+                return Err(err);
+            }
+
             let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &method_name);
             let result = loop {
                 let stack = self.clone_as_inherited_stack(span.span_id());
@@ -568,6 +593,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let remote_agent_id = payload.remote_agent_id.clone();
         let connection_span_id = payload.span_id.clone();
         let remote_agent_type = payload.remote_agent_type.clone();
+        let deferred_target_activation = payload.target_activation.deferred_activation();
 
         if remote_agent_id == own_agent_id {
             return Err(anyhow::anyhow!(
@@ -652,6 +678,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         };
 
         let result = if self.state.is_live() {
+            ensure_rpc_target_activated(self, this).await?;
+
             let rpc = self.rpc();
             let stack = self.clone_as_inherited_stack(span.span_id());
 
@@ -698,6 +726,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 stack,
                 retry_params,
                 self.agent_auth_ctx(),
+                None,
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -725,6 +754,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     span_id: span.span_id().clone(),
                     begin_index,
                     auth_ctx,
+                    target_activation: deferred_target_activation,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -771,12 +801,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // an open durable function. `schedule_cancelable_invocation`
         // has no `RpcError` return channel, so these are surfaced as
         // wasmtime traps.
-        let (remote_agent_id, target_worker_fingerprint, remote_agent_type) = {
+        let (remote_agent_id, remote_agent_type) = {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
             (
                 payload.remote_agent_id.clone(),
-                payload.target_fingerprint,
                 payload.remote_agent_type.clone(),
             )
         };
@@ -799,7 +828,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         datetime.seconds, datetime.nanoseconds
                     )))
                 })?;
-
         // The persisted request embeds an idempotency key derived from the durable-scope begin
         // index, so this is a two-step call: open the scope first to learn the index, then build
         // the request from it.
@@ -816,7 +844,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // (which is stable across an incomplete-replay re-execution), so both live paths reproduce
         // the same key and `ScheduleId`.
         let idempotency_key;
-        let handle;
+        let mut handle;
         if begun.is_live() {
             idempotency_key = self.derive_idempotency_key(begin_index);
 
@@ -851,6 +879,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         }
 
         let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);
+        let target_worker_fingerprint = match ensure_rpc_target_activated(self, this).await {
+            Ok(fingerprint) => fingerprint,
+            Err(err) => {
+                handle.abandon_for_trap();
+                return Err(err);
+            }
+        };
 
         let stack = InvocationContextStack::new(
             self.state.invocation_context.trace_id.clone(),
@@ -986,13 +1021,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 } => {
                     let begin_index = *begin_index;
                     let message = "future-invoke-result already consumed";
+                    let err = classified_host_error(HostFailureKind::Permanent, message.to_string());
+                    let serializable_err = serialize_host_failure(&err);
                     (
-                        Err(anyhow::Error::new(ClassifiedHostError {
-                            kind: HostFailureKind::Permanent,
-                            message: message.to_string(),
-                        })),
+                        Err(err),
                         request.clone(),
-                        SerializableInvokeResult::Failed(message.to_string()),
+                        serializable_err,
                         begin_index,
                     )
                 }
@@ -1038,7 +1072,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         begin_index,
                     )
                 }
-                FutureInvokeResultState::Deferred { .. } => {
+                FutureInvokeResultState::Deferred {
+                    target_activation,
+                    ..
+                } => {
+                    let target_activation = target_activation.clone();
                     let enrichment = enrichment_agent_id
                         .as_ref()
                         .map(|id| (id, enrichment_idempotence));
@@ -1056,6 +1094,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         max_delay,
                         worker,
                         execution_status,
+                        target_activation,
                     )?
                 }
             };
@@ -1238,6 +1277,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     }
                 },
                 SerializableInvokeResult::Failed(error) => Err(anyhow::anyhow!(error)),
+                SerializableInvokeResult::FailedClassified { kind, message } => {
+                    Err(deserialize_classified_host_failure(kind, message))
+                }
             }
         }
     }
@@ -1518,10 +1560,12 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
-            demand,
             remote_agent_id,
             span_id: span.span_id().clone(),
-            target_fingerprint,
+            target_activation: WasmRpcTargetActivation::Activated {
+                demand,
+                target_fingerprint,
+            },
             remote_agent_type,
         }),
     })?;
@@ -1533,22 +1577,115 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_agent_id: AgentId,
     target_environment_id: EnvironmentId,
     target_fingerprint: AgentFingerprint,
+    env: Vec<(String, String)>,
+    config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
-            demand: Box::new(crate::services::rpc::ReplayedDemand::new(
-                target_fingerprint,
-            )),
             remote_agent_id,
             span_id: span.span_id().clone(),
-            target_fingerprint,
+            target_activation: WasmRpcTargetActivation::ReplayPending {
+                target_fingerprint,
+                env,
+                config,
+            },
             remote_agent_type,
         }),
     })?;
     Ok(entry)
+}
+
+/// Activates the remote RPC target by creating a fresh demand and verifying that the live
+/// fingerprint matches the one persisted at construction time. Failures are returned as
+/// [`ClassifiedHostError`]s so every call site classifies activation errors the same way: a
+/// `create_demand` failure inherits its transient/permanent kind from [`classify_rpc_error`], while
+/// a fingerprint change is always permanent.
+async fn activate_rpc_target(
+    rpc: &dyn Rpc,
+    remote_agent_id: &OwnedAgentId,
+    created_by: AccountId,
+    agent_id: &AgentId,
+    env: &[(String, String)],
+    stack: InvocationContextStack,
+    config: Vec<AgentConfigEntryDto>,
+    auth_ctx: &AuthCtx,
+    expected_fingerprint: AgentFingerprint,
+) -> Result<Box<dyn RpcDemand>, Error> {
+    let demand = rpc
+        .create_demand(
+            remote_agent_id,
+            created_by,
+            agent_id,
+            env,
+            stack,
+            config,
+            auth_ctx,
+        )
+        .await
+        .map_err(|err| classified_host_error(classify_rpc_error(&err), err.to_string()))?;
+    let target_fingerprint = demand.fingerprint();
+    if target_fingerprint != expected_fingerprint {
+        return Err(classified_host_error(
+            HostFailureKind::Permanent,
+            format!(
+                "RPC target activation fingerprint changed during replay: persisted={expected_fingerprint}, live={target_fingerprint}"
+            ),
+        ));
+    }
+    Ok(demand)
+}
+
+async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: Resource<WasmRpcEntry>,
+) -> anyhow::Result<AgentFingerprint> {
+    let (remote_agent_id, span_id, env, config, replayed_target_fingerprint) = {
+        let entry = ctx.table().get(&this)?;
+        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+        match &payload.target_activation {
+            WasmRpcTargetActivation::Activated {
+                target_fingerprint, ..
+            } => return Ok(*target_fingerprint),
+            WasmRpcTargetActivation::ReplayPending {
+                target_fingerprint,
+                env,
+                config,
+            } => (
+                payload.remote_agent_id.clone(),
+                payload.span_id.clone(),
+                env.clone(),
+                config.clone(),
+                *target_fingerprint,
+            ),
+        }
+    };
+
+    let stack = ctx.clone_as_inherited_stack(&span_id);
+    let rpc = ctx.rpc();
+    let demand = activate_rpc_target(
+        rpc.as_ref(),
+        &remote_agent_id,
+        ctx.created_by(),
+        ctx.agent_id(),
+        &env,
+        stack,
+        config,
+        &ctx.agent_auth_ctx(),
+        replayed_target_fingerprint,
+    )
+    .await?;
+
+    let entry = ctx.table().get_mut(&this)?;
+    let payload = entry.payload.downcast_mut::<WasmRpcEntryPayload>().unwrap();
+    payload.target_activation = WasmRpcTargetActivation::Activated {
+        demand,
+        target_fingerprint: replayed_target_fingerprint,
+    };
+
+    Ok(replayed_target_fingerprint)
 }
 
 struct TaskRetryParams<Ctx: WorkerCtx> {
@@ -1564,6 +1701,60 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 }
 
+enum RpcTaskError {
+    Rpc(InternalRpcError),
+    Host(Error),
+}
+
+impl std::fmt::Display for RpcTaskError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RpcTaskError::Rpc(err) => write!(f, "{err}"),
+            RpcTaskError::Host(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+fn classify_rpc_task_error(err: &RpcTaskError) -> HostFailureKind {
+    match err {
+        RpcTaskError::Rpc(err) => classify_rpc_error(err),
+        RpcTaskError::Host(err) => err
+            .downcast_ref::<ClassifiedHostError>()
+            .map(|err| err.kind)
+            .unwrap_or(HostFailureKind::Permanent),
+    }
+}
+
+fn classified_host_error(kind: HostFailureKind, message: String) -> Error {
+    Error::new(ClassifiedHostError { kind, message })
+}
+
+fn serialize_host_failure(err: &Error) -> SerializableInvokeResult {
+    if let Some(classified) = err.downcast_ref::<ClassifiedHostError>() {
+        let kind = match classified.kind {
+            HostFailureKind::Transient => SerializableHostFailureKind::Transient,
+            HostFailureKind::Permanent => SerializableHostFailureKind::Permanent,
+        };
+        SerializableInvokeResult::FailedClassified {
+            kind,
+            message: classified.message.clone(),
+        }
+    } else {
+        SerializableInvokeResult::Failed(err.to_string())
+    }
+}
+
+fn deserialize_classified_host_failure(
+    kind: SerializableHostFailureKind,
+    message: String,
+) -> Error {
+    let kind = match kind {
+        SerializableHostFailureKind::Transient => HostFailureKind::Transient,
+        SerializableHostFailureKind::Permanent => HostFailureKind::Permanent,
+    };
+    classified_host_error(kind, message)
+}
+
 fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     rpc: Arc<dyn Rpc>,
     remote_agent_id: OwnedAgentId,
@@ -1576,6 +1767,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     stack: InvocationContextStack,
     retry_params: Option<TaskRetryParams<Ctx>>,
     auth_ctx: AuthCtx,
+    target_activation: Option<RpcTargetActivation>,
 ) -> AbortOnDropJoinHandle<Result<Result<SchemaValue, InternalRpcError>, Error>> {
     let invoke = move || {
         let rpc = rpc.clone();
@@ -1588,7 +1780,27 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let env = env.clone();
         let stack = stack.clone();
         let auth_ctx = auth_ctx.clone();
+        let target_activation = target_activation.clone();
         async move {
+            let _demand = if let Some(target_activation) = target_activation {
+                let demand = activate_rpc_target(
+                    rpc.as_ref(),
+                    &remote_agent_id,
+                    created_by,
+                    &agent_id,
+                    &target_activation.env,
+                    stack.clone(),
+                    target_activation.config,
+                    &auth_ctx,
+                    target_activation.target_fingerprint,
+                )
+                .await
+                .map_err(RpcTaskError::Host)?;
+                Some(demand)
+            } else {
+                None
+            };
+
             let result = rpc
                 .invoke_and_await(
                     &remote_agent_id,
@@ -1601,7 +1813,8 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     stack,
                     &auth_ctx,
                 )
-                .await?;
+                .await
+                .map_err(RpcTaskError::Rpc)?;
             Ok(result)
         }
     };
@@ -1631,7 +1844,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 };
                 crate::durable_host::durability::in_task_retry_loop(
                     task_ctx,
-                    classify_rpc_error,
+                    classify_rpc_task_error,
                     invoke,
                     || {
                         execution_status
@@ -1644,7 +1857,11 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
             } else {
                 invoke().await
             };
-            Ok(result)
+            match result {
+                Ok(result) => Ok(Ok(result)),
+                Err(RpcTaskError::Rpc(err)) => Ok(Err(err)),
+                Err(RpcTaskError::Host(err)) => Err(err),
+            }
         }
         .in_current_span(),
     )
@@ -1709,13 +1926,8 @@ fn handle_completed_rpc_result(
                 begin_index,
             ),
             Err(err) => {
-                let serializable_err = err.to_string();
-                (
-                    Err(err),
-                    request,
-                    SerializableInvokeResult::Failed(serializable_err),
-                    begin_index,
-                )
+                let serializable_err = serialize_host_failure(&err);
+                (Err(err), request, serializable_err, begin_index)
             }
         })
     } else {
@@ -1742,6 +1954,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
+    target_activation: Option<RpcTargetActivation>,
 ) -> anyhow::Result<(
     Result<Option<Result<SchemaValue, RpcError>>, anyhow::Error>,
     HostRequestGolemRpcInvoke,
@@ -1812,6 +2025,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         stack,
         retry_params,
         auth_ctx.clone(),
+        target_activation,
     );
 
     let span_id = span_id.clone();
@@ -1831,17 +2045,52 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
 }
 
 pub struct WasmRpcEntryPayload {
-    #[allow(dead_code)]
-    pub demand: Box<dyn RpcDemand>,
     pub remote_agent_id: OwnedAgentId,
     pub span_id: SpanId,
-    pub target_fingerprint: AgentFingerprint,
+    pub target_activation: WasmRpcTargetActivation,
     /// Cached remote agent type, used to resolve per-method input/output
     /// schemas for the in-process [`SchemaValue`] / [`TypedSchemaValue`]
     /// flow. Sourced from the durable `get_agent_type` lookup performed in
     /// [`HostWasmRpc::new`], so it is consistent across live execution and
     /// replay.
     pub remote_agent_type: Arc<AgentTypeSchema>,
+}
+
+pub enum WasmRpcTargetActivation {
+    Activated {
+        #[allow(dead_code)]
+        demand: Box<dyn RpcDemand>,
+        target_fingerprint: AgentFingerprint,
+    },
+    ReplayPending {
+        target_fingerprint: AgentFingerprint,
+        env: Vec<(String, String)>,
+        config: Vec<AgentConfigEntryDto>,
+    },
+}
+
+impl WasmRpcTargetActivation {
+    fn deferred_activation(&self) -> Option<RpcTargetActivation> {
+        match self {
+            WasmRpcTargetActivation::ReplayPending {
+                target_fingerprint,
+                env,
+                config,
+            } => Some(RpcTargetActivation {
+                target_fingerprint: *target_fingerprint,
+                env: env.clone(),
+                config: config.clone(),
+            }),
+            WasmRpcTargetActivation::Activated { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RpcTargetActivation {
+    target_fingerprint: AgentFingerprint,
+    env: Vec<(String, String)>,
+    config: Vec<AgentConfigEntryDto>,
 }
 
 impl Debug for WasmRpcEntryPayload {
@@ -2015,6 +2264,7 @@ enum FutureInvokeResultState {
         span_id: SpanId,
         begin_index: OplogIndex,
         auth_ctx: AuthCtx,
+        target_activation: Option<RpcTargetActivation>,
     },
     Cancelled {
         request: HostRequestGolemRpcInvoke,
@@ -2091,5 +2341,387 @@ impl SubscribeAny for FutureInvokeResultState {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::rpc::RpcError as ServiceRpcError;
+    use async_trait::async_trait;
+    use golem_common::model::component::ComponentId;
+    use golem_service_base::model::auth::AuthCtx;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use test_r::test;
+    use uuid::Uuid;
+
+    struct FixedDemand {
+        fingerprint: AgentFingerprint,
+    }
+
+    impl RpcDemand for FixedDemand {
+        fn fingerprint(&self) -> AgentFingerprint {
+            self.fingerprint
+        }
+    }
+
+    struct FingerprintMismatchRpc {
+        live_fingerprint: AgentFingerprint,
+        invoke_called: AtomicBool,
+    }
+
+    struct ActivationFailureRpc {
+        invoke_called: AtomicBool,
+    }
+
+    struct RecordingEnvRpc {
+        fingerprint: AgentFingerprint,
+        activation_env: Mutex<Option<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl Rpc for FingerprintMismatchRpc {
+        async fn create_demand(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _config: Vec<AgentConfigEntryDto>,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+            Ok(Box::new(FixedDemand {
+                fingerprint: self.live_fingerprint,
+            }))
+        }
+
+        async fn invoke_and_await(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _idempotency_key: Option<IdempotencyKey>,
+            _method_name: String,
+            _method_parameters: SchemaValue,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<SchemaValue, ServiceRpcError> {
+            self.invoke_called.store(true, Ordering::SeqCst);
+            Ok(SchemaValue::Tuple { elements: vec![] })
+        }
+
+        async fn invoke(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _idempotency_key: Option<IdempotencyKey>,
+            _method_name: String,
+            _method_parameters: SchemaValue,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<(), ServiceRpcError> {
+            unreachable!("test only exercises invoke-and-await dispatch")
+        }
+    }
+
+    #[async_trait]
+    impl Rpc for ActivationFailureRpc {
+        async fn create_demand(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _config: Vec<AgentConfigEntryDto>,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+            Err(ServiceRpcError::Denied {
+                details: "activation denied".to_string(),
+            })
+        }
+
+        async fn invoke_and_await(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _idempotency_key: Option<IdempotencyKey>,
+            _method_name: String,
+            _method_parameters: SchemaValue,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<SchemaValue, ServiceRpcError> {
+            self.invoke_called.store(true, Ordering::SeqCst);
+            Ok(SchemaValue::Tuple { elements: vec![] })
+        }
+
+        async fn invoke(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _idempotency_key: Option<IdempotencyKey>,
+            _method_name: String,
+            _method_parameters: SchemaValue,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<(), ServiceRpcError> {
+            unreachable!("test only exercises invoke-and-await dispatch")
+        }
+    }
+
+    #[async_trait]
+    impl Rpc for RecordingEnvRpc {
+        async fn create_demand(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _config: Vec<AgentConfigEntryDto>,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+            *self.activation_env.lock().unwrap() = Some(self_env.to_vec());
+            Ok(Box::new(FixedDemand {
+                fingerprint: self.fingerprint,
+            }))
+        }
+
+        async fn invoke_and_await(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _idempotency_key: Option<IdempotencyKey>,
+            _method_name: String,
+            _method_parameters: SchemaValue,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<SchemaValue, ServiceRpcError> {
+            Ok(SchemaValue::Tuple { elements: vec![] })
+        }
+
+        async fn invoke(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _idempotency_key: Option<IdempotencyKey>,
+            _method_name: String,
+            _method_parameters: SchemaValue,
+            _self_created_by: AccountId,
+            _self_agent_id: &AgentId,
+            _self_env: &[(String, String)],
+            _self_stack: InvocationContextStack,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<(), ServiceRpcError> {
+            unreachable!("test only exercises invoke-and-await dispatch")
+        }
+    }
+
+    fn agent_id(name: &str) -> AgentId {
+        AgentId {
+            component_id: ComponentId(Uuid::from_u128(1)),
+            agent_id: name.to_string(),
+        }
+    }
+
+    #[test]
+    async fn deferred_activation_fingerprint_mismatch_is_a_host_failure_not_rpc_result() {
+        let persisted_fingerprint = AgentFingerprint(Uuid::from_u128(10));
+        let live_fingerprint = AgentFingerprint(Uuid::from_u128(11));
+        let rpc = Arc::new(FingerprintMismatchRpc {
+            live_fingerprint,
+            invoke_called: AtomicBool::new(false),
+        });
+
+        let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            rpc.clone(),
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
+            IdempotencyKey::new("deferred-activation-mismatch".to_string()),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            agent_id("caller"),
+            vec![],
+            InvocationContextStack::fresh(),
+            None,
+            AuthCtx::system(),
+            Some(RpcTargetActivation {
+                target_fingerprint: persisted_fingerprint,
+                env: vec![],
+                config: vec![],
+            }),
+        )
+        .await;
+
+        assert!(
+            !rpc.invoke_called.load(Ordering::SeqCst),
+            "fingerprint mismatch must stop before dispatching the RPC method"
+        );
+        assert!(
+            result.is_err(),
+            "fingerprint mismatch is a replay/activation violation and must be an outer host failure, not a completed RPC result: {result:?}"
+        );
+    }
+
+    #[test]
+    async fn deferred_activation_create_demand_failure_is_a_host_failure_not_rpc_result() {
+        let rpc = Arc::new(ActivationFailureRpc {
+            invoke_called: AtomicBool::new(false),
+        });
+
+        let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            rpc.clone(),
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
+            IdempotencyKey::new("deferred-activation-failure".to_string()),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            agent_id("caller"),
+            vec![],
+            InvocationContextStack::fresh(),
+            None,
+            AuthCtx::system(),
+            Some(RpcTargetActivation {
+                target_fingerprint: AgentFingerprint(Uuid::from_u128(10)),
+                env: vec![],
+                config: vec![],
+            }),
+        )
+        .await;
+
+        assert!(
+            !rpc.invoke_called.load(Ordering::SeqCst),
+            "activation failure must stop before dispatching the RPC method"
+        );
+        assert!(
+            result.is_err(),
+            "activation failure happened before the RPC method call and must be an outer host failure, not a completed RPC result: {result:?}"
+        );
+    }
+
+    #[test]
+    async fn deferred_activation_fingerprint_mismatch_is_permanent_host_failure() {
+        let persisted_fingerprint = AgentFingerprint(Uuid::from_u128(10));
+        let live_fingerprint = AgentFingerprint(Uuid::from_u128(11));
+        let rpc = Arc::new(FingerprintMismatchRpc {
+            live_fingerprint,
+            invoke_called: AtomicBool::new(false),
+        });
+
+        let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            rpc.clone(),
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
+            IdempotencyKey::new("deferred-activation-mismatch-classification".to_string()),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            agent_id("caller"),
+            vec![],
+            InvocationContextStack::fresh(),
+            None,
+            AuthCtx::system(),
+            Some(RpcTargetActivation {
+                target_fingerprint: persisted_fingerprint,
+                env: vec![],
+                config: vec![],
+            }),
+        )
+        .await;
+
+        assert!(
+            !rpc.invoke_called.load(Ordering::SeqCst),
+            "fingerprint mismatch must stop before dispatching the RPC method"
+        );
+        let err = result.expect_err("fingerprint mismatch must be an outer host failure");
+        let classified = err.downcast_ref::<ClassifiedHostError>().expect(
+            "fingerprint mismatch must be classified so future get does not retry it as transient",
+        );
+        assert_eq!(classified.kind, HostFailureKind::Permanent);
+    }
+
+    #[test]
+    async fn deferred_replay_activation_uses_new_env_not_async_invocation_env() {
+        let persisted_fingerprint = AgentFingerprint(Uuid::from_u128(10));
+        let env_from_wasm_rpc_new = vec![("SOURCE".to_string(), "wasm-rpc-new".to_string())];
+        let env_from_async_invocation = vec![("SOURCE".to_string(), "async-invoke".to_string())];
+        let rpc = Arc::new(RecordingEnvRpc {
+            fingerprint: persisted_fingerprint,
+            activation_env: Mutex::new(None),
+        });
+        let replay_pending = WasmRpcTargetActivation::ReplayPending {
+            target_fingerprint: persisted_fingerprint,
+            env: env_from_wasm_rpc_new.clone(),
+            config: vec![],
+        };
+
+        let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            rpc.clone(),
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
+            IdempotencyKey::new("deferred-activation-env".to_string()),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            agent_id("caller"),
+            env_from_async_invocation,
+            InvocationContextStack::fresh(),
+            None,
+            AuthCtx::system(),
+            replay_pending.deferred_activation(),
+        )
+        .await;
+
+        result
+            .expect("activation should succeed")
+            .expect("RPC invocation should succeed");
+        assert_eq!(
+            *rpc.activation_env.lock().unwrap(),
+            Some(env_from_wasm_rpc_new),
+            "deferred replay activation must use the environment captured by wasm-rpc::new, not the later async invocation environment"
+        );
+    }
+
+    #[test]
+    fn completed_deferred_activation_host_failure_replays_with_classification() {
+        let span_id = SpanId::generate();
+        let message = "RPC target activation fingerprint changed during replay: persisted=00000000-0000-0000-0000-00000000000a, live=00000000-0000-0000-0000-00000000000b";
+        let request = HostRequestGolemRpcInvoke {
+            remote_agent_id: agent_id("target"),
+            idempotency_key: IdempotencyKey::new("classified-host-failure".to_string()),
+            method_name: "run".to_string(),
+            input: SchemaValue::Tuple { elements: vec![] },
+            remote_agent_type: None,
+            remote_agent_parameters: None,
+        };
+        let mut state = FutureInvokeResultState::Completed {
+            request,
+            result: Err(anyhow::Error::new(ClassifiedHostError {
+                kind: HostFailureKind::Permanent,
+                message: message.to_string(),
+            })),
+            span_id: span_id.clone(),
+            begin_index: OplogIndex::from_u64(42),
+        };
+
+        let (_, _, serialized_result, _) = handle_completed_rpc_result(&mut state, &span_id)
+            .expect("completed host failure should be serializable");
+
+        let SerializableInvokeResult::FailedClassified { kind, message } = serialized_result else {
+            panic!("outer host failure should be persisted as a failed future result");
+        };
+        let replayed_error = deserialize_classified_host_failure(kind, message);
+        let classified = replayed_error
+            .downcast_ref::<ClassifiedHostError>()
+            .expect("replayed permanent activation failure must remain classified");
+        assert_eq!(classified.kind, HostFailureKind::Permanent);
     }
 }

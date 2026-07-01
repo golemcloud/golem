@@ -26,6 +26,7 @@ golem-skills/**/node_modules/
 golem-skills/**/dist/
 .DS_Store
 /.scala-build/**
+proptest-regressions/
 
 # locally kept custom dev files
 /.local/

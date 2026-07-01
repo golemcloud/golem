@@ -17,6 +17,7 @@ use crate::repo::{Deps, TestDb};
 use golem_common::config::DbPostgresConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
+use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
@@ -208,6 +209,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(pool.clone())),
         account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(pool.clone())),
+        agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
@@ -303,6 +305,13 @@ async fn test_environment_update(#[dimension(postgres_variant)] deps: &Deps) {
 #[test]
 async fn test_environment_update_concurrently(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_environment_update_concurrently(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_get_revision_include_deleted(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_agent_secret_get_revision_include_deleted(deps).await;
 }
 
 #[test]

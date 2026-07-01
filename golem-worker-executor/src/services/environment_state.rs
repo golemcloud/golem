@@ -15,7 +15,9 @@
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_service_base::clients::registry::RegistryService;
@@ -41,6 +43,14 @@ pub trait EnvironmentStateService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError>;
+
+    async fn get_agent_secret_revision(
+        &self,
+        environment_id: EnvironmentId,
+        agent_secret_id: AgentSecretId,
+        path: CanonicalAgentSecretPath,
+        revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, WorkerExecutorError>;
 
     async fn get_retry_policies(
         &self,
@@ -121,6 +131,21 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
     ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
         let environment_state = self.get_environment_state(environment_id).await?;
         Ok(environment_state.agent_secrets.clone())
+    }
+
+    async fn get_agent_secret_revision(
+        &self,
+        environment_id: EnvironmentId,
+        agent_secret_id: AgentSecretId,
+        path: CanonicalAgentSecretPath,
+        revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
+        self.client
+            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("Failed to get agent secret revision: {e}"))
+            })
     }
 
     async fn get_retry_policies(

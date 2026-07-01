@@ -30,8 +30,7 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
-    VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::{SchemaError, validate_graph};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -61,10 +60,8 @@ mod serde_json_types;
 mod url;
 
 mod quantity;
-mod secret;
 
 pub use quantity::{Quantity, QuantityUnit};
-pub use secret::SecretRef;
 
 // =====================================================================
 // Trait surface
@@ -531,24 +528,6 @@ pub fn url_from_value(v: &SchemaValue, context: &'static str) -> Result<String, 
         SchemaValue::Url { url } => Ok(url.clone()),
         other => Err(FromSchemaError::shape_mismatch(
             "url",
-            value_kind(other),
-            context,
-        )),
-    }
-}
-
-pub fn secret_to_value(secret_ref: String) -> SchemaValue {
-    SchemaValue::Secret(SecretValuePayload { secret_ref })
-}
-
-pub fn secret_from_value(
-    v: &SchemaValue,
-    context: &'static str,
-) -> Result<String, FromSchemaError> {
-    match v {
-        SchemaValue::Secret(p) => Ok(p.secret_ref.clone()),
-        other => Err(FromSchemaError::shape_mismatch(
-            "secret",
             value_kind(other),
             context,
         )),
@@ -1263,7 +1242,7 @@ impl<T: FromSchema> FromSchema for std::ops::Bound<T> {
 }
 
 // =====================================================================
-// Tests for merge_agent_graphs
+// Tests
 // =====================================================================
 
 #[cfg(test)]

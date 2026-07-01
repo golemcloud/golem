@@ -51,8 +51,8 @@ pub fn set_agent_instance(instance : AgentInstance) -> Unit {
 /// Optional trait that agents can implement to support snapshot-based state persistence.
 /// When implemented, the SDK will use these methods to save/load agent state during updates.
 pub(open) trait Snapshottable {
-  save_snapshot(Self) -> Bytes
-  load_snapshot(Self, Bytes) -> Result[Unit, String]
+  fn save_snapshot(Self) -> Bytes
+  fn load_snapshot(Self, Bytes) -> Result[Unit, String]
 }
 
 ///|
@@ -139,7 +139,7 @@ pub fn[T] panic_with_message(context : String, message : String) -> T {
 /// Low-level trait that every agent must implement. Generated code provides
 /// `invoke` dispatch by method name.
 pub(open) trait RawAgent {
-  invoke(
+  fn invoke(
     Self,
     method_name : String,
     input : @types.SchemaValueTree,

@@ -103,6 +103,14 @@ pub fn GuestQuotaTokenHandle::new(@types.QuotaToken) -> Self
 pub fn GuestQuotaTokenHandle::take(Self) -> @types.QuotaToken?
 pub fn[R] GuestQuotaTokenHandle::with_handle(Self, (@types.QuotaToken) -> R) -> R?
 
+pub(all) struct GuestSecretHandle {
+  // private fields
+}
+pub fn GuestSecretHandle::is_present(Self) -> Bool
+pub fn GuestSecretHandle::new(@types.Secret) -> Self
+pub fn GuestSecretHandle::take(Self) -> @types.Secret?
+pub fn[R] GuestSecretHandle::with_handle(Self, (@types.Secret) -> R) -> R?
+
 pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
@@ -145,16 +153,16 @@ pub(all) struct SchemaType {
 pub(all) enum SchemaTypeBody {
   Ref(String)
   Bool
-  S8
-  S16
-  S32
-  S64
-  U8
-  U16
-  U32
-  U64
-  F32
-  F64
+  S8(@types.NumericRestrictions?)
+  S16(@types.NumericRestrictions?)
+  S32(@types.NumericRestrictions?)
+  S64(@types.NumericRestrictions?)
+  U8(@types.NumericRestrictions?)
+  U16(@types.NumericRestrictions?)
+  U32(@types.NumericRestrictions?)
+  U64(@types.NumericRestrictions?)
+  F32(@types.NumericRestrictions?)
+  F64(@types.NumericRestrictions?)
   Char
   String
   Record(Array[NamedFieldType])
@@ -175,7 +183,7 @@ pub(all) enum SchemaTypeBody {
   Duration
   Quantity(@types.QuantitySpec)
   Union(Array[UnionBranch])
-  Secret(@types.SecretSpec)
+  Secret(SecretSpec)
   QuotaToken(@types.QuotaTokenSpec)
   Future(SchemaType?)
   Stream(SchemaType?)
@@ -220,8 +228,13 @@ pub(all) enum SchemaValue {
   Duration(Int64)
   Quantity(@types.QuantityValue)
   Union(String, SchemaValue)
-  Secret(String)
+  Secret(GuestSecretHandle)
   QuotaToken(GuestQuotaTokenHandle)
+} derive(Eq, Show)
+
+pub(all) struct SecretSpec {
+  inner : SchemaType
+  category : String?
 } derive(Eq, Show)
 
 pub(all) struct TypedSchemaValue {

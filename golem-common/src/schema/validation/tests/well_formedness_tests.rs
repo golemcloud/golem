@@ -17,7 +17,8 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, QuantitySpec,
-    QuantityValue, SchemaType, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
+    QuantityValue, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
+    VariantCaseType,
 };
 use crate::schema::validation::well_formedness::{SchemaError, validate_graph};
 use proptest::prelude::*;
@@ -66,6 +67,17 @@ fn dangling_ref_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::ref_to(TypeId::new("missing")));
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DanglingRef(TypeId::new("missing"))));
+}
+
+#[test]
+fn dangling_ref_in_secret_inner_is_reported() {
+    let missing = TypeId::new("missing-secret-inner");
+    let graph = SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
+        inner: Box::new(SchemaType::ref_to(missing.clone())),
+        category: None,
+    }));
+    let errors = validate_graph(&graph).expect_err("should fail");
+    assert!(errors.contains(&SchemaError::DanglingRef(missing)));
 }
 
 #[test]

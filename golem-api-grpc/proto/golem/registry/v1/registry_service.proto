@@ -48,6 +48,7 @@ service RegistryService {
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
   rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
   rpc GetCurrentEnvironmentState (GetCurrentEnvironmentStateRequest) returns (GetCurrentEnvironmentStateResponse);
+  rpc GetAgentSecretRevision (GetAgentSecretRevisionRequest) returns (GetAgentSecretRevisionResponse);
 
   // quotas api
   rpc GetResourceDefinitionById (GetResourceDefinitionByIdRequest) returns (GetResourceDefinitionByIdResponse);
@@ -334,6 +335,24 @@ message GetCurrentEnvironmentStateResponse {
 }
 
 message GetCurrentEnvironmentStateSuccessResponse {
+  EnvironmentState environment_state = 1;
+}
+
+message GetAgentSecretRevisionRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  repeated string path = 2;
+  uint64 revision = 3;
+  golem.common.UUID agent_secret_id = 4;
+}
+
+message GetAgentSecretRevisionResponse {
+  oneof result {
+    GetAgentSecretRevisionSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetAgentSecretRevisionSuccessResponse {
   EnvironmentState environment_state = 1;
 }
 
