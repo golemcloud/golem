@@ -26,8 +26,8 @@ use golem_common::model::oplog::{
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, HasSelf, Resource, StreamProducer, StreamReader,
-    StreamResult,
+    Access, Accessor, AccessorTask, Destination, HasSelf, Resource, Source, StreamConsumer,
+    StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime_wasi::IoView;
 
@@ -35,7 +35,8 @@ use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 
 use crate::preview2::wasi::blobstore::types::{
-    Error, Host, HostIncomingValue, HostIncomingValueWithStore, HostOutgoingValue, IncomingValue,
+    Error, Host, HostIncomingValue, HostIncomingValueWithStore, HostOutgoingValue,
+    HostOutgoingValueWithStore, IncomingValue,
 };
 use crate::workerctx::WorkerCtx;
 
@@ -197,23 +198,65 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         Ok(outgoing_value)
     }
 
-    async fn outgoing_value_write_body(
-        &mut self,
-        _self_: Resource<OutgoingValueEntry>,
-    ) -> anyhow::Result<Result<StreamReader<u8>, ()>> {
-        self.observe_function_call(
-            "blobstore::types::outgoing_value",
-            "outgoing_value_write_body",
-        );
-        unimplemented!("outgoing_value_write_body is not yet implemented for WASI p3 streams")
-    }
-
     async fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
         self.observe_function_call("blobstore::types::outgoing_value", "drop");
         self.as_wasi_view()
             .table()
             .delete::<OutgoingValueEntry>(rep)?;
         Ok(())
+    }
+}
+
+/// Consumes the guest-provided `stream<u8>` written into an outgoing value and
+/// appends the bytes to the outgoing value's in-memory body buffer. The buffer
+/// is later captured durably by the consuming `container::write-data` call, so
+/// this consumer itself performs no oplog recording.
+struct OutgoingValueWriteConsumer {
+    body: Arc<RwLock<Vec<u8>>>,
+}
+
+impl<D> StreamConsumer<D> for OutgoingValueWriteConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        source: Source<'_, Self::Item>,
+        _finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        let mut source = source.as_direct(store);
+        let bytes = source.remaining();
+        if bytes.is_empty() {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+        let len = bytes.len();
+        self.body.write().unwrap().extend_from_slice(bytes);
+        source.mark_read(len);
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
+impl<Ctx: WorkerCtx> HostOutgoingValueWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    fn outgoing_value_write_body<T>(
+        mut host: Access<T, Self>,
+        self_: Resource<OutgoingValueEntry>,
+        data: StreamReader<u8>,
+    ) -> anyhow::Result<Result<(), ()>> {
+        let body = {
+            let ctx = host.get();
+            ctx.observe_function_call(
+                "blobstore::types::outgoing_value",
+                "outgoing_value_write_body",
+            );
+            ctx.as_wasi_view()
+                .table()
+                .get::<OutgoingValueEntry>(&self_)?
+                .body
+                .clone()
+        };
+        data.pipe(&mut host, OutgoingValueWriteConsumer { body })?;
+        Ok(Ok(()))
     }
 }
 

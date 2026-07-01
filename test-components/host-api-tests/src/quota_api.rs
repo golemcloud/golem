@@ -14,7 +14,6 @@
 
 use golem_rust::quota::{QuotaToken, with_reservation};
 use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
-use golem_wasi_http::Client;
 use serde::{Deserialize, Serialize};
 
 /// The amount that was actually reserved (always equal to the requested amount
@@ -91,7 +90,7 @@ pub trait QuotaApi {
     /// Returns the number of HTTP calls successfully made.  This is the
     /// primary driver for rate-limit tests: the test counts incoming requests
     /// at the server side and compares to the expected quota limit.
-    fn reserve_in_loop(
+    async fn reserve_in_loop(
         &self,
         resource_name: String,
         expected_use: u64,
@@ -193,7 +192,7 @@ impl QuotaApi for QuotaApiImpl {
         // _token is dropped here; lease reference count decrements
     }
 
-    fn reserve_in_loop(
+    async fn reserve_in_loop(
         &self,
         resource_name: String,
         expected_use: u64,
@@ -202,16 +201,17 @@ impl QuotaApi for QuotaApiImpl {
         max_iterations: u64,
     ) -> u64 {
         let token = QuotaToken::new(&resource_name, expected_use);
-        let client = Client::builder().build().unwrap();
         let mut calls_made = 0u64;
 
         for _ in 0..max_iterations {
             match token.reserve(1) {
                 Err(_) => break,
                 Ok(reservation) => {
-                    let _resp = client
+                    wasi_fetch::Client::new()
                         .get(&format!("http://{host}:{port}/call"))
+                        .redirect_limit(0)
                         .send()
+                        .await
                         .unwrap();
                     reservation.commit(1);
                     calls_made += 1;

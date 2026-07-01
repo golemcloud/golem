@@ -51,7 +51,7 @@ interface types {
   // Soon: switch to `resource value { ... }`
   resource outgoing-value {
     new-outgoing-value: static func() -> outgoing-value;
-    outgoing-value-write-body: func() -> result<stream<u8>>;
+    outgoing-value-write-body: func(data: stream<u8>) -> result;
   }
 
   /// A incoming-value is a wrapper around a value.

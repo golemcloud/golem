@@ -1,8 +1,9 @@
+use crate::raw_http;
 use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
 use golem_rust::{agent_definition, agent_implementation};
-use golem_wasi_http::Client;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use wasi::http::types::Method;
 
 #[agent_definition]
 pub trait InvocationContext {
@@ -149,11 +150,13 @@ fn broadcast_current_invocation_context(from: &str) {
     println!("Sending context {body} through HTTP");
 
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
-    let client = Client::builder().build().unwrap();
 
-    client
-        .post(&format!("http://localhost:{port}/invocation-context"))
-        .json(&body)
-        .send()
-        .expect("Request failed");
+    let json = serde_json::to_vec(&body).expect("Failed to serialize invocation context");
+    raw_http::request(
+        Method::Post,
+        &format!("localhost:{port}"),
+        "/invocation-context",
+        Some(&json),
+        Some("application/json"),
+    );
 }

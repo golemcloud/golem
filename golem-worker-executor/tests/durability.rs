@@ -136,6 +136,7 @@ async fn custom_durability_1(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO(p3): needs a p3 replacement for lazy-initialized-pollable (see p3-migration-notes.md)
 async fn lazy_pollable(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

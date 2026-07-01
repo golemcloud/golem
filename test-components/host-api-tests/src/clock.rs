@@ -2,7 +2,6 @@ use futures_concurrency::prelude::*;
 use golem_rust::{agent_definition, agent_implementation};
 use std::thread;
 use std::time::Duration;
-use wstd::http::{Client, Request};
 
 #[agent_definition]
 pub trait Clock {
@@ -95,15 +94,14 @@ mod tests {
 
 async fn send_request() -> Result<String, String> {
     let port = std::env::var("PORT").expect("Requires a PORT env var set");
-    let request = Request::get(format!("http://localhost:{port}/simulated-slow-request"))
-        .body(())
-        .map_err(|e| e.to_string())?;
-
-    let mut response = Client::new()
-        .send(request)
+    let response = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/simulated-slow-request"))
+        .send()
         .await
         .map_err(|e| e.to_string())?;
-    let body = response.body_mut();
-    let contents = body.str_contents().await.map_err(|e| e.to_string())?;
-    Ok(contents.to_string())
+    response
+        .into_body()
+        .text()
+        .await
+        .map_err(|e| e.to_string())
 }
