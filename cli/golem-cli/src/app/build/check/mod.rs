@@ -59,6 +59,33 @@ enum ExpectedDependencyKind {
     },
 }
 
+impl ExpectedDependencyKind {
+    /// Semver-compatible match against the version embedded in `spec` (e.g. `"^4.4.3"`),
+    /// proposing the project's own spec as the fix hint when one is missing/wrong.
+    fn version_hint(spec: &str) -> Self {
+        ExpectedDependencyKind::SemanticCompatibleVersion {
+            base_version: extract_version(spec).unwrap_or_else(|| spec.to_string()),
+            use_version_hint: true,
+        }
+    }
+
+    /// Semver-compatible match against `base_version`, without a version hint.
+    fn compatible(base_version: impl Into<String>) -> Self {
+        ExpectedDependencyKind::SemanticCompatibleVersion {
+            base_version: base_version.into(),
+            use_version_hint: false,
+        }
+    }
+}
+
+/// Whether the build-check force-adds a dependency when it is missing (`Required`) or
+/// only verifies/updates it when it is already present (`Optional`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DependencyPresence {
+    Required,
+    Optional,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum DependencySpecCompliance {
     Compatible,
@@ -132,12 +159,18 @@ pub(crate) fn plan_dependency_fixes(
 
     let overrides = sdk_overrides()?;
 
-    if selected_languages.contains(&GuestLanguage::TypeScript) {
+    if selected_languages.contains(&GuestLanguage::TypeScript)
+        || selected_languages.contains(&GuestLanguage::TypeScriptFluent)
+    {
         let package_step = ts::plan_package_json_fix_step(ctx, overrides, &mut plan.warnings)?;
         if let Some(step) = package_step {
             plan.steps.push(step);
         }
+    }
 
+    if selected_languages.contains(&GuestLanguage::TypeScript)
+        || selected_languages.contains(&GuestLanguage::TypeScriptFluent)
+    {
         let tsconfig_steps = ts::plan_tsconfig_fix_steps(ctx)?;
         plan.steps.extend(tsconfig_steps);
     }

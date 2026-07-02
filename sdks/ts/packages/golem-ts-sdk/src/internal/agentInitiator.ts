@@ -36,11 +36,14 @@ export type AgentInitiator = {
    * @param constructorParams - Constructor arguments for the agent, encoded as a `SchemaValue` record.
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
-  initiate(constructorParams: SchemaValue, principal: Principal): Result<ResolvedAgent, AgentError>;
+  initiate(
+    constructorParams: SchemaValue,
+    principal: Principal,
+  ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 
   /** Initiates an agent from the raw WIT value tree used by the exported component. */
   initiateFromWit?(
     constructorParams: SchemaValueTree,
     principal: Principal,
-  ): Result<ResolvedAgent, AgentError>;
+  ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 };

@@ -358,6 +358,110 @@ fn tsconfig_merge_and_check() {
 }
 
 #[test]
+fn tsconfig_build_settings_patch_from_missing() {
+    let base = r#"{
+  "compilerOptions": {
+    "target": "ES2020"
+  }
+}"#;
+    let required = [
+        tsconfig_json::RequiredSetting {
+            path: vec![
+                "compilerOptions".to_string(),
+                "moduleResolution".to_string(),
+            ],
+            expected_literal: Some("\"bundler\"".to_string()),
+        },
+        tsconfig_json::RequiredSetting {
+            path: vec![
+                "compilerOptions".to_string(),
+                "experimentalDecorators".to_string(),
+            ],
+            expected_literal: Some("true".to_string()),
+        },
+    ];
+
+    let missing = tsconfig_json::check_required_settings(base, &required).unwrap();
+    assert_eq!(missing.len(), 2);
+
+    // The patch nests each missing setting under its full path (here, the
+    // `compilerOptions` wrapper emerges from the paths themselves).
+    let patch = tsconfig_json::build_settings_patch(&missing).unwrap();
+    let patch_value: JsonValue = serde_json::from_str(&patch).unwrap();
+    assert_eq!(
+        patch_value,
+        serde_json::json!({
+            "compilerOptions": { "moduleResolution": "bundler", "experimentalDecorators": true }
+        })
+    );
+
+    // Merging it makes the tsconfig satisfy the requirements while preserving `target`.
+    let merged = tsconfig_json::merge_with_newer(base, &patch).unwrap();
+    assert!(
+        tsconfig_json::check_required_settings(&merged, &required)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(merged.contains("\"target\": \"ES2020\""));
+}
+
+#[test]
+fn json_build_object_source_nests_and_merges() {
+    let entry = |path: &[&str], literal: &str| {
+        (
+            path.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            literal.to_string(),
+        )
+    };
+    // A top-level key, two keys sharing the `compilerOptions` prefix, a 3-level path,
+    // and verbatim literals of different JSON kinds (array / string / bool / array).
+    let source = json::build_object_source(&[
+        entry(&["include"], "[\"src\"]"),
+        entry(&["compilerOptions", "moduleResolution"], "\"bundler\""),
+        entry(&["compilerOptions", "strict"], "true"),
+        entry(&["compilerOptions", "paths", "@app/*"], "[\"src/*\"]"),
+    ])
+    .unwrap();
+
+    let value: JsonValue = serde_json::from_str(&source).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "include": ["src"],
+            "compilerOptions": {
+                "moduleResolution": "bundler",
+                "strict": true,
+                "paths": { "@app/*": ["src/*"] }
+            }
+        })
+    );
+}
+
+#[test]
+fn json_build_object_source_escapes_keys() {
+    let source =
+        json::build_object_source(&[(vec!["weird \"key\" \\ x".to_string()], "\"v\"".to_string())])
+            .unwrap();
+
+    let value: JsonValue = serde_json::from_str(&source).unwrap();
+    assert_eq!(value, serde_json::json!({ "weird \"key\" \\ x": "v" }));
+}
+
+#[test]
+fn json_build_object_source_errors_on_conflicting_paths() {
+    let result = json::build_object_source(&[
+        (vec!["a".to_string()], "1".to_string()),
+        (vec!["a".to_string(), "b".to_string()], "2".to_string()),
+    ]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn json_build_object_source_empty_is_empty_object() {
+    assert_eq!(json::build_object_source(&[]).unwrap(), "{}");
+}
+
+#[test]
 fn cargo_toml_merge_and_check() {
     let source = r#"[package]
 name = "demo"

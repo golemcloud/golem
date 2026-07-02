@@ -763,7 +763,7 @@ impl TemplateHandler {
         let mut upgrade_plan = MultiComponentLayoutUpgradePlan::new();
 
         match component.language {
-            GuestLanguage::TypeScript => {
+            GuestLanguage::TypeScript | GuestLanguage::TypeScriptFluent => {
                 let target_root = application_path.join(new_component_dir);
 
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {

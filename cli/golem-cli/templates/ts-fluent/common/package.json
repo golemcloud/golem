@@ -1,0 +1,17 @@
+{
+  "name": "app",
+  "dependencies": {
+    "@golemcloud/golem-ts-sdk": "GOLEM_TS_SDK_VERSION_OR_PATH"
+  },
+  "devDependencies": {
+    "@rollup/plugin-alias": "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",
+    "@rollup/plugin-node-resolve": "GOLEM_TS_ROLLUP_PLUGIN_NODE_RESOLVE_VERSION",
+    "@rollup/plugin-typescript": "GOLEM_TS_ROLLUP_PLUGIN_TYPESCRIPT_VERSION",
+    "@rollup/plugin-commonjs": "GOLEM_TS_ROLLUP_PLUGIN_COMMONJS_VERSION",
+    "@rollup/plugin-json": "GOLEM_TS_ROLLUP_PLUGIN_JSON_VERSION",
+    "@types/node": "GOLEM_TS_TYPES_NODE_VERSION",
+    "rollup": "GOLEM_TS_ROLLUP_VERSION",
+    "tslib": "GOLEM_TS_TSLIB_VERSION",
+    "typescript": "GOLEM_TS_TYPESCRIPT_VERSION"
+  }
+}
