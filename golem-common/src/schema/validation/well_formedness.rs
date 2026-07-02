@@ -346,6 +346,10 @@ fn check_type(
             }
         }
 
+        SchemaType::Secret { spec, .. } => {
+            check_type(graph, &spec.inner, known, errors);
+        }
+
         SchemaType::Bool { .. }
         | SchemaType::S8 { .. }
         | SchemaType::S16 { .. }
@@ -361,7 +365,6 @@ fn check_type(
         | SchemaType::String { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
-        | SchemaType::Secret { .. }
         | SchemaType::QuotaToken { .. } => {}
     }
 }

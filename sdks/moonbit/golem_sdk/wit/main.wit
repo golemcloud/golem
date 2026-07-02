@@ -19,6 +19,8 @@ world agent-guest {
   import golem:durability/durability@1.5.0;
 
   import golem:quota/types@1.5.0;
+  import golem:secrets/types@0.1.0;
+  import golem:secrets/reveal@0.1.0;
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;

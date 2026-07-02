@@ -12,36 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Placeholder implementation of the `golem:tool/guest@0.1.0` export.
-//!
-//! Every agentic component exports `golem:tool/guest` alongside
-//! `golem:agent/guest`, mirroring the agent guest surface. The tool runtime is
-//! not implemented yet, so this component currently exposes no tools: discovery
-//! returns an empty list and lookups/invocations report the tool as unknown.
-
 use crate::agentic::agent_impl::Component;
+use crate::agentic::tool_registry::{get_all_tools, get_tool_by_name, get_tool_invoker_by_name};
 use crate::golem_agentic::exports::golem::tool::guest::{
     Guest, InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::wasi::io::streams::InputStream;
+use crate::wasip2::io::streams::InputStream;
 
 impl Guest for Component {
     fn discover_tools() -> Result<Vec<Tool>, ToolError> {
-        Ok(Vec::new())
+        Ok(get_all_tools())
     }
 
     fn get_tool(name: String) -> Result<Tool, ToolError> {
-        Err(ToolError::InvalidToolName(name))
+        get_tool_by_name(&name).ok_or(ToolError::InvalidToolName(name))
     }
 
     fn invoke(
         tool_name: String,
-        _command_path: Vec<String>,
-        _input: TypedSchemaValue,
-        _stdin: Option<InputStream>,
-        _principal: Principal,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        stdin: Option<InputStream>,
+        principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
-        Err(ToolError::InvalidToolName(tool_name))
+        let invoker = get_tool_invoker_by_name(&tool_name)
+            .ok_or_else(|| ToolError::InvalidToolName(tool_name.clone()))?;
+        invoker(command_path, input, stdin, principal)
     }
 }

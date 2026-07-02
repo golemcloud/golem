@@ -46,7 +46,7 @@ use golem_common::schema::{
     SchemaValue, TypedSchemaValue, redact_host_managed_typed_value, redact_host_managed_value,
 };
 use golem_schema::schema::wit::{
-    QuotaTokenHandleDropper, decode_value, encode_typed, encode_value,
+    QuotaTokenHandleDropper, SecretHandleDropper, decode_value, encode_typed, encode_value,
     reject_quota_handles_in_value_tree, wire,
 };
 
@@ -150,7 +150,9 @@ fn card_install_failure_from_wit(value: oplog::CardInstallFailure) -> CardInstal
 /// than leaked) and the whole batch is rejected. All entries are drained before
 /// the first error is surfaced, so a handle in a later entry cannot leak when an
 /// earlier entry is rejected.
-pub(crate) fn reject_quota_handles_in_oplog_entries<D: QuotaTokenHandleDropper>(
+pub(crate) fn reject_quota_handles_in_oplog_entries<
+    D: QuotaTokenHandleDropper + SecretHandleDropper,
+>(
     entries: Vec<(u64, oplog::OplogEntry)>,
     dropper: &mut D,
 ) -> Result<Vec<(u64, oplog::OplogEntry)>, String> {

@@ -408,6 +408,19 @@ mod tests {
             unimplemented!()
         }
 
+        async fn get_agent_secret_revision(
+            &self,
+            _environment_id: EnvironmentId,
+            _agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
+            _path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
+            _revision: golem_common::model::agent_secret::AgentSecretRevision,
+        ) -> Result<
+            Option<golem_service_base::model::agent_secret::AgentSecret>,
+            RegistryServiceError,
+        > {
+            unimplemented!()
+        }
+
         async fn get_resource_definition_by_id(
             &self,
             _resource_definition_id: ResourceDefinitionId,

@@ -55,11 +55,15 @@ alone does not enforce them):
     no items, is valid).
   • A `positional` / `option` / `result` / `error` `type-node-index`
     resolves to a node in `tool.schema`.
-  • A `repeatable` option's `default`, if present, is a list whose
-    elements are values of the `repeatable-shape.%type` node.
-  • A `value-is` ref naming a repeatable option, tail positional, or
-    otherwise list-shaped target means "any occurrence / element
-    equals this literal"; the literal is a value of the element type.
+  • A `repeatable-list` option's `default`, if present, is a `list`
+    whose elements are values of the `repeatable-list-shape.item-type`
+    node. A `repeatable-map` option's `default`, if present, is a `map`
+    value of the `repeatable-map-shape.map-type` node.
+  • A `value-is` ref naming a `repeatable-list` option, tail positional,
+    or otherwise list-shaped target means "any occurrence / element
+    equals this literal"; the literal is a value of the element type. For
+    a `repeatable-map` option the literal is a value of the map's value
+    type (any entry's value equals this literal).
   • The tool's identity is its root command name
     (`commands.nodes[0].name`); `get-tool(name)` and
     `guest.invoke(tool-name, …)` match against it. `commands.nodes`

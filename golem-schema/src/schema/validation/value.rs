@@ -18,18 +18,22 @@
 use crate::schema::graph::{GraphIndex, SchemaGraph};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathSpec, QuantitySpec, QuantityValue, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UrlRestrictions,
+    BinaryRestrictions, DiscriminatorRule, NumericBound, NumericRepr, NumericRestrictionError,
+    NumericRestrictions, PathSpec, QuantitySpec, QuantityValue, SchemaType, TextRestrictions,
+    UnionBranch, UrlRestrictions, numeric_bound_cmp,
 };
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+use crate::schema::schema_value::SecretValuePayload;
 use crate::schema::schema_value::{
-    BinaryValuePayload, ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
+    BinaryValuePayload, ResultValuePayload, SchemaValue, TextValuePayload,
 };
 // Only the host (and feature-neutral) build inspects a quota-token's snapshot
 // fields; on a guest the value is an opaque owned handle.
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
-use crate::schema::schema_type::QuotaTokenSpec;
+use crate::schema::schema_type::{QuotaTokenSpec, SecretSpec};
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
 use crate::schema::schema_value::QuotaTokenValuePayload;
+use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write};
 
@@ -238,8 +242,14 @@ pub enum ValueError {
         path: ValuePath,
         reason: String,
     },
-    SecretRefEmpty {
+    NumericOutOfRange {
         path: ValuePath,
+        reason: String,
+    },
+    SecretCategoryMismatch {
+        path: ValuePath,
+        expected: String,
+        found: Option<String>,
     },
     QuotaTokenResourceMismatch {
         path: ValuePath,
@@ -420,9 +430,18 @@ impl Display for ValueError {
             ValueError::QuantityOutOfRange { path, reason } => {
                 write!(f, "quantity value at {path} is out of range ({reason})")
             }
-            ValueError::SecretRefEmpty { path } => {
-                write!(f, "secret value at {path} has an empty `secret_ref`")
+            ValueError::NumericOutOfRange { path, reason } => {
+                write!(f, "numeric value at {path} is out of range ({reason})")
             }
+            ValueError::SecretCategoryMismatch {
+                path,
+                expected,
+                found,
+            } => write!(
+                f,
+                "secret value at {path} expected category `{expected}`, found `{}`",
+                found.as_deref().unwrap_or("<none>")
+            ),
             ValueError::QuotaTokenResourceMismatch {
                 path,
                 expected,
@@ -666,16 +685,96 @@ fn check<'a>(
 
     match (ty, value) {
         (SchemaType::Bool { .. }, SchemaValue::Bool(_)) => {}
-        (SchemaType::S8 { .. }, SchemaValue::S8(_)) => {}
-        (SchemaType::S16 { .. }, SchemaValue::S16(_)) => {}
-        (SchemaType::S32 { .. }, SchemaValue::S32(_)) => {}
-        (SchemaType::S64 { .. }, SchemaValue::S64(_)) => {}
-        (SchemaType::U8 { .. }, SchemaValue::U8(_)) => {}
-        (SchemaType::U16 { .. }, SchemaValue::U16(_)) => {}
-        (SchemaType::U32 { .. }, SchemaValue::U32(_)) => {}
-        (SchemaType::U64 { .. }, SchemaValue::U64(_)) => {}
-        (SchemaType::F32 { .. }, SchemaValue::F32(_)) => {}
-        (SchemaType::F64 { .. }, SchemaValue::F64(_)) => {}
+        (SchemaType::S8 { restrictions, .. }, SchemaValue::S8(v)) => {
+            check_numeric(
+                NumericRepr::S8,
+                restrictions,
+                NumericBound::Signed(*v as i64),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::S16 { restrictions, .. }, SchemaValue::S16(v)) => {
+            check_numeric(
+                NumericRepr::S16,
+                restrictions,
+                NumericBound::Signed(*v as i64),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::S32 { restrictions, .. }, SchemaValue::S32(v)) => {
+            check_numeric(
+                NumericRepr::S32,
+                restrictions,
+                NumericBound::Signed(*v as i64),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::S64 { restrictions, .. }, SchemaValue::S64(v)) => {
+            check_numeric(
+                NumericRepr::S64,
+                restrictions,
+                NumericBound::Signed(*v),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::U8 { restrictions, .. }, SchemaValue::U8(v)) => {
+            check_numeric(
+                NumericRepr::U8,
+                restrictions,
+                NumericBound::Unsigned(*v as u64),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::U16 { restrictions, .. }, SchemaValue::U16(v)) => {
+            check_numeric(
+                NumericRepr::U16,
+                restrictions,
+                NumericBound::Unsigned(*v as u64),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::U32 { restrictions, .. }, SchemaValue::U32(v)) => {
+            check_numeric(
+                NumericRepr::U32,
+                restrictions,
+                NumericBound::Unsigned(*v as u64),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::U64 { restrictions, .. }, SchemaValue::U64(v)) => {
+            check_numeric(
+                NumericRepr::U64,
+                restrictions,
+                NumericBound::Unsigned(*v),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::F32 { restrictions, .. }, SchemaValue::F32(v)) => {
+            check_numeric(
+                NumericRepr::F32,
+                restrictions,
+                NumericBound::FloatBits((*v as f64).to_bits()),
+                path,
+                errors,
+            );
+        }
+        (SchemaType::F64 { restrictions, .. }, SchemaValue::F64(v)) => {
+            check_numeric(
+                NumericRepr::F64,
+                restrictions,
+                NumericBound::FloatBits(v.to_bits()),
+                path,
+                errors,
+            );
+        }
         (SchemaType::Char { .. }, SchemaValue::Char(_)) => {}
         (SchemaType::String { .. }, SchemaValue::String(_)) => {}
 
@@ -697,7 +796,13 @@ fn check<'a>(
             check_quantity(spec, value, path, errors);
         }
         (SchemaType::Secret { spec, .. }, SchemaValue::Secret(payload)) => {
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             check_secret(spec, payload, path, errors);
+            // On a guest the secret value is an opaque owned handle with no
+            // readable fields; category constraints are enforced host-side when
+            // the handle is lifted to its trusted snapshot.
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            let _ = (spec, payload);
         }
         (SchemaType::QuotaToken { spec, .. }, SchemaValue::QuotaToken(payload)) => {
             #[cfg(not(all(feature = "guest", not(feature = "host"))))]
@@ -909,6 +1014,66 @@ fn check<'a>(
     }
 }
 
+/// Validate a numeric value against the node's optional restrictions.
+///
+/// Only the value range is checked here (the `unit` is schema-level metadata,
+/// never carried by a `SchemaValue`). A malformed restriction set is a
+/// well-formedness concern reported elsewhere, so when the stored restrictions
+/// are not well-formed for the repr this check is skipped rather than producing
+/// a misleading value error. `value` is the numeric value reinterpreted as a
+/// same-family `NumericBound` (floats widened to `f64` bits).
+fn check_numeric(
+    repr: NumericRepr,
+    restrictions: &Option<NumericRestrictions>,
+    value: NumericBound,
+    path: &mut ValuePath,
+    errors: &mut Vec<ValueError>,
+) {
+    let Some(restrictions) = restrictions else {
+        return;
+    };
+    // Skip value-level range checking only when the bounds are incomparable to
+    // this repr (family/range/float mismatches), since comparing against them
+    // would produce misleading errors. An inverted `min > max` is still a pair
+    // of comparable bounds, so it is enforced here (the constraint is simply
+    // unsatisfiable), consistent with the text/binary range validators.
+    if let Err(err) = restrictions.validate_for_repr(repr)
+        && !matches!(err, NumericRestrictionError::MinGreaterThanMax)
+    {
+        return;
+    }
+    if let Some(min) = restrictions.min
+        && !matches!(
+            numeric_bound_cmp(value, min),
+            Some(Ordering::Greater | Ordering::Equal)
+        )
+    {
+        errors.push(ValueError::NumericOutOfRange {
+            path: path.snapshot(),
+            reason: format!("below minimum {}", describe_numeric_bound(min)),
+        });
+    }
+    if let Some(max) = restrictions.max
+        && !matches!(
+            numeric_bound_cmp(value, max),
+            Some(Ordering::Less | Ordering::Equal)
+        )
+    {
+        errors.push(ValueError::NumericOutOfRange {
+            path: path.snapshot(),
+            reason: format!("above maximum {}", describe_numeric_bound(max)),
+        });
+    }
+}
+
+fn describe_numeric_bound(bound: NumericBound) -> String {
+    match bound {
+        NumericBound::Signed(v) => v.to_string(),
+        NumericBound::Unsigned(v) => v.to_string(),
+        NumericBound::FloatBits(bits) => f64::from_bits(bits).to_string(),
+    }
+}
+
 fn check_text(
     restrictions: &TextRestrictions,
     payload: &TextValuePayload,
@@ -1111,15 +1276,20 @@ fn check_quantity(
     }
 }
 
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
 fn check_secret(
-    _spec: &SecretSpec,
+    spec: &SecretSpec,
     payload: &SecretValuePayload,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
-    if payload.secret_ref.is_empty() {
-        errors.push(ValueError::SecretRefEmpty {
+    if let Some(expected) = &spec.category
+        && payload.category.as_ref() != Some(expected)
+    {
+        errors.push(ValueError::SecretCategoryMismatch {
             path: path.snapshot(),
+            expected: expected.clone(),
+            found: payload.category.clone(),
         });
     }
 }

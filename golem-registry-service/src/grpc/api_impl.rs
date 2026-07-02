@@ -37,11 +37,13 @@ use golem_api_grpc::proto::golem::registry::v1::{
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
     GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
-    GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest, GetAgentTypeResponse,
-    GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
-    GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest,
-    GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse,
-    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    GetActiveRoutesForDomainSuccessResponse, GetAgentSecretRevisionRequest,
+    GetAgentSecretRevisionResponse, GetAgentSecretRevisionSuccessResponse, GetAgentTypeRequest,
+    GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
+    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
+    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
+    GetAllDeployedComponentRevisionsSuccessResponse, GetComponentMetadataRequest,
+    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
     GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
@@ -56,7 +58,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
     download_component_response, get_active_mcp_for_domain_response,
-    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
+    get_active_routes_for_domain_response, get_agent_secret_revision_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
@@ -65,6 +68,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::CardId;
@@ -75,6 +81,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::environment::EnvironmentState;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -477,6 +484,43 @@ impl RegistryServiceGrpcApi {
 
         Ok(GetCurrentEnvironmentStateSuccessResponse {
             environment_state: Some(environment_state.into()),
+        })
+    }
+
+    async fn get_agent_secret_revision_internal(
+        &self,
+        request: GetAgentSecretRevisionRequest,
+    ) -> Result<GetAgentSecretRevisionSuccessResponse, GrpcApiError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let revision = AgentSecretRevision::new(request.revision).map_err(|err| err.to_string())?;
+        let agent_secret_id = AgentSecretId(
+            request
+                .agent_secret_id
+                .ok_or("missing agent_secret_id field")?
+                .into(),
+        );
+        let path = CanonicalAgentSecretPath(request.path);
+
+        let agent_secret = self
+            .environment_state_service
+            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .await?;
+
+        Ok(GetAgentSecretRevisionSuccessResponse {
+            environment_state: Some(
+                EnvironmentState {
+                    agent_deployment_details: HashMap::new(),
+                    agent_secrets: agent_secret
+                        .into_iter()
+                        .map(|secret| (secret.path.clone(), secret))
+                        .collect(),
+                    retry_policies: Vec::new(),
+                }
+                .into(),
+            ),
         })
     }
 
@@ -1001,6 +1045,33 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetCurrentEnvironmentStateResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_agent_secret_revision(
+        &self,
+        request: Request<GetAgentSecretRevisionRequest>,
+    ) -> Result<Response<GetAgentSecretRevisionResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_agent_secret_revision",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            path = request.path.join("."),
+            revision = request.revision,
+        );
+
+        let response = match self
+            .get_agent_secret_revision_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_agent_secret_revision_response::Result::Success(result),
+            Err(error) => get_agent_secret_revision_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetAgentSecretRevisionResponse {
             result: Some(response),
         }))
     }

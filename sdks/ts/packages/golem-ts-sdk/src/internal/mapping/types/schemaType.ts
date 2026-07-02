@@ -140,6 +140,8 @@ export function resolvedToSchemaType(resolved: ResolvedType): SchemaTypeMapping 
           body.ok ? toSchema(body.ok) : undefined,
           body.err ? toSchema(body.err) : undefined,
         );
+      case 'secret':
+        return t.secret(toSchema(body.inner), body.spec);
       case 'quota-token':
         return t.quotaToken(body.spec);
       case 'path':
@@ -252,6 +254,8 @@ export function resolvedGraphToSchemaType(graph: ResolvedGraph): SchemaGraphMapp
           body.ok ? toSchema(body.ok) : undefined,
           body.err ? toSchema(body.err) : undefined,
         );
+      case 'secret':
+        return t.secret(toSchema(body.inner), body.spec);
       case 'quota-token':
         return t.quotaToken(body.spec);
       case 'path':

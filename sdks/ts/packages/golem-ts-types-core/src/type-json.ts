@@ -104,8 +104,16 @@ export type LiteTypeJSON =
         path: string[];
         secret: boolean;
         type: LiteTypeJSON;
+        secretHandleOptional?: boolean;
       }[];
       requiredMembers: { path: string[]; requiredKeys: string[] }[];
+    }
+  | {
+      kind: 'secret';
+      name?: string;
+      owner?: string;
+      typeArg: LiteTypeJSON;
+      optional: boolean;
     }
   | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | { kind: 'principal'; name?: string; owner?: string; optional: boolean }

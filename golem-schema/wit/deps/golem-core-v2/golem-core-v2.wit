@@ -93,7 +93,7 @@ interface types {
 
     /// Represents a Golem permission card
     record card-id {
-        uuid: uuid,
+        uuid: uuid
     }
 
     /// An index into the persistent log storing all performed operations of an agent
@@ -119,6 +119,11 @@ interface types {
     /// ownership; the host converts it to/from its internal trusted
     /// representation at the boundary.
     resource quota-token;
+
+    /// An unforgeable handle to sensitive material held by the runtime. The
+    /// handle is opaque to guests: components can pass it through schema values
+    /// and reveal it only through capability-gated host interfaces.
+    resource secret;
 
     // ============================================================
     // Schema graph (self-contained type carrier)
@@ -221,16 +226,16 @@ interface types {
 
         // --- Primitives ---
         bool-type,
-        s8-type,
-        s16-type,
-        s32-type,
-        s64-type,
-        u8-type,
-        u16-type,
-        u32-type,
-        u64-type,
-        f32-type,
-        f64-type,
+        s8-type(option<numeric-restrictions>),
+        s16-type(option<numeric-restrictions>),
+        s32-type(option<numeric-restrictions>),
+        s64-type(option<numeric-restrictions>),
+        u8-type(option<numeric-restrictions>),
+        u16-type(option<numeric-restrictions>),
+        u32-type(option<numeric-restrictions>),
+        u64-type(option<numeric-restrictions>),
+        f32-type(option<numeric-restrictions>),
+        f64-type(option<numeric-restrictions>),
         char-type,
         string-type,
 
@@ -294,6 +299,27 @@ interface types {
     record result-spec {
         ok: option<type-node-index>,
         err: option<type-node-index>,
+    }
+
+    // --- Numeric restrictions ---
+
+    /// A numeric bound usable across every numeric representation. Float bounds
+    /// carry canonical IEEE-754 `f64` bits (NaN/inf rejected, -0.0 normalized);
+    /// comparisons decode the bits to `f64` and compare numerically.
+    variant numeric-bound {
+        signed(s64),
+        unsigned(u64),
+        float-bits(u64),
+    }
+
+    /// Inline numeric refinement. `none` on a numeric type means unconstrained
+    /// (the common case). The empty restriction set is never encoded as `some`:
+    /// producers normalize it to `none`, decoders normalize a decoded empty to
+    /// `none`. `unit` is schema/help metadata only.
+    record numeric-restrictions {
+        min:  option<numeric-bound>,
+        max:  option<numeric-bound>,
+        unit: option<string>,
     }
 
     // --- Text / Binary restrictions ---
@@ -424,6 +450,8 @@ interface types {
     // --- Capability nodes ---
 
     record secret-spec {
+        /// Revealed payload type carried by this secret handle.
+        inner: type-node-index,
         /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
         category: option<string>,
     }
@@ -494,7 +522,7 @@ interface types {
         union-value(union-value-payload),
 
         // Capability nodes
-        secret-value(secret-value-payload),
+        secret-value(own<secret>),
         quota-token-handle(own<quota-token>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
@@ -544,15 +572,6 @@ interface types {
         /// type and (by construction) satisfies the branch's discriminator
         /// rule.
         body: value-node-index,
-    }
-
-    /// Capability value: secret transport is **by reference**. The schema side
-    /// declares the secret; the value side carries an opaque reference that the
-    /// authority resolves on read. The literal secret material never crosses
-    /// this carrier.
-    record secret-value-payload {
-        /// Opaque, authority-resolved reference.
-        secret-ref: string,
     }
 
     // ============================================================

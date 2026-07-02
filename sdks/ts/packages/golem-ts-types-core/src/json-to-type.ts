@@ -204,10 +204,11 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       };
 
     case 'config': {
-      const properties = json.properties.map(({ path, secret, type }) => ({
+      const properties = json.properties.map(({ path, secret, type, secretHandleOptional }) => ({
         path,
         secret,
         type: buildTypeFromJSON(type),
+        secretHandleOptional,
       }));
       return {
         kind: 'config',
@@ -218,6 +219,15 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         optional: json.optional,
       };
     }
+
+    case 'secret':
+      return {
+        kind: 'secret',
+        name: json.name,
+        owner: json.owner,
+        element: buildTypeFromJSON(json.typeArg),
+        optional: json.optional,
+      };
 
     case 'quota-token':
       return { kind: 'quota-token', name: json.name, owner: json.owner, optional: json.optional };

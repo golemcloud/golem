@@ -11601,6 +11601,61 @@ components:
       - body
     NormalizedJsonValue:
       type: object
+    NumericBound:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - signed
+          value:
+            type: integer
+            format: int64
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - unsigned
+          value:
+            type: integer
+            format: uint64
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - float-bits
+          value:
+            type: integer
+            format: uint64
+        required:
+        - kind
+        - value
+    NumericRestrictions:
+      type: object
+      properties:
+        min:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/NumericBound'
+          - nullable: true
+        max:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/NumericBound'
+          - nullable: true
+        unit:
+          nullable: true
+          type: string
     OplogCursor:
       title: OplogCursor
       type: object
@@ -13327,6 +13382,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13341,6 +13401,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13355,6 +13420,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13369,6 +13439,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13383,6 +13458,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13397,6 +13477,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13411,6 +13496,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13425,6 +13515,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13439,6 +13534,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -13453,6 +13553,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
         required:
@@ -14359,16 +14464,35 @@ components:
     SecretSpec:
       type: object
       properties:
+        inner:
+          $ref: '#/components/schemas/SchemaType'
         category:
           nullable: true
           type: string
     SecretValuePayload:
       type: object
       properties:
-        secretRef:
+        secretId:
+          type: string
+          format: uuid
+        configKey:
+          nullable: true
+          type: array
+          items:
+            type: string
+        version:
+          type: integer
+          format: uint64
+        resolvedAt:
+          type: string
+          format: date-time
+        category:
+          nullable: true
           type: string
       required:
-      - secretRef
+      - secretId
+      - version
+      - resolvedAt
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -15671,6 +15795,42 @@ components:
           $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue'
       required:
       - currentRevision
+    AgentTypeInitialPermissions:
+      title: AgentTypeInitialPermissions
+      type: object
+      properties:
+        lowerBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionsBound'
+          - default:
+              negative: []
+              positive: []
+        upperBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionsBound'
+          - default:
+              negative: []
+              positive: []
+    AgentTypeInitialPermissionsBound:
+      title: AgentTypeInitialPermissionsBound
+      type: object
+      properties:
+        positive:
+          default: []
+          type: array
+          items:
+            type: string
+        negative:
+          default: []
+          type: array
+          items:
+            type: string
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -15678,30 +15838,36 @@ components:
         in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
       type: object
       properties:
+        initialPermissions:
+          $ref: '#/components/schemas/PolymorphicCard'
         env:
-          default: {}
           type: object
           additionalProperties:
             type: string
         config:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
         plugins:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/InstalledPlugin'
         files:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/InitialAgentFile'
+      required:
+      - initialPermissions
+      - env
+      - config
+      - plugins
+      - files
     AgentTypeProvisionConfigCreation:
       title: AgentTypeProvisionConfigCreation
       type: object
       properties:
+        initialPermissions:
+          $ref: '#/components/schemas/AgentTypeInitialPermissions'
         env:
           default: {}
           type: object
@@ -15723,10 +15889,16 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFileOptions'
+      required:
+      - initialPermissions
     AgentTypeProvisionConfigUpdate:
       title: AgentTypeProvisionConfigUpdate
       type: object
       properties:
+        initialPermissions:
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissions'
+          - {}
         env:
           type: object
           additionalProperties:
@@ -17801,6 +17973,51 @@ components:
           format: uuid
       required:
       - environmentPluginGrantId
+    PolymorphicCard:
+      title: PolymorphicCard
+      type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        lowerPositive:
+          type: array
+          items:
+            type: string
+        lowerNegative:
+          type: array
+          items:
+            type: string
+        upperPositive:
+          type: array
+          items:
+            type: string
+        upperNegative:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        systemCard:
+          type: boolean
+      required:
+      - cardId
+      - parentIds
+      - lowerPositive
+      - lowerNegative
+      - upperPositive
+      - upperNegative
+      - createdAt
+      - systemCard
     ProducerField:
       title: ProducerField
       type: object

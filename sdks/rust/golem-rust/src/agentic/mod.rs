@@ -20,10 +20,18 @@ pub use agent_registry::*;
 pub use async_utils::*;
 pub use errors::*;
 pub use extended_agent_type::*;
+pub use extended_tool_type::*;
 pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use tool_client::*;
+pub use tool_literal::*;
+pub use tool_refinement::*;
+pub use tool_registry::{
+    ToolInvoker, get_all_tools, get_extended_tool_by_name, get_tool_by_name,
+    get_tool_invoker_by_name, register_tool, register_tool_invoker,
+};
 pub use unstructured_binary::*;
 pub use unstructured_text::*;
 pub use webhook::*;
@@ -36,13 +44,18 @@ mod agent_registry;
 mod async_utils;
 mod errors;
 mod extended_agent_type;
+mod extended_tool_type;
 mod http;
 mod multimodal;
 mod principal_serde;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
+mod tool_client;
 mod tool_impl;
+mod tool_literal;
+mod tool_refinement;
+mod tool_registry;
 mod unstructured_binary;
 mod unstructured_text;
 mod webhook;

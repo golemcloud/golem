@@ -17,6 +17,7 @@
 // the TypeScript SDK's schema-native surfaces.
 
 export * from './errors';
+export * from './secretHandle';
 export * from './quotaTokenHandle';
 export * from './model';
 export * from './builder';

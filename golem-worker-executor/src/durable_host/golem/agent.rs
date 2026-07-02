@@ -18,6 +18,7 @@ use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult}
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use chrono::Utc;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
@@ -38,12 +39,13 @@ use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
-use golem_common::schema::schema_value::SchemaValue;
+use golem_common::schema::schema_value::{SchemaValue, SecretValuePayload};
 use golem_common::schema::validation::subtyping::is_equivalent_cross_graph;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{
-    decode_graph, decode_value_with, encode_typed, encode_value, reject_quota_handles_in_value_tree,
+    decode_graph, decode_value_with, encode_typed, encode_value, encode_value_with,
+    reject_quota_handles_in_value_tree,
 };
 
 fn encode_registered_agent_type_schema_wire(
@@ -149,13 +151,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Resolve a secret-backed agent-config value. The stored
-    /// [`AgentSecret`] carries its own [`SchemaGraph`] (with possibly
-    /// recursive named types reached via [`SchemaType::Ref`]); the
-    /// guest-supplied `expected_type` is inline (no refs).
-    /// Compatibility between the two is checked via
-    /// [`schema_types_compatible`], which resolves refs against the
-    /// secret's graph.
+    /// Resolve a secret-backed agent-config value. Stored [`AgentSecret`]
+    /// schemas describe the plaintext payload type while guest config expects
+    /// an opaque `secret<T>` handle. Compatibility is checked against the
+    /// expected secret's inner type before a durable secret handle is returned.
     async fn resolve_secret_config(
         &mut self,
         path: Vec<String>,
@@ -181,6 +180,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
+        let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
+        let (optional, expected_secret_spec) = match expected_root {
+            SchemaType::Option { inner, .. } => match resolve_schema_ref(&expected_graph, inner) {
+                SchemaType::Secret { spec, .. } => (true, spec.clone()),
+                _ => {
+                    return Err(anyhow!(
+                        "expected type for secret key {path_str} must be secret or option<secret>"
+                    ));
+                }
+            },
+            SchemaType::Secret { spec, .. } => (false, spec.clone()),
+            _ => {
+                return Err(anyhow!(
+                    "expected type for secret key {path_str} must be secret or option<secret>"
+                ));
+            }
+        };
+
         let handle = CallHandle::<GolemAgentGetConfigValue, NotCancellable>::start(
             self,
             HostRequestGolemAgentGetConfigValue {
@@ -203,45 +220,63 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
                 let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
-                let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
-
-                let result_schema = match (expected_root, agent_secret) {
-                    // No secret stored; `Option<_>` resolves to `None`.
-                    (SchemaType::Option { .. }, None) => SchemaValue::Option { inner: None },
-
-                    // No secret stored and a non-optional expected type.
-                    (_, None) => {
+                let result_schema = match agent_secret {
+                    None if optional => SchemaValue::Option { inner: None },
+                    None => {
                         return Err(anyhow!(
                             "No secret for key {path_str} exists in environment"
                         ));
                     }
-
-                    // Secret exists. Compatibility is checked cross-graph so any
-                    // [`SchemaType::Ref`] on either side resolves through its own
-                    // graph — including a ref to `Option<T>` matched against an
-                    // `Option<T>` expected type.
-                    (_, Some(secret)) => {
-                        if !schema_types_compatible(
+                    Some(secret) => {
+                        let stored_secret_inner = resolve_schema_ref(
                             &secret.secret_type,
                             &secret.secret_type.root,
+                        );
+                        if !schema_types_compatible(
+                            &secret.secret_type,
+                            stored_secret_inner,
                             &expected_graph,
-                            &expected_graph.root,
-                        ) {
+                            &expected_secret_spec.inner,
+                        )
+                        {
                             return Err(anyhow!(
                                 "declared and expected type for config key {path_str} are not compatible"
                             ));
                         }
 
-                        match (expected_root, &secret.secret_value) {
-                            // Missing-value secrets with an `Option<_>`
-                            // expected type collapse to `None`.
-                            (SchemaType::Option { .. }, None) => {
-                                SchemaValue::Option { inner: None }
+                        if let Some(secret_value) = &secret.secret_value {
+                            // The validation errors can embed fragments of the
+                            // stored plaintext (e.g. an invalid URL value), so
+                            // they are never surfaced; the message stays generic.
+                            validate_value(&secret.secret_type, stored_secret_inner, secret_value)
+                                .map_err(|_| {
+                                    anyhow!("secret key {path_str} has invalid stored value")
+                                })?;
+                        }
+
+                        if secret.secret_value.is_none() {
+                            if optional {
+                                return Ok(HostResponseGolemAgentGetConfigValue {
+                                    result: SchemaValue::Option { inner: None },
+                                });
                             }
-                            (_, None) => {
-                                return Err(anyhow!("Secret key {path_str} is missing value"));
+                            return Err(anyhow!("Secret key {path_str} is missing value"));
+                        }
+
+                        let secret_value = SchemaValue::Secret(SecretValuePayload {
+                            secret_id: secret.id.into(),
+                            config_key: Some(secret.path.0.clone()),
+                            version: secret.revision.get(),
+                            resolved_at: Utc::now(),
+                            category: expected_secret_spec.category.clone(),
+                        });
+
+                        if optional {
+                            SchemaValue::Option {
+                                inner: Some(Box::new(secret_value)),
                             }
-                            (_, Some(value)) => value.clone(),
+                        } else {
+                            secret_value
                         }
                     }
                 };
@@ -251,6 +286,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 })
             })
             .await?;
+
+        validate_secret_config_result_shape(path_str, optional, &persisted.result)?;
 
         Ok(persisted.result)
     }
@@ -388,6 +425,25 @@ fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a
         }
     }
     ty
+}
+
+fn validate_secret_config_result_shape(
+    path_str: &str,
+    optional: bool,
+    value: &SchemaValue,
+) -> anyhow::Result<()> {
+    match (optional, value) {
+        (false, SchemaValue::Secret(_)) => Ok(()),
+        (true, SchemaValue::Option { inner: None }) => Ok(()),
+        (true, SchemaValue::Option { inner: Some(inner) })
+            if matches!(inner.as_ref(), SchemaValue::Secret(_)) =>
+        {
+            Ok(())
+        }
+        _ => Err(anyhow!(
+            "persisted secret config response for key {path_str} has invalid shape"
+        )),
+    }
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -580,7 +636,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let declaration_value_type = declaration.map(|d| d.value_type.clone());
 
-        let schema_value: SchemaValue = match declaration {
+        let (schema_value, uses_resolver): (SchemaValue, bool) = match declaration {
             // Allow reading undeclared optional config keys so that
             // newer agents can run against older component schemas.
             None if matches!(
@@ -588,11 +644,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 SchemaType::Option { .. }
             ) =>
             {
-                SchemaValue::Option { inner: None }
+                (SchemaValue::Option { inner: None }, false)
             }
             None => return Err(anyhow!("No config declared for path {path_str}")),
-            Some(declaration) if declaration.source == AgentConfigSource::Local => self
-                .resolve_local_config(
+            Some(declaration) if declaration.source == AgentConfigSource::Local => (
+                self.resolve_local_config(
                     &path,
                     &path_str,
                     &expected_graph,
@@ -602,7 +658,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .as_ref()
                         .expect("existing config declaration must have a value type"),
                 )?,
-            Some(declaration) if declaration.source == AgentConfigSource::Secret => {
+                false,
+            ),
+            Some(declaration) if declaration.source == AgentConfigSource::Secret => (
                 self.resolve_secret_config(
                     path,
                     &path_str,
@@ -612,8 +670,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .as_ref()
                         .expect("existing config declaration must have a value type"),
                 )
-                .await?
-            }
+                .await?,
+                true,
+            ),
             Some(declaration) => {
                 return Err(anyhow!(
                     "Unsupported config source {:?} for path {path_str}",
@@ -623,11 +682,60 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         // Encode the schema-native value into the wire value tree returned
-        // across the `golem:agent/host@2.0.0` boundary. Config values are not a
-        // capability-minting source, so the pure encoder is used: a quota token
-        // appearing here is a schema/config error and is rejected rather than
-        // lowered into a live handle.
-        encode_value(&schema_value)
-            .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))
+        // across the `golem:agent/host@2.0.0` boundary. Secret-backed config is
+        // the only capability-minting source here; local config still uses the
+        // pure encoder so a quota token remains a schema/config error.
+        if uses_resolver {
+            encode_value_with(&schema_value, self)
+        } else {
+            encode_value(&schema_value)
+        }
+        .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn secret_snapshot_value() -> SchemaValue {
+        SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: None,
+            version: 1,
+            resolved_at: Utc::now(),
+            category: None,
+        })
+    }
+
+    #[test]
+    fn secret_config_replay_shape_rejects_plaintext_values() {
+        validate_secret_config_result_shape("apiKey", false, &secret_snapshot_value()).unwrap();
+        validate_secret_config_result_shape(
+            "apiKey",
+            true,
+            &SchemaValue::Option {
+                inner: Some(Box::new(secret_snapshot_value())),
+            },
+        )
+        .unwrap();
+        validate_secret_config_result_shape("apiKey", true, &SchemaValue::Option { inner: None })
+            .unwrap();
+
+        validate_secret_config_result_shape(
+            "apiKey",
+            false,
+            &SchemaValue::String("plaintext".to_string()),
+        )
+        .expect_err("required secret config replay must not accept plaintext");
+        validate_secret_config_result_shape(
+            "apiKey",
+            true,
+            &SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String("plaintext".to_string()))),
+            },
+        )
+        .expect_err("optional secret config replay must not accept plaintext");
     }
 }

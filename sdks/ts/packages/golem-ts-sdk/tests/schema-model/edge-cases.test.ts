@@ -21,6 +21,7 @@ import type {
 } from 'golem:core/types@2.0.0';
 
 import {
+  GuestSecretHandle,
   GuestQuotaTokenHandle,
   SchemaBuilder,
   type SchemaGraph,
@@ -39,6 +40,7 @@ import {
 // (only SDK-internal code may move or re-wrap an owned quota-token handle). These
 // are whitebox tests of the schema-model internals, so they import the
 // capability key directly to stand in for that SDK-internal caller.
+import { SECRET_INTERNAL } from '../../src/internal/schema-model/secretInternal';
 import { QUOTA_INTERNAL } from '../../src/internal/schema-model/quotaInternal';
 
 function roundtripValue(value: SchemaValue): void {
@@ -259,9 +261,25 @@ describe('rich semantic and capability values', () => {
     roundtripValue({ tag: 'quantity', value: { mantissa: -98765n, scale: -3, unit: 'm' } });
   });
 
-  it('union and secret values round-trip', () => {
+  it('union values round-trip', () => {
     roundtripValue({ tag: 'union', unionTag: 'ssh', body: v.string('ssh://host') });
-    roundtripValue({ tag: 'secret', secretRef: 'ref-abc' });
+  });
+
+  it('secret handle is lowered once and lifted back as an opaque handle', () => {
+    const raw = { id: 'opaque-secret' } as never;
+    const handle = GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw);
+    expect(handle.isPresent()).toBe(true);
+
+    const wit = schemaValueToWit(v.secret(handle));
+    expect(wit.valueNodes[wit.root]).toEqual({ tag: 'secret-value', val: raw });
+    expect(handle.isPresent()).toBe(false);
+
+    const decoded = schemaValueFromWit(wit);
+    expect(decoded.tag).toBe('secret');
+    if (decoded.tag === 'secret') {
+      expect(decoded.handle.isPresent()).toBe(true);
+      expect(decoded.handle.take()).toBe(raw);
+    }
   });
 
   it('quota-token handle is lowered once and lifted back as an opaque handle', () => {
@@ -470,7 +488,7 @@ describe('flat-carrier DAG sharing (decode expands shared nodes)', () => {
     const m = emptyMetadata();
     const wit: WitSchemaGraph = {
       typeNodes: [
-        { body: { tag: 's32-type' }, metadata: m },
+        { body: { tag: 's32-type', val: undefined }, metadata: m },
         {
           body: {
             tag: 'record-type',

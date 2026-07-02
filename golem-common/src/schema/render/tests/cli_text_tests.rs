@@ -108,7 +108,11 @@ fn secret_value_is_redacted_by_default() {
     let ty = SchemaType::secret(SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::Secret(SecretValuePayload {
-        secret_ref: "shhh".to_string(),
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        category: None,
     });
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
     assert_eq!(text, "<redacted: secret>");
@@ -153,7 +157,11 @@ fn capability_value_is_redacted_inside_record() {
         fields: vec![
             SchemaValue::String("svc".to_string()),
             SchemaValue::Secret(SecretValuePayload {
-                secret_ref: "shhh".to_string(),
+                secret_id: uuid::Uuid::nil(),
+                config_key: None,
+                version: 0,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
             }),
         ],
     };
