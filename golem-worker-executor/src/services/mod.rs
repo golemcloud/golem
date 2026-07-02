@@ -17,6 +17,7 @@ pub mod agent_types;
 pub mod agent_webhooks;
 pub mod blob_store;
 pub mod card;
+pub mod card_interest;
 pub mod compilation_limiter;
 pub mod component;
 pub mod direct_invocation_auth;

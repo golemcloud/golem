@@ -78,7 +78,7 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentTypesService, HasComponentService, HasConfig,
+    All, HasActiveWorkers, HasAgentTypesService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService, rdbms,
 };
 use crate::storage::indexed::IndexedStorage;
@@ -172,14 +172,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
-        card_service: Arc<dyn CardService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<ActiveWorkers<Ctx>> {
         Arc::new(ActiveWorkers::<Ctx>::new(
             &golem_config.memory,
             &golem_config.filesystem_storage,
             &golem_config.agent_status_flush,
-            card_service.clone(),
             shutdown_token,
         ))
     }
@@ -817,11 +815,7 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_workers = bootstrap.create_active_workers(
-        &golem_config,
-        card_service.clone(),
-        shutdown_token.clone(),
-    );
+    let active_workers = bootstrap.create_active_workers(&golem_config, shutdown_token.clone());
 
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
@@ -1083,6 +1077,7 @@ pub async fn bootstrap_and_run_worker_executor<
     if start_registry_invalidation_handler {
         let registry_service = registry_service.clone();
         let active_workers = worker_executor_impl.active_workers();
+        let card_service = worker_executor_impl.card_service();
         let component_service = worker_executor_impl.component_service();
         let environment_state_service = worker_executor_impl.environment_state_service();
         let agent_types_service = worker_executor_impl.agent_types();
@@ -1091,6 +1086,7 @@ pub async fn bootstrap_and_run_worker_executor<
             WorkerExecutorRegistryInvalidationHandler::run(
                 registry_service,
                 active_workers,
+                card_service,
                 component_service,
                 environment_state_service,
                 agent_types_service,

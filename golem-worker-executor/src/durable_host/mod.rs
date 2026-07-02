@@ -53,7 +53,8 @@ use crate::model::{
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::card::CardService;
+use crate::services::card::{CardService, CardState};
+use crate::services::card_interest::CardInterestIndex;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -390,6 +391,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
@@ -556,6 +558,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 rdbms_service,
                 quota_service,
                 card_service,
+                card_interest_index,
                 component_service,
                 agent_types_service,
                 environment_state_service,
@@ -725,25 +728,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        let events = self
+        while let Some(pending_event) = self
             .public_state
             .worker()
-            .get_last_known_status()
+            .get_non_detached_last_known_status()
             .await
-            .pending_card_events;
-        if events.is_empty() {
-            return Ok(());
-        }
-
-        for pending_event in events {
-            match pending_event.event {
+            .pending_card_events
+            .first()
+        {
+            match &pending_event.event {
                 QueuedCardEvent::Revoke(event) => {
                     let card_id = event.card_id;
                     self.apply_card_revoked(card_id, pending_event.oplog_index, true)
                         .await?;
                 }
                 QueuedCardEvent::Install(event) => {
-                    let Some(card) = event.card else {
+                    let Some(card) = event.card.clone() else {
                         return Err(WorkerExecutorError::runtime(
                             "queued card install is missing card payload",
                         ));
@@ -754,7 +754,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
         }
-
         Ok(())
     }
 
@@ -764,19 +763,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         card: StoredCard,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
         let card_id = card.card_id();
-        let revoked_or_missing = self
+        let mut candidate_wallet_card_ids = self
+            .state
+            .agent_wallet_cards
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        if !candidate_wallet_card_ids.contains(&card_id) {
+            candidate_wallet_card_ids.push(card_id);
+        }
+        self.state
+            .card_interest_index
+            .set_card_interest(self.owned_agent_id.clone(), &candidate_wallet_card_ids)
+            .await;
+
+        let card_state = self
             .state
             .card_service
             .check_cards(vec![card_id])
             .await?
-            .contains(&card_id);
-        let status = self.public_state.worker().get_last_known_status().await;
+            .remove(&card_id);
 
-        if revoked_or_missing {
-            let reason = if status.revoked_cards.contains(&card_id) {
-                CardInstallFailure::CardRevoked
-            } else {
-                CardInstallFailure::NotFound
+        if !matches!(card_state, Some(CardState::Live(_))) {
+            let wallet_card_ids = self
+                .state
+                .agent_wallet_cards
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            self.state
+                .card_interest_index
+                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
+                .await;
+
+            let reason = match card_state {
+                Some(CardState::Revoked) => CardInstallFailure::CardRevoked,
+                _ => CardInstallFailure::NotFound,
             };
 
             if let Some(queued_event_index) = queued_event_index {
@@ -800,9 +822,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .copied()
                 .collect::<Vec<_>>();
             self.state
-                .card_service
-                .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
+                .card_interest_index
+                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
+
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
@@ -824,9 +847,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         if is_live {
+            let wallet_card_ids = self
+                .state
+                .agent_wallet_cards
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
             self.state
-                .card_service
-                .remove_revoked_agent_cards(&self.owned_agent_id, &[card_id])
+                .card_interest_index
+                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
 
             self.public_state
@@ -2646,21 +2675,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .copied()
             .collect::<Vec<_>>();
         self.state
-            .card_service
-            .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
+            .card_interest_index
+            .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
             .await;
 
         if wallet_card_ids.is_empty() {
             return Ok(());
         }
 
-        let revoked_card_ids = self.state.card_service.check_cards(wallet_card_ids).await?;
+        let card_states = self.state.card_service.check_cards(wallet_card_ids).await?;
 
-        for card_id in revoked_card_ids {
-            self.public_state
-                .worker()
-                .queue_card_revocation(card_id)
-                .await;
+        for (card_id, state) in card_states {
+            if state == CardState::Revoked {
+                self.public_state
+                    .worker()
+                    .queue_card_revocation(card_id)
+                    .await;
+            }
         }
 
         Ok(())
@@ -2674,7 +2705,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    pub async fn update_state_to_new_component_revision(
+    async fn update_state_to_new_component_revision(
         &mut self,
         new_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
@@ -4633,6 +4664,7 @@ struct PrivateDurableWorkerState {
     rdbms_service: Arc<dyn RdbmsService>,
     quota_service: Arc<dyn QuotaService>,
     card_service: Arc<dyn CardService>,
+    card_interest_index: Arc<CardInterestIndex>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -4816,6 +4848,7 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -4912,6 +4945,7 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             quota_service,
             card_service,
+            card_interest_index,
             component_service,
             agent_types_service,
             environment_state_service,
