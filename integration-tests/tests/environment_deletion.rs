@@ -81,8 +81,7 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
 }
 
 #[test_dep(tagged_as = "postgres")]
-pub async fn create_deps_postgres() -> EnvBasedTestDependencies {
-    Tracing::init();
+pub async fn create_deps_postgres(_tracing: &Tracing) -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 1,
         oplog_archive_interval: Some(Duration::from_secs(2)),
@@ -98,8 +97,7 @@ pub async fn create_deps_postgres() -> EnvBasedTestDependencies {
 }
 
 #[test_dep(tagged_as = "sqlite")]
-pub async fn create_deps_sqlite() -> EnvBasedTestDependencies {
-    Tracing::init();
+pub async fn create_deps_sqlite(_tracing: &Tracing) -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 1,
         oplog_archive_interval: Some(Duration::from_secs(2)),
