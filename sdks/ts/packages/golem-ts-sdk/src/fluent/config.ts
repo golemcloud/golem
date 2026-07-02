@@ -13,40 +13,40 @@
 // limitations under the License.
 
 // Standard-Schema config surface for the fluent SDK (issue #3449). A `config`
-// spec on `defineAgent` carries named `local` and `secret` fields, each a
-// Standard Schema value. We compile each field once into a `FluentCodec` plus a
-// declaration `SchemaGraph`:
-//   - local fields declare their inner type directly,
-//   - secret fields declare `secret<inner>` (a capability node) so the host
+// spec on `defineAgent` is a single record of named fields, each a Standard
+// Schema value. A field marked with `s.secret(inner)` — at ANY depth — is a
+// SECRET field; every other leaf is a plain LOCAL field. We flatten each field
+// recursively (descending into object/record schemas) to a flat list of LEAF
+// declarations, each carrying its full multi-segment `path`:
+//   - local leaves declare their inner type directly,
+//   - secret leaves declare `secret<inner>` (a capability node) so the host
 //     knows the value is a secret and returns an opaque handle.
-// At runtime the read accessor fetches each value fresh (config may change
-// between invocations): local values decode directly, secret values are
-// revealed (capability-gated via `golem:secrets/reveal`) then decoded.
+// At runtime the accessor reassembles the nested object from the leaves and
+// fetches each leaf fresh by its full path (config may change between
+// invocations): local leaves decode directly, secret leaves are surfaced as a
+// lazy, log-safe {@link Secret} handle whose `.get()` reveals + decodes on
+// demand (capability-gated via `golem:secrets/reveal`).
+//
+// Only object/record schemas are recursed; unions, arrays, tuples, maps, and
+// primitives are read whole as a single leaf (matching the decorator SDK's
+// flattening scope). A secret nested directly inside an array/union is out of
+// scope — it is read whole with its enclosing leaf.
 
 import { getConfigValue } from 'golem:agent/host@2.0.0';
-import { reveal } from 'golem:secrets/reveal@0.1.0';
 import { AgentConfigSource } from 'golem:agent/common@2.0.0';
-import {
-  SchemaGraph,
-  SchemaValue,
-  schemaGraphToWit,
-  schemaValueFromWit,
-  t,
-} from '../internal/schema-model';
+import { SchemaGraph, schemaGraphToWit, schemaValueFromWit } from '../internal/schema-model';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import { compileSchema } from './schema/adapter';
 import { FluentCodec } from './schema/codec';
+import { Secret } from './secret';
 
 /**
- * The fluent agent's config spec: named `local` and `secret` fields. Each value
- * is a Standard Schema (Zod / Valibot / ArkType / Effect Schema). A `secret`
- * field's schema describes the *inner* (revealed) value; the SDK wraps it in a
- * `secret<inner>` declaration node automatically.
+ * The fluent agent's config spec: a single record of named fields, each a
+ * Standard Schema (Zod / Valibot / ArkType / Effect Schema). Mark a field (at
+ * any depth) with `s.secret(inner)` to make it a secret (declared to the host as
+ * `secret<inner>`); any other leaf is a plain local field.
  */
-export interface ConfigSpec {
-  readonly local?: Record<string, StandardSchemaV1>;
-  readonly secret?: Record<string, StandardSchemaV1>;
-}
+export type ConfigSpec = Record<string, StandardSchemaV1>;
 
 /**
  * A single compiled config field. `graph` is the *declaration* graph the host
@@ -64,48 +64,67 @@ export interface ConfigDeclaration {
 }
 
 /**
- * Compile a {@link ConfigSpec} into a flat, ordered list of
- * {@link ConfigDeclaration}s. `local` fields are emitted first (declaration
- * order), then `secret` fields. Each field's `path` is a single segment (its
- * name).
+ * Compile a {@link ConfigSpec} into a flat, ordered list of LEAF
+ * {@link ConfigDeclaration}s, in declaration order, by recursively flattening
+ * each top-level field:
+ *  - an OBJECT schema (a WIT `record` with named fields, e.g. `z.object({...})`)
+ *    is descended field-by-field, extending the `path`;
+ *  - a SECRET marker (at any depth) becomes a `secret` leaf whose declaration
+ *    graph is `secret<inner>` and whose `codec` is the inner (revealed) codec;
+ *  - anything else (primitive, union, array, tuple, map, scalar marker) becomes
+ *    a `local` leaf read whole at its full path.
  */
 export function compileConfig(spec: ConfigSpec | undefined): ConfigDeclaration[] {
   const declarations: ConfigDeclaration[] = [];
   if (spec === undefined) return declarations;
 
-  for (const [name, schema] of Object.entries(spec.local ?? {})) {
-    const codec = compileSchema(schema);
-    declarations.push({
-      name,
-      source: 'local',
-      path: [name],
-      codec,
-      graph: codec.graph,
-    });
-  }
-
-  for (const [name, schema] of Object.entries(spec.secret ?? {})) {
-    const codec = compileSchema(schema);
-    // The agent registry requires a secret-typed config field to declare its
-    // value type as `secret<inner>` (a capability node), not the bare inner
-    // type. Wrap the inner graph's root in a `secret` node; the inner codec
-    // still drives plaintext encode/decode of the revealed value.
-    const graph: SchemaGraph = { ...codec.graph, root: t.secret(codec.graph.root) };
-    declarations.push({
-      name,
-      source: 'secret',
-      path: [name],
-      codec,
-      graph,
-    });
+  for (const [name, schema] of Object.entries(spec)) {
+    flattenField(compileSchema(schema), [name], declarations);
   }
 
   return declarations;
 }
 
 /**
- * Build the runtime config accessor: an object with one getter per declaration.
- * Getters read FRESH on every access (config may change between invocations).
+ * Recursively append leaf declarations for a compiled field `codec` at `path`.
+ * Uses the vendor-agnostic {@link FluentCodec} hints: `secretInner` marks a
+ * secret leaf, `fields` marks an object to descend.
+ */
+function flattenField(codec: FluentCodec, path: string[], out: ConfigDeclaration[]): void {
+  if (codec.secretInner !== undefined) {
+    // Secret leaf: the marker's own `graph` is `secret<inner>` (declared to the
+    // host); its inner codec decodes the revealed plaintext.
+    out.push({
+      name: path[path.length - 1],
+      source: 'secret',
+      path: [...path],
+      codec: codec.secretInner,
+      graph: codec.graph,
+    });
+    return;
+  }
+  if (codec.fields !== undefined && codec.fields.length > 0) {
+    for (const f of codec.fields) flattenField(f.codec, [...path, f.name], out);
+    return;
+  }
+  // Local leaf: primitive / union / array / map / scalar marker, or an empty
+  // object (read whole).
+  out.push({
+    name: path[path.length - 1],
+    source: 'local',
+    path: [...path],
+    codec,
+    graph: codec.graph,
+  });
+}
+
+/**
+ * Build the runtime config accessor: reassemble the nested object from the flat
+ * leaf declarations. Intermediate path segments become nested objects; each leaf
+ * becomes either a fresh-reading getter (local) or a lazy, log-safe
+ * {@link Secret} handle (secret). Local getters read FRESH on every access, and
+ * `Secret.get()` reveals fresh on every call (config may change between
+ * invocations).
  *
  * Note: the host bindings (`getConfigValue` / `reveal`) only resolve inside the
  * Golem guest, so this accessor is wired in `initiate` and exercised at
@@ -114,36 +133,41 @@ export function compileConfig(spec: ConfigSpec | undefined): ConfigDeclaration[]
 export function buildConfigAccessor(
   declarations: readonly ConfigDeclaration[],
 ): Record<string, unknown> {
-  const accessor: Record<string, unknown> = {};
+  const root: Record<string, unknown> = {};
+
   for (const d of declarations) {
-    Object.defineProperty(accessor, d.name, {
-      enumerable: true,
-      configurable: true,
-      get(): unknown {
-        const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
-        if (d.source !== 'secret') {
+    if (d.path.length === 0) continue;
+
+    // Walk/create the intermediate objects along the path.
+    let current = root;
+    for (let i = 0; i < d.path.length - 1; i++) {
+      const key = d.path[i];
+      const existing = current[key];
+      if (typeof existing !== 'object' || existing === null) {
+        const next: Record<string, unknown> = {};
+        current[key] = next;
+        current = next;
+      } else {
+        current = existing as Record<string, unknown>;
+      }
+    }
+
+    const leafKey = d.path[d.path.length - 1];
+    if (d.source === 'secret') {
+      // A lazy, log-safe `Secret` handle; the plaintext is only revealed by
+      // `Secret.get()` (which re-reads the live value each call).
+      current[leafKey] = new Secret(d);
+    } else {
+      Object.defineProperty(current, leafKey, {
+        enumerable: true,
+        configurable: true,
+        get(): unknown {
+          const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
           return d.codec.fromValue(schemaValueFromWit(tree));
-        }
-        // A secret leaf's declared value type is `secret<inner>`: the host
-        // returns an opaque secret handle, not the plaintext. Reveal it
-        // (capability-gated via `golem:secrets/reveal`) against the inner-type
-        // graph to obtain the inner value tree, which the inner codec decodes.
-        const sv = schemaValueFromWit(tree);
-        if (sv.tag !== 'secret') {
-          throw new Error(
-            `Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`,
-          );
-        }
-        const handle = (sv as Extract<SchemaValue, { tag: 'secret' }>).handle;
-        const revealedTree = handle.withHandle((raw) =>
-          reveal(raw, schemaGraphToWit(d.codec.graph)),
-        );
-        if (revealedTree === undefined) {
-          throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
-        }
-        return d.codec.fromValue(schemaValueFromWit(revealedTree));
-      },
-    });
+        },
+      });
+    }
   }
-  return accessor;
+
+  return root;
 }

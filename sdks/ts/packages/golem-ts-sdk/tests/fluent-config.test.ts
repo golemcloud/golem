@@ -12,34 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Phase 4: agent CONFIG (local + secret) on the Standard-Schema path.
+// Agent CONFIG on the Standard-Schema path: a single record of fields, with
+// secrets marked by `s.secret(inner)` (no more `{ local, secret }` buckets).
 //
 // The live runtime accessor (`buildConfigAccessor`) calls host bindings
 // (`getConfigValue` / `reveal`) that only resolve inside the Golem guest, so
 // these tests never invoke it. Instead they assert the *declarative* output:
 //   - `defineAgent({ config })` emits `agent-config-declaration`s whose
 //     `valueType` resolves (in the agent-type `schema`) to the right node, and
-//   - `compileConfig` produces the expected per-field declaration graphs.
+//   - `compileConfig` produces the expected per-field declaration graphs, with
+//     secret vs local detected by the `s.secret(...)` marker.
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { defineAgent } from '../src/fluent/defineAgent';
 import { method } from '../src/fluent/method';
 import { compileConfig } from '../src/fluent/config';
+import { s } from '../src/fluent/schema/markers';
+import { Secret } from '../src/fluent/secret';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
-describe('fluent agent config (Phase 4)', () => {
+describe('fluent agent config (single-record + s.secret marker)', () => {
   it('emits agent-config-declarations whose value-types resolve to the right schema nodes', () => {
     defineAgent({
       name: 'configured',
       id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
       config: {
-        local: { greeting: z.string() },
-        secret: { apiKey: z.string() },
+        greeting: z.string(),
+        apiKey: s.secret(z.string()),
       },
     });
 
@@ -66,10 +70,10 @@ describe('fluent agent config (Phase 4)', () => {
     expect(at.schema.typeNodes[innerIndex].body.tag).toBe('string-type');
   });
 
-  it('compileConfig produces local + secret declarations with the right graphs', () => {
+  it('compileConfig detects secret vs local by the s.secret marker', () => {
     const declarations = compileConfig({
-      local: { greeting: z.string() },
-      secret: { apiKey: z.string() },
+      greeting: z.string(),
+      apiKey: s.secret(z.string()),
     });
 
     expect(declarations).toHaveLength(2);
@@ -92,6 +96,61 @@ describe('fluent agent config (Phase 4)', () => {
       .inner;
     expect(inner.body.tag).toBe('string');
     expect(secret.codec.graph.root.body.tag).toBe('string');
+  });
+
+  it('a plain field (no marker) compiles as local', () => {
+    const [decl] = compileConfig({ greeting: z.string() });
+    expect(decl.source).toBe('local');
+  });
+
+  it('flattens nested objects to leaf declarations with full multi-segment paths', () => {
+    const declarations = compileConfig({
+      top: z.string(),
+      nested: z.object({
+        a: z.string(),
+        b: z.number(),
+        c: s.secret(z.object({ d: z.string(), e: z.number() })),
+      }),
+    });
+
+    const byPath = Object.fromEntries(declarations.map((d) => [d.path.join('.'), d]));
+
+    // Top-level local leaf.
+    expect(byPath['top'].source).toBe('local');
+    expect(byPath['top'].path).toEqual(['top']);
+
+    // Nested local leaves carry their full path.
+    expect(byPath['nested.a'].source).toBe('local');
+    expect(byPath['nested.a'].path).toEqual(['nested', 'a']);
+    expect(byPath['nested.a'].graph.root.body.tag).toBe('string');
+    expect(byPath['nested.b'].source).toBe('local');
+    expect(byPath['nested.b'].path).toEqual(['nested', 'b']);
+
+    // Nested secret leaf: full path, `secret<inner>` declaration graph, inner codec.
+    const secret = byPath['nested.c'];
+    expect(secret.source).toBe('secret');
+    expect(secret.path).toEqual(['nested', 'c']);
+    expect(secret.graph.root.body.tag).toBe('secret');
+    // The inner codec decodes the revealed plaintext (the { d, e } record).
+    expect(secret.codec.graph.root.body.tag).toBe('record');
+
+    // No declaration for the intermediate `nested` object itself — only leaves.
+    expect(byPath['nested']).toBeUndefined();
+  });
+
+  it('reads a whole array/union field as a single local leaf (no recursion)', () => {
+    const declarations = compileConfig({ tags: z.array(z.string()) });
+    expect(declarations).toHaveLength(1);
+    expect(declarations[0].source).toBe('local');
+    expect(declarations[0].path).toEqual(['tags']);
+    expect(declarations[0].graph.root.body.tag).toBe('list');
+  });
+
+  it('Secret.toJSON throws so secrets never leak through serialization', () => {
+    const [secretDecl] = compileConfig({ apiKey: s.secret(z.string()) });
+    const handle = new Secret(secretDecl);
+    expect(() => JSON.stringify(handle)).toThrow(/not serializable/);
+    expect(() => handle.toJSON()).toThrow(/not serializable/);
   });
 
   it('an agent with no config keeps an empty config declaration list', () => {

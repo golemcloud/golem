@@ -67,7 +67,7 @@ import type {
   SnapshottingSpec,
 } from './defineAgent';
 import { MethodSpec } from './method';
-import { buildConfigAccessor, compileConfig, ConfigDeclaration } from './config';
+import { buildConfigAccessor, compileConfig, ConfigDeclaration, ConfigSpec } from './config';
 import { compileEndpoint, compileMount, pathVariableNames } from './http';
 import { HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@2.0.0';
 
@@ -518,7 +518,7 @@ class FluentResolvedAgent {
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
 export function registerAgentInitiator(
   reg: RegisteredAgent,
-  impl: AgentImplementation<IdRecord, MethodsRecord, object>,
+  impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
 ): void {
   AgentInitiatorRegistry.register(reg.className, {
     async initiate(constructorInput: SchemaValue, principal: HostPrincipal) {

@@ -32,6 +32,8 @@ import {
   VariantCaseType,
 } from '../../internal/schema-model';
 import { FluentCodec, SchemaWalker } from './codec';
+import { StandardSchemaV1 } from './standardSchema';
+import { buildUnionVariantCodec, matchesStandard } from './union';
 import { registerSchemaWalker } from './adapter';
 
 interface NormalizedDef {
@@ -191,6 +193,8 @@ const valibotWalker: SchemaWalker = (schema, recurse): FluentCodec => {
           });
           return out;
         },
+        // Expose per-field codecs so the config surface can flatten nested config.
+        fields: fieldCodecs,
       };
     }
     case 'tuple':
@@ -317,12 +321,16 @@ const valibotWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       };
     }
     case 'union': {
-      // Plain (non-discriminated) unions need robust structural disambiguation on
-      // encode; deferred (mirrors the Zod walker). Use `v.variant(...)` for the
-      // discriminated case.
-      throw new Error(
-        `Plain v.union(...) is not yet supported by the fluent SDK walker; use v.variant(...) ` +
-          `(a discriminated union) or an SDK variant marker. (kind '${kind}')`,
+      // Plain (non-discriminated) union → WIT `variant` with auto-named cases
+      // `case0..caseN-1`. Decode by `caseIndex`; encode disambiguates by running
+      // each member's own `~standard.validate` in declaration order.
+      const opts = (options ?? []) as StandardSchemaV1[];
+      if (opts.length === 0) throw new Error('v.union(...) has no members');
+      const memberCodecs = opts.map((o) => recurse(o));
+      return buildUnionVariantCodec(
+        memberCodecs,
+        (value) => opts.findIndex((o) => matchesStandard(o, value)),
+        'v.union',
       );
     }
     default:

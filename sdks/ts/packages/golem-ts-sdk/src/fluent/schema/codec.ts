@@ -29,6 +29,22 @@ export interface FluentCodec {
    * `output-schema.unit`, so `graph` is a placeholder and is never encoded.
    */
   readonly isUnit?: boolean;
+  /**
+   * For OBJECT codecs (a WIT `record` with named fields, e.g. `z.object({...})`):
+   * the per-field child codecs, in declaration order. Set by the vendor object
+   * walkers so the config surface can flatten nested config to leaf fields
+   * (each fetched by its full multi-segment path). Absent for non-object codecs
+   * (including `z.record(k, v)` maps, which are read whole).
+   */
+  readonly fields?: ReadonlyArray<{ readonly name: string; readonly codec: FluentCodec }>;
+  /**
+   * For SECRET markers (`s.secret(inner)`): the inner (revealed-value) codec —
+   * the one that decodes the plaintext after `golem:secrets/reveal`. The
+   * marker's own `graph` is `secret<inner>` and its own `fromValue` yields the
+   * raw handle; the config surface uses this inner codec to decode a revealed
+   * secret leaf.
+   */
+  readonly secretInner?: FluentCodec;
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   VariantCaseType,
 } from '../../internal/schema-model';
 import { FluentCodec, SchemaWalker } from './codec';
+import { buildUnionVariantCodec, matchesSchemaType } from './union';
 import { registerSchemaWalker } from './adapter';
 
 type Ast = any;
@@ -236,6 +237,8 @@ function walkTypeLiteral(ast: Ast): FluentCodec {
       });
       return out;
     },
+    // Expose per-field codecs so the config surface can flatten nested config.
+    fields: fieldCodecs.map((f) => ({ name: f.name, codec: f.codec })),
   };
 }
 
@@ -297,9 +300,16 @@ function walkUnion(ast: Ast): FluentCodec {
     return walkTaggedVariant(unwrapped);
   }
 
-  throw new Error(
-    `Effect Schema.Union(...) is only supported as a string-literal enum, a NullOr/UndefinedOr option, ` +
-      `or a tagged union whose members each carry a required string-literal '_tag'. (got ${types.length} members)`,
+  // Plain (non-tagged) union → WIT `variant` with auto-named cases
+  // `case0..caseN-1`. Decode by `caseIndex`; encode disambiguates structurally
+  // over the compiled member types (Effect members are AST nodes, not Standard
+  // Schema values).
+  if (types.length === 0) throw new Error('Effect Schema.Union(...) has no members');
+  const memberCodecs = types.map((m) => walkAst(m));
+  return buildUnionVariantCodec(
+    memberCodecs,
+    (value) => memberCodecs.findIndex((c) => matchesSchemaType(c.graph.defs, c.graph.root, value)),
+    'Effect Schema.Union',
   );
 }
 

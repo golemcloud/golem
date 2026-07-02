@@ -31,11 +31,15 @@ export type {
   AgentImplementation,
   AgentSpec,
   ConfigSpec,
+  ConfigView,
   FluentAgentThis,
   IdRecord,
   InitContext,
   MethodsRecord,
 } from './defineAgent';
+
+// Lazy, log-safe secret config handle.
+export { Secret } from './secret';
 
 export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';

@@ -73,7 +73,12 @@ export type MarkerDescriptor = (recurse: (child: unknown) => FluentCodec) => Flu
  * bound from a path / query / header variable and therefore must be excluded
  * from HTTP variable binding (see {@link MarkerKindOf} / `BindableKeys`).
  */
-export type MarkerKind = 'scalar' | 'multimodal' | 'unstructured-text' | 'unstructured-binary';
+export type MarkerKind =
+  | 'scalar'
+  | 'multimodal'
+  | 'unstructured-text'
+  | 'unstructured-binary'
+  | 'secret';
 
 /** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
 declare const MARKER_KIND: unique symbol;
@@ -96,6 +101,32 @@ export interface MarkerSchema<Output = unknown, Kind extends MarkerKind = 'scala
  * Zod / Valibot / ArkType schema).
  */
 export type MarkerKindOf<V> = V extends MarkerSchema<any, infer K> ? K : undefined;
+
+/**
+ * Runtime brand key carried by every secret marker; its value is the marker's
+ * INNER Standard Schema (describing the revealed plaintext). It doubles as the
+ * type-level carrier of the inner type — {@link SecretInnerOf} recovers it — so
+ * no separate phantom field is needed. Symbol-keyed, so it is invisible to
+ * `JSON.stringify` / `Object.keys` and does not disturb the codec build.
+ */
+export const SECRET_INNER: unique symbol = Symbol('golem.secretInner');
+
+/**
+ * A secret marker: a {@link MarkerSchema} of kind `'secret'` that additionally
+ * carries its inner (revealed) schema under {@link SECRET_INNER}. The static
+ * `Inner` type is recoverable via {@link SecretInnerOf}.
+ */
+export interface SecretMarkerSchema<Inner> extends MarkerSchema<RawSecret, 'secret'> {
+  readonly [SECRET_INNER]: StandardSchemaV1<Inner>;
+}
+
+/** Recover the inner (revealed) type of a secret marker, else `never`. */
+export type SecretInnerOf<V> = V extends SecretMarkerSchema<infer I> ? I : never;
+
+/** Type guard: is this value a secret marker (kind `'secret'`)? */
+export function isSecretMarker(value: unknown): value is SecretMarkerSchema<unknown> {
+  return isMarkerSchema(value) && SECRET_INNER in value;
+}
 
 /** Type guard: does this value carry a {@link WIT_MARKER} brand? */
 export function isMarkerSchema(value: unknown): value is MarkerSchema {
@@ -323,7 +354,7 @@ function bytesMarker(): MarkerSchema<Uint8Array> {
 // Capability wrapper: secret
 // ============================================================
 
-function secretMarker<Output>(inner: StandardSchemaV1<Output>): MarkerSchema<RawSecret> {
+function secretMarker<Output>(inner: StandardSchemaV1<Output>): SecretMarkerSchema<Output> {
   // The runtime secret value is an opaque owned `secret` resource handle, not
   // the revealed plaintext — so `validate` only checks it is a non-null object
   // (the inner schema constrains the *revealed* type, surfaced on the wire as
@@ -348,9 +379,17 @@ function secretMarker<Output>(inner: StandardSchemaV1<Output>): MarkerSchema<Raw
         }
         return raw;
       },
+      // Expose the inner (revealed-value) codec so the config surface can decode
+      // a secret leaf's plaintext after `golem:secrets/reveal`, at any depth.
+      secretInner: innerCodec,
     };
   };
-  return marker(validate, descriptor);
+  // Carry the inner schema under SECRET_INNER so `compileConfig` can detect the
+  // secret at runtime and recover the inner codec, and so `SecretInnerOf` can
+  // recover the inner type. The symbol field does not affect the marker's codec
+  // (compileSchema dispatches on WIT_MARKER before reading any other field).
+  const base = marker<RawSecret, 'secret'>(validate, descriptor);
+  return Object.assign(base, { [SECRET_INNER]: inner }) as SecretMarkerSchema<Output>;
 }
 
 // ============================================================

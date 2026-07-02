@@ -32,6 +32,8 @@ import {
   VariantCaseType,
 } from '../../internal/schema-model';
 import { FluentCodec, SchemaWalker } from './codec';
+import { StandardSchemaV1 } from './standardSchema';
+import { buildUnionVariantCodec, matchesStandard } from './union';
 
 const F64_BITS_VIEW = new DataView(new ArrayBuffer(8));
 function f64Bits(x: number): bigint {
@@ -262,6 +264,8 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
           });
           return out;
         },
+        // Expose per-field codecs so the config surface can flatten nested config.
+        fields: fieldCodecs,
       };
     }
     case 'tuple': {
@@ -384,14 +388,16 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       };
     }
     case 'union': {
-      // Plain (non-discriminated) unions compile to a WIT `variant`. Robust
-      // structural disambiguation on encode is deferred; for now require a
-      // discriminated union or an `s.variant(...)` marker for ambiguous cases. We
-      // still support the common case by trying each branch's validator-equivalent
-      // on decode by caseIndex.
-      throw new Error(
-        `Plain z.union(...) is not yet supported by the fluent SDK walker; use z.discriminatedUnion(...) ` +
-          `or an SDK variant marker. (kind '${kind}')`,
+      // Plain (non-discriminated) union → WIT `variant` with auto-named cases
+      // `case0..caseN-1`. Decode by `caseIndex`; encode disambiguates by running
+      // each member's own `~standard.validate` in declaration order.
+      const opts = (options ?? []) as StandardSchemaV1[];
+      if (opts.length === 0) throw new Error('z.union(...) has no members');
+      const memberCodecs = opts.map((o) => recurse(o));
+      return buildUnionVariantCodec(
+        memberCodecs,
+        (value) => opts.findIndex((o) => matchesStandard(o, value)),
+        'z.union',
       );
     }
     default:

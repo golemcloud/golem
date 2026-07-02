@@ -38,6 +38,7 @@ import {
   v,
 } from '../../internal/schema-model';
 import { FluentCodec, SchemaWalker } from './codec';
+import { buildUnionVariantCodec, matchesSchemaType } from './union';
 import { registerSchemaWalker } from './adapter';
 
 type Node = any;
@@ -196,9 +197,16 @@ function walkUnion(node: Node): FluentCodec {
     );
   }
 
-  throw new Error(
-    `Plain ArkType unions are not yet supported by the fluent SDK walker; only string-literal enums, ` +
-      `'T | undefined' / 'T | null' optionals, and 'boolean' are recognised.`,
+  // Plain (non-literal) union → WIT `variant` with auto-named cases
+  // `case0..caseN-1`. Decode by `caseIndex`; encode disambiguates structurally
+  // over the compiled member types (ArkType branches are internal nodes, not
+  // Standard Schema values).
+  if (branches.length === 0) throw new Error('ArkType union has no branches');
+  const memberCodecs = branches.map((b) => walkNode(b));
+  return buildUnionVariantCodec(
+    memberCodecs,
+    (value) => memberCodecs.findIndex((c) => matchesSchemaType(c.graph.defs, c.graph.root, value)),
+    'ArkType union',
   );
 }
 
@@ -282,6 +290,8 @@ function walkStructure(node: Node): FluentCodec {
       });
       return out;
     },
+    // Expose per-field codecs so the config surface can flatten nested config.
+    fields: fieldCodecs.map((f) => ({ name: f.name, codec: f.codec })),
   };
 }
 

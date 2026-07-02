@@ -27,11 +27,56 @@ import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './ru
 import { ConfigSpec } from './config';
 import { HttpMountSpec } from './http';
 import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
+import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
+import type { Secret } from './secret';
 
 export type { ConfigSpec } from './config';
 
 export type IdRecord = Record<string, StandardSchemaV1>;
 export type MethodsRecord = Record<string, MethodSpec>;
+
+/**
+ * Recover the field-schema record of an OBJECT schema, or `never` for a
+ * non-object. Vendor-agnostic structural detection: Zod exposes the field
+ * schemas under `.shape`, Valibot under `.entries`, Effect Schema under
+ * `.fields`. Non-object schemas (primitives, arrays, unions, maps, markers)
+ * carry none of these, so they resolve to `never` and are typed by their
+ * `InferOutput` (read whole), matching the runtime flattening scope.
+ */
+type ConfigObjectShapeOf<S> = S extends { readonly shape: infer Sh }
+  ? Sh
+  : S extends { readonly entries: infer Sh }
+    ? Sh
+    : S extends { readonly fields: infer Sh }
+      ? Sh
+      : never;
+
+/**
+ * Deep view of a single config field's schema `S`:
+ * - a secret marker (at any depth) → a lazy {@link Secret} handle over its inner
+ *   type (call `.get()` for the value);
+ * - an object schema → recurse field-by-field (each field deeply transformed);
+ * - anything else (primitive / union / array / map / scalar marker) → its
+ *   decoded `InferOutput` value, read whole.
+ */
+type ConfigFieldView<S> = MarkerKindOf<S> extends 'secret'
+  ? Secret<SecretInnerOf<S>>
+  : [ConfigObjectShapeOf<S>] extends [never]
+    ? OutputOf<S>
+    : { readonly [K in keyof ConfigObjectShapeOf<S>]: ConfigFieldView<ConfigObjectShapeOf<S>[K]> };
+
+/** `InferOutput` guarded for the unconstrained recursion parameter. */
+type OutputOf<S> = S extends StandardSchemaV1 ? StandardSchemaV1.InferOutput<S> : unknown;
+
+/**
+ * The typed view of an agent's config on `this.config` / `InitContext.config`:
+ * one property per declared field, deeply transformed by {@link ConfigFieldView}
+ * (secrets → {@link Secret} handles at any depth; nested objects recursed).
+ * Accessing an undeclared field is a compile error. Defaults to `{}` (no config).
+ */
+export type ConfigView<C extends ConfigSpec> = {
+  readonly [K in keyof C]: ConfigFieldView<C[K]>;
+};
 
 /**
  * Resolved, name-only agent-level metadata handed to {@link registerAgentType}.
@@ -62,46 +107,55 @@ type HandlerFor<M> =
     : never;
 
 /** SDK helpers available on a handler's `this` (alongside state). */
-export interface FluentAgentThis {
+export interface FluentAgentThis<Config extends ConfigSpec = {}> {
   getId(): ParsedAgentId;
   getPhantomId(): Uuid | undefined;
   getPrincipal(): Principal;
   /**
-   * The agent's config accessor: one fresh-reading getter per declared
-   * `local`/`secret` field. Loosely typed for now — proper per-agent typing
-   * can come later.
+   * The agent's config accessor: one fresh-reading getter per declared field.
+   * Local fields read their decoded value directly; secret fields yield a lazy
+   * {@link Secret} handle (call `.get()`). See {@link ConfigView}.
    */
-  readonly config: Record<string, unknown>;
+  readonly config: ConfigView<Config>;
 }
 
-export interface InitContext<Id extends IdRecord> {
+export interface InitContext<Id extends IdRecord, Config extends ConfigSpec = {}> {
   readonly id: InferRecord<Id>;
   readonly principal: Principal;
   readonly phantomId: Uuid | undefined;
   /** The agent's config accessor (see {@link FluentAgentThis.config}). */
-  readonly config: Record<string, unknown>;
+  readonly config: ConfigView<Config>;
 }
 
 export interface AgentImplementation<
   Id extends IdRecord,
   Methods extends MethodsRecord,
+  Config extends ConfigSpec,
   State extends object,
 > {
-  init: (ctx: InitContext<Id>) => State | Promise<State>;
+  init: (ctx: InitContext<Id, Config>) => State | Promise<State>;
   /** One handler per declared method; `this` is bound to `State` + SDK helpers. */
-  methods: { [K in keyof Methods]: HandlerFor<Methods[K]> } & ThisType<State & FluentAgentThis>;
+  methods: { [K in keyof Methods]: HandlerFor<Methods[K]> } & ThisType<
+    State & FluentAgentThis<Config>
+  >;
 }
 
 export interface AgentImpl {
   readonly name: string;
 }
 
-export interface AgentDefinition<Id extends IdRecord, Methods extends MethodsRecord> {
+export interface AgentDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+> {
   readonly name: string;
   readonly id: Id;
   readonly methods: Methods;
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
-  implement<State extends object>(impl: AgentImplementation<Id, Methods, State>): AgentImpl;
+  implement<State extends object>(
+    impl: AgentImplementation<Id, Methods, Config, State>,
+  ): AgentImpl;
 }
 
 /**
@@ -120,6 +174,7 @@ export type SnapshottingSpec =
 export interface AgentSpec<
   Id extends IdRecord,
   Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
   MV extends string = keyof Id & string,
   WV extends string = never,
 > {
@@ -142,11 +197,12 @@ export interface AgentSpec<
   /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
   snapshotting?: SnapshottingSpec;
   /**
-   * Named `local` / `secret` config fields. Each is a Standard Schema value;
-   * `secret` fields describe the inner (revealed) value and are declared to the
-   * host as `secret<inner>`. Surfaced as `agent-type.config`.
+   * Named config fields, one Standard Schema value each. Mark a field with
+   * `s.secret(inner)` to declare it to the host as `secret<inner>`; any other
+   * field is a plain local field. Surfaced as `agent-type.config` and typed on
+   * `this.config` / `InitContext.config` via {@link ConfigView}.
    */
-  config?: ConfigSpec;
+  config?: Config;
   /**
    * HTTP mount for the agent: a path prefix (`{var}` template or path-segment
    * builders) plus optional auth / CORS / webhook-suffix. Surfaced as
@@ -193,9 +249,10 @@ export interface AgentSpec<
 export function defineAgent<
   Id extends IdRecord,
   Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
   MV extends string = keyof Id & string,
   WV extends string = never,
->(spec: AgentSpec<Id, Methods, MV, WV>): AgentDefinition<Id, Methods> {
+>(spec: AgentSpec<Id, Methods, Config, MV, WV>): AgentDefinition<Id, Methods, Config> {
   const registered: RegisteredAgent = registerAgentType(spec.name, spec.id, spec.methods, {
     description: spec.description,
     promptHint: spec.promptHint,
@@ -212,7 +269,10 @@ export function defineAgent<
     id: spec.id,
     methods: spec.methods,
     implement(impl) {
-      registerAgentInitiator(registered, impl as AgentImplementation<IdRecord, MethodsRecord, object>);
+      registerAgentInitiator(
+        registered,
+        impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
+      );
       return { name: spec.name };
     },
   };

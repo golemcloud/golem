@@ -116,6 +116,38 @@ describe('fluent Zod walker', () => {
     expect(du.fromValue(du.toValue(b))).toEqual(b);
   });
 
+  it('maps a plain (non-discriminated) union to a variant and round-trips by case', () => {
+    const u = compileSchema(z.union([z.string(), z.number(), z.boolean()]));
+    expect(u.graph.root.body).toMatchObject({ tag: 'variant' });
+    // Auto-named cases, structurally compatible with a discriminated union.
+    expect((u.graph.root.body as { tag: 'variant'; cases: { name: string }[] }).cases.map((c) => c.name)).toEqual([
+      'case0',
+      'case1',
+      'case2',
+    ]);
+    // Encode by structural disambiguation; decode by caseIndex.
+    for (const [val, idx] of [['hi', 0] as const, [5, 1] as const, [true, 2] as const]) {
+      expect(u.toValue(val)).toMatchObject({ tag: 'variant', caseIndex: idx });
+      expect(u.fromValue(u.toValue(val))).toEqual(val);
+    }
+  });
+
+  it('picks the right union-of-objects case by structure', () => {
+    const u = compileSchema(z.union([z.object({ a: z.string() }), z.object({ b: z.number() })]));
+    expect(u.graph.root.body).toMatchObject({ tag: 'variant' });
+    const va = { a: 'x' };
+    const vb = { b: 7 };
+    expect(u.toValue(va)).toMatchObject({ tag: 'variant', caseIndex: 0 });
+    expect(u.fromValue(u.toValue(va))).toEqual(va);
+    expect(u.toValue(vb)).toMatchObject({ tag: 'variant', caseIndex: 1 });
+    expect(u.fromValue(u.toValue(vb))).toEqual(vb);
+  });
+
+  it('throws a clear error when no union member accepts the value', () => {
+    const u = compileSchema(z.union([z.string(), z.number()]));
+    expect(() => u.toValue(true)).toThrow(/no ?.*member accepts|none matched/i);
+  });
+
   it('rejects non-Standard-Schema values', () => {
     expect(() => compileSchema({} as never)).toThrow(/Standard Schema/);
   });

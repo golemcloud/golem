@@ -143,8 +143,16 @@ describe('fluent Valibot walker', () => {
     expect(variant.fromValue(variant.toValue(b))).toEqual(b);
   });
 
-  it('throws for a plain (non-discriminated) union', () => {
-    expect(() => compileSchema(vb.union([vb.string(), vb.number()]))).toThrow(/not yet supported/);
+  it('maps a plain (non-discriminated) union to a variant and round-trips by case', () => {
+    const u = compileSchema(vb.union([vb.string(), vb.number(), vb.boolean()]));
+    expect(u.graph.root.body.tag).toBe('variant');
+    expect(
+      (u.graph.root.body as { tag: 'variant'; cases: { name: string }[] }).cases.map((c) => c.name),
+    ).toEqual(['case0', 'case1', 'case2']);
+    for (const [val, idx] of [['hi', 0] as const, [5, 1] as const, [true, 2] as const]) {
+      expect((u.toValue(val) as { caseIndex: number }).caseIndex).toBe(idx);
+      expect(u.fromValue(u.toValue(val))).toEqual(val);
+    }
   });
 });
 
@@ -242,8 +250,13 @@ describe('fluent ArkType walker', () => {
     expect(rec.fromValue(rec.toValue(value))).toEqual(value);
   });
 
-  it('throws for a plain (non-literal) union', () => {
-    expect(() => compileSchema(ark('string | number'))).toThrow(/not yet supported/);
+  it('maps a plain (non-literal) union to a variant and round-trips by structure', () => {
+    const u = compileSchema(ark('string | number'));
+    expect(u.graph.root.body.tag).toBe('variant');
+    // ArkType may normalize branch order, so assert round-trip correctness
+    // (structural disambiguation picks the right case) rather than a fixed index.
+    expect(u.fromValue(u.toValue('hi'))).toBe('hi');
+    expect(u.fromValue(u.toValue(5))).toBe(5);
   });
 });
 
@@ -362,5 +375,13 @@ describe('fluent Effect Schema walker', () => {
     expect(variant.toValue(a)).toMatchObject({ tag: 'variant', caseIndex: 0 });
     expect(variant.fromValue(variant.toValue(a))).toEqual(a);
     expect(variant.fromValue(variant.toValue(b))).toEqual(b);
+  });
+
+  it('maps a plain (non-tagged) union to a variant and round-trips by structure', () => {
+    const u = compileSchema(std(Schema.Union(Schema.String, Schema.Number, Schema.Boolean)));
+    expect(u.graph.root.body.tag).toBe('variant');
+    for (const val of ['hi', 5, true] as const) {
+      expect(u.fromValue(u.toValue(val))).toEqual(val);
+    }
   });
 });
