@@ -1,0 +1,5 @@
+error: the implicit-body method's #[command(name = "search")] diverges from the tool name "grep"; the root command name must equal the tool name (§5.8.1)
+ --> tests/ui/fail/tool_body_name_divergence.rs:9:8
+  |
+9 |     fn grep(&self, pattern: String) -> Result<(), ()>;
+  |        ^^^^

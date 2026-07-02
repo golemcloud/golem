@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk/schema"
 
 import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema_model",
 }
 
@@ -36,6 +37,8 @@ pub fn type_id_with_args(String, Array[String]) -> String
 
 pub fn[T] type_tag() -> TypeTag[T]
 
+pub fn[U : QuantityUnit] unit_allowed(TypeTag[U], String) -> Bool
+
 pub fn value_kind(@schema_model.SchemaValue) -> String
 
 // Errors
@@ -50,14 +53,45 @@ pub fn FromSchemaError::out_of_range(UInt, UInt, String) -> Self
 pub fn FromSchemaError::shape_mismatch(String, String, String) -> Self
 
 // Types and methods
+pub(all) struct Duration {
+  nanoseconds : Int64
+} derive(Eq, Show)
+pub fn Duration::new(Int64) -> Self
+pub impl FromSchema for Duration
+pub impl IntoSchema for Duration
+
+pub(all) struct Path {
+  value : String
+} derive(Eq, Show)
+pub fn Path::new(String) -> Self
+pub impl FromSchema for Path
+pub impl IntoSchema for Path
+
+pub struct Quantity[U] {
+  mantissa : Int64
+  scale : Int
+  unit : String
+} derive(Eq, Show)
+pub fn[U : QuantityUnit] Quantity::new(Int64, Int, String) -> Self[U] raise FromSchemaError
+pub fn[U] Quantity::value(Self[U]) -> @types.QuantityValue
+pub impl[U : QuantityUnit] FromSchema for Quantity[U]
+pub impl[U : QuantityUnit] IntoSchema for Quantity[U]
+
 pub(all) struct TypeTag[T] {
 }
+
+pub(all) struct Url {
+  value : String
+} derive(Eq, Show)
+pub fn Url::new(String) -> Self
+pub impl FromSchema for Url
+pub impl IntoSchema for Url
 
 // Type aliases
 
 // Traits
 pub(open) trait FromSchema {
-  from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+  fn from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
 }
 pub impl FromSchema for Unit
 pub impl FromSchema for Bool
@@ -73,6 +107,7 @@ pub impl FromSchema for String
 pub impl[T : FromSchema] FromSchema for T?
 pub impl[T : FromSchema, E : FromSchema] FromSchema for Result[T, E]
 pub impl FromSchema for Bytes
+pub impl FromSchema for @types.Datetime
 pub impl[T : FromSchema] FromSchema for Array[T]
 pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V]
 pub impl[T0 : FromSchema, T1 : FromSchema] FromSchema for (T0, T1)
@@ -84,9 +119,9 @@ pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema, T4 
 pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema, T4 : FromSchema, T5 : FromSchema, T6 : FromSchema, T7 : FromSchema] FromSchema for (T0, T1, T2, T3, T4, T5, T6, T7)
 
 pub(open) trait IntoSchema {
-  type_id() -> String
-  register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
-  to_value(Self) -> @schema_model.SchemaValue
+  fn type_id() -> String
+  fn register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+  fn to_value(Self) -> @schema_model.SchemaValue
 }
 pub impl IntoSchema for Unit
 pub impl IntoSchema for Bool
@@ -102,6 +137,7 @@ pub impl IntoSchema for String
 pub impl[T : IntoSchema] IntoSchema for T?
 pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E]
 pub impl IntoSchema for Bytes
+pub impl IntoSchema for @types.Datetime
 pub impl[T : IntoSchema] IntoSchema for Array[T]
 pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V]
 pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1)
@@ -111,4 +147,10 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema, T4 
 pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema, T4 : IntoSchema, T5 : IntoSchema] IntoSchema for (T0, T1, T2, T3, T4, T5)
 pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema, T4 : IntoSchema, T5 : IntoSchema, T6 : IntoSchema] IntoSchema for (T0, T1, T2, T3, T4, T5, T6)
 pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema, T4 : IntoSchema, T5 : IntoSchema, T6 : IntoSchema, T7 : IntoSchema] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7)
+
+pub(open) trait QuantityUnit {
+  fn type_id() -> String
+  fn base_unit() -> String
+  fn allowed_suffixes() -> Array[String]
+}
 

@@ -20,11 +20,20 @@ const external = [
   'golem:core/types@1.5.0',
   'golem:core/types@2.0.0',
   'golem:quota/types@1.5.0',
+  'golem:tool/common@0.1.0',
+  'golem:secrets/types@0.1.0',
+  'golem:secrets/reveal@0.1.0',
   'wasi:cli/environment@0.2.3',
   'wasi:clocks/monotonic-clock@0.2.3',
   'wasi:clocks/wall-clock@0.2.3',
+  'wasi:io/streams@0.2.3',
   'node:sqlite',
 ];
+
+function onwarn(warning, warn) {
+  if (warning.code === 'CIRCULAR_DEPENDENCY') return;
+  warn(warning);
+}
 
 export default defineConfig([
   {
@@ -35,6 +44,7 @@ export default defineConfig([
       sourcemap: true,
     },
     external,
+    onwarn,
     plugins: [
       resolve({
         extensions: ['.js', '.ts'],
@@ -58,6 +68,7 @@ export default defineConfig([
       format: 'esm',
     },
     external,
+    onwarn,
     plugins: [
       dts(),
       {

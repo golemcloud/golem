@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
+import type { Snapshot } from 'golem:api/host@1.5.0';
+import type { InputStream } from 'wasi:io/streams@0.2.3';
+import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { schemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
@@ -60,9 +62,41 @@ export * from './host/result';
 export * from './host/transaction';
 export * from './host/checkpoint';
 export { Config, Secret } from './agentConfig';
+export { Path, Duration, Quantity } from './richTypes';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
+
+interface GolemAgentGuest {
+  initialize(agentTypeName: string, input: SchemaValueTree, principal: Principal): Promise<void>;
+  discoverAgentTypes(): Promise<AgentType[]>;
+  invoke(
+    methodName: string,
+    input: SchemaValueTree,
+    principal: Principal,
+  ): Promise<SchemaValueTree | undefined>;
+  getDefinition(): Promise<AgentType>;
+}
+
+interface GolemToolGuest {
+  discoverTools(): Promise<Tool[]>;
+  getTool(name: string): Promise<Tool>;
+  invoke(
+    toolName: string,
+    commandPath: string[],
+    input: TypedSchemaValue,
+    stdin: InputStream | undefined,
+    principal: Principal,
+  ): Promise<InvocationResult>;
+}
+
+interface SaveSnapshotGuest {
+  save(): Promise<Snapshot>;
+}
+
+interface LoadSnapshotGuest {
+  load(snapshot: Snapshot): Promise<void>;
+}
 
 async function initialize(
   agentTypeName: string,
@@ -86,7 +120,9 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = initiator.initiate(schemaValueFromWit(input), principal);
+  const initiateResult = initiator.initiateFromWit
+    ? initiator.initiateFromWit(input, principal)
+    : initiator.initiate(schemaValueFromWit(input), principal);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = initiateResult.val;
@@ -96,7 +132,7 @@ async function initialize(
   }
 }
 
-async function invoke(
+async function invokeAgent(
   methodName: string,
   input: SchemaValueTree,
   principal: Principal,
@@ -114,7 +150,29 @@ async function invoke(
   }
 }
 
-async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
+async function discoverTools(): Promise<Tool[]> {
+  return [];
+}
+
+async function getTool(name: string): Promise<Tool> {
+  throw { tag: 'invalid-tool-name', val: name } satisfies ToolError;
+}
+
+async function invokeTool(
+  toolName: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _commandPath: string[],
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _input: TypedSchemaValue,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _stdin: InputStream | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _principal: Principal,
+): Promise<InvocationResult> {
+  throw { tag: 'invalid-tool-name', val: toolName } satisfies ToolError;
+}
+
+async function discoverAgentTypes(): Promise<AgentType[]> {
   try {
     // Check if there were any validation errors during agent registration
     const validationError = getAgentValidationError();
@@ -390,17 +448,23 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   }
 }
 
-export const guest: typeof bindings.guest = {
+export const golemAgent200Guest: GolemAgentGuest = {
   initialize,
   discoverAgentTypes,
-  invoke,
+  invoke: invokeAgent,
   getDefinition,
 };
 
-export const saveSnapshot: typeof bindings.saveSnapshot = {
+export const golemTool010Guest: GolemToolGuest = {
+  discoverTools,
+  getTool,
+  invoke: invokeTool,
+};
+
+export const saveSnapshot: SaveSnapshotGuest = {
   save,
 };
 
-export const loadSnapshot: typeof bindings.loadSnapshot = {
+export const loadSnapshot: LoadSnapshotGuest = {
   load,
 };

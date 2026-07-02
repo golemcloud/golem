@@ -22,7 +22,7 @@ use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use std::io::Write;
-use test_r::test_dep;
+use test_r::{define_matrix_dimension, test_dep};
 use test_r::{inherit_test_dep, test};
 
 /// Normalizes server URLs in OpenAPI spec strings by replacing dynamic domains with placeholders
@@ -32,9 +32,16 @@ fn normalize_server_servers_urls_in_openapi_spec(spec_str: &str, env: &Environme
 }
 
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("postgres")]
+    EnvBasedTestDependencies
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite")]
+    EnvBasedTestDependencies
+);
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,
         vec![
@@ -58,9 +65,32 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     .unwrap()
 }
 
+#[test_dep(scope = PerWorker)]
+async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "postgres")]
+async fn test_context_postgres(
+    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
+async fn test_context_sqlite(
+    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
+
 #[test]
 #[tracing::instrument]
-async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn test_open_api_yaml_generation(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let mut mint = Mint::new("tests/goldenfiles");
     let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_yaml.yaml")?;
 

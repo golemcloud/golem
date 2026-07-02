@@ -26,11 +26,11 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
-use golem_common::schema::agent::wit::decode_agent_error;
+use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
 use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::validation::value::validate_record_fields;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_schema::schema::wit::{decode_value, encode_value};
+use golem_schema::schema::wit::{decode_value_with, encode_value_with};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{Instrument, Level, debug, span};
 use wasmtime::{AsContextMut, StoreContextMut};
@@ -118,6 +118,11 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         call,
     } = lowered;
 
+    // Encode the schema-native inputs into wire trees (minting any quota-token
+    // handles into the guest store) before the invocation is marked started, so
+    // an encoding failure surfaces before invocation bookkeeping.
+    let call = materialize_call(&mut store, call)?;
+
     if let InvocationMode::Live(invocation) = mode {
         async {
             store
@@ -166,11 +171,11 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 async fn dispatch_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     instance: &wasmtime::component::Instance,
-    call: LoweredCall,
+    call: PreparedCall,
     display_name: &str,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     match call {
-        LoweredCall::Initialize {
+        PreparedCall::Initialize {
             agent_type,
             input,
             principal,
@@ -187,11 +192,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     consumed_fuel,
                     result: AgentInvocationResult::AgentInitialization,
                 }),
-                Ok(Err(wire_err)) => invoke_result_from_agent_error(consumed_fuel, wire_err),
+                Ok(Err(wire_err)) => invoke_result_from_agent_error(store, consumed_fuel, wire_err),
                 Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
             }
         }
-        LoweredCall::Invoke {
+        PreparedCall::Invoke {
             method_name,
             input,
             principal,
@@ -205,17 +210,17 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
                 Ok(Ok(maybe_output)) => {
-                    let output = decode_invoke_output(maybe_output)?;
+                    let output = decode_invoke_output(store, maybe_output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
                         result: AgentInvocationResult::AgentMethod { output },
                     })
                 }
-                Ok(Err(wire_err)) => invoke_result_from_agent_error(consumed_fuel, wire_err),
+                Ok(Err(wire_err)) => invoke_result_from_agent_error(store, consumed_fuel, wire_err),
                 Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
             }
         }
-        LoweredCall::SaveSnapshot => {
+        PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
             let result = guest.call_save(&mut *store).await;
@@ -231,7 +236,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
             }
         }
-        LoweredCall::LoadSnapshot { snapshot } => {
+        PreparedCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
             let result = guest.call_load(&mut *store, &snapshot).await;
@@ -245,7 +250,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
             }
         }
-        LoweredCall::ProcessOplogEntries {
+        PreparedCall::ProcessOplogEntries {
             account_info,
             config,
             component_id,
@@ -314,13 +319,24 @@ async fn invoke_result_from_trap<Ctx: WorkerCtx>(
 
 /// Maps a guest-returned `agent-error` (the `Err` arm of `initialize` /
 /// `invoke`) into a failed [`InvokeResult`].
-fn invoke_result_from_agent_error(
+///
+/// The guest export has already returned, so the instance and its resource
+/// table stay alive while we decode the result. The `custom-error` payload is
+/// decoded through the rejecting path so any owned `quota-token` handle the
+/// guest smuggled into a domain error is deleted from the table rather than
+/// leaked.
+fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
     consumed_fuel: u64,
     wire_err: golem_agent::common::AgentError,
 ) -> Result<InvokeResult, WorkerExecutorError> {
-    let agent_error = decode_agent_error(wire_err).map_err(|e| {
-        WorkerExecutorError::runtime(format!("Failed to decode agent-error from guest: {e}"))
-    })?;
+    let agent_error =
+        decode_agent_error_rejecting_quota_with(wire_err, store.data_mut().durable_ctx_mut())
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to decode agent-error from guest: {e}"
+                ))
+            })?;
     Ok(InvokeResult::Failed {
         consumed_fuel,
         error: OplogAgentError::InternalError(agent_error.to_string()),
@@ -335,7 +351,8 @@ fn invoke_result_from_agent_error(
 /// A `none` result (the declared `unit` output) is represented by the
 /// canonical empty tuple, matching the `unit` projection used on the caller
 /// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
-fn decode_invoke_output(
+fn decode_invoke_output<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
     maybe_output: Option<core_wire::SchemaValueTree>,
 ) -> Result<SchemaValue, WorkerExecutorError> {
     match maybe_output {
@@ -343,7 +360,9 @@ fn decode_invoke_output(
         None => Ok(SchemaValue::Tuple {
             elements: Vec::new(),
         }),
-        Some(tree) => decode_value(&tree).map_err(|e| {
+        // The output is a guest-owned value tree, so any `quota-token` handles
+        // it carries are lifted into trusted snapshots (and consumed) here.
+        Some(tree) => decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
             WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
         }),
     }
@@ -557,9 +576,45 @@ pub struct LoweredInvocation {
     call: LoweredCall,
 }
 
-/// The typed guest-export call an [`AgentInvocation`] lowers to, carrying the
-/// schema-native wire arguments needed by the `bindgen!`-generated accessors.
+/// The typed guest-export call an [`AgentInvocation`] lowers to.
+///
+/// `Initialize`/`Invoke` carry the schema-native input as a [`SchemaValue`]
+/// rather than the encoded wire tree, because lowering it can mint owned
+/// `quota-token` handles, which requires the guest store's resource table. The
+/// encoding is therefore deferred to [`materialize_call`] at the actual
+/// guest-call site (see [`PreparedCall`]).
 enum LoweredCall {
+    Initialize {
+        agent_type: String,
+        input: SchemaValue,
+        principal: golem_agent::common::Principal,
+    },
+    Invoke {
+        method_name: String,
+        input: SchemaValue,
+        principal: golem_agent::common::Principal,
+    },
+    SaveSnapshot,
+    LoadSnapshot {
+        snapshot: golem_api_1_x::host::Snapshot,
+    },
+    ProcessOplogEntries {
+        account_info: oplog_processor_exports::AccountInfo,
+        config: Vec<(String, String)>,
+        component_id: core_wire::ComponentId,
+        agent_id: core_wire::AgentId,
+        metadata: golem_api_1_x::host::AgentMetadata,
+        first_entry_index: u64,
+        entries: Vec<golem_api_1_x::oplog::OplogEntry>,
+    },
+}
+
+/// A [`LoweredCall`] whose schema-native inputs have been materialized into the
+/// `golem:core/types@2.0.0` wire trees the `bindgen!`-generated guest accessors
+/// expect. Produced by [`materialize_call`] once the guest store is available so
+/// that `quota-token` snapshots can be lowered into owned handles in the guest's
+/// resource table.
+enum PreparedCall {
     Initialize {
         agent_type: String,
         input: core_wire::SchemaValueTree,
@@ -585,6 +640,75 @@ enum LoweredCall {
     },
 }
 
+/// Encode the schema-native inputs of a [`LoweredCall`] into the wire trees the
+/// guest expects, minting any `quota-token` handles into the guest store's
+/// resource table via the [`QuotaTokenResolver`](golem_schema::schema::wit::QuotaTokenResolver)
+/// implemented by [`DurableWorkerCtx`](crate::durable_host::DurableWorkerCtx).
+///
+/// Run before the live invocation is marked started so that an encoding failure
+/// (e.g. a malformed quota snapshot) surfaces before invocation bookkeeping,
+/// matching the previous eager-encoding behavior.
+fn materialize_call<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    call: LoweredCall,
+) -> Result<PreparedCall, WorkerExecutorError> {
+    Ok(match call {
+        LoweredCall::Initialize {
+            agent_type,
+            input,
+            principal,
+        } => {
+            let input =
+                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to encode agent initialization input: {e}"
+                    ))
+                })?;
+            PreparedCall::Initialize {
+                agent_type,
+                input,
+                principal,
+            }
+        }
+        LoweredCall::Invoke {
+            method_name,
+            input,
+            principal,
+        } => {
+            let input =
+                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to encode agent method input: {e}"
+                    ))
+                })?;
+            PreparedCall::Invoke {
+                method_name,
+                input,
+                principal,
+            }
+        }
+        LoweredCall::SaveSnapshot => PreparedCall::SaveSnapshot,
+        LoweredCall::LoadSnapshot { snapshot } => PreparedCall::LoadSnapshot { snapshot },
+        LoweredCall::ProcessOplogEntries {
+            account_info,
+            config,
+            component_id,
+            agent_id,
+            metadata,
+            first_entry_index,
+            entries,
+        } => PreparedCall::ProcessOplogEntries {
+            account_info,
+            config,
+            component_id,
+            agent_id,
+            metadata,
+            first_entry_index,
+            entries,
+        },
+    })
+}
+
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
@@ -596,14 +720,15 @@ pub fn lower_invocation(
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
             // The input carrier is already the schema-native parameter-record
-            // value the guest export expects, so it is encoded to the wire
-            // tree directly without any schema-driven re-lowering.
+            // value the guest export expects. Encoding to the wire tree (which
+            // may mint owned quota-token handles) is deferred to
+            // `materialize_call` where the guest store is available.
             Ok(LoweredInvocation {
                 display_name: "initialize".to_string(),
                 read_only_method: None,
                 call: LoweredCall::Initialize {
                     agent_type: agent_type.type_name.to_string(),
-                    input: encode_value(&input),
+                    input,
                     principal: principal.into(),
                 },
             })
@@ -616,8 +741,9 @@ pub fn lower_invocation(
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
             // The method is resolved only to classify read-only methods; the
-            // input carrier is already the schema-native parameter record and
-            // is encoded to the wire tree directly.
+            // input carrier is already the schema-native parameter record.
+            // Encoding to the wire tree (which may mint owned quota-token
+            // handles) is deferred to `materialize_call`.
             let method = agent_type
                 .methods
                 .iter()
@@ -642,7 +768,7 @@ pub fn lower_invocation(
                 read_only_method,
                 call: LoweredCall::Invoke {
                     method_name,
-                    input: encode_value(&input),
+                    input,
                     principal: principal.into(),
                 },
             })

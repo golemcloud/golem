@@ -130,7 +130,6 @@ pub enum RichSpec {
     Path(PathAttrSpec),
     Url(UrlSpec),
     Quantity(QuantitySpec),
-    Secret(SecretAttrSpec),
     QuotaToken(QuotaTokenAttrSpec),
 }
 
@@ -316,12 +315,6 @@ impl FromMeta for StringList {
 }
 
 #[derive(Default, Debug, Clone, FromMeta)]
-pub struct SecretAttrSpec {
-    #[darling(default)]
-    pub category: Option<String>,
-}
-
-#[derive(Default, Debug, Clone, FromMeta)]
 pub struct QuotaTokenAttrSpec {
     #[darling(default)]
     pub resource_name: Option<String>,
@@ -397,7 +390,7 @@ pub fn parse_item_attrs(attrs: &[Attribute]) -> syn::Result<ItemAttrs> {
                 .find(|a| a.path().is_ident(SCHEMA_ATTR))
                 .map(|a| a as &dyn quote::ToTokens)
                 .unwrap_or(&""),
-            "conflicting rich-scalar attributes on the same item (only one of text/binary/path/url/quantity/secret/quota_token allowed)",
+            "conflicting rich-scalar attributes on the same item (only one of text/binary/path/url/quantity/quota_token allowed)",
         ));
     }
     if out.flatten {
@@ -491,9 +484,6 @@ fn apply_item_meta(
         NestedMeta::Meta(Meta::Path(path)) => {
             if path.is_ident("deprecated") {
                 out.deprecated = Some(DeprecatedMarker::Flag);
-            } else if path.is_ident("secret") {
-                *rich_count += 1;
-                out.rich = Some(RichSpec::Secret(SecretAttrSpec::default()));
             } else if path.is_ident("quota_token") {
                 *rich_count += 1;
                 out.rich = Some(RichSpec::QuotaToken(QuotaTokenAttrSpec::default()));
@@ -582,11 +572,6 @@ fn apply_item_meta(
                     *rich_count += 1;
                     let spec = QuantitySpecRaw::from_list(&nested)?;
                     out.rich = Some(RichSpec::Quantity(spec.into()));
-                }
-                "secret" => {
-                    *rich_count += 1;
-                    let spec = SecretAttrSpec::from_list(&nested)?;
-                    out.rich = Some(RichSpec::Secret(spec));
                 }
                 "quota_token" => {
                     *rich_count += 1;

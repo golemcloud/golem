@@ -178,13 +178,46 @@ function getTypeFromTsMorphInternal(
       owner: getTypeOwner(type),
       optional: isOptional,
       properties: result.properties,
-      // Filter out the root entry (empty path) — it has no parent to prune.
-      requiredMembers: result.requiredMembers.filter((e) => e.path.length > 0),
+      requiredMembers: configRequiredMembers(result),
+    };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.secret)) {
+    return {
+      kind: 'secret',
+      name: aliasName,
+      optional: isOptional,
+      element: getTypeFromTsMorphInternal(
+        type.getTypeArguments()[0],
+        false,
+        wellKnownTypes,
+        visitedTypes,
+      ),
     };
   }
 
   if (isExactly(type, wellKnownTypes.sdk.quotaToken)) {
     return { kind: 'quota-token', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.path)) {
+    return { kind: 'path', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactlyBuiltIn(type, wellKnownTypes.sdk.url)) {
+    return { kind: 'url', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactlyBuiltIn(type, wellKnownTypes.sdk.date)) {
+    return { kind: 'datetime', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.duration)) {
+    return { kind: 'duration', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.quantity)) {
+    return { kind: 'quantity', name: aliasName, optional: isOptional, spec: getQuantitySpec(type) };
   }
 
   if (!containsInvalidTypes(type) && type.isAssignableTo(wellKnownTypes.sdk.principal)) {
@@ -503,17 +536,70 @@ function getUnionTypeKindRank(kind: Type.Type['kind']): number {
       return 15;
     case 'config':
       return 16;
-    case 'quota-token':
+    case 'secret':
       return 17;
-    case 'principal':
+    case 'quota-token':
       return 18;
-    case 'alias':
+    case 'principal':
       return 19;
-    case 'others':
+    case 'path':
       return 20;
-    case 'unresolved-type':
+    case 'url':
       return 21;
+    case 'datetime':
+      return 22;
+    case 'duration':
+      return 23;
+    case 'quantity':
+      return 24;
+    case 'alias':
+      return 25;
+    case 'others':
+      return 26;
+    case 'unresolved-type':
+      return 27;
   }
+}
+
+function getQuantitySpec(type: TsMorphType): Type.QuantitySpec | undefined {
+  const specType = type.getTypeArguments()[0];
+  if (!specType) return undefined;
+
+  const declaration =
+    specType.getSymbol()?.getDeclarations()[0] ?? specType.getAliasSymbol()?.getDeclarations()[0];
+  if (!declaration) return undefined;
+  const baseUnit = literalProperty(specType, 'baseUnit');
+  const allowedSuffixesType = specType
+    .getProperty('allowedSuffixes')
+    ?.getTypeAtLocation(declaration);
+  const tupleElements = allowedSuffixesType?.getTupleElements();
+  const allowedSuffixes = tupleElements?.map((element) => element.getLiteralValue());
+
+  if (
+    baseUnit === undefined ||
+    tupleElements === undefined ||
+    !allowedSuffixesType?.isTuple() ||
+    allowedSuffixes === undefined ||
+    allowedSuffixes.length !== tupleElements.length ||
+    !allowedSuffixes.every((value): value is string => typeof value === 'string')
+  ) {
+    throw new Error(
+      'Quantity<T> type parameter must have a literal baseUnit and a tuple of string-literal allowedSuffixes',
+    );
+  }
+
+  return {
+    baseUnit,
+    allowedSuffixes,
+  };
+}
+
+function literalProperty(type: TsMorphType, name: string): string | undefined {
+  const declaration =
+    type.getSymbol()?.getDeclarations()[0] ?? type.getAliasSymbol()?.getDeclarations()[0];
+  if (!declaration) return undefined;
+  const value = type.getProperty(name)?.getTypeAtLocation(declaration).getLiteralValue();
+  return typeof value === 'string' ? value : undefined;
 }
 
 // TypeLiteral in TS AST is `type A = {}`. Union types, etc. get other node types
@@ -566,19 +652,47 @@ function extractConfigPropertiesFromTypeLiteral(
     // For optional properties (`field?: T`), ts-morph returns `T | undefined`.
     // Strip the `undefined` member so well-known-type checks work correctly.
     const rawPropType = unwrapAlias(member.getType());
+    const rawUnionTypes = rawPropType.isUnion() ? rawPropType.getUnionTypes() : [];
+    const nonUndefinedUnionMember = singleNonUndefinedUnionMember(rawPropType);
+    const nonNullishUnionMember = singleNonNullishUnionMember(rawPropType);
+    const hasNullUnionMember = rawUnionTypes.some((t) => t.isNull());
+    const hasUndefinedUnionMember = rawUnionTypes.some((t) => t.isUndefined());
+    const isExplicitUndefinedSecret =
+      !memberOptional &&
+      ((nonUndefinedUnionMember !== undefined &&
+        isExactly(nonUndefinedUnionMember, wellKnownTypes.sdk.secret)) ||
+        (hasUndefinedUnionMember &&
+          nonNullishUnionMember !== undefined &&
+          isExactly(nonNullishUnionMember, wellKnownTypes.sdk.secret)));
     const propType =
-      memberOptional && rawPropType.isUnion()
-        ? (rawPropType.getUnionTypes().find((t) => !t.isUndefined()) ?? rawPropType)
-        : rawPropType;
+      memberOptional && nonUndefinedUnionMember
+        ? nonUndefinedUnionMember
+        : nonNullishUnionMember && isExactly(nonNullishUnionMember, wellKnownTypes.sdk.secret)
+          ? nonNullishUnionMember
+          : rawPropType;
+    const isExplicitOptionalSecret =
+      nonNullishUnionMember !== undefined &&
+      isExactly(nonNullishUnionMember, wellKnownTypes.sdk.secret);
+    const secretHandleOptional =
+      isOptional ||
+      (isExplicitOptionalSecret && hasUndefinedUnionMember) ||
+      isExplicitUndefinedSecret;
+    const propertyOptional = isOptional || isExplicitOptionalSecret;
+    const secretPayloadOptional = isExplicitOptionalSecret && hasNullUnionMember;
 
-    if (!memberOptional) requiredKeys.push(name);
+    if (!memberOptional && !isExplicitUndefinedSecret) requiredKeys.push(name);
 
     // 1. secret wrapper
     if (isExactly(propType, wellKnownTypes.sdk.secret)) {
       properties.push({
         path: nextPath,
         secret: true,
-        type: getTypeFromTsMorph(propType.getTypeArguments()[0], isOptional, wellKnownTypes),
+        type: getTypeFromTsMorph(
+          propType.getTypeArguments()[0],
+          secretPayloadOptional,
+          wellKnownTypes,
+        ),
+        secretHandleOptional,
       });
       continue;
     }
@@ -589,7 +703,7 @@ function extractConfigPropertiesFromTypeLiteral(
       const nested = extractConfigPropertiesFromTypeLiteral(
         nestedTypeLiteral,
         nextPath,
-        isOptional,
+        propertyOptional,
         wellKnownTypes,
       );
       if (nested == null) return undefined;
@@ -602,13 +716,73 @@ function extractConfigPropertiesFromTypeLiteral(
     properties.push({
       path: nextPath,
       secret: false,
-      type: getTypeFromTsMorph(propType, isOptional, wellKnownTypes),
+      type: getTypeFromTsMorph(propType, propertyOptional, wellKnownTypes),
     });
   }
 
   const requiredMembers = [...nestedRequiredMembers, { path, requiredKeys }];
 
   return { properties, requiredMembers };
+}
+
+function configRequiredMembers(result: {
+  properties: Type.ConfigProperty[];
+  requiredMembers: { path: string[]; requiredKeys: string[] }[];
+}): { path: string[]; requiredKeys: string[] }[] {
+  const requiredSecretPaths = result.properties
+    .filter((prop) => prop.secret && isRequiredPath(result.requiredMembers, prop.path))
+    .map((prop) => prop.path);
+
+  return result.requiredMembers.flatMap((entry) => {
+    if (entry.path.length > 0) return entry.requiredKeys.length > 0 ? [entry] : [];
+
+    const requiredKeys = entry.requiredKeys.filter((key) =>
+      requiredSecretPaths.some((path) => isPrefixPath([key], path)),
+    );
+
+    return requiredKeys.length > 0 ? [{ path: entry.path, requiredKeys }] : [];
+  });
+}
+
+function isRequiredPath(
+  requiredMembers: { path: string[]; requiredKeys: string[] }[],
+  path: string[],
+): boolean {
+  for (let length = 1; length <= path.length; length++) {
+    const parentPath = path.slice(0, length - 1);
+    const key = path[length - 1];
+    const isRequired = requiredMembers.some(
+      (entry) =>
+        entry.path.length === parentPath.length &&
+        entry.path.every((part, i) => part === parentPath[i]) &&
+        entry.requiredKeys.includes(key),
+    );
+    if (!isRequired) return false;
+  }
+
+  return true;
+}
+
+function isPrefixPath(prefix: string[], path: string[]): boolean {
+  return prefix.length <= path.length && prefix.every((part, i) => part === path[i]);
+}
+
+function singleNonUndefinedUnionMember(type: TsMorphType): TsMorphType | undefined {
+  if (!type.isUnion()) return undefined;
+  const unionTypes = type.getUnionTypes();
+  const nonUndefined = unionTypes.filter((t) => !t.isUndefined());
+  return nonUndefined.length === 1 && nonUndefined.length < unionTypes.length
+    ? nonUndefined[0]
+    : undefined;
+}
+
+function singleNonNullishUnionMember(type: TsMorphType): TsMorphType | undefined {
+  if (!type.isUnion()) return undefined;
+  const unionTypes = type.getUnionTypes();
+  const nonNullish = unionTypes.filter((t) => !t.isUndefined() && !t.isNull());
+  return nonNullish.length === 1 && nonNullish.length < unionTypes.length
+    ? nonNullish[0]
+    : undefined;
 }
 
 type RawName = string;
@@ -1045,7 +1219,36 @@ function isExactly(type: TsMorphType, wellKnown: WellKnown): boolean {
     return false;
   }
 
-  return nominalSymbol === wellKnown.symbol;
+  return (
+    nominalSymbol === wellKnown.symbol || sameSymbolDeclaration(nominalSymbol, wellKnown.symbol)
+  );
+}
+
+function isExactlyBuiltIn(type: TsMorphType, wellKnown: WellKnown): boolean {
+  const nominalSymbol = getNominalSymbol(type);
+  if (nominalSymbol == null || !isExactly(type, wellKnown)) return false;
+  const declarationPaths = nominalSymbol
+    .getDeclarations()
+    .map((declaration) => declaration.getSourceFile().getFilePath());
+  return (
+    declarationPaths.some((filePath) => filePath.includes('/typescript/lib/')) &&
+    declarationPaths.every((filePath) => filePath.includes('/node_modules/'))
+  );
+}
+
+function sameSymbolDeclaration(left: TsMorphSymbol, right: TsMorphSymbol): boolean {
+  return left
+    .getDeclarations()
+    .some((leftDeclaration) =>
+      right
+        .getDeclarations()
+        .some(
+          (rightDeclaration) =>
+            leftDeclaration.getSourceFile().getFilePath() ===
+              rightDeclaration.getSourceFile().getFilePath() &&
+            leftDeclaration.getStart() === rightDeclaration.getStart(),
+        ),
+    );
 }
 
 function isConcreteType(type: TsMorphType): boolean {

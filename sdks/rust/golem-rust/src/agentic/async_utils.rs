@@ -29,7 +29,7 @@ pub async fn await_invoke_schema_value_result(
                 .map(|value| {
                     value
                         .map(|value| {
-                            decode_value(&value).map_err(|e| RpcError::ProtocolError(e.to_string()))
+                            decode_value(value).map_err(|e| RpcError::ProtocolError(e.to_string()))
                         })
                         .transpose()
                 })

@@ -15,6 +15,7 @@
 import { ResolvedAgent } from './resolvedAgent';
 import { Result } from 'golem:agent/host@2.0.0';
 import { AgentError, Principal } from 'golem:agent/common@2.0.0';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { SchemaValue } from './schema-model';
 
 /**
@@ -36,4 +37,10 @@ export type AgentInitiator = {
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
   initiate(constructorParams: SchemaValue, principal: Principal): Result<ResolvedAgent, AgentError>;
+
+  /** Initiates an agent from the raw WIT value tree used by the exported component. */
+  initiateFromWit?(
+    constructorParams: SchemaValueTree,
+    principal: Principal,
+  ): Result<ResolvedAgent, AgentError>;
 };

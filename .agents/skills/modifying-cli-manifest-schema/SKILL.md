@@ -1,3 +1,8 @@
+---
+name: modifying-cli-manifest-schema
+description: "Adding or changing application manifest JSON schema versions and aligning CLI schema references."
+---
+
 # Skill: modifying-cli-manifest-schema
 
 Use this skill when changing the Golem application manifest JSON schema under

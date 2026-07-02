@@ -46,10 +46,12 @@ uuid = { workspace = true, features = ["v4"] }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 goldenfile = { workspace = true }
 redis = { workspace = true }
 sqlx = { workspace = true }
 test-r = { workspace = true }
+url = { workspace = true }
 wac-graph = { workspace = true }
 assert2 = { workspace = true }
 convert_case = { workspace = true }

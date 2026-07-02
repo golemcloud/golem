@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::Reservation;
 use golem_common::model::quota::ResourceName;
+use golem_schema::schema::wit::QuotaTokenHandleRep;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::Resource;
 
@@ -41,7 +42,11 @@ pub enum LeaseInterestHandle {
     Pending(PendingAcquire),
 }
 
-/// Resource table entry for a `quota-token` WIT resource.
+/// Host state for a `golem:core/types@2.0.0` `quota-token` resource.
+///
+/// The resource's opaque table representation is
+/// [`QuotaTokenHandleRep`](golem_schema::schema::wit::QuotaTokenHandleRep);
+/// this entry is the real quota/lease state stored inside that erased payload.
 pub struct QuotaTokenEntry {
     pub lease: LeaseInterestHandle,
 }
@@ -144,5 +149,5 @@ impl QuotaTokenEntry {
 /// Resource table entry for a `reservation` WIT resource.
 pub struct ReservationEntry {
     pub reservation: Reservation,
-    pub token: Resource<QuotaTokenEntry>,
+    pub token: Resource<QuotaTokenHandleRep>,
 }

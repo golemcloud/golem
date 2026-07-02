@@ -27,3 +27,9 @@ export class Secret<T> {}
 export class Config<T> {}
 
 export class QuotaToken {}
+
+export class Path {}
+
+export class Duration {}
+
+export class Quantity<T> {}

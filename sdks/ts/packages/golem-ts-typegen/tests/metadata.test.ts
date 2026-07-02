@@ -199,21 +199,47 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     );
     expect(param.type.properties).toEqual(
       expect.arrayContaining([
-        { path: ['foo'], secret: false, type: { kind: 'number', optional: false } },
-        { path: ['bar'], secret: false, type: { kind: 'string', optional: false } },
-        { path: ['secret'], secret: true, type: { kind: 'boolean', optional: false } },
-        {
+        expect.objectContaining({
+          path: ['foo'],
+          secret: false,
+          type: expect.objectContaining({ kind: 'number', optional: false }),
+        }),
+        expect.objectContaining({
+          path: ['bar'],
+          secret: false,
+          type: expect.objectContaining({ kind: 'string', optional: false }),
+        }),
+        expect.objectContaining({
+          path: ['secret'],
+          secret: true,
+          secretHandleOptional: false,
+          type: expect.objectContaining({ kind: 'boolean', optional: false }),
+        }),
+        expect.objectContaining({
           path: ['nested', 'nestedSecret'],
           secret: true,
-          type: { kind: 'number', optional: false },
-        },
-        { path: ['nested', 'a'], secret: false, type: { kind: 'boolean', optional: false } },
-        {
+          secretHandleOptional: false,
+          type: expect.objectContaining({ kind: 'number', optional: false }),
+        }),
+        expect.objectContaining({
+          path: ['nested', 'a'],
+          secret: false,
+          type: expect.objectContaining({ kind: 'boolean', optional: false }),
+        }),
+        expect.objectContaining({
           path: ['nested', 'b'],
           secret: false,
-          type: { kind: 'array', element: { kind: 'number', optional: false }, optional: false },
-        },
-        { path: ['aliasedNested', 'c'], secret: false, type: { kind: 'number', optional: false } },
+          type: expect.objectContaining({
+            kind: 'array',
+            element: expect.objectContaining({ kind: 'number', optional: false }),
+            optional: false,
+          }),
+        }),
+        expect.objectContaining({
+          path: ['aliasedNested', 'c'],
+          secret: false,
+          type: expect.objectContaining({ kind: 'number', optional: false }),
+        }),
       ]),
     );
   });
@@ -241,7 +267,6 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(param.type.requiredMembers).toEqual([
       { path: ['outerGroup', 'innerGroup'], requiredKeys: ['a'] },
       { path: ['outerGroup', 'requiredInnerGroup'], requiredKeys: ['b'] },
-      { path: ['outerGroup', 'requiredInnerGroupWithOptionalMember'], requiredKeys: [] },
       {
         path: ['outerGroup'],
         requiredKeys: ['required', 'requiredInnerGroup', 'requiredInnerGroupWithOptionalMember'],
@@ -258,9 +283,22 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(param.type.properties).toHaveLength(3);
     expect(param.type.properties).toEqual(
       expect.arrayContaining([
-        { path: ['required'], secret: false, type: { kind: 'string', optional: false } },
-        { path: ['optionalSecret'], secret: true, type: { kind: 'string', optional: true } },
-        { path: ['optionalValue'], secret: false, type: { kind: 'number', optional: true } },
+        expect.objectContaining({
+          path: ['required'],
+          secret: false,
+          type: expect.objectContaining({ kind: 'string', optional: false }),
+        }),
+        expect.objectContaining({
+          path: ['optionalSecret'],
+          secret: true,
+          secretHandleOptional: true,
+          type: expect.objectContaining({ kind: 'string', optional: false }),
+        }),
+        expect.objectContaining({
+          path: ['optionalValue'],
+          secret: false,
+          type: expect.objectContaining({ kind: 'number', optional: true }),
+        }),
       ]),
     );
   });
