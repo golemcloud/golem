@@ -23,7 +23,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
-use golem_common::model::card::{CardId, CardManagedBy};
+use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -1361,9 +1361,9 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
         Vec::new(),
         None,
         true,
-        Some(CardManagedBy::AccountRoot {
+        Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot {
             account_id: golem_common::model::account::AccountId(account_id),
-        }),
+        })),
     )
 }
 

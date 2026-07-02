@@ -32,6 +32,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
@@ -68,6 +69,10 @@ impl TestDsl for TestWorkerExecutor {
 
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis.clone()
+    }
+
+    fn account_email(&self) -> AccountEmail {
+        AccountEmail::new("test@golem")
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(wasm_name, name))]
@@ -152,6 +157,7 @@ impl TestDsl for TestWorkerExecutor {
                     Ok((
                         agent_type_name,
                         AgentTypeProvisionConfig {
+                            initial_permissions: creation.initial_permissions.to_polymorphic_card(),
                             env: creation.env,
                             files,
                             config,
@@ -293,7 +299,9 @@ impl TestDsl for TestWorkerExecutor {
                 .agent_type_provision_configs()
                 .clone();
             for (agent_type_name, update) in updates {
-                let existing = configs.get(&agent_type_name).cloned().unwrap_or_default();
+                let existing = configs.get(&agent_type_name).cloned().ok_or_else(|| {
+                    anyhow::anyhow!("Missing provision config for agent type {agent_type_name}")
+                })?;
 
                 let new_env = update.env.unwrap_or(existing.env);
                 let new_config = match update.config {
@@ -331,6 +339,10 @@ impl TestDsl for TestWorkerExecutor {
                 configs.insert(
                     agent_type_name,
                     AgentTypeProvisionConfig {
+                        initial_permissions: update
+                            .initial_permissions
+                            .map(|initial_permission| initial_permission.to_polymorphic_card())
+                            .unwrap_or(existing.initial_permissions),
                         env: new_env,
                         files: files.into_values().collect(),
                         config: new_config,

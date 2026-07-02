@@ -402,6 +402,9 @@ fn log_provision_config_diff(diff: &AgentTypeProvisionConfigDiff) {
             diff.plugin_changes.len()
         ));
     }
+    if diff.initial_permission_changed {
+        logln("        - initial permissions");
+    }
 }
 
 pub fn log_unified_diff(diff: &str) {

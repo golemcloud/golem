@@ -15795,6 +15795,42 @@ components:
           $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue'
       required:
       - currentRevision
+    AgentTypeInitialPermissions:
+      title: AgentTypeInitialPermissions
+      type: object
+      properties:
+        lowerBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionsBound'
+          - default:
+              negative: []
+              positive: []
+        upperBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionsBound'
+          - default:
+              negative: []
+              positive: []
+    AgentTypeInitialPermissionsBound:
+      title: AgentTypeInitialPermissionsBound
+      type: object
+      properties:
+        positive:
+          default: []
+          type: array
+          items:
+            type: string
+        negative:
+          default: []
+          type: array
+          items:
+            type: string
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -15802,30 +15838,36 @@ components:
         in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
       type: object
       properties:
+        initialPermissions:
+          $ref: '#/components/schemas/PolymorphicCard'
         env:
-          default: {}
           type: object
           additionalProperties:
             type: string
         config:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
         plugins:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/InstalledPlugin'
         files:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/InitialAgentFile'
+      required:
+      - initialPermissions
+      - env
+      - config
+      - plugins
+      - files
     AgentTypeProvisionConfigCreation:
       title: AgentTypeProvisionConfigCreation
       type: object
       properties:
+        initialPermissions:
+          $ref: '#/components/schemas/AgentTypeInitialPermissions'
         env:
           default: {}
           type: object
@@ -15847,10 +15889,16 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFileOptions'
+      required:
+      - initialPermissions
     AgentTypeProvisionConfigUpdate:
       title: AgentTypeProvisionConfigUpdate
       type: object
       properties:
+        initialPermissions:
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissions'
+          - {}
         env:
           type: object
           additionalProperties:
@@ -17925,6 +17973,51 @@ components:
           format: uuid
       required:
       - environmentPluginGrantId
+    PolymorphicCard:
+      title: PolymorphicCard
+      type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        lowerPositive:
+          type: array
+          items:
+            type: string
+        lowerNegative:
+          type: array
+          items:
+            type: string
+        upperPositive:
+          type: array
+          items:
+            type: string
+        upperNegative:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        systemCard:
+          type: boolean
+      required:
+      - cardId
+      - parentIds
+      - lowerPositive
+      - lowerNegative
+      - upperPositive
+      - upperNegative
+      - createdAt
+      - systemCard
     ProducerField:
       title: ProducerField
       type: object

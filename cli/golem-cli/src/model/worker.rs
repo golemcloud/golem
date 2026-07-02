@@ -171,9 +171,11 @@ impl From<AgentMetadata> for AgentMetadataView {
 }
 
 impl AgentMetadataView {
-    pub fn with_defaults(mut self, defaults: AgentTypeProvisionConfig) -> Self {
-        self.default_env = defaults.env.into_iter().collect();
-        self.default_config = defaults.config.into_iter().map(Into::into).collect();
+    pub fn with_defaults(mut self, defaults: Option<AgentTypeProvisionConfig>) -> Self {
+        if let Some(defaults) = defaults {
+            self.default_env = defaults.env.into_iter().collect();
+            self.default_config = defaults.config.into_iter().map(Into::into).collect();
+        }
         self
     }
 

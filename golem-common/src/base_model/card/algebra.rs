@@ -24,7 +24,7 @@ pub enum CardAlgebraError {
     DerivationNotSubsumed { grant: Box<PermissionPattern> },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct GrantSurface {
     pub positive: Vec<PermissionTarget>,
@@ -54,7 +54,7 @@ impl GrantSurface {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EffectiveSurface {
     pub source_card_ids: Vec<CardId>,
