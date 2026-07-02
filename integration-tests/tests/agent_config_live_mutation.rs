@@ -18,16 +18,28 @@ mod shared_agent_config_live_mutation;
 use convert_case::ccase;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_test_framework::config::{
-    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+    DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     WorkerExecutorClusterControl, WorkerExecutorClusterControlDispatch,
     WorkerExecutorClusterControlStub,
 };
 use std::sync::Arc;
-use test_r::{tag_suite, test, test_dep};
+use test_r::{define_matrix_dimension, matrix_suite, tag_suite, test, test_dep};
 
 test_r::enable!();
 
 tag_suite!(shared_agent_config_live_mutation, group8);
+
+// Matrix dimension for the DB backend. The `shared_agent_config_live_mutation`
+// module is runtime-multiplied via `matrix_suite!` below (zero per-test
+// annotations), while the crate-root `redis_control_round_trip` smoke test uses
+// a per-test `#[dimension(db)]` since it lives outside any named module.
+define_matrix_dimension!(db: EnvBasedTestDependencies -> "postgres", "sqlite");
+
+matrix_suite!(
+    shared_agent_config_live_mutation,
+    db,
+    EnvBasedTestDependencies
+);
 
 trait TestContext: std::fmt::Debug + Send + Sync {
     fn test_component_file(&self) -> &'static str;
@@ -131,6 +143,41 @@ pub async fn create_deps() -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
         environment_state_cache_capacity: Some(0),
+        db_type: DbType::Postgres,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .expect("Failed constructing test dependencies");
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
+
+#[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl), tagged_as = "postgres")]
+pub async fn create_deps_postgres() -> EnvBasedTestDependencies {
+    Tracing::init();
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 3,
+        environment_state_cache_capacity: Some(0),
+        db_type: DbType::Postgres,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .expect("Failed constructing test dependencies");
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
+
+#[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl), tagged_as = "sqlite")]
+pub async fn create_deps_sqlite() -> EnvBasedTestDependencies {
+    Tracing::init();
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 3,
+        environment_state_cache_capacity: Some(0),
+        db_type: DbType::Sqlite,
         ..EnvBasedTestDependenciesConfig::new()
     })
     .await
@@ -157,7 +204,7 @@ pub fn tracing() -> Tracing {
 // suites.
 #[test]
 async fn redis_control_round_trip(
-    deps: &EnvBasedTestDependencies,
+    #[dimension(db)] deps: &EnvBasedTestDependencies,
     redis_control: &WorkerExecutorClusterControlStub,
 ) {
     // Parent-owned Redis must be reachable from a worker via the
