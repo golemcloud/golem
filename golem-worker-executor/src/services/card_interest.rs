@@ -39,6 +39,11 @@ impl CardInterestIndex {
         }
     }
 
+    pub async fn tracked_card_ids(&self) -> Vec<CardId> {
+        let interests = self.interests.read().await;
+        interests.keys().copied().collect()
+    }
+
     pub async fn interested_agents(
         &self,
         card_ids: &[CardId],
@@ -138,6 +143,43 @@ mod tests {
         index.set_card_interest(agent, &[]).await;
 
         assert!(index.interested_agents(&[card_id]).await.is_empty());
+    }
+
+    #[test]
+    async fn tracked_card_ids_reports_all_interested_cards() {
+        let index = CardInterestIndex::new();
+        let first_agent = agent("agent-1");
+        let second_agent = agent("agent-2");
+        let card_a = CardId::new();
+        let card_b = CardId::new();
+        let card_c = CardId::new();
+
+        index
+            .set_card_interest(first_agent, &[card_a, card_b])
+            .await;
+        index
+            .set_card_interest(second_agent, &[card_b, card_c])
+            .await;
+
+        let tracked = index.tracked_card_ids().await;
+        assert_eq!(tracked.len(), 3);
+        assert_eq!(
+            tracked.into_iter().collect::<HashSet<_>>(),
+            HashSet::from([card_a, card_b, card_c])
+        );
+    }
+
+    #[test]
+    async fn tracked_card_ids_drops_cards_after_wallet_cleared() {
+        let index = CardInterestIndex::new();
+        let agent = agent("agent-1");
+        let card_id = CardId::new();
+
+        index.set_card_interest(agent.clone(), &[card_id]).await;
+        assert_eq!(index.tracked_card_ids().await, vec![card_id]);
+
+        index.set_card_interest(agent, &[]).await;
+        assert!(index.tracked_card_ids().await.is_empty());
     }
 
     #[test]

@@ -251,6 +251,10 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.workers.remove(agent_id).await
     }
 
+    pub async fn tracked_card_ids(&self) -> Vec<CardId> {
+        self.card_interest_index.tracked_card_ids().await
+    }
+
     pub async fn notify_revoked_cards(&self, card_ids: &[CardId]) {
         let affected_agent_cards = self.card_interest_index.interested_agents(card_ids).await;
 
