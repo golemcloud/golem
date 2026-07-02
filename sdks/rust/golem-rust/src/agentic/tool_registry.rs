@@ -13,9 +13,20 @@
 // limitations under the License.
 
 use crate::agentic::extended_tool_type::ExtendedToolType;
-use crate::golem_agentic::exports::golem::tool::guest::Tool;
+use crate::golem_agentic::exports::golem::tool::guest::{
+    InvocationResult, Tool, ToolError, TypedSchemaValue,
+};
+use crate::golem_agentic::golem::agent::common::Principal;
+use crate::wasip2::io::streams::InputStream;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+
+pub type ToolInvoker = fn(
+    Vec<String>,
+    TypedSchemaValue,
+    Option<InputStream>,
+    Principal,
+) -> Result<InvocationResult, ToolError>;
 
 #[derive(Default)]
 pub struct State {
@@ -24,6 +35,7 @@ pub struct State {
 #[derive(Default)]
 pub struct Tools {
     pub tools: BTreeMap<String, ExtendedToolType>,
+    pub invokers: BTreeMap<String, ToolInvoker>,
 }
 static mut STATE: Option<State> = None;
 
@@ -38,12 +50,23 @@ pub fn get_state() -> &'static State {
 }
 
 pub fn register_tool(tool: ExtendedToolType) {
+    register_tool_inner(tool, None)
+}
+
+pub fn register_tool_invoker(tool: ExtendedToolType, invoker: ToolInvoker) {
+    register_tool_inner(tool, Some(invoker))
+}
+
+fn register_tool_inner(tool: ExtendedToolType, invoker: Option<ToolInvoker>) {
     tool.try_to_tool().expect("tool descriptor build failed");
     let name = tool.tool_name().to_string();
     let state = get_state();
     let mut tools = state.tools.borrow_mut();
     if tools.tools.contains_key(&name) {
         panic!("duplicate tool registration for tool name: {name}");
+    }
+    if let Some(invoker) = invoker {
+        tools.invokers.insert(name.clone(), invoker);
     }
     tools.tools.insert(name, tool);
 }
@@ -64,9 +87,15 @@ pub fn get_extended_tool_by_name(name: &str) -> Option<ExtendedToolType> {
     get_state().tools.borrow().tools.get(name).cloned()
 }
 
+pub fn get_tool_invoker_by_name(name: &str) -> Option<ToolInvoker> {
+    get_state().tools.borrow().invokers.get(name).copied()
+}
+
 #[cfg(test)]
 pub(crate) fn clear_tools_for_tests() {
-    get_state().tools.borrow_mut().tools.clear();
+    let mut tools = get_state().tools.borrow_mut();
+    tools.tools.clear();
+    tools.invokers.clear();
 }
 
 #[cfg(test)]

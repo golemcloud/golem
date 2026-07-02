@@ -17,9 +17,7 @@
 //! This injects the hidden `tool_implementation_annotation` item that satisfies
 //! the required trait item emitted by `#[tool_definition]` (so an implementation
 //! that forgets the attribute is a compile error), and emits the `#[ctor]` that
-//! registers the tool's metadata at startup. Because the ctor exists only on
-//! implemented types, a tool with no implementation is never registered — a
-//! registered tool is necessarily implemented in that wasm.
+//! registers the tool's metadata and hidden trait-defined invoker at startup.
 
 use proc_macro::TokenStream;
 use quote::{ToTokens, format_ident, quote};
@@ -43,10 +41,6 @@ pub fn tool_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Token
     };
     let self_ty = item_impl.self_ty.clone();
     let trait_ident = &trait_path.segments.last().unwrap().ident;
-    // Two impls of the same trait (for different types, or different paths with
-    // the same last segment) must not collide on the ctor item name, so a stable
-    // hash of the full `Type` + trait path is mixed in. Semantic duplicate-tool
-    // detection still happens at registration (`register_tool` panics).
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     self_ty.to_token_stream().to_string().hash(&mut hasher);
     trait_path.to_token_stream().to_string().hash(&mut hasher);
@@ -62,15 +56,14 @@ pub fn tool_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Token
     };
     item_impl.items.push(annotation);
 
-    // `ctor_parse!` instead of `#[ctor]` to avoid a direct dependency on the
-    // `ctor` crate at the user side; the re-exported helper is used like agents.
     quote! {
         #item_impl
 
         ::golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_fn_name() {
-                golem_rust::agentic::register_tool(
-                    <#self_ty as #trait_path>::__tool_descriptor()
+                golem_rust::agentic::register_tool_invoker(
+                    <#self_ty as #trait_path>::__tool_descriptor(),
+                    <#self_ty as #trait_path>::__tool_invoke,
                 );
             }
         );

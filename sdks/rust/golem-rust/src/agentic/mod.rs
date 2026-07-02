@@ -25,10 +25,12 @@ pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use tool_client::*;
 pub use tool_literal::*;
 pub use tool_refinement::*;
 pub use tool_registry::{
-    get_all_tools, get_extended_tool_by_name, get_tool_by_name, register_tool,
+    ToolInvoker, get_all_tools, get_extended_tool_by_name, get_tool_by_name,
+    get_tool_invoker_by_name, register_tool, register_tool_invoker,
 };
 pub use unstructured_binary::*;
 pub use unstructured_text::*;
@@ -49,6 +51,7 @@ mod principal_serde;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
+mod tool_client;
 mod tool_impl;
 mod tool_literal;
 mod tool_refinement;

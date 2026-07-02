@@ -74,6 +74,7 @@ mod raw_bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
         }
@@ -105,6 +106,10 @@ pub mod bindings {
             pub use crate::raw_bindings::golem::agent::host;
         }
 
+        pub mod tool {
+            pub use crate::raw_bindings::golem::tool::host;
+        }
+
         pub use crate::raw_bindings::golem::{rdbms, websocket};
     }
 }
@@ -121,10 +126,12 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
@@ -161,10 +168,12 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
@@ -202,6 +211,7 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
@@ -224,6 +234,7 @@ pub mod golem_agentic {
             "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
             "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
             "wasi:logging/logging": crate::bindings::wasi::logging::logging,
+            "wasi:config/store@0.2.0-draft": crate::bindings::wasi::config::store,
         }
     });
 
@@ -258,10 +269,12 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
