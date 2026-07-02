@@ -38,14 +38,9 @@ impl HttpClient3 for HttpClient3Impl {
     }
 
     async fn run(&self) -> String {
-        use golem_wasi_http::*;
-
-        println!("Hello reqwest-wasi!");
+        println!("Hello wasi-fetch!");
 
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
-
-        let client = Client::builder().build().unwrap();
-        println!("{:?}", client);
 
         let request_body = ExampleRequest {
             name: "Something".to_string(),
@@ -55,17 +50,19 @@ impl HttpClient3 for HttpClient3Impl {
 
         println!("Sending {:?}", request_body);
 
-        let response: Response = client
+        let response = wasi_fetch::Client::new()
             .post(&format!("http://localhost:{port}/post-example"))
             .json(&request_body)
             .header("X-Test", "Golem")
-            .basic_auth("some", Some("body"))
+            // Basic auth for user "some" and password "body"
+            .header("Authorization", "Basic c29tZTpib2R5")
             .send()
             .await
             .expect("Request failed");
 
         let status = response.status();
         let body = response
+            .into_body()
             .json::<ExampleResponse>()
             .await
             .expect("Invalid response");
@@ -76,11 +73,7 @@ impl HttpClient3 for HttpClient3Impl {
     }
 
     async fn run_parallel(&self, n: u16) -> Vec<String> {
-        use golem_wasi_http::*;
-
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
-
-        let client = Client::builder().build().unwrap();
 
         let mut send_futures = Vec::new();
         for i in 0..n {
@@ -90,20 +83,21 @@ impl HttpClient3 for HttpClient3Impl {
                 comments: vec!["Hello".to_string(), "World".to_string()],
             };
 
-            let client_clone = client.clone();
             let port_clone = port.clone();
             let future = async move {
-                let response: Response = client_clone
+                let response = wasi_fetch::Client::new()
                     .post(&format!("http://localhost:{port_clone}/post-example"))
                     .json(&request_body)
                     .header("X-Test", i.to_string())
-                    .basic_auth("some", Some("body"))
+                    // Basic auth for user "some" and password "body"
+                    .header("Authorization", "Basic c29tZTpib2R5")
                     .send()
                     .await
                     .expect("Request failed");
 
                 let status = response.status();
                 let body = response
+                    .into_body()
                     .json::<ExampleResponse>()
                     .await
                     .expect("Invalid response");
@@ -119,19 +113,16 @@ impl HttpClient3 for HttpClient3Impl {
     }
 
     async fn start_polling(&self, until: String) {
-        use golem_wasi_http::*;
-
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
         let component_id = std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
         let worker_name = std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
 
         println!("Polling until receiving {until}");
 
-        let client = Client::builder().build().unwrap();
         loop {
             println!("Calling the poll endpoint");
-            match client
-                .get(format!(
+            match wasi_fetch::Client::new()
+                .get(&format!(
                     "http://localhost:{port}/poll?component_id={component_id}&worker_name={worker_name}"
                 ))
                 .send()
@@ -139,6 +130,7 @@ impl HttpClient3 for HttpClient3Impl {
             {
                 Ok(response) => {
                     let s = response
+                        .into_body()
                         .text()
                         .await
                         .unwrap_or_else(|err| format!("error receiving body: {err:?}"));
@@ -151,7 +143,7 @@ impl HttpClient3 for HttpClient3Impl {
                     }
                 }
                 Err(err) => {
-                    println!("Failed to poll: {err}");
+                    println!("Failed to poll: {err:?}");
                 }
             }
         }
@@ -166,24 +158,14 @@ impl HttpClient3 for HttpClient3Impl {
     }
 
     async fn slow_body_stream(&self) -> u64 {
-        use golem_wasi_http::*;
-
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
-        let client = Client::builder().build().unwrap();
-
-        let response: Response = client
+        let response = wasi_fetch::Client::new()
             .get(&format!("http://localhost:{port}/big-byte-array"))
             .send()
             .await
             .expect("Request failed");
 
-        match response.bytes().await {
-            Ok(bytes) => bytes.len() as u64,
-            Err(err) => {
-                println!("Failed to read response: {:?}", err);
-                0
-            }
-        }
+        response.into_body().bytes().await.len() as u64
     }
 }
