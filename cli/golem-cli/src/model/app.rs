@@ -1423,6 +1423,19 @@ impl Layer for ComponentLayer {
                     .map_err(|err| format!("Failed to render outputWasm: {}", err))?,
             );
 
+            value.dependencies.apply_layer(
+                id,
+                selection,
+                (
+                    VecMergeMode::Append,
+                    properties
+                        .dependencies
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render dependencies: {}", err))?,
+                ),
+            );
+
             value.build.apply_layer(
                 id,
                 selection,
@@ -1728,6 +1741,7 @@ pub struct ComponentLayerProperties {
 
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
+    pub dependencies: VecProperty<ComponentLayer, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
@@ -1751,6 +1765,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             applied_layers: vec![],
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
+            dependencies: value.dependencies.into(),
             build_merge_mode: value.build_merge_mode,
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
@@ -1770,6 +1785,7 @@ impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
+        self.dependencies.compact_trace();
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
@@ -2057,6 +2073,7 @@ pub struct ComponentProperties {
     pub component_dir: PathBuf, // Resolved canonical component path
     pub component_wasm: String,
     pub output_wasm: Option<String>,
+    pub dependencies: Vec<ComponentName>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
@@ -2084,6 +2101,7 @@ impl ComponentProperties {
             component_dir,
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
             output_wasm: merged.output_wasm.value().clone(),
+            dependencies: Self::validate_dependencies(validation, merged.dependencies.value()),
             build: merged.build.value().clone(),
             custom_commands: merged
                 .custom_commands
@@ -2108,6 +2126,28 @@ impl ComponentProperties {
         }
 
         properties
+    }
+
+    fn validate_dependencies(
+        validation: &mut ValidationBuilder,
+        dependencies: &[String],
+    ) -> Vec<ComponentName> {
+        dependencies
+            .iter()
+            .map(
+                |dependency| match ComponentName::try_from(dependency.as_str()) {
+                    Ok(component_name) => component_name,
+                    Err(err) => {
+                        validation.add_error(format!(
+                            "Invalid component dependency name: {}. {}",
+                            dependency.log_color_error_highlight(),
+                            err
+                        ));
+                        ComponentName(dependency.clone())
+                    }
+                },
+            )
+            .collect()
     }
 
     fn validate_and_normalize_env(
@@ -3458,12 +3498,39 @@ mod app_builder {
                         component_dir,
                         &component_layer_properties,
                     );
+                    self.validate_component_dependencies(
+                        validation,
+                        &component_name,
+                        &component_properties.dependencies,
+                    );
                     self.components.insert(
                         component_name,
                         WithSource::new(source, (component_properties, component_layer_properties)),
                     );
                 }
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
+            }
+        }
+
+        fn validate_component_dependencies(
+            &self,
+            validation: &mut ValidationBuilder,
+            component_name: &ComponentName,
+            dependencies: &[ComponentName],
+        ) {
+            for dependency in dependencies {
+                if dependency == component_name {
+                    validation.add_error(format!(
+                        "Component {} cannot depend on itself",
+                        component_name.as_str().log_color_error_highlight(),
+                    ));
+                } else if !self.raw_component_names.contains(dependency.as_str()) {
+                    validation.add_error(format!(
+                        "Unknown component dependency: {}\n\n{}",
+                        dependency.as_str().log_color_error_highlight(),
+                        self.available_components(dependency.as_str())
+                    ));
+                }
             }
         }
 
@@ -3504,6 +3571,15 @@ mod app_builder {
             unknown: &str,
         ) -> String {
             self.available_options_help("profiles", "profile names", unknown, available_profiles)
+        }
+
+        fn available_components(&self, unknown: &str) -> String {
+            self.available_options_help(
+                "components",
+                "component names",
+                unknown,
+                self.raw_component_names.iter().map(|name| name.as_str()),
+            )
         }
 
         // TODO: atomic

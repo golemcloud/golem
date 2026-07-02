@@ -258,6 +258,8 @@ pub struct ComponentTemplate {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -289,6 +291,7 @@ impl ComponentTemplate {
         ComponentLayerProperties {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
+            dependencies: self.dependencies.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
@@ -317,6 +320,8 @@ pub struct Component {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -348,6 +353,7 @@ impl Component {
         ComponentLayerProperties {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
+            dependencies: self.dependencies.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
@@ -374,6 +380,8 @@ pub struct ComponentPreset {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -403,6 +411,7 @@ impl ComponentPreset {
         ComponentLayerProperties {
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
+            dependencies: self.dependencies,
             build_merge_mode: self.build_merge_mode,
             build: self.build,
             custom_commands: self.custom_commands,
@@ -741,6 +750,7 @@ pub struct InitialComponentFile {
 pub struct ComponentLayerProperties {
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
+    pub dependencies: Vec<String>,
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
@@ -1289,6 +1299,7 @@ mod test {
                     default: is_default.then_some(Marker),
                     component_wasm,
                     output_wasm,
+                    dependencies: vec![],
                     build_merge_mode,
                     build,
                     custom_commands,
@@ -1350,6 +1361,7 @@ mod test {
                     templates,
                     component_wasm,
                     output_wasm,
+                    dependencies: vec![],
                     build_merge_mode,
                     build,
                     custom_commands,
@@ -1415,6 +1427,7 @@ mod test {
                     dir,
                     component_wasm,
                     output_wasm,
+                    dependencies: vec![],
                     build_merge_mode,
                     build,
                     custom_commands,

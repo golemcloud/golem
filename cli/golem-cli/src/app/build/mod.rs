@@ -22,12 +22,11 @@ use crate::app::build::gen_bridge::{
     plan_custom_bridge_generation_lenient,
     plan_manifest_external_bridge_generation_for_components_lenient,
     plan_manifest_guest_bridge_generation_for_components_lenient,
-    plan_repl_bridge_generation_lenient, should_auto_enable_guest_bridge,
-    validate_no_output_dir_collisions, validate_supported_bridge_targets, write_repl_metadata,
+    plan_repl_bridge_generation_lenient, validate_no_output_dir_collisions,
+    validate_supported_bridge_targets, write_repl_metadata,
 };
 use crate::app::context::BuildContext;
-use crate::app::edit::cargo_toml::{self, DependencySpec};
-use crate::bridge_gen::{BridgeMode, bridge_client_directory_name_for_mode};
+use crate::bridge_gen::BridgeMode;
 use crate::error::NonSuccessfulExit;
 use crate::log::{LogColorize, log_error, logln};
 use crate::model::GuestLanguage;
@@ -72,27 +71,28 @@ pub async fn build_app(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
 }
 
 async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let selected_component_names = ctx
-        .application_context()
-        .selected_component_names()
+    let effective_component_names = selected_component_names_with_dependencies(ctx);
+    let guest_source_component_names = effective_component_names
         .iter()
+        .filter(|component_name| {
+            component_guest_bridge_requirements(ctx, component_name).is_empty()
+        })
         .cloned()
         .collect::<Vec<_>>();
-    let guest_source_component_names = selected_component_names
-        .iter()
-        .filter(|component_name| !component_build_may_need_guest_bridge(ctx, component_name))
-        .cloned()
-        .collect::<Vec<_>>();
-    let requests = bridge_requests(ctx, &selected_component_names);
+    let requests = if ctx.should_run_step(AppBuildStep::GenBridge) {
+        bridge_requests(ctx, &effective_component_names)
+    } else {
+        Vec::new()
+    };
     let mut agent_metadata_cache = AgentMetadataCache::default();
     let mut validated_targets = Vec::<(BridgeRequestId, BridgeSdkTarget)>::new();
-    let claims = bridge_output_dir_claims(ctx, &selected_component_names);
-    let mut pending_components = selected_component_names
+    let claims = bridge_output_dir_claims(ctx, &effective_component_names);
+    let mut pending_components = effective_component_names
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut built_components = BTreeSet::<ComponentName>::new();
-    let mut available_guest_clients = BTreeSet::<GuestBridgeClientId>::new();
+    let mut available_guest_bridge_components = BTreeSet::<ComponentName>::new();
     let mut generated_guest_target_keys = BTreeSet::<BridgeSdkTargetKey>::new();
 
     while !pending_components.is_empty() {
@@ -100,7 +100,7 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
             .iter()
             .filter(|component_name| {
                 component_guest_bridge_requirements(ctx, component_name)
-                    .is_subset(&available_guest_clients)
+                    .is_subset(&available_guest_bridge_components)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -117,12 +117,27 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
             }
 
             pending_components.remove(&component_name);
-            built_components.insert(component_name);
+            built_components.insert(component_name.clone());
+            if !requests.contains(&BridgeRequestId::ManifestGuest) {
+                available_guest_bridge_components.insert(component_name);
+            }
             made_progress = true;
         }
 
         if requests.contains(&BridgeRequestId::ManifestGuest) {
+            let has_explicit_manifest_guest_request =
+                has_explicit_manifest_guest_bridge_request(ctx, &effective_component_names);
+            let dependency_source_components =
+                selected_guest_bridge_dependency_sources(ctx, &effective_component_names);
             let built_component_names = built_components
+                .iter()
+                .filter(|component_name| {
+                    has_explicit_manifest_guest_request
+                        || dependency_source_components.contains(*component_name)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let source_component_names = built_component_names
                 .iter()
                 .filter(|component_name| {
                     ctx.application()
@@ -134,7 +149,8 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
                 .collect::<Vec<_>>();
             let plan = plan_manifest_guest_bridge_generation_for_components_lenient(
                 ctx,
-                &built_component_names,
+                &source_component_names,
+                &effective_component_names,
                 &mut agent_metadata_cache,
             )
             .await?;
@@ -150,17 +166,21 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
 
             if !new_targets.is_empty() {
                 gen_bridge_sdk_targets(ctx, new_targets.clone()).await?;
-                available_guest_clients.extend(
-                    new_targets
-                        .iter()
-                        .map(GuestBridgeClientId::from_bridge_target),
-                );
+            }
+
+            let available_before = available_guest_bridge_components.len();
+            available_guest_bridge_components.extend(built_component_names);
+            if available_guest_bridge_components.len() != available_before {
                 made_progress = true;
             }
         }
 
         if !made_progress {
-            report_guest_bridge_build_cycle(ctx, &pending_components, &available_guest_clients)?;
+            report_guest_bridge_build_cycle(
+                ctx,
+                &pending_components,
+                &available_guest_bridge_components,
+            )?;
         }
     }
 
@@ -180,7 +200,7 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
         let plan = plan_bridge_request(
             ctx,
             request_id,
-            &selected_component_names,
+            &effective_component_names,
             &guest_source_component_names,
             &mut agent_metadata_cache,
         )
@@ -281,21 +301,21 @@ fn validate_and_filter_new_bridge_targets(
 fn report_guest_bridge_build_cycle(
     ctx: &BuildContext<'_>,
     pending_components: &BTreeSet<ComponentName>,
-    available_guest_clients: &BTreeSet<GuestBridgeClientId>,
+    available_guest_bridge_components: &BTreeSet<ComponentName>,
 ) -> anyhow::Result<()> {
     logln("");
     log_error("Build graph has a cycle involving guest bridge generation:".to_string());
     for component_name in pending_components {
         let missing = component_guest_bridge_requirements(ctx, component_name)
-            .difference(available_guest_clients)
-            .map(|client| client.to_string())
+            .difference(available_guest_bridge_components)
+            .map(|component| component.as_str().to_string())
             .collect::<Vec<_>>();
         log_error(format!(
-            "  component {} build needs guest bridge clients: {}",
+            "  component {} waits for guest bridge generation from components: {}",
             component_name.as_str().log_color_highlight(),
             missing
                 .iter()
-                .map(|client| client.log_color_highlight())
+                .map(|component| component.log_color_highlight())
                 .join(", "),
         ));
     }
@@ -327,40 +347,47 @@ impl BridgeSdkTargetKey {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct GuestBridgeClientId {
-    target_language: GuestLanguage,
-    client_name: String,
-}
-
-impl GuestBridgeClientId {
-    fn from_bridge_target(target: &BridgeSdkTarget) -> Self {
-        Self {
-            target_language: target.target_language,
-            client_name: bridge_client_directory_name_for_mode(
-                &target.agent_type.type_name,
-                target.bridge_mode,
-            ),
-        }
-    }
-}
-
-impl std::fmt::Display for GuestBridgeClientId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.target_language.id(), self.client_name)
-    }
-}
-
 fn component_guest_bridge_requirements(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
-) -> BTreeSet<GuestBridgeClientId> {
-    let component = ctx.application().component(component_name);
-    component_referenced_guest_clients(
-        ctx,
-        component.component_dir(),
-        component.properties().build.as_slice(),
-    )
+) -> BTreeSet<ComponentName> {
+    ctx.application()
+        .component(component_name)
+        .properties()
+        .dependencies
+        .iter()
+        .cloned()
+        .collect()
+}
+
+fn selected_guest_bridge_dependency_sources(
+    ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
+) -> BTreeSet<ComponentName> {
+    selected_component_names
+        .iter()
+        .flat_map(|component_name| component_guest_bridge_requirements(ctx, component_name))
+        .collect()
+}
+
+fn selected_component_names_with_dependencies(ctx: &BuildContext<'_>) -> Vec<ComponentName> {
+    let mut selected = BTreeSet::<ComponentName>::new();
+    let mut pending = ctx
+        .application_context()
+        .selected_component_names()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    while let Some(component_name) = pending.pop() {
+        if !selected.insert(component_name.clone()) {
+            continue;
+        }
+
+        pending.extend(component_guest_bridge_requirements(ctx, &component_name));
+    }
+
+    selected.into_iter().collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -383,6 +410,7 @@ async fn plan_bridge_request(
             plan_manifest_guest_bridge_generation_for_components_lenient(
                 ctx,
                 guest_source_component_names,
+                selected_component_names,
                 agent_metadata_cache,
             )
             .await
@@ -776,20 +804,10 @@ fn bridge_requests(
     if ctx.custom_bridge_sdk_target().is_some() {
         requests.push(BridgeRequestId::Custom);
     } else {
-        if ctx
-            .application()
-            .bridge_sdks()
-            .for_all_used_modes()
-            .into_iter()
-            .any(|(_, mode, sdk_targets)| {
-                mode == BridgeMode::Guest
-                    && manifest_bridge_request_may_match_selected_components(
-                        ctx,
-                        sdk_targets.agents,
-                        selected_component_names,
-                    )
+        if has_explicit_manifest_guest_bridge_request(ctx, selected_component_names)
+            || selected_component_names.iter().any(|component_name| {
+                !component_guest_bridge_requirements(ctx, component_name).is_empty()
             })
-            || should_auto_enable_guest_bridge(ctx, selected_component_names)
         {
             requests.push(BridgeRequestId::ManifestGuest);
         }
@@ -818,637 +836,41 @@ fn bridge_requests(
     requests
 }
 
-fn should_run_bridge_scheduler(ctx: &BuildContext<'_>) -> bool {
-    if !ctx.should_run_step(AppBuildStep::Build)
-        || !ctx.should_run_step(AppBuildStep::GenBridge)
-        || ctx.custom_bridge_sdk_target().is_some()
-    {
-        return false;
-    }
-
-    let selected_component_names = ctx
-        .application_context()
-        .selected_component_names()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-
-    bridge_requests(ctx, &selected_component_names).contains(&BridgeRequestId::ManifestGuest)
-}
-
-fn component_build_may_need_guest_bridge(
+fn has_explicit_manifest_guest_bridge_request(
     ctx: &BuildContext<'_>,
-    component_name: &ComponentName,
+    selected_component_names: &[ComponentName],
 ) -> bool {
-    let component = ctx.application().component(component_name);
-    if component.build_commands().is_empty() {
-        return false;
-    }
-
-    !component_guest_bridge_requirements(ctx, component_name).is_empty()
-}
-
-fn component_referenced_guest_clients(
-    ctx: &BuildContext<'_>,
-    component_dir: &Path,
-    build_commands: &[crate::model::app_raw::BuildCommand],
-) -> BTreeSet<GuestBridgeClientId> {
-    let output_bases = guest_bridge_output_bases(ctx);
-    let mut result = component_cargo_manifest_paths(component_dir, build_commands)
+    ctx.application()
+        .bridge_sdks()
+        .for_all_used_modes()
         .into_iter()
-        .flat_map(|cargo_toml_path| {
-            cargo_toml_referenced_guest_clients(&cargo_toml_path, &output_bases)
+        .any(|(_, mode, sdk_targets)| {
+            mode == BridgeMode::Guest
+                && manifest_bridge_request_may_match_selected_components(
+                    ctx,
+                    sdk_targets.agents,
+                    selected_component_names,
+                )
         })
-        .collect::<BTreeSet<_>>();
-
-    result.extend(build_commands.iter().flat_map(|build_command| {
-        build_command_referenced_guest_clients(component_dir, build_command, &output_bases)
-    }));
-
-    result
 }
 
-fn cargo_toml_referenced_guest_clients(
-    cargo_toml_path: &Path,
-    output_bases: &[(GuestLanguage, PathBuf)],
-) -> BTreeSet<GuestBridgeClientId> {
-    let Ok(component_cargo_toml) = crate::fs::read_to_string(cargo_toml_path) else {
-        return BTreeSet::new();
-    };
-
-    let mut result = BTreeSet::new();
-    let source_dir = cargo_toml_path.parent().unwrap_or_else(|| Path::new(""));
-
-    if let Ok(specs) = cargo_toml::collect_package_dependency_specs(&component_cargo_toml) {
-        result.extend(
-            specs
-                .iter()
-                .filter_map(|spec| dependency_spec_guest_client(source_dir, spec, output_bases)),
-        );
-    }
-
-    let Ok(workspace_dependency_refs) =
-        cargo_toml::collect_workspace_dependency_refs(&component_cargo_toml)
-    else {
-        return result;
-    };
-    if workspace_dependency_refs.is_empty() {
-        return result;
-    }
-
-    let mut current_dir = cargo_toml_path.parent();
-    while let Some(dir) = current_dir {
-        if let Ok(workspace_cargo_toml) = crate::fs::read_to_string(dir.join("Cargo.toml"))
-            && let Ok(specs) = cargo_toml::collect_workspace_dependency_specs(&workspace_cargo_toml)
-        {
-            result.extend(workspace_dependency_refs.iter().filter_map(|name| {
-                specs
-                    .get(name)
-                    .and_then(|spec| dependency_spec_guest_client(dir, spec, output_bases))
-            }));
-        }
-        current_dir = dir.parent();
-    }
-
-    result
-}
-
-fn guest_bridge_output_bases(ctx: &BuildContext<'_>) -> Vec<(GuestLanguage, PathBuf)> {
-    let mut result = vec![(
-        GuestLanguage::Rust,
-        ctx.application()
-            .temp_dir()
-            .join("bridge-sdk")
-            .join(GuestLanguage::Rust.id())
-            .join(BridgeMode::Guest.id()),
-    )];
-
-    result.extend(
-        ctx.application()
-            .bridge_sdks()
-            .for_all_used_modes()
-            .into_iter()
-            .filter_map(|(language, mode, sdk_targets)| {
-                if mode == BridgeMode::Guest {
-                    sdk_targets.output_dir.as_ref().map(|output_dir| {
-                        (
-                            language,
-                            ctx.application().bridge_sdks_source().join(output_dir),
-                        )
-                    })
-                } else {
-                    None
-                }
-            }),
-    );
-
-    result
-}
-
-#[cfg(test)]
-fn component_cargo_manifests_may_need_guest_bridge(
-    component_dir: &Path,
-    build_commands: &[crate::model::app_raw::BuildCommand],
-) -> bool {
-    component_cargo_manifest_paths(component_dir, build_commands)
-        .into_iter()
-        .any(|cargo_toml_path| cargo_toml_may_need_guest_bridge(&cargo_toml_path))
-}
-
-#[cfg(test)]
-fn cargo_toml_may_need_guest_bridge(cargo_toml_path: &Path) -> bool {
-    let Ok(component_cargo_toml) = crate::fs::read_to_string(cargo_toml_path) else {
+fn should_run_bridge_scheduler(ctx: &BuildContext<'_>) -> bool {
+    if !ctx.should_run_step(AppBuildStep::Build) || ctx.custom_bridge_sdk_target().is_some() {
         return false;
-    };
+    }
 
-    if cargo_toml::collect_package_dependency_specs(&component_cargo_toml)
-        .is_ok_and(|specs| specs.iter().any(dependency_spec_may_need_guest_bridge))
+    let effective_component_names = selected_component_names_with_dependencies(ctx);
+
+    if effective_component_names
+        .iter()
+        .any(|component_name| !component_guest_bridge_requirements(ctx, component_name).is_empty())
     {
         return true;
     }
 
-    let Ok(workspace_dependency_refs) =
-        cargo_toml::collect_workspace_dependency_refs(&component_cargo_toml)
-    else {
-        return false;
-    };
-    if workspace_dependency_refs.is_empty() {
+    if !ctx.should_run_step(AppBuildStep::GenBridge) {
         return false;
     }
 
-    let mut current_dir = cargo_toml_path.parent();
-    while let Some(dir) = current_dir {
-        if let Ok(workspace_cargo_toml) = crate::fs::read_to_string(dir.join("Cargo.toml")) {
-            if cargo_toml::collect_workspace_dependency_specs(&workspace_cargo_toml).is_ok_and(
-                |specs| {
-                    workspace_dependency_refs.iter().any(|name| {
-                        specs
-                            .get(name)
-                            .is_some_and(dependency_spec_may_need_guest_bridge)
-                    })
-                },
-            ) {
-                return true;
-            }
-        }
-        current_dir = dir.parent();
-    }
-
-    false
-}
-
-fn component_cargo_manifest_paths(
-    component_dir: &Path,
-    build_commands: &[crate::model::app_raw::BuildCommand],
-) -> BTreeSet<PathBuf> {
-    let mut result = BTreeSet::from([component_dir.join("Cargo.toml")]);
-
-    for build_command in build_commands {
-        if let crate::model::app_raw::BuildCommand::External(command) = build_command {
-            let command_dir = command
-                .dir
-                .as_ref()
-                .map(|dir| component_dir.join(dir))
-                .unwrap_or_else(|| component_dir.to_path_buf());
-            let Some(selection) =
-                cargo_manifest_selection_from_direct_cargo_command(&command.command)
-            else {
-                continue;
-            };
-            match selection {
-                CargoManifestSelection::DefaultManifest => {
-                    result.insert(command_dir.join("Cargo.toml"));
-                }
-                CargoManifestSelection::ExplicitManifests(paths) => {
-                    result.extend(paths.into_iter().map(|path| {
-                        if path.is_absolute() {
-                            path
-                        } else {
-                            command_dir.join(path)
-                        }
-                    }));
-                }
-            }
-        }
-    }
-
-    result
-}
-
-enum CargoManifestSelection {
-    DefaultManifest,
-    ExplicitManifests(Vec<PathBuf>),
-}
-
-fn cargo_manifest_selection_from_direct_cargo_command(
-    command: &str,
-) -> Option<CargoManifestSelection> {
-    let Some(words) = shlex::split(command) else {
-        return None;
-    };
-    let program = words.first()?;
-    if !Path::new(program)
-        .file_name()
-        .is_some_and(|file_name| file_name == "cargo")
-    {
-        return None;
-    }
-
-    let mut result = Vec::new();
-    let mut index = 1;
-    while index < words.len() {
-        let word = &words[index];
-        if word == "--" {
-            break;
-        }
-        if word == "--manifest-path" {
-            if let Some(path) = words.get(index + 1) {
-                result.push(PathBuf::from(path));
-            }
-            index += 2;
-            continue;
-        }
-        if let Some(path) = word.strip_prefix("--manifest-path=") {
-            result.push(PathBuf::from(path));
-        }
-        index += 1;
-    }
-
-    Some(if result.is_empty() {
-        CargoManifestSelection::DefaultManifest
-    } else {
-        CargoManifestSelection::ExplicitManifests(result)
-    })
-}
-
-#[cfg(test)]
-fn explicit_cargo_manifest_paths_from_direct_cargo_command(command: &str) -> Vec<PathBuf> {
-    match cargo_manifest_selection_from_direct_cargo_command(command) {
-        Some(CargoManifestSelection::ExplicitManifests(paths)) => paths,
-        Some(CargoManifestSelection::DefaultManifest) | None => Vec::new(),
-    }
-}
-
-#[cfg(test)]
-fn dependency_spec_may_need_guest_bridge(spec: &DependencySpec) -> bool {
-    dependency_spec_guest_client_name(spec).is_some()
-}
-
-fn dependency_spec_guest_client(
-    source_dir: &Path,
-    spec: &DependencySpec,
-    output_bases: &[(GuestLanguage, PathBuf)],
-) -> Option<GuestBridgeClientId> {
-    let DependencySpec::Path { path, .. } = spec else {
-        return None;
-    };
-
-    generated_guest_client_from_path(source_dir, path, output_bases)
-}
-
-#[cfg(test)]
-fn dependency_spec_guest_client_name(spec: &DependencySpec) -> Option<String> {
-    let DependencySpec::Path { path, .. } = spec else {
-        return None;
-    };
-
-    guest_client_name_from_path(path)
-}
-
-#[cfg(test)]
-fn guest_client_name_from_path(path: &str) -> Option<String> {
-    Path::new(path)
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .find(|component| text_references_generated_guest_bridge_client(component))
-        .map(str::to_string)
-}
-
-fn generated_guest_client_from_path(
-    source_dir: &Path,
-    path: &str,
-    output_bases: &[(GuestLanguage, PathBuf)],
-) -> Option<GuestBridgeClientId> {
-    let path = Path::new(path);
-    let absolute_path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        source_dir.join(path)
-    };
-    let absolute_path = crate::fs::absolute_lexical_path(&absolute_path).ok()?;
-
-    for (target_language, base_dir) in output_bases {
-        let base_dir = crate::fs::absolute_lexical_path(base_dir).ok()?;
-        let Ok(relative_path) = absolute_path.strip_prefix(&base_dir) else {
-            continue;
-        };
-        if let Some(client_name) = relative_path
-            .components()
-            .next()
-            .and_then(|component| component.as_os_str().to_str())
-            .filter(|component| text_references_generated_guest_bridge_client(component))
-        {
-            return Some(GuestBridgeClientId {
-                target_language: *target_language,
-                client_name: client_name.to_string(),
-            });
-        }
-    }
-
-    None
-}
-
-fn build_command_referenced_guest_clients(
-    component_dir: &Path,
-    build_command: &crate::model::app_raw::BuildCommand,
-    output_bases: &[(GuestLanguage, PathBuf)],
-) -> BTreeSet<GuestBridgeClientId> {
-    let crate::model::app_raw::BuildCommand::External(command) = build_command else {
-        return BTreeSet::new();
-    };
-    let command_dir = command
-        .dir
-        .as_ref()
-        .map(|dir| component_dir.join(dir))
-        .unwrap_or_else(|| component_dir.to_path_buf());
-
-    shlex::split(&command.command)
-        .unwrap_or_else(|| {
-            command
-                .command
-                .split_whitespace()
-                .map(str::to_string)
-                .collect()
-        })
-        .into_iter()
-        .flat_map(|text| {
-            std::iter::once(text.clone())
-                .chain(text.split_whitespace().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .chain(command.env.values().cloned())
-        .chain(command.sources.iter().cloned())
-        .filter_map(|text| generated_guest_client_from_path(&command_dir, &text, output_bases))
-        .collect()
-}
-
-fn text_references_generated_guest_bridge_client(text: &str) -> bool {
-    text.contains("-agent-guest-client")
-}
-
-fn infer_component_language_from_dir(component_dir: &Path) -> Option<GuestLanguage> {
-    if component_dir.join("Cargo.toml").exists() {
-        Some(GuestLanguage::Rust)
-    } else if component_dir.join("package.json").exists() {
-        Some(GuestLanguage::TypeScript)
-    } else if component_dir.join("build.sbt").exists() {
-        Some(GuestLanguage::Scala)
-    } else if component_dir.join("moon.mod.json").exists()
-        || component_dir.join("moon.mod").exists()
-    {
-        Some(GuestLanguage::MoonBit)
-    } else {
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use indexmap::IndexMap;
-    use indoc::indoc;
-    use test_r::test;
-
-    #[test]
-    fn component_workspace_root_cargo_toml_may_need_guest_bridge() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("Cargo.toml"),
-            indoc! {r#"
-                [package]
-                name = "consumer"
-                version = "0.1.0"
-                edition = "2021"
-
-                [workspace]
-                members = ["."]
-
-                [dependencies]
-                bar = { workspace = true }
-
-                [workspace.dependencies]
-                bar = { path = "bridge/bar-agent-guest-client" }
-            "#},
-        )
-        .unwrap();
-
-        assert!(component_cargo_manifests_may_need_guest_bridge(
-            dir.path(),
-            &[]
-        ));
-    }
-
-    #[test]
-    fn workspace_dependency_above_golem_yaml_may_need_guest_bridge() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("app/consumer")).unwrap();
-        std::fs::write(
-            dir.path().join("Cargo.toml"),
-            indoc! {r#"
-                [workspace]
-                members = ["app/consumer"]
-
-                [workspace.dependencies]
-                bar = { path = "app/bridge/bar-agent-guest-client" }
-            "#},
-        )
-        .unwrap();
-        std::fs::write(dir.path().join("app/golem.yaml"), "app: test\n").unwrap();
-        std::fs::write(
-            dir.path().join("app/consumer/Cargo.toml"),
-            indoc! {r#"
-                [package]
-                name = "consumer"
-                version = "0.1.0"
-                edition = "2021"
-
-                [dependencies]
-                bar = { workspace = true }
-            "#},
-        )
-        .unwrap();
-
-        assert!(component_cargo_manifests_may_need_guest_bridge(
-            &dir.path().join("app/consumer"),
-            &[]
-        ));
-    }
-
-    #[test]
-    fn cargo_manifest_path_command_selects_additional_cargo_toml() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("component")).unwrap();
-        std::fs::write(
-            dir.path().join("component/Cargo.toml"),
-            indoc! {r#"
-                [package]
-                name = "component"
-                version = "0.1.0"
-                edition = "2021"
-            "#},
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("Cargo.toml"),
-            indoc! {r#"
-                [package]
-                name = "workspace-root-package"
-                version = "0.1.0"
-                edition = "2021"
-
-                [dependencies]
-                bar = { path = "bridge/bar-agent-guest-client" }
-            "#},
-        )
-        .unwrap();
-
-        let build_commands = [external_build_command(
-            "cargo metadata --manifest-path ../Cargo.toml --format-version=1",
-            None,
-        )];
-
-        assert!(component_cargo_manifests_may_need_guest_bridge(
-            &dir.path().join("component"),
-            &build_commands,
-        ));
-    }
-
-    #[test]
-    fn cargo_manifest_path_equals_form_is_supported() {
-        assert_eq!(
-            explicit_cargo_manifest_paths_from_direct_cargo_command(
-                "cargo metadata --manifest-path=../Cargo.toml"
-            ),
-            vec![PathBuf::from("../Cargo.toml")]
-        );
-    }
-
-    #[test]
-    fn cargo_manifest_path_is_relative_to_external_command_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("component/scripts")).unwrap();
-        std::fs::write(
-            dir.path().join("component/Cargo.toml"),
-            indoc! {r#"
-                [package]
-                name = "component"
-                version = "0.1.0"
-                edition = "2021"
-            "#},
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("Cargo.toml"),
-            indoc! {r#"
-                [package]
-                name = "workspace-root-package"
-                version = "0.1.0"
-                edition = "2021"
-
-                [dependencies]
-                bar = { path = "bridge/bar-agent-guest-client" }
-            "#},
-        )
-        .unwrap();
-
-        let build_commands = [external_build_command(
-            "cargo metadata --manifest-path=../../Cargo.toml --format-version=1",
-            Some("scripts"),
-        )];
-
-        assert!(component_cargo_manifests_may_need_guest_bridge(
-            &dir.path().join("component"),
-            &build_commands,
-        ));
-    }
-
-    #[test]
-    fn cargo_command_without_manifest_path_uses_external_command_dir_cargo_toml() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("component/rust/src")).unwrap();
-        std::fs::write(
-            dir.path().join("component/rust/Cargo.toml"),
-            indoc! {r#"
-                [package]
-                name = "consumer"
-                version = "0.1.0"
-                edition = "2021"
-
-                [dependencies]
-                bar-agent-guest-client = { path = "../../bridge/bar-agent-guest-client" }
-            "#},
-        )
-        .unwrap();
-
-        let build_commands = [external_build_command(
-            "cargo metadata --format-version=1",
-            Some("rust"),
-        )];
-
-        assert!(component_cargo_manifests_may_need_guest_bridge(
-            &dir.path().join("component"),
-            &build_commands,
-        ));
-    }
-
-    #[test]
-    fn cargo_manifest_path_after_argument_separator_is_not_a_cargo_manifest_path() {
-        assert!(
-            explicit_cargo_manifest_paths_from_direct_cargo_command(
-                "cargo run -- --manifest-path ../Cargo.toml"
-            )
-            .is_empty()
-        );
-        assert!(
-            explicit_cargo_manifest_paths_from_direct_cargo_command(
-                "cargo run -- --manifest-path=../Cargo.toml"
-            )
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn non_direct_cargo_commands_are_ignored() {
-        assert!(
-            explicit_cargo_manifest_paths_from_direct_cargo_command(
-                "sh -c 'cargo metadata --manifest-path ../Cargo.toml'"
-            )
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn guest_bridge_client_text_references_are_precise() {
-        assert!(text_references_generated_guest_bridge_client(
-            "../bridge/bar-agent-guest-client/Cargo.toml"
-        ));
-        assert!(!text_references_generated_guest_bridge_client(
-            "echo guest bridge"
-        ));
-    }
-
-    fn external_build_command(
-        command: &str,
-        dir: Option<&str>,
-    ) -> crate::model::app_raw::BuildCommand {
-        crate::model::app_raw::BuildCommand::External(crate::model::app_raw::ExternalCommand {
-            command: command.to_string(),
-            dir: dir.map(str::to_string),
-            sources: Vec::new(),
-            targets: Vec::new(),
-            env: IndexMap::new(),
-            rmdirs: Vec::new(),
-            mkdirs: Vec::new(),
-        })
-    }
+    bridge_requests(ctx, &effective_component_names).contains(&BridgeRequestId::ManifestGuest)
 }

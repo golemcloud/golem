@@ -183,13 +183,15 @@ pub(crate) async fn write_repl_metadata(
 
 pub(crate) async fn plan_manifest_guest_bridge_generation_for_components_lenient(
     ctx: &BuildContext<'_>,
-    component_names: &[ComponentName],
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
     agent_metadata_cache: &mut AgentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     Ok(BridgeGenerationPlan {
         targets: collect_manifest_targets_for_components_and_mode(
             ctx,
-            component_names,
+            source_component_names,
+            selection_scope_component_names,
             Some(BridgeMode::Guest),
             true,
             false,
@@ -262,6 +264,7 @@ pub(crate) async fn collect_manifest_external_bridge_targets_for_components_leni
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     collect_manifest_targets_for_components_and_mode(
         ctx,
+        component_names,
         component_names,
         Some(BridgeMode::External),
         true,
@@ -349,6 +352,7 @@ async fn collect_manifest_targets(
     collect_manifest_targets_for_components_and_mode(
         ctx,
         &component_names,
+        &component_names,
         bridge_mode_filter,
         false,
         false,
@@ -359,7 +363,8 @@ async fn collect_manifest_targets(
 
 async fn collect_manifest_targets_for_components_and_mode(
     ctx: &BuildContext<'_>,
-    component_names: &[ComponentName],
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
     bridge_mode_filter: Option<BridgeMode>,
     ignore_unmatched_matchers: bool,
     skip_missing_sources: bool,
@@ -387,7 +392,7 @@ async fn collect_manifest_targets_for_components_and_mode(
 
         let is_matching_all = matchers.remove("*");
 
-        for component_name in component_names {
+        for component_name in source_component_names {
             if skip_missing_sources
                 && !ctx
                     .application()
@@ -436,11 +441,7 @@ async fn collect_manifest_targets_for_components_and_mode(
         if !ignore_unmatched_matchers && !matchers.is_empty() {
             // Remove "non-selected" components
             for component_name in ctx.application().component_names() {
-                if !ctx
-                    .application_context()
-                    .selected_component_names()
-                    .contains(component_name)
-                {
+                if !selection_scope_component_names.contains(component_name) {
                     matchers.remove(component_name.as_str());
                 }
             }
@@ -462,68 +463,52 @@ async fn collect_manifest_targets_for_components_and_mode(
 
     if bridge_mode_filter.is_none_or(|bridge_mode| bridge_mode == BridgeMode::Guest) {
         targets.extend(
-            collect_auto_guest_bridge_targets(ctx, component_names, agent_metadata_cache).await?,
+            collect_dependency_guest_bridge_targets(
+                ctx,
+                source_component_names,
+                selection_scope_component_names,
+                agent_metadata_cache,
+            )
+            .await?,
         );
     }
 
     Ok(targets)
 }
 
-pub(crate) fn should_auto_enable_guest_bridge(
+async fn collect_dependency_guest_bridge_targets(
     ctx: &BuildContext<'_>,
-    selected_component_names: &[ComponentName],
-) -> bool {
-    auto_guest_bridge_target_languages().any(|target_language| {
-        has_selected_guest_bridge_target_language(ctx, selected_component_names, target_language)
-            && selected_component_names.iter().any(|component_name| {
-                component_may_produce_cross_language_agents(ctx, component_name, target_language)
-            })
-    })
-}
-
-async fn collect_auto_guest_bridge_targets(
-    ctx: &BuildContext<'_>,
-    component_names: &[ComponentName],
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
     agent_metadata_cache: &mut AgentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
-    let selected_component_names = ctx
-        .application_context()
-        .selected_component_names()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
     let mut targets = Vec::new();
 
-    for target_language in auto_guest_bridge_target_languages() {
-        if !has_selected_guest_bridge_target_language(
-            ctx,
-            &selected_component_names,
-            target_language,
-        ) {
+    for component_name in source_component_names {
+        if !ctx
+            .application()
+            .component(component_name)
+            .agent_type_extraction_source_wasm()
+            .exists()
+        {
             continue;
         }
 
-        let explicit_matchers = explicit_guest_bridge_matchers(ctx, target_language);
-        let explicitly_matches_all = explicit_matchers.contains("*");
+        let target_languages = dependency_guest_bridge_target_languages(
+            ctx,
+            component_name,
+            selection_scope_component_names,
+        );
+        if target_languages.is_empty() {
+            continue;
+        }
 
-        for component_name in component_names {
-            if !component_may_produce_cross_language_agents(ctx, component_name, target_language) {
-                continue;
-            }
-            if !ctx
-                .application()
-                .component(component_name)
-                .agent_type_extraction_source_wasm()
-                .exists()
-            {
-                continue;
-            }
+        let agent_types = agent_metadata_cache.get(ctx, component_name).await?;
+        for target_language in target_languages {
+            let explicit_matchers = explicit_guest_bridge_matchers(ctx, target_language);
+            let explicitly_matches_all = explicit_matchers.contains("*");
 
-            let agent_types = agent_metadata_cache.get(ctx, component_name).await?;
-            for agent_type in agent_types {
-                if agent_type_matches_language(ctx, component_name, &agent_type, target_language) {
-                    continue;
-                }
+            for agent_type in &agent_types {
                 if explicitly_matches_all
                     || explicit_matchers.contains(component_name.as_str())
                     || explicit_matchers.contains(agent_type.type_name.as_str())
@@ -538,7 +523,7 @@ async fn collect_auto_guest_bridge_targets(
                 );
                 targets.push(BridgeSdkTarget {
                     component_name: component_name.clone(),
-                    agent_type,
+                    agent_type: agent_type.clone(),
                     target_language,
                     bridge_mode: BridgeMode::Guest,
                     output_dir,
@@ -550,8 +535,31 @@ async fn collect_auto_guest_bridge_targets(
     Ok(targets)
 }
 
-fn auto_guest_bridge_target_languages() -> impl Iterator<Item = GuestLanguage> {
-    [GuestLanguage::Rust].into_iter()
+fn dependency_guest_bridge_target_languages(
+    ctx: &BuildContext<'_>,
+    source_component_name: &ComponentName,
+    selection_scope_component_names: &[ComponentName],
+) -> BTreeSet<GuestLanguage> {
+    selection_scope_component_names
+        .iter()
+        .filter(|consumer_component_name| {
+            ctx.application()
+                .component(consumer_component_name)
+                .properties()
+                .dependencies
+                .contains(source_component_name)
+        })
+        .filter_map(|consumer_component_name| {
+            ctx.application()
+                .component(consumer_component_name)
+                .guess_language()
+        })
+        .filter(|language| supported_dependency_guest_bridge_target_language(*language))
+        .collect()
+}
+
+fn supported_dependency_guest_bridge_target_language(language: GuestLanguage) -> bool {
+    matches!(language, GuestLanguage::Rust)
 }
 
 fn explicit_guest_bridge_matchers(
@@ -564,52 +572,6 @@ fn explicit_guest_bridge_matchers(
         .and_then(|targets| targets.guest.as_ref())
         .map(|guest| guest.agents.clone().into_set())
         .unwrap_or_default()
-}
-
-fn has_selected_guest_bridge_target_language(
-    ctx: &BuildContext<'_>,
-    selected_component_names: &[ComponentName],
-    target_language: GuestLanguage,
-) -> bool {
-    selected_component_names
-        .iter()
-        .any(|component_name| component_may_match_language(ctx, component_name, target_language))
-        || selected_component_names.iter().any(|component_name| {
-            super::component_guest_bridge_requirements(ctx, component_name)
-                .iter()
-                .any(|requirement| requirement.target_language == target_language)
-        })
-}
-
-fn component_may_produce_cross_language_agents(
-    ctx: &BuildContext<'_>,
-    component_name: &ComponentName,
-    target_language: GuestLanguage,
-) -> bool {
-    !component_may_match_language(ctx, component_name, target_language)
-}
-
-fn component_may_match_language(
-    ctx: &BuildContext<'_>,
-    component_name: &ComponentName,
-    language: GuestLanguage,
-) -> bool {
-    let component = ctx.application().component(component_name);
-    component
-        .guess_language()
-        .or_else(|| super::infer_component_language_from_dir(component.component_dir()))
-        == Some(language)
-}
-
-fn agent_type_matches_language(
-    ctx: &BuildContext<'_>,
-    component_name: &ComponentName,
-    agent_type: &golem_common::schema::AgentTypeSchema,
-    language: GuestLanguage,
-) -> bool {
-    GuestLanguage::from_string(&agent_type.source_language) == Some(language)
-        || (agent_type.source_language.is_empty()
-            && ctx.application().component(component_name).guess_language() == Some(language))
 }
 
 async fn collect_custom_targets(
