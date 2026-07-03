@@ -114,7 +114,7 @@ pub async fn extract_agent_type_schemas_with_streams(
     let component_type = component.component_type();
     for (name, item) in component_type.imports(&engine) {
         let name = name.to_string();
-        match item {
+        match item.ty {
             ComponentItem::ComponentFunc(_) => {}
             ComponentItem::CoreFunc(_) => {}
             ComponentItem::Module(_) => {}
@@ -298,7 +298,7 @@ fn dynamic_import(
             let name = name.to_owned();
             let inner_name = inner_name.to_owned();
 
-            match inner_item {
+            match inner_item.ty {
                 ComponentItem::ComponentFunc(fun) => {
                     let function_name = ParsedFunctionName::parse(format!(
                         "{name}.{{{inner_name}}}"

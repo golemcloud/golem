@@ -180,8 +180,7 @@ pub fn add_to_linker<Ctx: WorkerCtx>(
     use wasmtime_wasi_http::p3::bindings::http;
 
     cli::environment::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
-    let exit_options = cli::exit::LinkOptions::default();
-    cli::exit::add_to_linker::<_, DurableP3<Ctx>>(linker, &exit_options, durable_p3_view::<Ctx>)?;
+    cli::exit::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
     cli::stdin::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
     cli::stdout::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
     cli::stderr::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;

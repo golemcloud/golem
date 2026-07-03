@@ -43,7 +43,6 @@ use http_body_util::BodyExt as _;
 use http_body_util::Empty;
 use http_body_util::combinators::UnsyncBoxBody;
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -73,8 +72,8 @@ type RequestOptionsResult<T> = Result<T, RequestOptionsError>;
 
 impl<Ctx: WorkerCtx> client::Host for DurableP3View<'_, Ctx> {}
 
-impl<Ctx: WorkerCtx> client::HostWithStore for DurableP3<Ctx> {
-    async fn send<U: Send>(
+impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<Ctx> {
+    async fn send(
         store: &Accessor<U, Self>,
         req: Resource<Request>,
     ) -> HttpResult<Resource<Response>> {
@@ -143,7 +142,7 @@ where
     let interrupt = store.with(|mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
     });
-    let send = <WasiHttp as client::HostWithStore>::send(&http_store, req);
+    let send = <WasiHttp as client::HostWithStore<U>>::send(&http_store, req);
     let send_result = match select(Box::pin(send), interrupt).await {
         Either::Left((result, _)) => result,
         Either::Right((interrupt_kind, _)) => {
@@ -846,8 +845,8 @@ impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> types::HostRequestWithStore for DurableP3<Ctx> {
-    fn new<U>(
+impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for DurableP3<Ctx> {
+    fn new(
         mut store: Access<U, Self>,
         headers: Resource<Headers>,
         contents: Option<StreamReader<u8>>,
@@ -855,10 +854,12 @@ impl<Ctx: WorkerCtx> types::HostRequestWithStore for DurableP3<Ctx> {
         options: Option<Resource<RequestOptions>>,
     ) -> wasmtime::Result<(Resource<Request>, FutureReader<Result<(), ErrorCode>>)> {
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-        <WasiHttp as types::HostRequestWithStore>::new(store, headers, contents, trailers, options)
+        <WasiHttp as types::HostRequestWithStore<U>>::new(
+            store, headers, contents, trailers, options,
+        )
     }
 
-    fn consume_body<U>(
+    fn consume_body(
         mut store: Access<U, Self>,
         req: Resource<Request>,
         fut: FutureReader<Result<(), ErrorCode>>,
@@ -867,12 +868,12 @@ impl<Ctx: WorkerCtx> types::HostRequestWithStore for DurableP3<Ctx> {
         FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
     )> {
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-        <WasiHttp as types::HostRequestWithStore>::consume_body(store, req, fut)
+        <WasiHttp as types::HostRequestWithStore<U>>::consume_body(store, req, fut)
     }
 
-    fn drop<U>(mut store: Access<U, Self>, req: Resource<Request>) -> wasmtime::Result<()> {
+    fn drop(mut store: Access<U, Self>, req: Resource<Request>) -> wasmtime::Result<()> {
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-        <WasiHttp as types::HostRequestWithStore>::drop(store, req)
+        <WasiHttp as types::HostRequestWithStore<U>>::drop(store, req)
     }
 }
 
@@ -1039,7 +1040,7 @@ impl DurableHttpBodyProducer {
 
 impl<D> StreamProducer<D> for DurableHttpBodyProducer {
     type Item = u8;
-    type Buffer = Cursor<Bytes>;
+    type Buffer = Bytes;
 
     fn poll_produce<'a>(
         mut self: Pin<&mut Self>,
@@ -1079,7 +1080,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         // Hand the whole frame to the runtime; it delivers it
                         // across as many guest reads as needed and only calls
                         // us again once it is drained.
-                        dst.set_buffer(Cursor::new(bytes));
+                        dst.set_buffer(bytes);
                         return Poll::Ready(Ok(StreamResult::Completed));
                     }
                     Poll::Ready(Ok(HttpBodyChunkReply::End { ack })) => {
@@ -1723,18 +1724,18 @@ where
     }
 }
 
-impl<Ctx: WorkerCtx> types::HostResponseWithStore for DurableP3<Ctx> {
-    fn new<U>(
+impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for DurableP3<Ctx> {
+    fn new(
         mut store: Access<U, Self>,
         headers: Resource<Headers>,
         contents: Option<StreamReader<u8>>,
         trailers: FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
     ) -> wasmtime::Result<(Resource<Response>, FutureReader<Result<(), ErrorCode>>)> {
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-        <WasiHttp as types::HostResponseWithStore>::new(store, headers, contents, trailers)
+        <WasiHttp as types::HostResponseWithStore<U>>::new(store, headers, contents, trailers)
     }
 
-    fn consume_body<U>(
+    fn consume_body(
         mut store: Access<U, Self>,
         res: Resource<Response>,
         fut: FutureReader<Result<(), ErrorCode>>,
@@ -1747,7 +1748,7 @@ impl<Ctx: WorkerCtx> types::HostResponseWithStore for DurableP3<Ctx> {
         let (upstream_stream, mut upstream_trailers) = {
             let http_store =
                 Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-            <WasiHttp as types::HostResponseWithStore>::consume_body(http_store, res, fut)?
+            <WasiHttp as types::HostResponseWithStore<U>>::consume_body(http_store, res, fut)?
         };
 
         // Recover the host body producer so we can drive and record the body
@@ -1801,9 +1802,9 @@ impl<Ctx: WorkerCtx> types::HostResponseWithStore for DurableP3<Ctx> {
         Ok((stream, trailers))
     }
 
-    fn drop<U>(mut store: Access<U, Self>, res: Resource<Response>) -> wasmtime::Result<()> {
+    fn drop(mut store: Access<U, Self>, res: Resource<Response>) -> wasmtime::Result<()> {
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-        <WasiHttp as types::HostResponseWithStore>::drop(store, res)
+        <WasiHttp as types::HostResponseWithStore<U>>::drop(store, res)
     }
 }
 
@@ -2118,7 +2119,7 @@ mod tests {
             .expect("request should be pushed to the resource table");
         let drop_access =
             Access::<TestHttpCtx, WasiHttp>::new(drop_store.as_context_mut(), TestHttpCtx::http);
-        <WasiHttp as types::HostRequestWithStore>::drop(drop_access, drop_handle)
+        <WasiHttp as types::HostRequestWithStore<TestHttpCtx>>::drop(drop_access, drop_handle)
             .expect("request drop should succeed");
         let drop_transmission_result = drop_transmission.await;
         assert!(

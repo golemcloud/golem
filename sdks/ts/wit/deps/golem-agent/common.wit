@@ -3,7 +3,7 @@ package golem:agent@2.0.0;
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
     metadata-envelope, agent-id, account-id, component-id};
-  use wasi:clocks/types@0.3.0-rc-2026-03-15.{duration};
+  use wasi:clocks/types@0.3.0.{duration};
 
   enum agent-mode {
     durable,

@@ -2,7 +2,7 @@ package golem:agent@2.0.0;
 
 interface host {
     use golem:core/types@2.0.0.{component-id, uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value};
-    use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
+    use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use common.{agent-error, agent-type, registered-agent-type, typed-agent-config-value};
 
     /// Gets all the registered agent types

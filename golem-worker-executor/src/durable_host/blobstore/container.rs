@@ -646,9 +646,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HostContainerWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn list_objects<T: Send + 'static>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostContainerWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn list_objects(
+        accessor: &Accessor<U, Self>,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<StreamReader<ObjectName>, Error>> {
         let result = list_objects_durable_access(accessor, container).await?;

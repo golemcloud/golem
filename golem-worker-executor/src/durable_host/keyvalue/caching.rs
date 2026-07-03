@@ -101,9 +101,11 @@ fn push_incoming_value<Ctx: WorkerCtx>(
 
 impl<Ctx: WorkerCtx> HostFutureGetResult for DurableWorkerCtx<Ctx> {}
 
-impl<Ctx: WorkerCtx> HostFutureGetResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn drop<T>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn drop(
+        accessor: &Accessor<U, Self>,
         rep: Resource<FutureGetResult>,
     ) -> anyhow::Result<()> {
         let handle = accessor.with(|mut access| {
@@ -119,8 +121,8 @@ impl<Ctx: WorkerCtx> HostFutureGetResultWithStore for HasSelf<DurableWorkerCtx<C
         Ok(())
     }
 
-    async fn get<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn get(
+        accessor: &Accessor<U, Self>,
         self_: Resource<FutureGetResult>,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
         let (mut handle, environment_id, key, key_value_service) =
@@ -162,9 +164,11 @@ impl<Ctx: WorkerCtx> HostFutureGetResultWithStore for HasSelf<DurableWorkerCtx<C
 
 impl<Ctx: WorkerCtx> HostFutureExistsResult for DurableWorkerCtx<Ctx> {}
 
-impl<Ctx: WorkerCtx> HostFutureExistsResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn drop<T>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureExistsResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn drop(
+        accessor: &Accessor<U, Self>,
         rep: Resource<FutureExistsResult>,
     ) -> anyhow::Result<()> {
         let handle = accessor.with(|mut access| {
@@ -180,8 +184,8 @@ impl<Ctx: WorkerCtx> HostFutureExistsResultWithStore for HasSelf<DurableWorkerCt
         Ok(())
     }
 
-    async fn get<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn get(
+        accessor: &Accessor<U, Self>,
         self_: Resource<FutureExistsResult>,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
         let (mut handle, environment_id, key, key_value_service) =
@@ -225,11 +229,10 @@ impl<Ctx: WorkerCtx> HostFutureExistsResultWithStore for HasSelf<DurableWorkerCt
 
 impl<Ctx: WorkerCtx> HostFutureResult for DurableWorkerCtx<Ctx> {}
 
-impl<Ctx: WorkerCtx> HostFutureResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn drop<T>(
-        accessor: &Accessor<T, Self>,
-        rep: Resource<FutureResult>,
-    ) -> anyhow::Result<()> {
+impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn drop(accessor: &Accessor<U, Self>, rep: Resource<FutureResult>) -> anyhow::Result<()> {
         enum Handle {
             Set(CallHandle<P3KeyvalueCacheSet, Cancellable>),
             Delete(CallHandle<P3KeyvalueCacheDelete, Cancellable>),
@@ -261,8 +264,8 @@ impl<Ctx: WorkerCtx> HostFutureResultWithStore for HasSelf<DurableWorkerCtx<Ctx>
         Ok(())
     }
 
-    async fn get<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn get(
+        accessor: &Accessor<U, Self>,
         self_: Resource<FutureResult>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
         enum Action {
@@ -360,9 +363,11 @@ impl<Ctx: WorkerCtx> HostFutureResultWithStore for HasSelf<DurableWorkerCtx<Ctx>
 
 impl<Ctx: WorkerCtx> HostFutureGetOrSetResult for DurableWorkerCtx<Ctx> {}
 
-impl<Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn drop<T>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn drop(
+        accessor: &Accessor<U, Self>,
         rep: Resource<FutureGetOrSetResult>,
     ) -> anyhow::Result<()> {
         let handle = accessor.with(|mut access| {
@@ -378,8 +383,8 @@ impl<Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore for HasSelf<DurableWorker
         Ok(())
     }
 
-    async fn get<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn get(
+        accessor: &Accessor<U, Self>,
         self_: Resource<FutureGetOrSetResult>,
     ) -> anyhow::Result<Result<GetOrSetEntry, Resource<Error>>> {
         let (mut handle, environment_id, key, key_value_service) =
@@ -434,9 +439,9 @@ impl<Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore for HasSelf<DurableWorker
 
 impl<Ctx: WorkerCtx> HostVacancy for DurableWorkerCtx<Ctx> {}
 
-impl<Ctx: WorkerCtx> HostVacancyWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn vacancy_fill<T: Send>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn vacancy_fill(
+        accessor: &Accessor<U, Self>,
         self_: Resource<Vacancy>,
         ttl_ms: Option<u32>,
     ) -> anyhow::Result<Resource<OutgoingValue>> {
@@ -474,7 +479,7 @@ impl<Ctx: WorkerCtx> HostVacancyWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
         })
     }
 
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Vacancy>) -> anyhow::Result<()> {
+    async fn drop(accessor: &Accessor<U, Self>, rep: Resource<Vacancy>) -> anyhow::Result<()> {
         let entry = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache::vacancy", "drop");
@@ -512,9 +517,9 @@ impl<Ctx: WorkerCtx> HostVacancyWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
-impl<Ctx: WorkerCtx> HostWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn get<T: Send>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn get(
+        accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureGetResult>> {
         let environment_id = accessor.with(|mut access| {
@@ -538,8 +543,8 @@ impl<Ctx: WorkerCtx> HostWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
         })
     }
 
-    async fn exists<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn exists(
+        accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureExistsResult>> {
         let environment_id = accessor.with(|mut access| {
@@ -563,8 +568,8 @@ impl<Ctx: WorkerCtx> HostWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
         })
     }
 
-    async fn set<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn set(
+        accessor: &Accessor<U, Self>,
         k: Key,
         v: Resource<OutgoingValue>,
         ttl_ms: Option<u32>,
@@ -600,8 +605,8 @@ impl<Ctx: WorkerCtx> HostWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
         })
     }
 
-    async fn get_or_set<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn get_or_set(
+        accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureGetOrSetResult>> {
         let environment_id = accessor.with(|mut access| {
@@ -625,8 +630,8 @@ impl<Ctx: WorkerCtx> HostWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
         })
     }
 
-    async fn delete<T: Send>(
-        accessor: &Accessor<T, Self>,
+    async fn delete(
+        accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureResult>> {
         let environment_id = accessor.with(|mut access| {

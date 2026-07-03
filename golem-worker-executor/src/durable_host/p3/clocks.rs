@@ -139,8 +139,8 @@ impl<Ctx: WorkerCtx> monotonic_clock::Host for DurableP3View<'_, Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> monotonic_clock::HostWithStore for DurableP3<Ctx> {
-    async fn wait_until<U: Send + 'static>(
+impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for DurableP3<Ctx> {
+    async fn wait_until(
         store: &Accessor<U, Self>,
         when: monotonic_clock::Mark,
     ) -> wasmtime::Result<()> {
@@ -150,7 +150,8 @@ impl<Ctx: WorkerCtx> monotonic_clock::HostWithStore for DurableP3<Ctx> {
             DurableFunctionType::ReadLocal,
             || async {
                 let clocks = store.with_getter::<WasiClocks>(wasi_clocks_view::<Ctx, U>);
-                <WasiClocks as monotonic_clock::HostWithStore>::wait_until(&clocks, when).await?;
+                <WasiClocks as monotonic_clock::HostWithStore<U>>::wait_until(&clocks, when)
+                    .await?;
                 Ok(HostResponseP3MonotonicClockUnit {})
             },
         )
@@ -158,7 +159,7 @@ impl<Ctx: WorkerCtx> monotonic_clock::HostWithStore for DurableP3<Ctx> {
         .map(|_| ())
     }
 
-    async fn wait_for<U: Send + 'static>(
+    async fn wait_for(
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
@@ -170,7 +171,8 @@ impl<Ctx: WorkerCtx> monotonic_clock::HostWithStore for DurableP3<Ctx> {
             DurableFunctionType::ReadLocal,
             || async {
                 let clocks = store.with_getter::<WasiClocks>(wasi_clocks_view::<Ctx, U>);
-                <WasiClocks as monotonic_clock::HostWithStore>::wait_for(&clocks, how_long).await?;
+                <WasiClocks as monotonic_clock::HostWithStore<U>>::wait_for(&clocks, how_long)
+                    .await?;
                 Ok(HostResponseP3MonotonicClockUnit {})
             },
         )

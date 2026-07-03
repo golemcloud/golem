@@ -61,8 +61,8 @@ pub fn decode_typed_schema_value(
 }
 
 // Compatibility shim for the `wasi:clocks` types the Golem WIT interfaces reference
-// (`wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant}` and
-// `wasi:clocks/types@0.3.0-rc-2026-03-15.{duration}`). The `with:` remaps in every
+// (`wasi:clocks/system-clock@0.3.0.{instant}` and
+// `wasi:clocks/types@0.3.0.{duration}`). The `with:` remaps in every
 // `generate!` block point the generated bindings at these modules so the Rust
 // types come from a single source.
 
@@ -89,8 +89,8 @@ mod raw_bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
-            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
+            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
         }
     });
 }
@@ -138,8 +138,8 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
-            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
+            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -177,8 +177,8 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
-            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
+            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -220,8 +220,8 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
-            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
+            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -274,8 +274,8 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::system_clock,
-            "wasi:clocks/types@0.3.0-rc-2026-03-15": crate::wasi_clocks_compat::types,
+            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,

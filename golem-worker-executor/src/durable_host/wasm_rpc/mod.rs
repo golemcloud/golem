@@ -946,9 +946,11 @@ async fn finish_span_access<T, Ctx: WorkerCtx>(
     })
 }
 
-impl<Ctx: WorkerCtx> HostFutureInvokeResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn get<T: Send>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn get(
+        accessor: &Accessor<U, Self>,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
         let this_rep = this.rep();
@@ -1160,8 +1162,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResultWithStore for HasSelf<DurableWorkerCt
         }
     }
 
-    async fn drop<T>(
-        accessor: &Accessor<T, Self>,
+    async fn drop(
+        accessor: &Accessor<U, Self>,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<()> {
         let future_rep = this.rep();

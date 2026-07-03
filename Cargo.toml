@@ -299,9 +299,9 @@ wasm-rquickjs = { path = "../wasm-rquickjs/crates/wasm-rquickjs", features = ["o
 wasm-wave = "0.248"
 wasmparser = "0.248.0"
 wasmprinter = "0.248.0"
-wasmtime = { version = "=45.0.0", features = ["component-model", "component-model-async", "component-model-async-bytes", "anyhow"] }
-wasmtime-wasi = { version = "=45.0.0", features = ["p3"] }
-wasmtime-wasi-http = { version = "=45.0.0", features = ["p3"] }
+wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
+wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
+wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }

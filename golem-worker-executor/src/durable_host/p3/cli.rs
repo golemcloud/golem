@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Cursor;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -69,7 +68,7 @@ struct StdinStreamProducer {
 
 impl<D> StreamProducer<D> for StdinStreamProducer {
     type Item = u8;
-    type Buffer = Cursor<BytesMut>;
+    type Buffer = BytesMut;
 
     fn poll_produce<'a>(
         mut self: Pin<&mut Self>,
@@ -360,8 +359,8 @@ impl<Ctx: WorkerCtx> terminal_stderr::Host for DurableP3View<'_, Ctx> {
 
 impl<Ctx: WorkerCtx> stdin::Host for DurableP3View<'_, Ctx> {}
 
-impl<Ctx: WorkerCtx> stdin::HostWithStore for DurableP3<Ctx> {
-    async fn read_via_stream<U: Send + 'static>(
+impl<U: Send + 'static, Ctx: WorkerCtx> stdin::HostWithStore<U> for DurableP3<Ctx> {
+    async fn read_via_stream(
         accessor: &Accessor<U, Self>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), ErrorCode>>)> {
         accessor.with(|mut store| {
@@ -392,8 +391,8 @@ impl<Ctx: WorkerCtx> stdin::HostWithStore for DurableP3<Ctx> {
 
 impl<Ctx: WorkerCtx> stdout::Host for DurableP3View<'_, Ctx> {}
 
-impl<Ctx: WorkerCtx> stdout::HostWithStore for DurableP3<Ctx> {
-    async fn write_via_stream<U: Send + 'static>(
+impl<U: Send + 'static, Ctx: WorkerCtx> stdout::HostWithStore<U> for DurableP3<Ctx> {
+    async fn write_via_stream(
         accessor: &Accessor<U, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), ErrorCode>>> {
@@ -403,8 +402,8 @@ impl<Ctx: WorkerCtx> stdout::HostWithStore for DurableP3<Ctx> {
 
 impl<Ctx: WorkerCtx> stderr::Host for DurableP3View<'_, Ctx> {}
 
-impl<Ctx: WorkerCtx> stderr::HostWithStore for DurableP3<Ctx> {
-    async fn write_via_stream<U: Send + 'static>(
+impl<U: Send + 'static, Ctx: WorkerCtx> stderr::HostWithStore<U> for DurableP3<Ctx> {
+    async fn write_via_stream(
         accessor: &Accessor<U, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), ErrorCode>>> {

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Cursor;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -270,7 +269,7 @@ impl DurableTcpReceiveProducer {
 
 impl<D> StreamProducer<D> for DurableTcpReceiveProducer {
     type Item = u8;
-    type Buffer = Cursor<Bytes>;
+    type Buffer = Bytes;
 
     fn poll_produce<'a>(
         mut self: Pin<&mut Self>,
@@ -301,7 +300,7 @@ impl<D> StreamProducer<D> for DurableTcpReceiveProducer {
                         if bytes.is_empty() {
                             continue;
                         }
-                        dst.set_buffer(Cursor::new(bytes));
+                        dst.set_buffer(bytes);
                         return Poll::Ready(Ok(StreamResult::Completed));
                     }
                     Poll::Ready(Ok(TcpReceiveReply::End { ack })) => {
@@ -791,7 +790,7 @@ where
     let stream = accessor.with(|mut store| StreamReader::new(&mut store, contents))?;
     let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
     let future =
-        <WasiSockets as types::HostTcpSocketWithStore>::send(&sockets, socket, stream).await?;
+        <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, stream).await?;
     let (result_tx, result_rx) = oneshot::channel();
     accessor.with(|mut store| future.pipe(&mut store, TcpSocketResultConsumer::new(result_tx)))?;
     Ok(result_rx
@@ -908,7 +907,7 @@ where
     let mut socket_result_rx: Option<oneshot::Receiver<Result<(), types::ErrorCode>>> = None;
     if parent.is_live() {
         let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        match <WasiSockets as types::HostTcpSocketWithStore>::receive(&sockets, socket).await {
+        match <WasiSockets as types::HostTcpSocketWithStore<U>>::receive(&sockets, socket).await {
             Ok((stream, result_future)) => {
                 let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<u8>>(1);
                 let (demand_permit_tx, demand_permit_rx) = mpsc::unbounded_channel::<()>();
@@ -1348,27 +1347,27 @@ where
     Ok(deserialize_tcp_stream_result(response.result))
 }
 
-impl<Ctx: WorkerCtx> types::HostTcpSocketWithStore for DurableP3<Ctx> {
-    async fn connect<U: Send>(
+impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for DurableP3<Ctx> {
+    async fn connect(
         store: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
         remote_address: types::IpSocketAddress,
     ) -> SocketResult<()> {
         let store = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore>::connect(&store, socket, remote_address)
+        <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(&store, socket, remote_address)
             .await
     }
 
-    fn listen<U: 'static>(
+    fn listen(
         mut store: Access<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<StreamReader<Resource<TcpSocket>>> {
         let store =
             Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore>::listen(store, socket)
+        <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket)
     }
 
-    async fn send<U: Send + 'static>(
+    async fn send(
         accessor: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
         mut data: StreamReader<u8>,
@@ -1402,7 +1401,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocketWithStore for DurableP3<Ctx> {
             // transmission result is persisted (no bytes in the oplog).
             let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
             let socket_result_future =
-                <WasiSockets as types::HostTcpSocketWithStore>::send(&sockets, socket, data)
+                <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, data)
                     .await?;
             let (socket_result_tx, socket_result_rx) = oneshot::channel();
             accessor.with(|mut store| {
@@ -1429,7 +1428,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocketWithStore for DurableP3<Ctx> {
         }
     }
 
-    async fn receive<U: Send + 'static>(
+    async fn receive(
         accessor: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
@@ -1578,8 +1577,8 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> types::HostUdpSocketWithStore for DurableP3<Ctx> {
-    async fn send<U: Send>(
+impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for DurableP3<Ctx> {
+    async fn send(
         store: &Accessor<U, Self>,
         socket: Resource<UdpSocket>,
         data: Vec<u8>,
@@ -1594,7 +1593,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocketWithStore for DurableP3<Ctx> {
             DurableFunctionType::WriteRemoteBatched(None),
             || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                let result = <WasiSockets as types::HostUdpSocketWithStore>::send(
+                let result = <WasiSockets as types::HostUdpSocketWithStore<U>>::send(
                     &sockets,
                     socket,
                     data,
@@ -1619,7 +1618,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocketWithStore for DurableP3<Ctx> {
         }
     }
 
-    async fn receive<U: Send>(
+    async fn receive(
         store: &Accessor<U, Self>,
         socket: Resource<UdpSocket>,
     ) -> SocketResult<(Vec<u8>, types::IpSocketAddress)> {
@@ -1630,7 +1629,8 @@ impl<Ctx: WorkerCtx> types::HostUdpSocketWithStore for DurableP3<Ctx> {
             || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
                 let result =
-                    <WasiSockets as types::HostUdpSocketWithStore>::receive(&sockets, socket).await;
+                    <WasiSockets as types::HostUdpSocketWithStore<U>>::receive(&sockets, socket)
+                        .await;
 
                 Ok(HostResponseP3SocketsUdpReceive {
                     result: match result {
@@ -1658,8 +1658,8 @@ impl<Ctx: WorkerCtx> types::HostUdpSocketWithStore for DurableP3<Ctx> {
 
 impl<Ctx: WorkerCtx> ip_name_lookup::Host for DurableP3View<'_, Ctx> {}
 
-impl<Ctx: WorkerCtx> ip_name_lookup::HostWithStore for DurableP3<Ctx> {
-    async fn resolve_addresses<U: Send + 'static>(
+impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for DurableP3<Ctx> {
+    async fn resolve_addresses(
         store: &Accessor<U, Self>,
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
@@ -1669,7 +1669,7 @@ impl<Ctx: WorkerCtx> ip_name_lookup::HostWithStore for DurableP3<Ctx> {
             DurableFunctionType::ReadRemote,
             || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                let result = <WasiSockets as ip_name_lookup::HostWithStore>::resolve_addresses(
+                let result = <WasiSockets as ip_name_lookup::HostWithStore<U>>::resolve_addresses(
                     &sockets,
                     name.clone(),
                 )

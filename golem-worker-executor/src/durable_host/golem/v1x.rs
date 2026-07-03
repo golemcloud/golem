@@ -1214,9 +1214,11 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HostGetPromiseResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn get<T: Send>(
-        accessor: &Accessor<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn get(
+        accessor: &Accessor<U, Self>,
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Vec<u8>> {
         let resource_rep = resource.rep();

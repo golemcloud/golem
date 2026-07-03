@@ -62,7 +62,7 @@ impl DeferredIncomingValueStreamProducer {
 
 impl<D> StreamProducer<D> for DeferredIncomingValueStreamProducer {
     type Item = u8;
-    type Buffer = Cursor<BytesMut>;
+    type Buffer = BytesMut;
 
     fn poll_produce<'a>(
         mut self: Pin<&mut Self>,
@@ -237,9 +237,11 @@ impl<D> StreamConsumer<D> for OutgoingValueWriteConsumer {
     }
 }
 
-impl<Ctx: WorkerCtx> HostOutgoingValueWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    fn outgoing_value_write_body<T>(
-        mut host: Access<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostOutgoingValueWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    fn outgoing_value_write_body(
+        mut host: Access<U, Self>,
         self_: Resource<OutgoingValueEntry>,
         data: StreamReader<u8>,
     ) -> anyhow::Result<Result<(), ()>> {
@@ -300,9 +302,11 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HostIncomingValueWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
-    fn incoming_value_consume_async<T>(
-        mut host: Access<T, Self>,
+impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    fn incoming_value_consume_async(
+        mut host: Access<U, Self>,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<StreamReader<u8>, Error>> {
         let contents = {

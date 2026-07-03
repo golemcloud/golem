@@ -6,7 +6,7 @@ package golem:quota@1.5.0;
 /// reserve / commit actual usage.
 interface types {
     use golem:api/host@1.5.0.{environment-id};
-    use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
+    use wasi:clocks/system-clock@0.3.0.{instant as datetime};
 
     /// Error returned when a reservation cannot be satisfied because the
     /// resource's enforcement policy is `reject`.

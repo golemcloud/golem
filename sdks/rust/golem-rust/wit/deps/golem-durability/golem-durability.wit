@@ -3,7 +3,7 @@ package golem:durability@1.5.0;
 interface durability {
     use golem:api/host@1.5.0.{persistence-level};
     use golem:api/oplog@1.5.0.{oplog-index, wrapped-function-type};
-    use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
+    use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use golem:core/types@2.0.0.{typed-schema-value};
 
     type durable-function-type = wrapped-function-type;
