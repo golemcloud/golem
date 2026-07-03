@@ -6,6 +6,7 @@ use wasi::sockets::ip_name_lookup::resolve_addresses;
 pub trait Networking {
     fn new(name: String) -> Self;
     fn get(&self) -> Vec<String>;
+    async fn resolve_p3(&self, name: String) -> Result<Vec<String>, String>;
 }
 
 pub struct NetworkingImpl {
@@ -36,5 +37,17 @@ impl Networking for NetworkingImpl {
             }
         }
         result
+    }
+
+    async fn resolve_p3(&self, name: String) -> Result<Vec<String>, String> {
+        golem_rust::wasip3::sockets::ip_name_lookup::resolve_addresses(name)
+            .await
+            .map(|addresses| {
+                addresses
+                    .into_iter()
+                    .map(|address| format!("{address:?}"))
+                    .collect()
+            })
+            .map_err(|error| format!("{error:?}"))
     }
 }

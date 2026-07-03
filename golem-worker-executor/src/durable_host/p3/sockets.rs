@@ -18,13 +18,16 @@ use std::task::{Context, Poll};
 
 use crate::durable_host::TcpSocketStreamDirection;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
-use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
+use crate::durable_host::durability::{
+    ClassifiedHostError, DurableCallTrapContext, HostFailureKind, mark_durable_call_trap_context,
+};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_read_access, wasi_sockets_view,
+    observe_function_call_store, run_read_access, run_read_access_classified, wasi_sockets_view,
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
+use golem_common::model::RetryContext;
 use golem_common::model::oplog::host_functions::{
     P3SocketsIpNameLookupResolveAddresses, P3SocketsTypesTcpSocketReceive,
     P3SocketsTypesTcpSocketReceiveAcquire, P3SocketsTypesTcpSocketReceiveChunk,
@@ -32,8 +35,8 @@ use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
 };
 use golem_common::model::oplog::types::{
-    SerializableP3IpAddresses, SerializableP3SocketErrorCode, SerializableP3TcpChunk,
-    SerializableP3UdpDatagram,
+    SerializableP3IpAddresses, SerializableP3IpNameLookupError, SerializableP3SocketErrorCode,
+    SerializableP3TcpChunk, SerializableP3UdpDatagram,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostRequestP3SocketsResolveName,
@@ -1789,31 +1792,66 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         store: &Accessor<U, Self>,
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
-        let response = run_read_access::<_, _, Ctx, P3SocketsIpNameLookupResolveAddresses, _, _>(
-            store,
-            HostRequestP3SocketsResolveName { name: name.clone() },
-            DurableFunctionType::ReadRemote,
-            || async {
-                let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                let result = <WasiSockets as ip_name_lookup::HostWithStore<U>>::resolve_addresses(
-                    &sockets,
-                    name.clone(),
-                )
-                .await?;
+        // Worker-level retry classification, mirroring the P2 `resolve_addresses` path: a
+        // transient resolver failure raises a retry trap (the worker goes to `Retrying` per its
+        // retry policy and re-executes the lookup from the abandoned `Start` on replay) instead
+        // of surfacing as a guest-visible error value. Permanent failures — and transient ones
+        // whose retry budget is exhausted — are recorded and returned to the guest, which is also
+        // what a recorded error replays as.
+        let response =
+            run_read_access_classified::<_, _, Ctx, P3SocketsIpNameLookupResolveAddresses, _, _>(
+                store,
+                HostRequestP3SocketsResolveName { name: name.clone() },
+                DurableFunctionType::ReadRemote,
+                |response| {
+                    response
+                        .result
+                        .as_ref()
+                        .err()
+                        .map(|error| ClassifiedHostError {
+                            kind: classify_p3_ip_name_lookup_error(error),
+                            message: format!("DNS resolution of '{name}' failed: {error:?}"),
+                        })
+                },
+                RetryContext::dns(&name),
+                || async {
+                    let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                    let result =
+                        <WasiSockets as ip_name_lookup::HostWithStore<U>>::resolve_addresses(
+                            &sockets,
+                            name.clone(),
+                        )
+                        .await?;
 
-                Ok(HostResponseP3SocketsResolveName {
-                    result: result
-                        .map(SerializableP3IpAddresses::from)
-                        .map_err(Into::into),
-                })
-            },
-        )
-        .await?;
+                    Ok(HostResponseP3SocketsResolveName {
+                        result: result
+                            .map(SerializableP3IpAddresses::from)
+                            .map_err(Into::into),
+                    })
+                },
+            )
+            .await?;
 
         Ok(response
             .result
             .map(Vec::<types::IpAddress>::from)
             .map_err(Into::into))
+    }
+}
+
+/// Classifies P3 DNS lookup failures for worker-level retry, mirroring the P2
+/// `resolve_addresses` classification: resolver failures that cannot succeed on a retry
+/// (`NameUnresolvable`, `PermanentResolverFailure`, `AccessDenied`) are permanent, everything
+/// else is transient. Unlike P2's generic network error code, the P3 lookup error also carries
+/// `InvalidArgument` (an unparseable name), which is deterministic and therefore also permanent.
+fn classify_p3_ip_name_lookup_error(error: &SerializableP3IpNameLookupError) -> HostFailureKind {
+    match error {
+        SerializableP3IpNameLookupError::AccessDenied
+        | SerializableP3IpNameLookupError::InvalidArgument
+        | SerializableP3IpNameLookupError::NameUnresolvable
+        | SerializableP3IpNameLookupError::PermanentResolverFailure => HostFailureKind::Permanent,
+        SerializableP3IpNameLookupError::TemporaryResolverFailure
+        | SerializableP3IpNameLookupError::Other(_) => HostFailureKind::Transient,
     }
 }
 
@@ -1851,6 +1889,48 @@ mod tests {
         );
         assert_p3_ip_name_lookup_error_roundtrip(
             ip_name_lookup::ErrorCode::PermanentResolverFailure,
+        );
+    }
+
+    /// Transient resolver failures must route through the worker-level retry machinery instead
+    /// of surfacing as guest-visible error values; failures that cannot succeed on a retry must
+    /// be persisted and returned to the guest (mirroring the P2 `resolve_addresses`
+    /// classification).
+    #[test]
+    fn p3_ip_name_lookup_error_classification_matches_p2_semantics() {
+        assert_eq!(
+            classify_p3_ip_name_lookup_error(&SerializableP3IpNameLookupError::AccessDenied),
+            HostFailureKind::Permanent
+        );
+        assert_eq!(
+            classify_p3_ip_name_lookup_error(&SerializableP3IpNameLookupError::InvalidArgument),
+            HostFailureKind::Permanent
+        );
+        assert_eq!(
+            classify_p3_ip_name_lookup_error(&SerializableP3IpNameLookupError::NameUnresolvable),
+            HostFailureKind::Permanent
+        );
+        assert_eq!(
+            classify_p3_ip_name_lookup_error(
+                &SerializableP3IpNameLookupError::PermanentResolverFailure
+            ),
+            HostFailureKind::Permanent
+        );
+        assert_eq!(
+            classify_p3_ip_name_lookup_error(
+                &SerializableP3IpNameLookupError::TemporaryResolverFailure
+            ),
+            HostFailureKind::Transient
+        );
+        assert_eq!(
+            classify_p3_ip_name_lookup_error(&SerializableP3IpNameLookupError::Other(Some(
+                "resolver said maybe later".to_string()
+            ))),
+            HostFailureKind::Transient
+        );
+        assert_eq!(
+            classify_p3_ip_name_lookup_error(&SerializableP3IpNameLookupError::Other(None)),
+            HostFailureKind::Transient
         );
     }
 

@@ -3058,6 +3058,150 @@ async fn ip_address_resolve(
 
 #[test]
 #[tracing::instrument]
+async fn p3_ip_address_resolve(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result1 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "resolve_p3",
+            data_value!("golem.cloud"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    // If the recovery succeeds, the replayed P3 DNS resolution produced the same recorded result
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "resolve_p3",
+            data_value!("golem.cloud"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the
+    // same order) but we can expect that it could resolve golem.cloud to at least one address.
+    let SchemaValue::Result(ResultValuePayload::Ok {
+        value: Some(entries1),
+    }) = &result1
+    else {
+        panic!("expected successful resolution, got {:?}", result1)
+    };
+    let SchemaValue::Result(ResultValuePayload::Ok {
+        value: Some(entries2),
+    }) = &result2
+    else {
+        panic!("expected successful resolution, got {:?}", result2)
+    };
+    let SchemaValue::List { elements: entries1 } = entries1.as_ref() else {
+        panic!("expected list, got {:?}", entries1)
+    };
+    let SchemaValue::List { elements: entries2 } = entries2.as_ref() else {
+        panic!("expected list, got {:?}", entries2)
+    };
+    assert!(!entries1.is_empty());
+    assert!(!entries2.is_empty());
+
+    Ok(())
+}
+
+/// A permanently failing P3 DNS lookup (`NameUnresolvable`) must surface to the guest as an error
+/// value without routing through the worker-level retry machinery: the invocation succeeds, the
+/// guest observes the error, and the oplog contains no `Error` (retry) entries. The transient
+/// side of the classification (`TemporaryResolverFailure` / `Other` raising a retry trap) cannot
+/// be induced end-to-end because the underlying resolver maps every lookup failure to
+/// `NameUnresolvable`; it is covered by the classification unit tests in
+/// `durable_host::p3::sockets`.
+#[test]
+#[tracing::instrument]
+async fn p3_ip_address_resolve_permanent_failure_is_guest_visible_without_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-failure-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "resolve_p3",
+            data_value!("this-name-does-not-exist.golem-test.invalid"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let SchemaValue::Result(ResultValuePayload::Err { value: Some(error) }) = &result else {
+        panic!("expected guest-visible resolution error, got {:?}", result)
+    };
+    let SchemaValue::String(error) = error.as_ref() else {
+        panic!("expected error message string, got {:?}", error)
+    };
+    assert!(
+        error.contains("NameUnresolvable"),
+        "expected NameUnresolvable, got {error}"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let retry_errors = oplog
+        .iter()
+        .filter(|e| matches!(e.entry, PublicOplogEntry::Error(_)))
+        .count();
+    assert_eq!(
+        retry_errors, 0,
+        "a permanent DNS failure must not trigger worker-level retries"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn wasi_config_initial_worker_config(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -38,8 +38,9 @@ use std::marker::PhantomData;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
-use crate::durable_host::durability::DurabilityHost;
+use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::RetryProperties;
 use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
 use wasmtime::component::{HasData, Linker};
 
@@ -113,10 +114,61 @@ fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
     observe_function_call(expect_ctx::<Ctx, U>(u), interface, function);
 }
 
+/// Drives the live / replay / incomplete-replay flow for a re-executable durable p3 accessor
+/// call whose response never carries a guest-visible error value (or whose errors must never be
+/// retried by the host).
+///
+/// Durable p3 host wrappers surface failures in two ways: traps, which escape via
+/// [`CallHandle::trap`] and are classified by the trap-recovery machinery; and error *values*
+/// recorded in the response payload and returned to the guest (`wasi:sockets` error codes,
+/// `wasi:http` error codes, ...). Error values bypass trap classification entirely — the guest
+/// unwraps them and the worker fails deterministically — so any wrapper whose response payload
+/// carries such an error value must use [`run_read_access_classified`] instead and classify it
+/// as retryable-via-host vs guest-visible.
 async fn run_read_access<T, D, Ctx, Pair, F, Fut>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
+    live: F,
+) -> wasmtime::Result<Pair::Resp>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
+{
+    run_read_access_classified::<T, D, Ctx, Pair, F, Fut>(
+        store,
+        request,
+        function_type,
+        |_| None,
+        RetryProperties::new(),
+        live,
+    )
+    .await
+}
+
+/// Like [`run_read_access`], but classifies a guest-visible error *value* carried in the live
+/// response payload before it is persisted, routing transient failures through the worker-level
+/// retry machinery ([`CallHandle::try_trigger_retry_access`]) instead of returning them to the
+/// guest.
+///
+/// `classify` inspects the response about to be persisted: it returns `None` for a success and
+/// the failure classification (kind + message) for an error value. When the failure is transient
+/// and the worker's retry policy allows another attempt, the call raises a retry trap — the
+/// worker goes to `Retrying` and re-executes this call from its incomplete `Start` on replay —
+/// so the guest never observes the error. Permanent failures, and transient ones whose retry
+/// budget is exhausted, are persisted and returned to the guest as before. Recorded failures
+/// replay deterministically to the guest without re-classification (`classify` only runs on the
+/// live path, including incomplete-replay re-execution).
+async fn run_read_access_classified<T, D, Ctx, Pair, F, Fut>(
+    store: &wasmtime::component::Accessor<T, D>,
+    request: Pair::Req,
+    function_type: DurableFunctionType,
+    classify: impl Fn(&Pair::Resp) -> Option<ClassifiedHostError>,
+    retry_properties: RetryProperties,
     live: F,
 ) -> wasmtime::Result<Pair::Resp>
 where
@@ -156,6 +208,21 @@ where
             return Err(wasmtime::Error::from_anyhow(handle.trap(err)));
         }
     };
+
+    if let Some(classified) = classify(&response) {
+        let kind = classified.kind;
+        let for_retry: Result<(), ClassifiedHostError> = Err(classified);
+        handle
+            .try_trigger_retry_access(
+                store,
+                durable_worker_ctx::<Ctx, T>,
+                &for_retry,
+                |_| kind,
+                retry_properties,
+            )
+            .await
+            .map_err(wasmtime::Error::from_anyhow)?;
+    }
 
     handle
         .complete_access(store, durable_worker_ctx::<Ctx, T>, response)
