@@ -20,6 +20,7 @@ pub use implementation::tool_implementation_impl;
 pub use tool_error::derive_tool_error_impl;
 
 mod arg;
+mod client;
 mod command;
 mod constraint;
 mod definition;

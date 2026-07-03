@@ -597,6 +597,7 @@ fn validate_effective_surface_derivation(
 ) -> Result<(), PermissionShareError> {
     effective_surface
         .validates_derivation(&parsed.lower_positive, &parsed.upper_positive)
+        .map(|_| ())
         .map_err(derivation_error)
 }
 

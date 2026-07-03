@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{FunctionOutputInfo, is_static_method};
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
+use crate::rpc_client_common::{
+    FunctionOutputInfo, collect_kept_args, collect_typed_params, decode_result_value,
+    encode_value_only_carrier, find_generic_param_in_inputs, find_generic_param_in_return,
+    is_principal_param, is_static_method, positional_record_schema_value,
+};
 use quote::{format_ident, quote};
-use syn::spanned::Spanned;
-use syn::{FnArg, ItemTrait, Type};
+use syn::ItemTrait;
 
 pub fn get_remote_client(
     item_trait: &ItemTrait,
@@ -292,13 +295,10 @@ mod tests {
 fn generate_constructor_data_value_params_encoding(
     param_idents: &[proc_macro2::Ident],
 ) -> proc_macro2::TokenStream {
+    let constructor_record =
+        positional_record_schema_value(param_idents, "Failed to convert constructor parameter");
     quote! {
-        let constructor_value = golem_rust::SchemaValue::Record {
-            fields: vec![
-                #(<_ as golem_rust::agentic::Schema>::to_schema_value(#param_idents)
-                    .expect("Failed to convert constructor parameter")),*
-            ],
-        };
+        let constructor_value = #constructor_record;
         golem_rust::agentic::__reject_quota_tokens_in_agent_constructor(&constructor_value)
             .unwrap_or_else(|err| panic!("Invalid agent constructor parameters: {err}"));
     }
@@ -320,17 +320,28 @@ fn get_remote_agent_methods_info(
                 return None;
             }
 
-            if let Err(ts) = validate_return_type(&method.sig, type_parameter_names) {
-                return Some(ts);
+            if let Some(violation) = find_generic_param_in_return(&method.sig, type_parameter_names)
+            {
+                return Some(generic_type_in_agent_return_type_error(
+                    violation.span,
+                    &violation.type_name,
+                ));
             }
 
-            if let Err(ts) = validate_input_types(&method.sig, type_parameter_names) {
-                return Some(ts);
+            if let Some(violation) = find_generic_param_in_inputs(&method.sig, type_parameter_names)
+            {
+                return Some(generic_type_in_agent_method_error(
+                    violation.span,
+                    &violation.type_name,
+                ));
             }
 
-            let input_defs = collect_input_defs_without_principal(&method.sig);
-            let input_idents = collect_input_idents_without_principal(&method.sig);
-            let input_types = collect_input_types_without_principal(&method.sig);
+            let keep = |pat_type: &syn::PatType| !is_principal_param(pat_type);
+            let input_defs = collect_kept_args(&method.sig, keep);
+            let input_idents: Vec<syn::Ident> = collect_typed_params(&method.sig, keep)
+                .into_iter()
+                .map(|param| param.ident)
+                .collect();
 
             let method_name = &method.sig.ident;
             let trigger_name = format_ident!("trigger_{}", method_name);
@@ -351,7 +362,6 @@ fn get_remote_agent_methods_info(
                 &schedule_cancelable_name,
                 &input_defs,
                 &input_idents,
-                &input_types,
                 &method.sig,
             ))
         })
@@ -369,135 +379,6 @@ fn extract_method(item: &syn::TraitItem) -> Option<&syn::TraitItemFn> {
     }
 }
 
-fn validate_return_type(
-    sig: &syn::Signature,
-    type_params: &[String],
-) -> Result<(), proc_macro2::TokenStream> {
-    if let syn::ReturnType::Type(_, ty) = &sig.output
-        && let syn::Type::Path(path) = &**ty
-    {
-        let ident = &path.path.segments.last().unwrap().ident;
-
-        if ident == "Self" {
-            return Ok(()); // skip Self, still valid
-        }
-
-        if type_params.contains(&ident.to_string()) {
-            return Err(generic_type_in_agent_return_type_error(
-                sig.ident.span(),
-                &ident.to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_input_types(
-    sig: &syn::Signature,
-    type_params: &[String],
-) -> Result<(), proc_macro2::TokenStream> {
-    for fn_arg in &sig.inputs {
-        if let FnArg::Typed(pat_type) = fn_arg
-            && let Type::Path(type_path) = &*pat_type.ty
-        {
-            let type_name = type_path.path.segments.last().unwrap().ident.to_string();
-            if type_params.contains(&type_name) {
-                return Err(generic_type_in_agent_method_error(
-                    pat_type.ty.span(),
-                    &type_name,
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn collect_input_defs_without_principal(sig: &syn::Signature) -> Vec<&syn::FnArg> {
-    sig.inputs.iter().filter(|arg| match arg {
-        FnArg::Receiver(_) => true,
-        FnArg::Typed(pat_type) => !matches!(
-            &*pat_type.ty,
-            Type::Path(type_path) if type_path.path.segments.last().map(|s| s.ident == "Principal").unwrap_or(false)
-        ),
-    }).collect()
-}
-
-fn collect_input_idents_without_principal(sig: &syn::Signature) -> Vec<syn::Ident> {
-    sig.inputs
-        .iter()
-        .filter_map(|arg| {
-            if let FnArg::Typed(pat_type) = arg
-                && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
-            {
-                if let Type::Path(type_path) = &*pat_type.ty
-                    && type_path
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|seg| seg.ident == "Principal")
-                {
-                    return None;
-                }
-                return Some(pat_ident.ident.clone());
-            }
-            None
-        })
-        .collect()
-}
-
-fn collect_input_types_without_principal(sig: &syn::Signature) -> Vec<syn::Type> {
-    sig.inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            FnArg::Typed(pat_type) => {
-                if let Type::Path(type_path) = &*pat_type.ty
-                    && type_path
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|seg| seg.ident == "Principal")
-                {
-                    None
-                } else {
-                    Some((*pat_type.ty).clone())
-                }
-            }
-            FnArg::Receiver(_) => None,
-        })
-        .collect()
-}
-
-fn generate_input_encoding(
-    input_idents: &[syn::Ident],
-    input_types: &[syn::Type],
-) -> proc_macro2::TokenStream {
-    match (input_idents, input_types) {
-        ([], []) => quote! {
-            let input = golem_rust::encode_schema_value(&golem_rust::SchemaValue::Record {
-                fields: vec![],
-            })
-            .expect("Failed to encode parameters");
-        },
-        ([ident], [ty]) => quote! {
-            let __input_value = <#ty as golem_rust::agentic::Schema>::to_schema_value(#ident)
-                .expect("Failed to encode parameter");
-            let input = golem_rust::encode_schema_value(&golem_rust::SchemaValue::Record {
-                fields: vec![__input_value],
-            })
-            .expect("Failed to encode parameters");
-        },
-        _ => quote! {
-            let input = golem_rust::encode_schema_value(&golem_rust::SchemaValue::Record {
-                fields: vec![
-                    #(<_ as golem_rust::agentic::Schema>::to_schema_value(#input_idents)
-                        .expect("Failed to encode parameter")),*
-                ],
-            })
-            .expect("Failed to encode parameters");
-        },
-    }
-}
-
 fn generate_method_code(
     method_name: &syn::Ident,
     trigger_name: &syn::Ident,
@@ -505,7 +386,6 @@ fn generate_method_code(
     schedule_cancelable_name: &syn::Ident,
     input_defs: &[&syn::FnArg],
     input_idents: &[syn::Ident],
-    input_types: &[syn::Type],
     sig: &syn::Signature,
 ) -> proc_macro2::TokenStream {
     let remote_method_name = method_name.to_string();
@@ -516,20 +396,16 @@ fn generate_method_code(
         syn::ReturnType::Default => quote! { () },
     };
     let process_invoke_result = match &sig.output {
-        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => {
-            quote! {
-                let output_schema = <#ty as golem_rust::agentic::Schema>::get_type();
-                <#ty as golem_rust::agentic::Schema>::from_schema_value(
-                    rpc_result_ok.expect("remote method returned no value"),
-                    output_schema
-                )
-                    .expect("Failed to deserialize rpc result to return type")
-            }
-        }
+        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => decode_result_value(
+            ty,
+            quote! { rpc_result_ok.expect("remote method returned no value") },
+        ),
         _ => quote! {},
     };
 
-    let encode_input = generate_input_encoding(input_idents, input_types);
+    let input_record = positional_record_schema_value(input_idents, "Failed to encode parameter");
+    let encoded_input = encode_value_only_carrier(input_record);
+    let encode_input = quote! { let input = #encoded_input; };
 
     quote! {
         pub async fn #method_name(#(#input_defs),*) -> #return_type {

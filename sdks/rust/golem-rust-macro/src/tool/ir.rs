@@ -50,6 +50,8 @@ pub struct CommandIr {
     pub annotations: Option<CommandAnnotationsIr>,
     /// `#[command(subtree = path::To::Trait)]`, if this method grafts a subtree.
     pub subtree: Option<SubtreeIr>,
+    /// Whether the trait method is async; generated guest dispatch blocks on async methods.
+    pub is_async: bool,
     /// Typed method parameters, in declaration order (the `&self` receiver is
     /// excluded). Metadata synthesis projects these onto positionals/options/flags/streams
     /// using each parameter's Rust type.
@@ -304,8 +306,9 @@ pub struct ToolErrorVariantIr {
     pub doc: DocIr,
     pub kind: ErrorKindIr,
     pub exit_code: u8,
-    /// Payload schema source: unit variants carry no payload, single-field
-    /// variants carry the field's type (resolved to a `SchemaType` during metadata synthesis).
+    /// Payload schema source: unit and zero-field variants carry no payload,
+    /// single-field variants carry the field's type (resolved to a `SchemaType`
+    /// during metadata synthesis).
     pub payload: ToolErrorPayloadIr,
 }
 
@@ -314,6 +317,18 @@ pub struct ToolErrorVariantIr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum ToolErrorPayloadIr {
-    None,
-    Single { ty: Type },
+    None {
+        style: ToolErrorNoPayloadStyleIr,
+    },
+    Single {
+        ty: Type,
+        field_ident: Option<Ident>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolErrorNoPayloadStyleIr {
+    Unit,
+    Tuple,
+    Struct,
 }

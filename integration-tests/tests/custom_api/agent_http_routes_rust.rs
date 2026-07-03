@@ -20,13 +20,20 @@ use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use reqwest::Url;
 use serde_json::json;
-use test_r::test_dep;
+use test_r::{define_matrix_dimension, test_dep};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("postgres")]
+    EnvBasedTestDependencies
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite")]
+    EnvBasedTestDependencies
+);
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,
         vec![
@@ -50,9 +57,30 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     .unwrap()
 }
 
+#[test_dep(scope = PerWorker)]
+async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "postgres")]
+async fn test_context_postgres(
+    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
+async fn test_context_sqlite(
+    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
+
 #[test]
 #[tracing::instrument]
-async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn string_path_var(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -73,7 +101,7 @@ async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn multi_path_vars(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn multi_path_vars(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -95,7 +123,7 @@ async fn multi_path_vars(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn remaining_path_variable(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn remaining_path_variable(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -122,7 +150,7 @@ async fn remaining_path_variable(agent: &HttpTestContext) -> anyhow::Result<()> 
 
 #[test]
 #[tracing::instrument]
-async fn remaining_path_missing(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn remaining_path_missing(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/http-agents/test-agent/rest")?)
@@ -135,7 +163,7 @@ async fn remaining_path_missing(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn path_and_query(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn path_and_query(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -163,7 +191,7 @@ async fn path_and_query(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn path_and_header(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn path_and_header(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -192,7 +220,7 @@ async fn path_and_header(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn json_body(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn json_body(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -218,7 +246,7 @@ async fn json_body(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn json_body_missing_field(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn json_body_missing_field(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -238,7 +266,7 @@ async fn json_body_missing_field(agent: &HttpTestContext) -> anyhow::Result<()> 
 
 #[test]
 #[tracing::instrument]
-async fn json_body_wrong_type(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn json_body_wrong_type(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -259,7 +287,9 @@ async fn json_body_wrong_type(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn unrestricted_unstructured_binary_inline(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn unrestricted_unstructured_binary_inline(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -284,7 +314,7 @@ async fn unrestricted_unstructured_binary_inline(agent: &HttpTestContext) -> any
 #[test]
 #[tracing::instrument]
 async fn unrestricted_unstructured_binary_missing_body(
-    agent: &HttpTestContext,
+    #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
         .client
@@ -308,7 +338,7 @@ async fn unrestricted_unstructured_binary_missing_body(
 #[test]
 #[tracing::instrument]
 async fn unrestricted_unstructured_binary_json_content_type(
-    agent: &HttpTestContext,
+    #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
         .client
@@ -332,7 +362,9 @@ async fn unrestricted_unstructured_binary_json_content_type(
 
 #[test]
 #[tracing::instrument]
-async fn restricted_unstructured_binary_inline(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn restricted_unstructured_binary_inline(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -357,7 +389,7 @@ async fn restricted_unstructured_binary_inline(agent: &HttpTestContext) -> anyho
 #[test]
 #[tracing::instrument]
 async fn restricted_unstructured_binary_missing_body(
-    agent: &HttpTestContext,
+    #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
         .client
@@ -381,7 +413,7 @@ async fn restricted_unstructured_binary_missing_body(
 #[test]
 #[tracing::instrument]
 async fn restricted_unstructured_binary_unsupported_mime_type(
-    agent: &HttpTestContext,
+    #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
         .client
@@ -401,7 +433,7 @@ async fn restricted_unstructured_binary_unsupported_mime_type(
 
 #[test]
 #[tracing::instrument]
-async fn response_no_content(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_no_content(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -420,7 +452,7 @@ async fn response_no_content(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn response_json(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_json(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/http-agents/test-agent/resp/json")?)
@@ -438,7 +470,7 @@ async fn response_json(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn response_optional_found(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_optional_found(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -460,7 +492,9 @@ async fn response_optional_found(agent: &HttpTestContext) -> anyhow::Result<()> 
 
 #[test]
 #[tracing::instrument]
-async fn response_optional_not_found(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_optional_not_found(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -479,7 +513,7 @@ async fn response_optional_not_found(agent: &HttpTestContext) -> anyhow::Result<
 
 #[test]
 #[tracing::instrument]
-async fn response_result_ok(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_result_ok(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -501,7 +535,7 @@ async fn response_result_ok(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn response_result_err(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_result_err(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -526,7 +560,7 @@ async fn response_result_err(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn response_result_void_err(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_result_void_err(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .post(
@@ -551,7 +585,7 @@ async fn response_result_void_err(agent: &HttpTestContext) -> anyhow::Result<()>
 
 #[test]
 #[tracing::instrument]
-async fn response_result_json_void(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_result_json_void(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -573,7 +607,7 @@ async fn response_result_json_void(agent: &HttpTestContext) -> anyhow::Result<()
 
 #[test]
 #[tracing::instrument]
-async fn response_binary(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn response_binary(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/http-agents/test-agent/resp/binary")?)
@@ -597,7 +631,7 @@ async fn response_binary(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn negative_missing_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn negative_missing_path_var(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     // second path variable missing
     let response = agent
         .client
@@ -615,7 +649,9 @@ async fn negative_missing_path_var(agent: &HttpTestContext) -> anyhow::Result<()
 
 #[test]
 #[tracing::instrument]
-async fn negative_extra_path_segment(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn negative_extra_path_segment(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -632,7 +668,9 @@ async fn negative_extra_path_segment(agent: &HttpTestContext) -> anyhow::Result<
 
 #[test]
 #[tracing::instrument]
-async fn negative_missing_query_param(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn negative_missing_query_param(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -649,7 +687,9 @@ async fn negative_missing_query_param(agent: &HttpTestContext) -> anyhow::Result
 
 #[test]
 #[tracing::instrument]
-async fn negative_invalid_query_param_type(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn negative_invalid_query_param_type(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -666,7 +706,7 @@ async fn negative_invalid_query_param_type(agent: &HttpTestContext) -> anyhow::R
 
 #[test]
 #[tracing::instrument]
-async fn negative_missing_header(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn negative_missing_header(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -684,7 +724,7 @@ async fn negative_missing_header(agent: &HttpTestContext) -> anyhow::Result<()> 
 
 #[test]
 #[tracing::instrument]
-async fn cors_preflight_wildcard(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn cors_preflight_wildcard(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .request(
@@ -716,7 +756,9 @@ async fn cors_preflight_wildcard(agent: &HttpTestContext) -> anyhow::Result<()> 
 
 #[test]
 #[tracing::instrument]
-async fn cors_preflight_specific_origin(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn cors_preflight_specific_origin(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .request(
@@ -757,7 +799,9 @@ async fn cors_preflight_specific_origin(agent: &HttpTestContext) -> anyhow::Resu
 
 #[test]
 #[tracing::instrument]
-async fn cors_get_with_origin_header(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn cors_get_with_origin_header(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/cors-agents/test-agent/inherited")?)
@@ -781,7 +825,9 @@ async fn cors_get_with_origin_header(agent: &HttpTestContext) -> anyhow::Result<
 
 #[test]
 #[tracing::instrument]
-async fn cors_get_with_origin_header_invalid(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn cors_get_with_origin_header_invalid(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/cors-agents/test-agent/inherited")?)
@@ -803,7 +849,7 @@ async fn cors_get_with_origin_header_invalid(agent: &HttpTestContext) -> anyhow:
 
 #[test]
 #[tracing::instrument]
-async fn cors_get_wildcard_origin(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn cors_get_wildcard_origin(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(agent.base_url.join("/cors-agents/test-agent/wildcard")?)
@@ -827,7 +873,7 @@ async fn cors_get_wildcard_origin(agent: &HttpTestContext) -> anyhow::Result<()>
 
 #[test]
 #[tracing::instrument]
-async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn webhook_callback(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     use axum::{Router, body::Bytes, routing::post};
     use reqwest::Client;
     use std::sync::Arc;
@@ -917,7 +963,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn patch_resource_success(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn patch_resource_success(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .patch(
@@ -953,7 +999,7 @@ async fn patch_resource_success(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn patch_partial_success(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn patch_partial_success(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .patch(
@@ -982,7 +1028,9 @@ async fn patch_partial_success(agent: &HttpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn patch_resource_missing_body(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn patch_resource_missing_body(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .patch(

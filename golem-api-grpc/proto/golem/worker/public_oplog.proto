@@ -71,6 +71,7 @@ message OplogEntry {
     CardEventQueuedParameters CardEventQueued = 48;
     CardInstalledParameters CardInstalled = 49;
     CardInstallFailedParameters CardInstallFailed = 50;
+    CardExpiredParameters CardExpired = 51;
   }
 }
 
@@ -285,15 +286,24 @@ message CardRevokedParameters {
   golem.common.UUID card_id = 3;
 }
 
-message QueuedCardEvent {
-  oneof event {
-    QueuedCardEventCard install = 1;
-    QueuedCardEventCard revoke = 2;
-  }
+message CardExpiredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID card_id = 2;
 }
 
-message QueuedCardEventCard {
-  golem.common.UUID card_id = 1;
+message QueuedCardEvent {
+  message Install {
+    golem.common.UUID card_id = 1;
+  }
+
+  message Revoke {
+    golem.common.UUID card_id = 1;
+  }
+
+  oneof event {
+    Install install = 1;
+    Revoke revoke = 2;
+  }
 }
 
 enum CardInstallFailure {

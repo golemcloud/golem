@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::agentic::agent_impl::Component;
-use crate::agentic::tool_registry::{get_all_tools, get_tool_by_name};
+use crate::agentic::tool_registry::{get_all_tools, get_tool_by_name, get_tool_invoker_by_name};
 use crate::golem_agentic::exports::golem::tool::guest::{
     Guest, InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::wasi::io::streams::InputStream;
+use crate::wasip2::io::streams::InputStream;
 
 impl Guest for Component {
     fn discover_tools() -> Result<Vec<Tool>, ToolError> {
@@ -31,12 +31,13 @@ impl Guest for Component {
 
     fn invoke(
         tool_name: String,
-        _command_path: Vec<String>,
-        _input: TypedSchemaValue,
-        _stdin: Option<InputStream>,
-        _principal: Principal,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        stdin: Option<InputStream>,
+        principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
-        // Tool invocation dispatch is not wired yet; metadata discovery is available.
-        Err(ToolError::InvalidToolName(tool_name))
+        let invoker = get_tool_invoker_by_name(&tool_name)
+            .ok_or_else(|| ToolError::InvalidToolName(tool_name.clone()))?;
+        invoker(command_path, input, stdin, principal)
     }
 }

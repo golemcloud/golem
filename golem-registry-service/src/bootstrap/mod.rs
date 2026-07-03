@@ -288,7 +288,6 @@ impl Services {
 
         let component_write_service = Arc::new(ComponentWriteService::new(
             repos.component_repo.clone(),
-            card_service.clone(),
             component_object_store,
             component_compilation_service.clone(),
             initial_agent_files,

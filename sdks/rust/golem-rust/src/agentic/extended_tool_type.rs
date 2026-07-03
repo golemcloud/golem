@@ -17,7 +17,9 @@ use crate::agentic::tool_literal::{ToolLiteral, value_is_literal_to_schema_value
 use crate::golem_agentic::golem::tool::common as wire;
 use crate::schema::validation::validate_value;
 use crate::schema::wit::GraphEncoder;
-use crate::schema::{SchemaGraph, SchemaType, SchemaValue, merge_agent_graphs};
+use crate::schema::{
+    MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, merge_agent_graphs,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
@@ -226,6 +228,12 @@ pub struct ExtendedErrorCase {
 /// descriptor synthesis.
 pub trait ToolErrorSchema {
     fn error_cases() -> Result<Vec<ExtendedErrorCase>, ToolBuildError>;
+
+    fn to_error_payload_value(&self) -> Result<crate::TypedSchemaValue, String>;
+
+    fn from_error_payload_value(value: crate::TypedSchemaValue) -> Result<Self, String>
+    where
+        Self: Sized;
 }
 
 #[derive(Clone, Debug)]
@@ -493,11 +501,87 @@ pub struct EffectiveCommandBody {
     pub body: Option<ExtendedCommandBody>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanonicalInputField {
     pub name: String,
+    pub aliases: Vec<String>,
     pub schema: SchemaGraph,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalInputModel {
+    pub fields: Vec<CanonicalInputField>,
+    pub record_schema: SchemaGraph,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanonicalInputValue {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub schema: SchemaGraph,
+    pub value: SchemaValue,
+}
+
+impl CanonicalInputModel {
+    pub fn from_fields(fields: Vec<CanonicalInputField>) -> Result<Self, ToolBuildError> {
+        let record_schema = canonical_input_record_schema(&fields)?;
+        Ok(Self {
+            fields,
+            record_schema,
+        })
+    }
+
+    pub fn decode_record(
+        &self,
+        value: SchemaValue,
+    ) -> Result<Vec<CanonicalInputValue>, CanonicalInputDecodeError> {
+        let SchemaValue::Record { fields: values } = value else {
+            return Err(CanonicalInputDecodeError::ExpectedRecord);
+        };
+        if values.len() != self.fields.len() {
+            return Err(CanonicalInputDecodeError::FieldCountMismatch {
+                expected: self.fields.len(),
+                actual: values.len(),
+            });
+        }
+        Ok(self
+            .fields
+            .iter()
+            .cloned()
+            .zip(values)
+            .map(|(field, value)| CanonicalInputValue {
+                name: field.name,
+                aliases: field.aliases,
+                schema: field.schema,
+                value,
+            })
+            .collect())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CanonicalInputDecodeError {
+    Model(ToolBuildError),
+    ExpectedRecord,
+    FieldCountMismatch { expected: usize, actual: usize },
+}
+
+impl Display for CanonicalInputDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CanonicalInputDecodeError::Model(error) => write!(f, "{error}"),
+            CanonicalInputDecodeError::ExpectedRecord => {
+                write!(f, "tool input must be a positional record")
+            }
+            CanonicalInputDecodeError::FieldCountMismatch { expected, actual } => write!(
+                f,
+                "tool input record has {actual} fields, expected {expected} canonical fields"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CanonicalInputDecodeError {}
 
 impl ExtendedToolType {
     pub fn tool_name(&self) -> &str {
@@ -552,6 +636,26 @@ impl ExtendedToolType {
         result
     }
 
+    pub fn command_index_by_path(&self, command_path: &[String]) -> Option<usize> {
+        let mut current = 0usize;
+        if self.commands.is_empty() {
+            return None;
+        }
+        if command_path.is_empty() {
+            return self.commands[current].body.as_ref().map(|_| current);
+        }
+        for segment in command_path {
+            let next = self.commands[current].subcommands.iter().find_map(|idx| {
+                let idx = usize::try_from(*idx).ok()?;
+                let node = self.commands.get(idx)?;
+                (node.name == *segment || node.aliases.iter().any(|alias| alias == segment))
+                    .then_some(idx)
+            })?;
+            current = next;
+        }
+        self.commands[current].body.as_ref().map(|_| current)
+    }
+
     pub fn canonical_input_fields(&self, command_index: usize) -> Vec<CanonicalInputField> {
         // Collect the body field names first so an inherited global can be
         // shadowed by a body-local declaration of the same surface name. A
@@ -595,6 +699,7 @@ impl ExtendedToolType {
                     }
                     fields.push(CanonicalInputField {
                         name: o.long.clone(),
+                        aliases: o.aliases.clone(),
                         schema: option_collected_graph(&o.shape),
                     })
                 }
@@ -606,6 +711,7 @@ impl ExtendedToolType {
                     }
                     fields.push(CanonicalInputField {
                         name: f.long.clone(),
+                        aliases: f.aliases.clone(),
                         schema: flag_graph(&f),
                     })
                 }
@@ -614,24 +720,72 @@ impl ExtendedToolType {
         if let Some(body) = body {
             fields.extend(body.positionals.fixed.iter().map(|p| CanonicalInputField {
                 name: p.name.clone(),
+                aliases: Vec::new(),
                 schema: p.type_.clone(),
             }));
             if let Some(t) = &body.positionals.tail {
                 fields.push(CanonicalInputField {
                     name: t.name.clone(),
+                    aliases: Vec::new(),
                     schema: list_wrapper_graph(&t.item_type),
                 });
             }
             fields.extend(body.options.iter().map(|o| CanonicalInputField {
                 name: o.long.clone(),
+                aliases: o.aliases.clone(),
                 schema: option_collected_graph(&o.shape),
             }));
             fields.extend(body.flags.iter().map(|f| CanonicalInputField {
                 name: f.long.clone(),
+                aliases: f.aliases.clone(),
                 schema: flag_graph(f),
             }));
         }
         fields
+    }
+
+    pub fn canonical_input_model(
+        &self,
+        command_index: usize,
+    ) -> Result<CanonicalInputModel, ToolBuildError> {
+        self.check_canonical_input_command_index(command_index)?;
+        CanonicalInputModel::from_fields(self.canonical_input_fields(command_index))
+    }
+
+    pub fn canonical_input_record_schema(
+        &self,
+        command_index: usize,
+    ) -> Result<SchemaGraph, ToolBuildError> {
+        self.check_canonical_input_command_index(command_index)?;
+        canonical_input_record_schema(&self.canonical_input_fields(command_index))
+    }
+
+    pub fn decode_canonical_input_record(
+        &self,
+        command_index: usize,
+        value: SchemaValue,
+    ) -> Result<Vec<CanonicalInputValue>, CanonicalInputDecodeError> {
+        let model = self
+            .canonical_input_model(command_index)
+            .map_err(CanonicalInputDecodeError::Model)?;
+        model.decode_record(value)
+    }
+
+    fn check_canonical_input_command_index(
+        &self,
+        command_index: usize,
+    ) -> Result<(), ToolBuildError> {
+        check_command_tree_structure(self)?;
+        if command_index >= self.commands.len() {
+            return Err(ToolBuildError::CommandIndexOutOfBounds {
+                index: command_index as i32,
+                len: self.commands.len(),
+            });
+        }
+        if self.path_to(command_index).is_none() {
+            return Err(ToolBuildError::UnreachableCommandNode(command_index as i32));
+        }
+        Ok(())
     }
 
     fn path_to(&self, command_index: usize) -> Option<Vec<usize>> {
@@ -673,6 +827,34 @@ impl ExtendedToolType {
             None
         }
     }
+}
+
+fn canonical_input_record_schema(
+    fields: &[CanonicalInputField],
+) -> Result<SchemaGraph, ToolBuildError> {
+    for field in fields {
+        check_graph_closed(
+            &field.schema,
+            &format!("canonical input field {:?}", field.name),
+        )?;
+    }
+    let merged = merge_agent_graphs(fields.iter().map(|field| field.schema.clone()))
+        .map_err(|error| ToolBuildError::EncodeError(error.to_string()))?;
+    let graph = SchemaGraph {
+        defs: merged.defs,
+        root: SchemaType::record(
+            fields
+                .iter()
+                .map(|field| NamedFieldType {
+                    name: field.name.clone(),
+                    body: schema_graph_root(&field.schema),
+                    metadata: MetadataEnvelope::default(),
+                })
+                .collect(),
+        ),
+    };
+    check_graph_closed(&graph, "canonical input record")?;
+    Ok(graph)
 }
 
 /// Encodes a metadata-time literal (option/positional default, `value-is`
@@ -3387,6 +3569,151 @@ mod tests {
         assert_eq!(names, vec!["verbose", "input", "config", "force"]);
     }
 
+    #[test]
+    fn canonical_input_model_builds_record_schema_in_field_order() {
+        let tool = sample_tool();
+        let model = tool.canonical_input_model(1).unwrap();
+
+        assert_eq!(
+            model
+                .fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["verbose", "input", "config", "force"]
+        );
+        let SchemaType::Record { fields, .. } = &model.record_schema.root else {
+            panic!("canonical input schema must be a record")
+        };
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["verbose", "input", "config", "force"]
+        );
+    }
+
+    #[test]
+    fn canonical_input_model_decodes_positional_record_by_index() {
+        let tool = sample_tool();
+        let model = tool.canonical_input_model(1).unwrap();
+        let decoded = model
+            .decode_record(SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::U32(3),
+                    SchemaValue::String("in.txt".to_string()),
+                    SchemaValue::Map { entries: vec![] },
+                    SchemaValue::Bool(true),
+                ],
+            })
+            .unwrap();
+
+        assert_eq!(
+            decoded
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["verbose", "input", "config", "force"]
+        );
+        assert_eq!(decoded[0].value, SchemaValue::U32(3));
+        assert_eq!(decoded[1].value, SchemaValue::String("in.txt".to_string()));
+        assert_eq!(decoded[3].value, SchemaValue::Bool(true));
+    }
+
+    #[test]
+    fn canonical_input_model_rejects_non_record_and_wrong_field_count() {
+        let tool = sample_tool();
+        let model = tool.canonical_input_model(1).unwrap();
+
+        assert_eq!(
+            model.decode_record(SchemaValue::String("nope".to_string())),
+            Err(CanonicalInputDecodeError::ExpectedRecord)
+        );
+        assert_eq!(
+            model.decode_record(SchemaValue::Record { fields: vec![] }),
+            Err(CanonicalInputDecodeError::FieldCountMismatch {
+                expected: 4,
+                actual: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_input_model_rejects_out_of_bounds_command_index() {
+        let tool = sample_tool();
+
+        assert_eq!(
+            tool.canonical_input_model(99).unwrap_err(),
+            ToolBuildError::CommandIndexOutOfBounds { index: 99, len: 2 }
+        );
+        assert_eq!(
+            tool.canonical_input_record_schema(99).unwrap_err(),
+            ToolBuildError::CommandIndexOutOfBounds { index: 99, len: 2 }
+        );
+        assert_eq!(
+            tool.decode_canonical_input_record(99, SchemaValue::Record { fields: vec![] }),
+            Err(CanonicalInputDecodeError::Model(
+                ToolBuildError::CommandIndexOutOfBounds { index: 99, len: 2 }
+            ))
+        );
+    }
+
+    #[test]
+    fn canonical_input_model_validates_synthesized_record_schema() {
+        let error = CanonicalInputModel::from_fields(vec![
+            CanonicalInputField {
+                name: "same".to_string(),
+                aliases: Vec::new(),
+                schema: str_graph(),
+            },
+            CanonicalInputField {
+                name: "same".to_string(),
+                aliases: Vec::new(),
+                schema: u32_graph(),
+            },
+        ])
+        .unwrap_err();
+
+        assert!(
+            matches!(error, ToolBuildError::IllFormedSchema { .. }),
+            "expected synthesized record validation error, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn canonical_input_model_rejects_field_schema_with_duplicate_identical_defs() {
+        let id = crate::schema::TypeId::new("dup");
+        let graph = SchemaGraph {
+            defs: vec![
+                crate::schema::SchemaTypeDef {
+                    id: id.clone(),
+                    name: Some("first".to_string()),
+                    body: SchemaType::string(),
+                },
+                crate::schema::SchemaTypeDef {
+                    id: id.clone(),
+                    name: Some("second".to_string()),
+                    body: SchemaType::string(),
+                },
+            ],
+            root: SchemaType::ref_to(id),
+        };
+
+        assert!(crate::schema::validation::validate_graph(&graph).is_err());
+        let error = CanonicalInputModel::from_fields(vec![CanonicalInputField {
+            name: "field".to_string(),
+            aliases: Vec::new(),
+            schema: graph,
+        }])
+        .unwrap_err();
+
+        assert!(
+            matches!(error, ToolBuildError::IllFormedSchema { .. }),
+            "expected duplicate type id validation error, got {error:?}"
+        );
+    }
+
     /// Builds a two-node tool: a root carrying one inherited global option, and a
     /// single `leaf` body whose only option is described by `(long, aliases)`.
     /// Used to exercise alias-aware body-vs-inherited-global shadowing on an
@@ -4223,6 +4550,33 @@ mod tests {
     }
 
     #[test]
+    fn canonical_input_model_rejects_invalid_subcommand_index_in_reachable_tree() {
+        let tool = tool_with_nodes(vec![
+            bare_node("root", vec![1, -1]),
+            bare_node("child", vec![]),
+        ]);
+
+        assert!(matches!(
+            validate_tool(&tool),
+            Err(ToolBuildError::CommandIndexOutOfBounds { index: -1, len: 2 })
+        ));
+        assert!(matches!(
+            tool.canonical_input_model(1),
+            Err(ToolBuildError::CommandIndexOutOfBounds { index: -1, len: 2 })
+        ));
+        assert!(matches!(
+            tool.canonical_input_record_schema(1),
+            Err(ToolBuildError::CommandIndexOutOfBounds { index: -1, len: 2 })
+        ));
+        assert!(matches!(
+            tool.decode_canonical_input_record(1, SchemaValue::Record { fields: vec![] }),
+            Err(CanonicalInputDecodeError::Model(
+                ToolBuildError::CommandIndexOutOfBounds { index: -1, len: 2 }
+            ))
+        ));
+    }
+
+    #[test]
     fn cyclic_tree_is_rejected_without_panicking() {
         let tool = tool_with_nodes(vec![
             bare_node("root", vec![1]),
@@ -4238,6 +4592,25 @@ mod tests {
     }
 
     #[test]
+    fn canonical_input_model_rejects_cycle_on_target_path() {
+        let tool = tool_with_nodes(vec![
+            bare_node("root", vec![1]),
+            bare_node("child", vec![0]),
+        ]);
+
+        assert!(matches!(
+            tool.canonical_input_model(1),
+            Err(ToolBuildError::CommandTreeCycle(_))
+        ));
+        assert!(matches!(
+            tool.decode_canonical_input_record(1, SchemaValue::Record { fields: vec![] }),
+            Err(CanonicalInputDecodeError::Model(
+                ToolBuildError::CommandTreeCycle(_)
+            ))
+        ));
+    }
+
+    #[test]
     fn shared_subcommand_is_rejected() {
         let tool = tool_with_nodes(vec![
             bare_node("root", vec![1, 2]),
@@ -4247,6 +4620,29 @@ mod tests {
         ]);
         assert!(matches!(
             validate_tool(&tool),
+            Err(ToolBuildError::DuplicateCommandParent(3))
+        ));
+    }
+
+    #[test]
+    fn canonical_input_model_rejects_duplicate_parent_command_path() {
+        let mut a = bare_node("a", vec![3]);
+        a.globals.options = vec![scalar_opt("from-a", None)];
+        let mut b = bare_node("b", vec![3]);
+        b.globals.options = vec![scalar_opt("from-b", None)];
+        let tool = tool_with_nodes(vec![
+            bare_node("root", vec![1, 2]),
+            a,
+            b,
+            bare_node("leaf", vec![]),
+        ]);
+
+        assert!(matches!(
+            validate_tool(&tool),
+            Err(ToolBuildError::DuplicateCommandParent(3))
+        ));
+        assert!(matches!(
+            tool.canonical_input_model(3),
             Err(ToolBuildError::DuplicateCommandParent(3))
         ));
     }
