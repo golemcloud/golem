@@ -16,16 +16,21 @@
 
 package golem.runtime.guest
 
+import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.host.js.{JsSnapshot, PrincipalConverter}
-import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
+import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
+import golem.host.js.tool.{JsInvocationResult, JsTool, JsWasiInputStream}
 import golem.runtime.autowire.AgentRegistry
 import golem.runtime.rpc.SchemaRpcCodec
+import golem.runtime.tool.ToolRegistry
+import golem.tool.wire.WitToolError
 import golem.FutureInterop
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
+import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 import scala.scalajs.js.typedarray.Uint8Array
 
@@ -149,17 +154,52 @@ object Guest {
       resultPromise.`catch`[js.Any](onRejected)
     }
 
-  private def invalidToolName(name: String): js.Dynamic =
-    js.Dynamic.literal("tag" -> "invalid-tool-name", "val" -> name)
+  private def rejectToolError[A](error: WitToolError): js.Promise[A] =
+    js.Promise.reject(ToolWireInterop.toolErrorToJs(error)).asInstanceOf[js.Promise[A]]
 
-  private def discoverTools(): js.Promise[js.Array[js.Any]] =
-    js.Promise.resolve[js.Array[js.Any]](new js.Array[js.Any]())
+  private def discoverTools(): js.Promise[js.Array[JsTool]] =
+    js.Promise.resolve[js.Array[JsTool]](ToolRegistry.allTools.map(ToolWireInterop.toolToJs).toJSArray)
 
-  private def getTool(name: String): js.Promise[js.Any] =
-    js.Promise.reject(invalidToolName(name)).asInstanceOf[js.Promise[js.Any]]
+  private def getTool(name: String): js.Promise[JsTool] =
+    ToolRegistry.getTool(name) match {
+      case Some(tool) => js.Promise.resolve[JsTool](ToolWireInterop.toolToJs(tool))
+      case None       => rejectToolError(WitToolError.InvalidToolName(name))
+    }
 
-  private def invokeTool(toolName: String): js.Promise[js.Any] =
-    js.Promise.reject(invalidToolName(toolName)).asInstanceOf[js.Promise[js.Any]]
+  private def invokeTool(
+    toolName: String,
+    commandPath: js.Array[String],
+    input: JsTypedSchemaValue,
+    stdin: js.UndefOr[JsWasiInputStream],
+    principal: js.Dynamic
+  ): js.Promise[JsInvocationResult] =
+    ToolRegistry.getInvoker(toolName) match {
+      case None =>
+        rejectToolError(WitToolError.InvalidToolName(toolName))
+      case Some(invoker) =>
+        val decodedInput =
+          try Right(SchemaWireInterop.typedFromJs(input))
+          catch {
+            case t: Throwable =>
+              Left(WitToolError.InvalidInput(s"malformed invocation input: ${String.valueOf(t.getMessage)}"))
+          }
+        decodedInput match {
+          case Left(error) => rejectToolError(error)
+          case Right(in)   =>
+            val scalaPrincipal = PrincipalConverter.fromJs(principal)
+            // A `Left` (declared tool error) is surfaced as a rejection carrying
+            // the wire-encoded `tool-error`; a failed Future (user code error)
+            // propagates as an unhandled rejection so it becomes a WASM trap.
+            FutureInterop.toPromise(
+              invoker(commandPath.toList, in, stdin.toOption, scalaPrincipal).map {
+                case Right(res) =>
+                  JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined, res.stdout.orUndefined)
+                case Left(error) =>
+                  throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
+              }
+            )
+        }
+    }
 
   private def getDefinition(): js.Promise[js.Any] =
     if (js.isUndefined(resolved)) {
@@ -219,11 +259,18 @@ object Guest {
       "invoke"        -> (
         (
           toolName: String,
-          _commandPath: js.Array[String],
-          _input: js.Dynamic,
-          _stdin: js.UndefOr[js.Any],
-          _principal: js.Dynamic
-        ) => invokeTool(toolName)
+          commandPath: js.Array[String],
+          input: js.Dynamic,
+          stdin: js.UndefOr[js.Any],
+          principal: js.Dynamic
+        ) =>
+          invokeTool(
+            toolName,
+            commandPath,
+            input.asInstanceOf[JsTypedSchemaValue],
+            stdin.asInstanceOf[js.UndefOr[JsWasiInputStream]],
+            principal
+          )
       )
     )
 

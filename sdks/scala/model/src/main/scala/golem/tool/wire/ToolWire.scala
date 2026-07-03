@@ -16,7 +16,7 @@
 
 package golem.tool.wire
 
-import golem.schema.wire.{WitSchemaGraph, WitSchemaValueTree}
+import golem.schema.wire.{WitSchemaGraph, WitSchemaValueTree, WitTypedSchemaValue}
 import golem.tool._
 
 // Flat carrier ADT mirroring `golem:tool/common@0.1.0` exactly. A tool owns a
@@ -184,3 +184,20 @@ final case class WitErrorCase(
   exitCode: Int,
   payload: Option[Int]
 )
+
+/**
+ * The `tool-error` side of the invocation contract shared between guest and
+ * host. [[WitToolError.CustomError]] mirrors `agent-error::custom-error`: the
+ * payload is a self-contained `typed-schema-value` carrying the error value,
+ * shaped so its root type matches one of the body's declared `error-case`
+ * payload types.
+ */
+sealed trait WitToolError extends Product with Serializable
+object WitToolError {
+  final case class InvalidToolName(name: String)             extends WitToolError
+  final case class InvalidCommandPath(path: List[String])    extends WitToolError
+  final case class InvalidInput(message: String)             extends WitToolError
+  final case class ConstraintViolation(message: String)      extends WitToolError
+  final case class InvalidResult(message: String)            extends WitToolError
+  final case class CustomError(payload: WitTypedSchemaValue) extends WitToolError
+}
