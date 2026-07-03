@@ -1,0 +1,174 @@
+---
+name: golem-deployment-version
+description: "Configuring the deployment logical version in the Golem Application Manifest (golem.yaml): the version: source (git tag, git commit hash, static string, or env var), tuning tagPattern/hashFallback/staticFallback/allowDirty, per-environment version overrides, and the versionCheck uniqueness policy. Use when setting up or changing how deploy versions are computed, comparing environments by version, or fixing version-related deploy errors."
+---
+
+# Deployment Versions
+
+Every `golem deploy` attaches a **logical version** (a string) to the new deployment. Unlike the
+server-assigned, per-environment **revision** number, the version is a human-meaningful label you
+control. Use it to tell whether two environments run the *same* logical version, to see at which
+version an environment last changed, and as a rollback target (`golem deploy --version <v>`, see
+`golem-rollback`).
+
+The version is configured in the Golem Application Manifest (`golem.yaml`) under `version:`.
+Versioning is **opt-in**: with no `version:` the deployment is unversioned (empty version).
+
+`version:` (how the string is *computed*) is orthogonal to `versionCheck` (whether re-using a
+string is *rejected*) — see [Unique versions](#unique-versions-versioncheck).
+
+## The `version:` field
+
+`version:` is one of three shapes:
+
+```yaml
+version: "1.2.3"              # literal string
+version:
+  env: MY_VERSION            # read from the named environment variable at deploy time
+version:
+  git: { ... }               # derived from git (see below)
+```
+
+- **Literal** — used verbatim. An empty string is an error.
+- **Env var** — reads the named variable when you deploy. Missing or empty is an error.
+- **Git** — derived from the repository (tag or commit hash).
+
+## Git source
+
+The `git` source has two mutually exclusive modes.
+
+### Tag mode (default)
+
+```yaml
+version:
+  git:
+    tagPattern: "v*"         # required
+    commitInfo: true
+    hashFallback: false
+    allowDirty: false
+    staticFallback: "v0.0.0"
+```
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `tagPattern` | string | *(required)* | Only consider tags matching this glob (`git describe --tags --match`). Use `"*"` for all tags. |
+| `commitInfo` | bool | `true` | When HEAD is past the matching tag, append `-<commits-since-tag>-g<hash>` (e.g. `v1.2.3-5-gabc1234`). `false` gives the bare nearest tag. |
+| `hashFallback` | bool | `false` | When no matching tag is found, use the short commit hash instead of `staticFallback`. |
+| `allowDirty` | bool | `false` | Allow deploying with uncommitted changes, appending a `-dirty` marker. When `false`, a dirty working tree fails the deploy. |
+| `staticFallback` | string | *(none)* | Version used when git cannot supply one (no git, not a repo, or no matching tag without `hashFallback`). Absent means those cases are an error. |
+
+### Hash mode
+
+```yaml
+version:
+  git:
+    hashOnly: true           # must be literally true; ignores tags
+    allowDirty: false
+    staticFallback: "v0.0.0"
+```
+
+Uses the short commit hash as the version, ignoring tags. `tagPattern`/`commitInfo`/`hashFallback`
+are not valid here (the two modes are mutually exclusive).
+
+### How the git version is computed
+
+| Situation | Resulting version |
+|-----------|-------------------|
+| On the matching tag, clean | the tag, e.g. `v1.2.3` |
+| Past the tag, `commitInfo: true` | `v1.2.3-5-gabc1234` |
+| Past the tag, `commitInfo: false` | the nearest tag, `v1.2.3` |
+| No matching tag, `hashFallback: true` | short commit hash, e.g. `abc1234` |
+| No matching tag, `staticFallback` set | the static value |
+| No git / not a repo, `staticFallback` set | the static value (with a warning) |
+| Working tree dirty, `allowDirty: true` | the above + `-dirty` |
+| `hashOnly: true` | short commit hash |
+| No matching tag / no git and no fallback | error |
+| Working tree dirty, `allowDirty: false` | error |
+
+## Per-environment override
+
+`environments.<name>.version:` overrides the application-wide `version:`. It is a **partial**
+override — every field is optional and is layered over the root:
+
+- same source (both `git`, both literal, …) → fields merge (the environment wins per field);
+- different source → the environment replaces the root wholesale.
+
+```yaml
+version:                     # application-wide default
+  git:
+    tagPattern: "v*"
+    hashFallback: true
+    staticFallback: "v0.0.0"
+
+environments:
+  local:
+    version:
+      git:
+        allowDirty: true     # inherits tagPattern/hashFallback/staticFallback from the root
+  preview:
+    version: "0.0.0-preview" # replaces the root source entirely for this environment
+```
+
+## Unique versions (`versionCheck`)
+
+`versionCheck` is a per-environment deployment policy, set under `environments.<name>.deployment:`:
+
+```yaml
+environments:
+  cloud:
+    deployment:
+      versionCheck: true
+```
+
+When `true`, a deploy whose computed version already exists in that environment is **rejected**
+(the server returns a conflict). Combined with a git-tag source this enforces "tag a new release
+before deploying" and prevents accidentally re-deploying the same or an older changeset. Default is
+`false` (and `false` for the `local` environment, where iterating on the same version is expected).
+
+`versionCheck` governs *uniqueness*; the `version:` source governs *how the string is produced* —
+they are independent.
+
+## Full example
+
+The default generated by `golem new`:
+
+```yaml
+version:
+  git:
+    tagPattern: "v*"
+    hashFallback: true
+    staticFallback: "v0.0.0"
+
+environments:
+  local:
+    server: local
+    version:
+      git:
+        allowDirty: true
+  cloud:
+    server: cloud
+    deployment:
+      versionCheck: true
+```
+
+A tagged commit deploys as `v1.2.3` (or `v1.2.3-5-gabc1234` between tags); an untagged repo uses
+the short hash; a non-git checkout uses `v0.0.0`. `local` additionally allows dirty deploys; `cloud`
+rejects re-deploying a version that already exists.
+
+## Common errors
+
+- **`tagPattern` is required for git tag mode** — set `tagPattern` on the environment override or
+  the application-wide `version:` (use `"*"` for all tags), or switch to `hashOnly`/`static`/`env`.
+- **Working tree has uncommitted changes** — commit them, or set `allowDirty: true` for that source.
+- **Version already exists in this environment** — the environment has `versionCheck: true`; bump
+  the tag/version, or roll back instead (see `golem-rollback`).
+- **Environment variable not set / empty static version** — provide the `env` variable at deploy
+  time, or a non-empty literal.
+
+## Related Skills
+
+- Load `golem-edit-manifest` for the full `golem.yaml` reference, including the `version:` and
+  `deployment:` fields.
+- Load `golem-profiles-and-environments` for how environments and per-environment overrides work.
+- Load `golem-deploy` for running a deployment (where the version is assigned).
+- Load `golem-rollback` for reverting to a previous deployment by `--version` or `--revision`.

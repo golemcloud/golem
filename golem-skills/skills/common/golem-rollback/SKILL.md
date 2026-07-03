@@ -82,3 +82,8 @@ If you do not know which revision to target, deploy with a non-existent revision
 - `--revision` and `--version` conflict with `--force-build`, `--stage`, and `--approve-staging-steps` — rollback does not trigger a build.
 - The environment must already have at least one deployment (a current deployment must exist) before a rollback can be performed.
 - Rollback is an environment-level operation — it affects all components in the environment, not individual components.
+
+## Related Skills
+
+- Load `golem-deployment-version` for how the version labels used by `--version` are assigned to each deployment.
+- Load `golem-deploy` for creating deployments.

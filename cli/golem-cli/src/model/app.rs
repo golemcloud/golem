@@ -399,6 +399,7 @@ pub struct ApplicationPreload {
     pub application_name: WithSource<ApplicationName>,
     pub environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     pub local_server: Option<WithSource<app_raw::LocalServer>>,
+    pub version: Option<WithSource<app_raw::AppVersionSource>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2619,6 +2620,7 @@ mod app_builder {
         ResourceDefaults(EnvironmentName),
         Bridge,
         LocalServer,
+        Version,
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -2637,6 +2639,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
                 UniqueSourceCheckedEntityKey::LocalServer => property,
+                UniqueSourceCheckedEntityKey::Version => property,
             }
         }
 
@@ -2685,6 +2688,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::LocalServer => {
                     "localServer".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Version => {
+                    "version".log_color_highlight().to_string()
                 }
             }
         }
@@ -2856,6 +2862,7 @@ mod app_builder {
         environments: IndexMap<EnvironmentName, app_raw::Environment>,
         local_server: Option<WithSource<app_raw::LocalServer>>,
         deployment_domain_local_server: Option<WithSource<app_raw::LocalServer>>,
+        version: Option<WithSource<app_raw::AppVersionSource>>,
 
         // "Consts" for component templating
         app_root_dir_str: String,
@@ -3029,6 +3036,7 @@ mod app_builder {
                 application_name,
                 environments: builder.environments.into_iter().collect(),
                 local_server: builder.local_server,
+                version: builder.version,
             })
         }
 
@@ -3410,6 +3418,22 @@ mod app_builder {
                                 );
                                 self.local_server =
                                     Some(WithSource::new(app.source.clone(), local_server.clone()));
+                            }
+                        }
+                    }
+
+                    if let Some(version) = &app.application.version {
+                        match &self.version {
+                            Some(existing) => validation.add_error(format!(
+                                "{} {} is defined in multiple sources: {}, {}",
+                                UniqueSourceCheckedEntityKey::Version.entity_kind(),
+                                UniqueSourceCheckedEntityKey::Version.entity_name(),
+                                existing.source.log_color_highlight(),
+                                app.source.log_color_highlight()
+                            )),
+                            None => {
+                                self.version =
+                                    Some(WithSource::new(app.source.clone(), version.clone()));
                             }
                         }
                     }
@@ -4587,6 +4611,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = preload
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -4644,6 +4669,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = preload
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5357,6 +5383,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5417,6 +5444,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5474,6 +5502,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5568,6 +5597,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5629,6 +5659,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
