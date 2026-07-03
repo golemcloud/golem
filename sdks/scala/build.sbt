@@ -19,7 +19,7 @@ val Scala212    = "2.12.21"
 ThisBuild / organization     := "cloud.golem"
 ThisBuild / scalaVersion     := Scala3Golem
 ThisBuild / dynverTagPrefix  := "golem-scala-v"
-ThisBuild / licenses     := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
+ThisBuild / licenses     := List("Golem Source License v1.1" -> url("http://license.golem.cloud/LICENSE"))
 ThisBuild / homepage     := Some(url("https://github.com/golemcloud/golem"))
 ThisBuild / scmInfo := Some(
   ScmInfo(
@@ -72,6 +72,14 @@ lazy val commonSettings = Seq(
     CrossVersion.partialVersion(scalaVersion.value) match {
       case Some((3, minor)) if minor >= 5 => Seq("-experimental")
       case _                              => Nil
+    }
+  },
+  // Make Scaladoc comments of already-compiled sources visible to the agent/tool
+  // macros (Symbol.docstring) by reading docs back from TASTy.
+  scalacOptions ++= {
+    CrossVersion.partialVersion(scalaVersion.value) match {
+      case Some((3, minor)) => Seq(if (minor >= 8) "-Xread-docs" else "-Yread-docs")
+      case _                => Nil
     }
   }
 )

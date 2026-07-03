@@ -1,0 +1,45 @@
+[info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+[info] loading settings for project root from build.sbt, plugins.sbt...
+[info] loading project definition from /Users/vigoo/projects/golem/golem-4/sdks/scala/project
+[info] loading settings for project root from build.sbt...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] Setting Scala version to 3.8.2 on 8 projects.
+[info] Excluded 1 projects, run ++ 3.8.2 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[32m+[0m ScaladocDescriptionSpec
+  [32m+[0m annotation precedence
+    [32m+[0m undocumented Id class falls back to the trait description
+    [32m+[0m @description on a method wins over scaladoc
+    [32m+[0m @description on the trait wins over scaladoc
+  [32m+[0m Scaladoc parser
+    [32m+[0m single-line comment
+    [32m+[0m tags-only comment yields None
+    [32m+[0m email-like text is not treated as a tag
+    [32m+[0m tag sections are dropped
+    [32m+[0m multi-line comment with margin stars
+    [32m+[0m summary and description split
+  [32m+[0m scaladoc-based descriptions
+    [32m+[0m method scaladoc becomes the method description
+    [32m+[0m undocumented method has no description
+    [32m+[0m trait scaladoc becomes the agent description, tags stripped
+    [32m+[0m Id class scaladoc becomes the constructor description
+  [32m+[0m no docs at all
+    [32m+[0m behaves as before: no description, constructor falls back to type name
+[32m+[0m AgentMetadataMacroSpec
+  [32m+[0m EchoAgent metadata exposes all method names
+  [32m+[0m Agent metadata omits mode when durable annotation is not provided
+  [32m+[0m Agent metadata captures trait-level mode annotation
+  [32m+[0m EchoAgent combine method keeps parameter ordering and per-parameter schema
+  [32m+[0m AgentClientMacro produces fire-and-forget invocation for Unit-returning method
+  [32m+[0m AgentImplementationMacro preserves durable annotations in implementation metadata
+  [32m+[0m Agent metadata omits durable default (even when explicitly set via agentDefinition)
+  [32m+[0m AgentImplementationMacro preserves annotated agent mode
+  [32m+[0m AgentImplementationMacro leaves mode unset for durable defaults
+  [32m+[0m AgentImplementationMacro preserves method invocation kinds
+24 tests passed. 0 tests failed. 0 tests ignored.
+
+Executed in 99 ms
+
+[info] Completed tests
+[success] Total time: 1 s, completed Jul 3, 2026, 3:21:34 PM

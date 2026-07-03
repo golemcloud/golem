@@ -260,7 +260,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
         }
       },
       test("secret handle: inbound decode rejects two nodes carrying the same raw resource") {
-        val raw = js.Dynamic.literal(marker = 44).asInstanceOf[js.Any]
+        val raw    = js.Dynamic.literal(marker = 44).asInstanceOf[js.Any]
         val jsTree = JsSchemaValueTree(
           js.Array(
             JsSchemaValueNode.recordValue(js.Array(1, 2)),

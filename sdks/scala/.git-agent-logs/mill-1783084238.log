@@ -1,0 +1,6 @@
+Downloading https://repo1.maven.org/maven2/com/kohlschutter/junixsocket/junixsocket-core/2.10.0/junixsocket-core-2.10.0.jar
+Failed to download https://repo1.maven.org/maven2/com/kohlschutter/junixsocket/junixsocket-core/2.10.0/junixsocket-core-2.10.0.jar
+Downloading https://repo1.maven.org/maven2/com/kohlschutter/junixsocket/junixsocket-core/2.10.0/junixsocket-core-2.10.0.jar.sha1
+Failed to download https://repo1.maven.org/maven2/com/kohlschutter/junixsocket/junixsocket-core/2.10.0/junixsocket-core-2.10.0.jar.sha1
+[info] compiling 1 Scala source to /Users/vigoo/projects/golem/golem-4/sdks/scala/mill/out/mill-build/compile.dest/classes ...
+[info] done compiling

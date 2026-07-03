@@ -1,0 +1,32 @@
+[info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+[info] loading settings for project root from build.sbt, plugins.sbt...
+[info] loading project definition from /Users/vigoo/projects/golem/golem-4/sdks/scala/project
+[info] compiling 1 Scala source to /Users/vigoo/projects/golem/golem-4/sdks/scala/project/target/scala-2.12/sbt-1.0/classes ...
+[info] done compiling
+[info] loading settings for project root from build.sbt...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] Setting Scala version to 3.8.2 on 8 projects.
+[info] Excluded 1 projects, run ++ 3.8.2 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[error] java.lang.RuntimeException: [golem] Missing embedded resource 'golem/wasm/agent_guest.wasm' (and no repo fallback at /Users/vigoo/projects/golem/golem-4/sdks/scala/golem/sbt/src/main/resources/golem/wasm/agent_guest.wasm).
+[error] 	at scala.sys.package$.error(package.scala:30)
+[error] 	at golem.sbt.GolemPlugin$.embeddedAgentGuestWasmBytes(GolemPlugin.scala:89)
+[error] 	at golem.sbt.GolemPlugin$.$anonfun$projectSettings$8(GolemPlugin.scala:176)
+[error] 	at scala.Function1.$anonfun$compose$1(Function1.scala:49)
+[error] 	at sbt.internal.util.$tilde$greater.$anonfun$$u2219$1(TypeFunctions.scala:63)
+[error] 	at sbt.std.Transform$$anon$4.work(Transform.scala:69)
+[error] 	at sbt.Execute.$anonfun$submit$2(Execute.scala:283)
+[error] 	at sbt.internal.util.ErrorHandling$.wideConvert(ErrorHandling.scala:24)
+[error] 	at sbt.Execute.work(Execute.scala:292)
+[error] 	at sbt.Execute.$anonfun$submit$1(Execute.scala:283)
+[error] 	at sbt.ConcurrentRestrictions$$anon$4.$anonfun$submitValid$1(ConcurrentRestrictions.scala:265)
+[error] 	at sbt.CompletionService$$anon$2.call(CompletionService.scala:65)
+[error] 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+[error] 	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:572)
+[error] 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+[error] 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+[error] 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+[error] 	at java.base/java.lang.Thread.run(Thread.java:1583)
+[error] (testAgents / golemEnsureAgentGuestWasm) [golem] Missing embedded resource 'golem/wasm/agent_guest.wasm' (and no repo fallback at /Users/vigoo/projects/golem/golem-4/sdks/scala/golem/sbt/src/main/resources/golem/wasm/agent_guest.wasm).
+[error] Total time: 0 s, completed Jul 3, 2026, 3:13:48 PM

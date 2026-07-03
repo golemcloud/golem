@@ -1,0 +1,22 @@
+[info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+[info] loading settings for project root from build.sbt, plugins.sbt...
+[info] loading project definition from /Users/vigoo/projects/golem/golem-4/sdks/scala/project
+[info] loading settings for project root from build.sbt...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] Setting Scala version to 3.8.2 on 8 projects.
+[info] Excluded 1 projects, run ++ 3.8.2 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] scalafmt: Checking 1 Scala sources (/Users/vigoo/projects/golem/golem-4/sdks/scala/core/js)...
+[info] scalafmt: Checking 1 Scala sources (/Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js)...
+[info] scalafmt: Checking 1 Scala sources (/Users/vigoo/projects/golem/golem-4/sdks/scala/model/.jvm)...
+[warn] scalafmt: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/host/SchemaWireInteropSpec.scala isn't formatted properly!
+[warn] scalafmt: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/schema/wire/WireCodec.scala isn't formatted properly!
+[warn] scalafmt: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/schema/wire/WireCodec.scala isn't formatted properly!
+[error] scalafmt: 1 files must be formatted (/Users/vigoo/projects/golem/golem-4/sdks/scala/core/js)
+[error] scalafmt: 1 files must be formatted (/Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js)
+[error] scalafmt: 1 files must be formatted (/Users/vigoo/projects/golem/golem-4/sdks/scala/model/.jvm)
+[error] (core / Test / scalafmtCheck) scalafmt: 1 files must be formatted (/Users/vigoo/projects/golem/golem-4/sdks/scala/core/js)
+[error] (modelJS / Compile / scalafmtCheck) scalafmt: 1 files must be formatted (/Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js)
+[error] (modelJVM / Compile / scalafmtCheck) scalafmt: 1 files must be formatted (/Users/vigoo/projects/golem/golem-4/sdks/scala/model/.jvm)
+[error] Total time: 1 s, completed Jul 3, 2026, 3:15:46 PM

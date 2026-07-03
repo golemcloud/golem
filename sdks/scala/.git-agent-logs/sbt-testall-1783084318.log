@@ -1,0 +1,1295 @@
+[info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+[info] loading settings for project root from build.sbt, plugins.sbt...
+[info] loading project definition from /Users/vigoo/projects/golem/golem-4/sdks/scala/project
+[info] loading settings for project root from build.sbt...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] Setting Scala version to 3.8.2 on 8 projects.
+[info] Excluded 1 projects, run ++ 3.8.2 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] compiling 12 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.jvm/target/scala-3.8.2/test-classes ...
+[info] done compiling
+[32m+[0m ConfigIntrospectionSpec
+  [32m+[0m primitive root leaf
+    [32m+[0m String produces one local declaration
+  [32m+[0m all-local config
+    [32m+[0m five fields produce five local declarations
+    [32m+[0m field types are correct
+  [32m+[0m multiple secrets
+    [32m+[0m each secret field gets Secret source
+  [32m+[0m deeply nested
+    [32m+[0m three levels of nesting produce correct paths
+  [32m+[0m Secret[Record] stays one leaf
+    [32m+[0m Secret wrapping a case class emits one secret declaration
+  [32m+[0m Secret root leaf
+    [32m+[0m Secret[String] produces one secret declaration
+  [32m+[0m simple case class
+    [32m+[0m produces correct number of declarations
+    [32m+[0m produces local declarations for all fields
+    [32m+[0m field names become paths
+  [32m+[0m case class with secret field
+    [32m+[0m produces correct number of declarations
+    [32m+[0m local fields have Local source
+    [32m+[0m secret field has Secret source
+  [32m+[0m path prefix propagation
+    [32m+[0m describe with prefix prepends to all paths
+    [32m+[0m nested config with prefix produces correct deep paths
+  [32m+[0m nested case class
+    [32m+[0m produces declarations for all leaf fields
+    [32m+[0m top-level field has single-segment path
+    [32m+[0m nested fields have multi-segment paths
+[32m+[0m AnnotationsSpec
+  [32m+[0m annotation classes can be constructed
+  [32m+[0m DurabilityMode wire values and parsing
+[32m+[0m UuidSpec
+  [32m+[0m fromStandardString error cases
+    [32m+[0m empty string returns Left
+    [32m+[0m invalid format returns Left
+  [32m+[0m toStandardString / fromStandardString roundtrip
+    [32m+[0m roundtrip with known UUID
+    [32m+[0m roundtrip with max values
+    [32m+[0m roundtrip with zero UUID
+    [32m+[0m standard UUID string format
+[32m+[0m SecretSchemaSpec
+  [32m+[0m Secret[Int]
+    [32m+[0m reflect is a wrapper
+    [32m+[0m typeId normalized name contains golem.config.Secret
+    [32m+[0m wrapped reflect corresponds to Int
+  [32m+[0m Secret[String]
+    [32m+[0m wrapped reflect corresponds to String
+    [32m+[0m typeId normalized name contains golem.config.Secret
+    [32m+[0m reflect is a wrapper
+[32m+[0m DatetimeSpec
+  [32m+[0m fromEpochMillis preserves millis
+  [32m+[0m afterSeconds delegates to afterMillis
+[32m+[0m SchemaDerivationSpec
+  [32m+[0m Unit derives as empty tuple and round-trips
+  [32m+[0m afterMillis returns time after now
+  [32m+[0m self-recursive type closes via refs and round-trips
+  [32m+[0m mixed sealed trait derives a variant; all-empty derives an enum
+  [32m+[0m fromEpochSeconds scales to millis
+  [32m+[0m now returns current-ish time
+  [32m+[0m derives all primitives (BigDecimal/BigInt as string) and round-trips
+[32m+[0m HttpValidationPrincipalSpec
+  [32m+[0m mount Principal validation
+  [32m+[0m variant values round-trip (payload, record payload, no payload)
+    [32m+[0m accepts mount when principalParamNames is empty
+  [32m+[0m no-payload case in a mixed variant encodes as VariantValue(_, None), not EnumValue
+    [32m+[0m accepts mount with non-Principal path variables
+  [32m+[0m enum values round-trip
+    [32m+[0m rejects mount path variable referencing Principal param
+  [32m+[0m no-payload case in a pure enum encodes as EnumValue
+  [32m+[0m endpoint Principal validation
+  [32m+[0m case class derives a nominal record def referenced by the root
+  [32m+[0m Option derives option and round-trips Some/None
+    [32m+[0m rejects path variable referencing Principal param
+  [32m+[0m generic instantiations get distinct, generic-aware type ids
+    [32m+[0m accepts endpoint with non-Principal params
+    [32m+[0m rejects query variable referencing Principal param
+  [32m+[0m mutually-recursive types round-trip
+    [32m+[0m rejects header variable referencing Principal param
+    [32m+[0m accepts endpoint when principalParamNames is empty
+    [32m+[0m rejects remaining path variable referencing Principal param
+[32m+[0m SnapshottingParseSpec
+  [32m+[0m disabled
+  [32m+[0m enabled
+  [32m+[0m periodic with millis
+  [32m+[0m periodic with seconds
+  [32m+[0m periodic with minutes
+  [32m+[0m every with valid count
+  [32m+[0m invalid value
+  [32m+[0m periodic with invalid duration
+  [32m+[0m every(1)
+  [32m+[0m periodic with negative duration
+  [32m+[0m every with zero
+  [32m+[0m periodic with zero duration
+  [32m+[0m every with non-integer
+  [32m+[0m every with negative
+  [32m+[0m case insensitive
+  [32m+[0m List/Set derive list; Map derives map
+  [32m+[0m whitespace trimmed
+[32m+[0m ConfigSchemaSpec
+  [32m+[0m path propagation
+    [32m+[0m multi-segment path is preserved
+    [32m+[0m empty path produces empty path in declaration
+  [32m+[0m Secret instance
+    [32m+[0m Secret[Int] produces secret declaration with int type
+    [32m+[0m Secret[String] produces secret declaration
+  [32m+[0m ConfigOverride (internal)
+    [32m+[0m String override has correct path and type
+    [32m+[0m Int override has correct path and value
+    [32m+[0m Boolean override encodes correctly
+  [32m+[0m primitive leaf instances
+  [32m+[0m EnvironmentId derives a record over the canonical Uuid built-in and round-trips
+    [32m+[0m String produces local declaration
+  [32m+[0m Uuid derives the canonical cross-SDK record and round-trips
+    [32m+[0m Int produces local declaration
+    [32m+[0m Long produces local declaration
+    [32m+[0m Double produces local declaration
+    [32m+[0m Boolean produces local declaration
+[32m+[0m SchemaDerivationScala3Spec
+  [32m+[0m tuple derives tuple-type and round-trips
+  [32m+[0m Either derives result and round-trips Left/Right
+[32m+[0m rich semantic types
+  [32m+[0m top-level schemas use rich nodes
+  [32m+[0m collection values round-trip
+  [32m+[0m derived record supports two distinct quantity units
+  [32m+[0m Uuid value encodes high/low as raw u64 bits
+  [32m+[0m quantity rejects disallowed units
+  [32m+[0m quantity schemas do not depend on global unit lifecycle
+  [32m+[0m derived record fields use rich nodes and roundtrip
+  [32m+[0m top-level values roundtrip
+  [32m+[0m char decode rejects out-of-Char-range code points with FromSchemaError
+  [32m+[0m malformed BigInt/BigDecimal strings decode to FromSchemaError (NonFatal boundary)
+  [32m+[0m Uuid encode rejects out-of-range high/low bits with SchemaEncodeError
+  [32m+[0m Secret fails loud rather than silently unwrapping
+  [32m+[0m unsigned decode rejects out-of-range values with FromSchemaError
+  [32m+[0m decoding a mismatched value tree fails with FromSchemaError
+  [32m+[0m unsigned wrappers derive u8/u16/u32/u64 and round-trip (incl. boundary)
+  [32m+[0m unsigned encode rejects out-of-range wrapper values with SchemaEncodeError
+[32m+[0m SchemaModelSpec
+  [32m+[0m SchemaBuilder
+    [32m+[0m register is idempotent: a second register of the same id does not rebuild
+    [32m+[0m finish fails if a reserved id was never committed
+    [32m+[0m register reserves before building so self-recursive types close to a ref
+    [32m+[0m mutually recursive types both close to refs
+  [32m+[0m graph merge
+    [32m+[0m mergeGraphDefs deduplicates identical defs across graphs
+    [32m+[0m mergeGraphDefs rejects conflicting same-id bodies
+    [32m+[0m mergeAgentGraphs keeps roots in input order and shares defs
+  [32m+[0m error paths
+    [32m+[0m encoding a graph with a dangling ref fails with SchemaEncodeError
+    [32m+[0m decoding a graph with duplicate def ids fails
+    [32m+[0m decoding a graph with a def index out of range fails
+    [32m+[0m decoding a value tree with an out-of-range root index fails
+    [32m+[0m decoding a value tree with a cyclic reference fails
+    [32m+[0m decoding a type graph with an out-of-range root index fails
+    [32m+[0m decoding a value tree with an out-of-range child index fails
+    [32m+[0m decoding a type graph with an out-of-range child index fails
+    [32m+[0m decoding a type graph with a structural type-node cycle fails
+  [32m+[0m value tree wire roundtrip
+    [32m+[0m u64 max raw bits survive as a Long
+    [32m+[0m binary values compare structurally after a roundtrip
+    [32m+[0m kitchen-sink value round-trips through the flat WIT carrier
+  [32m+[0m quota-token handle affine semantics
+    [32m+[0m encoding an already-transferred quota-token handle fails with SchemaEncodeError
+    [32m+[0m a single quota-token handle round-trips preserving handle identity
+    [32m+[0m decoding a tree that references one quota-token handle node twice fails and drains it
+    [32m+[0m encoding the same quota-token handle twice in one tree fails with SchemaEncodeError
+    [32m+[0m decoding fails atomically when a sibling is invalid, draining an already-reached handle
+    [32m+[0m decoding a tree with an unreferenced quota-token handle node fails and drains it
+    [32m+[0m decoding a valid root plus an unreachable handle node fails and drains both handles
+  [32m+[0m GraphEncoder multi-root (agent carrier use case)
+    [32m+[0m encodes several roots into one shared pool with a placeholder finish root
+  [32m+[0m edge scalars and remaining enum/discriminator arms
+    [32m+[0m unsigned and boundary scalars survive a value roundtrip
+    [32m+[0m all discriminator rules and path/role metadata arms survive a type roundtrip
+  [32m+[0m type graph wire roundtrip
+    [32m+[0m numeric restrictions golden vectors round-trip and normalize
+    [32m+[0m numeric restrictions canonicalization drops empty values and negative zero
+    [32m+[0m ref bodies flatten to def indices that match the sorted def order
+    [32m+[0m flattened defs are deterministically sorted by id regardless of insertion order
+    [32m+[0m kitchen-sink type graph round-trips through the flat WIT carrier
+  [32m+[0m typed schema value roundtrip
+    [32m+[0m typed value (graph + value) round-trips
+142 tests passed. 0 tests failed. 0 tests ignored.
+
+Executed in 253 ms
+
+[info] Completed tests
+[success] Total time: 7 s, completed Jul 3, 2026, 3:12:09 PM
+[info] compiling 50 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js/target/scala-3.8.2/classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:39:46 
+[warn] 39 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+[warn]    |                                              ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:42:57 
+[warn] 42 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+[warn]    |                                                         ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:32:46 
+[warn] 32 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+[warn]    |                                              ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:35:57 
+[warn] 35 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+[warn]    |                                                         ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentImplementationType.scala:35:38 
+[warn] 35 |  configBuilder: Option[ConfigBuilder[_]] = None,
+[warn]    |                                      ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:45 
+[warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+[warn]    |                                             ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:48 
+[warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+[warn]    |                                                ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:61:42 
+[warn] 61 |        scala.concurrent.ExecutionContext.parasitic
+[warn]    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:73:80 
+[warn] 73 |      raw(instance, bytes).map(_ => instance)(scala.concurrent.ExecutionContext.parasitic)
+[warn]    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] 9 warnings found
+[info] done compiling
+[info] compiling 12 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js/target/scala-3.8.2/test-classes ...
+[info] done compiling
+[warn] multiple main classes detected: run 'show discoveredMainClasses' to see the list
+[info] Fast optimizing /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js/target/scala-3.8.2/golem-scala-model-test-fastopt
+[32m+[0m SecretSchemaSpec
+  [32m+[0m Secret[String]
+    [32m+[0m typeId normalized name contains golem.config.Secret
+    [32m+[0m wrapped reflect corresponds to String
+    [32m+[0m reflect is a wrapper
+  [32m+[0m Secret[Int]
+    [32m+[0m wrapped reflect corresponds to Int
+    [32m+[0m reflect is a wrapper
+    [32m+[0m typeId normalized name contains golem.config.Secret
+[32m+[0m ConfigIntrospectionSpec
+  [32m+[0m primitive root leaf
+    [32m+[0m String produces one local declaration
+  [32m+[0m nested case class
+    [32m+[0m produces declarations for all leaf fields
+    [32m+[0m top-level field has single-segment path
+    [32m+[0m nested fields have multi-segment paths
+  [32m+[0m Secret[Record] stays one leaf
+    [32m+[0m Secret wrapping a case class emits one secret declaration
+  [32m+[0m Secret root leaf
+    [32m+[0m Secret[String] produces one secret declaration
+  [32m+[0m case class with secret field
+    [32m+[0m secret field has Secret source
+    [32m+[0m local fields have Local source
+    [32m+[0m produces correct number of declarations
+  [32m+[0m simple case class
+    [32m+[0m field names become paths
+    [32m+[0m produces local declarations for all fields
+    [32m+[0m produces correct number of declarations
+  [32m+[0m multiple secrets
+    [32m+[0m each secret field gets Secret source
+  [32m+[0m path prefix propagation
+    [32m+[0m describe with prefix prepends to all paths
+    [32m+[0m nested config with prefix produces correct deep paths
+  [32m+[0m all-local config
+    [32m+[0m five fields produce five local declarations
+    [32m+[0m field types are correct
+  [32m+[0m deeply nested
+    [32m+[0m three levels of nesting produce correct paths
+[32m+[0m SchemaDerivationScala3Spec
+  [32m+[0m Either derives result and round-trips Left/Right
+  [32m+[0m tuple derives tuple-type and round-trips
+[32m+[0m AnnotationsSpec
+  [32m+[0m DurabilityMode wire values and parsing
+  [32m+[0m annotation classes can be constructed
+[32m+[0m DatetimeSpec
+  [32m+[0m fromEpochMillis preserves millis
+  [32m+[0m afterSeconds delegates to afterMillis
+  [32m+[0m afterMillis returns time after now
+  [32m+[0m fromEpochSeconds scales to millis
+  [32m+[0m now returns current-ish time
+[32m+[0m SchemaDerivationSpec
+  [32m+[0m derives all primitives (BigDecimal/BigInt as string) and round-trips
+  [32m+[0m mixed sealed trait derives a variant; all-empty derives an enum
+  [32m+[0m case class derives a nominal record def referenced by the root
+  [32m+[0m Unit derives as empty tuple and round-trips
+  [32m+[0m variant values round-trip (payload, record payload, no payload)
+  [32m+[0m no-payload case in a mixed variant encodes as VariantValue(_, None), not EnumValue
+  [32m+[0m enum values round-trip
+  [32m+[0m no-payload case in a pure enum encodes as EnumValue
+  [32m+[0m Option derives option and round-trips Some/None
+  [32m+[0m List/Set derive list; Map derives map
+  [32m+[0m collection values round-trip
+  [32m+[0m generic instantiations get distinct, generic-aware type ids
+  [32m+[0m self-recursive type closes via refs and round-trips
+  [32m+[0m mutually-recursive types round-trip
+  [32m+[0m Uuid derives the canonical cross-SDK record and round-trips
+  [32m+[0m EnvironmentId derives a record over the canonical Uuid built-in and round-trips
+  [32m+[0m Uuid value encodes high/low as raw u64 bits
+  [32m+[0m unsigned wrappers derive u8/u16/u32/u64 and round-trip (incl. boundary)
+  [32m+[0m Uuid encode rejects out-of-range high/low bits with SchemaEncodeError
+  [32m+[0m char decode rejects out-of-Char-range code points with FromSchemaError
+  [32m+[0m malformed BigInt/BigDecimal strings decode to FromSchemaError (NonFatal boundary)
+  [32m+[0m unsigned decode rejects out-of-range values with FromSchemaError
+  [32m+[0m unsigned encode rejects out-of-range wrapper values with SchemaEncodeError
+  [32m+[0m Secret fails loud rather than silently unwrapping
+  [32m+[0m decoding a mismatched value tree fails with FromSchemaError
+[32m+[0m SchemaModelSpec
+  [32m+[0m SchemaBuilder
+    [32m+[0m register reserves before building so self-recursive types close to a ref
+    [32m+[0m finish fails if a reserved id was never committed
+    [32m+[0m register is idempotent: a second register of the same id does not rebuild
+    [32m+[0m mutually recursive types both close to refs
+  [32m+[0m quota-token handle affine semantics
+    [32m+[0m a single quota-token handle round-trips preserving handle identity
+    [32m+[0m encoding an already-transferred quota-token handle fails with SchemaEncodeError
+    [32m+[0m encoding the same quota-token handle twice in one tree fails with SchemaEncodeError
+    [32m+[0m decoding a tree that references one quota-token handle node twice fails and drains it
+    [32m+[0m decoding a tree with an unreferenced quota-token handle node fails and drains it
+    [32m+[0m decoding a valid root plus an unreachable handle node fails and drains both handles
+    [32m+[0m decoding fails atomically when a sibling is invalid, draining an already-reached handle
+  [32m+[0m error paths
+    [32m+[0m encoding a graph with a dangling ref fails with SchemaEncodeError
+    [32m+[0m decoding a value tree with an out-of-range root index fails
+    [32m+[0m decoding a value tree with a cyclic reference fails
+    [32m+[0m decoding a graph with a def index out of range fails
+    [32m+[0m decoding a graph with duplicate def ids fails
+    [32m+[0m decoding a type graph with a structural type-node cycle fails
+    [32m+[0m decoding a type graph with an out-of-range root index fails
+    [32m+[0m decoding a type graph with an out-of-range child index fails
+    [32m+[0m decoding a value tree with an out-of-range child index fails
+  [32m+[0m value tree wire roundtrip
+    [32m+[0m u64 max raw bits survive as a Long
+    [32m+[0m binary values compare structurally after a roundtrip
+    [32m+[0m kitchen-sink value round-trips through the flat WIT carrier
+  [32m+[0m graph merge
+    [32m+[0m mergeAgentGraphs keeps roots in input order and shares defs
+    [32m+[0m mergeGraphDefs rejects conflicting same-id bodies
+    [32m+[0m mergeGraphDefs deduplicates identical defs across graphs
+  [32m+[0m typed schema value roundtrip
+    [32m+[0m typed value (graph + value) round-trips
+  [32m+[0m type graph wire roundtrip
+    [32m+[0m numeric restrictions golden vectors round-trip and normalize
+    [32m+[0m ref bodies flatten to def indices that match the sorted def order
+    [32m+[0m flattened defs are deterministically sorted by id regardless of insertion order
+    [32m+[0m kitchen-sink type graph round-trips through the flat WIT carrier
+    [32m+[0m numeric restrictions canonicalization drops empty values and negative zero
+  [32m+[0m GraphEncoder multi-root (agent carrier use case)
+    [32m+[0m encodes several roots into one shared pool with a placeholder finish root
+  [32m+[0m edge scalars and remaining enum/discriminator arms
+    [32m+[0m unsigned and boundary scalars survive a value roundtrip
+    [32m+[0m all discriminator rules and path/role metadata arms survive a type roundtrip
+[32m+[0m HttpValidationPrincipalSpec
+  [32m+[0m endpoint Principal validation
+    [32m+[0m rejects path variable referencing Principal param
+    [32m+[0m accepts endpoint with non-Principal params
+    [32m+[0m rejects query variable referencing Principal param
+    [32m+[0m rejects header variable referencing Principal param
+    [32m+[0m accepts endpoint when principalParamNames is empty
+    [32m+[0m rejects remaining path variable referencing Principal param
+  [32m+[0m mount Principal validation
+    [32m+[0m accepts mount when principalParamNames is empty
+    [32m+[0m accepts mount with non-Principal path variables
+    [32m+[0m rejects mount path variable referencing Principal param
+[32m+[0m UuidSpec
+  [32m+[0m toStandardString / fromStandardString roundtrip
+    [32m+[0m roundtrip with known UUID
+    [32m+[0m standard UUID string format
+    [32m+[0m roundtrip with max values
+    [32m+[0m roundtrip with zero UUID
+  [32m+[0m fromStandardString error cases
+    [32m+[0m empty string returns Left
+    [32m+[0m invalid format returns Left
+[32m+[0m ConfigSchemaSpec
+  [32m+[0m primitive leaf instances
+    [32m+[0m String produces local declaration
+    [32m+[0m Double produces local declaration
+    [32m+[0m Long produces local declaration
+    [32m+[0m Int produces local declaration
+    [32m+[0m Boolean produces local declaration
+  [32m+[0m ConfigOverride (internal)
+    [32m+[0m Boolean override encodes correctly
+    [32m+[0m Int override has correct path and value
+    [32m+[0m String override has correct path and type
+  [32m+[0m path propagation
+    [32m+[0m multi-segment path is preserved
+    [32m+[0m empty path produces empty path in declaration
+  [32m+[0m Secret instance
+    [32m+[0m Secret[Int] produces secret declaration with int type
+    [32m+[0m Secret[String] produces secret declaration
+[32m+[0m rich semantic types
+  [32m+[0m top-level schemas use rich nodes
+  [32m+[0m derived record supports two distinct quantity units
+  [32m+[0m derived record fields use rich nodes and roundtrip
+  [32m+[0m top-level values roundtrip
+  [32m+[0m quantity schemas do not depend on global unit lifecycle
+  [32m+[0m quantity rejects disallowed units
+[32m+[0m SnapshottingParseSpec
+  [32m+[0m disabled
+  [32m+[0m periodic with millis
+  [32m+[0m periodic with seconds
+  [32m+[0m enabled
+  [32m+[0m periodic with minutes
+  [32m+[0m every with valid count
+  [32m+[0m every(1)
+  [32m+[0m invalid value
+  [32m+[0m periodic with invalid duration
+  [32m+[0m periodic with zero duration
+  [32m+[0m periodic with negative duration
+  [32m+[0m every with zero
+  [32m+[0m every with negative
+  [32m+[0m every with non-integer
+  [32m+[0m case insensitive
+  [32m+[0m whitespace trimmed
+[info] 142 tests passed. 0 tests failed. 0 tests ignored.
+[info] 
+[info] Executed in 282 ms
+[success] Total time: 16 s, completed Jul 3, 2026, 3:12:25 PM
+[info] compiling 70 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/target/scala-3.8.2/classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala-3/golem/runtime/autowire/AgentImplementation.scala:27:59 
+[warn] 27 |    implType: golem.runtime.AgentImplementationType[Trait, _]
+[warn]    |                                                           ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:46:39 
+[warn] 46 |  def unwrapOrRevert[T](result: Either[_, T]): T =
+[warn]    |                                       ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:56:42 
+[warn] 56 |  def runOrRevert[T](fn: => Future[Either[_, T]]): Future[T] =
+[warn]    |                                          ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:88:56 
+[warn] 88 |  def withCheckpoint[T](fn: Checkpoint => Future[Either[_, T]]): Future[T] = {
+[warn]    |                                                        ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:375:105 
+[warn] 375 |    awaitPromiseRaw(promiseId).map(fromUint8Array)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:396:62 
+[warn] 396 |      }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:437:60 
+[warn] 437 |    }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:514:62 
+[warn] 514 |        scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+[warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/config/ConfigHolder.scala:20:38 
+[warn] 20 |  private var _current: Option[Config[_]] = None
+[warn]    |                                      ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:253:67 
+[warn] 253 |      case Bit(bs)              => JsMysqlDbValue.bit(js.Array(bs: _*))
+[warn]     |                                                                   ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:706:67 
+[warn] 706 |      case Bit(bs)           => JsPostgresDbValue.bit(js.Array(bs: _*))
+[warn]     |                                                                   ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:707:70 
+[warn] 707 |      case VarBit(bs)        => JsPostgresDbValue.varbit(js.Array(bs: _*))
+[warn]     |                                                                      ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:717:69 
+[warn] 717 |      case Vector(v)         => JsPostgresDbValue.vector(js.Array(v: _*))
+[warn]     |                                                                     ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:718:70 
+[warn] 718 |      case HalfVec(v)        => JsPostgresDbValue.halfvec(js.Array(v: _*))
+[warn]     |                                                                      ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:720:79 
+[warn] 720 |        JsPostgresDbValue.sparsevec(JsPgSparseVec(sv.dim, js.Array(sv.indices: _*), js.Array(sv.values: _*)))
+[warn]     |                                                                               ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:720:104 
+[warn] 720 |        JsPostgresDbValue.sparsevec(JsPgSparseVec(sv.dim, js.Array(sv.indices: _*), js.Array(sv.values: _*)))
+[warn]     |                                                                                                        ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentConstructor.scala:54:28 
+[warn] 54 |          .decode[A](input)(inputCodec)
+[warn]    |                            ^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentRequestBuilder.scala:107:70 
+[warn] 107 |      corsOptions = JsCorsOptions(js.Array(mount.corsAllowedPatterns: _*)),
+[warn]     |                                                                      ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentRequestBuilder.scala:126:62 
+[warn] 126 |      case Some(patterns) => JsCorsOptions(js.Array(patterns: _*))
+[warn]     |                                                              ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/MethodBinding.scala:69:31 
+[warn] 69 |            .decode[In](input)(inputCodec)
+[warn]    |                               ^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/MethodBinding.scala:78:70 
+[warn] 78 |                    case Some(into) => Some(SchemaPayload.encode(out)(into))
+[warn]    |                                                                      ^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:121:51 
+[warn] 121 |    def trigger[In](method: AgentMethod[Trait, In, _], input: In): Future[Unit] =
+[warn]     |                                                   ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:124:52 
+[warn] 124 |    def schedule[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[Unit] =
+[warn]     |                                                    ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:128:37 
+[warn] 128 |      method: AgentMethod[Trait, In, _],
+[warn]     |                                     ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:72:47 
+[warn] 72 |    try Right(SchemaRpcCodec.encodeArgs(input)(inputCodec))
+[warn]    |                                               ^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:84:103 
+[warn] 84 |      case OutputMetadata.Single(_) => SchemaRpcCodec.decodeSingleResult[Out](result)(outputCodec.from.get)
+[warn]    |                                                                                      ^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:161:66 
+[warn] 161 |          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala:121:66 
+[warn] 121 |          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/host/AgentHostApi.scala:161:53 
+[warn] 161 |    AgentRegistryModule.getConfigValue(js.Array(key: _*), expected)
+[warn]     |                                                     ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/wasi/KeyValue.scala:124:31 
+[warn] 124 |      val arr = js.Array(keys: _*)
+[warn]     |                               ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/wasi/KeyValue.scala:132:64 
+[warn] 132 |      EventualBatchModule.deleteMany(underlying, js.Array(keys: _*))
+[warn]     |                                                                ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- [E030] Match case Unreachable Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala:149:13 
+[warn] 149 |        case Some(res) =>
+[warn]     |             ^^^^^^^^^
+[warn]     |             Unreachable case
+[warn] 32 warnings found
+[info] done compiling
+[info] compiling 42 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/target/scala-3.8.2/test-classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/FutureInteropCompileSpec.scala:31:71 
+[warn] 31 |        future.map(v => v)(scala.scalajs.concurrent.JSExecutionContext.queue)
+[warn]    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/runtime/AgentEndToEndSpec.scala:103:57 
+[warn] 103 |    SchemaPayload.encode[A](a)(InputRecordCodec.single[A]("in"))
+[warn]     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/runtime/AgentEndToEndSpec.scala:170:35 
+[warn] 170 |        InputRecordCodec.fromParams(List(paramCodec[String]("a"), paramCodec[Int]("b")))
+[warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/runtime/PrincipalInjectionSpec.scala:46:57 
+[warn] 46 |    SchemaPayload.encode[A](a)(InputRecordCodec.single[A]("in"))
+[warn]    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] four warnings found
+[info] done compiling
+[warn] multiple main classes detected: run 'show discoveredMainClasses' to see the list
+[info] Fast optimizing /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/target/scala-3.8.2/golem-scala-core-test-fastopt
+[32m+[0m RdbmsRoundtripSpec
+  [32m+[0m MySQL BooleanVal round-trip
+  [32m+[0m MySQL MediumInt round-trip
+  [32m+[0m MySQL SmallInt round-trip
+  [32m+[0m MySQL TinyInt round-trip
+  [32m+[0m MySQL IntVal round-trip
+  [32m+[0m MySQL BigInt round-trip
+  [32m+[0m MySQL TinyIntUnsigned round-trip
+  [32m+[0m MySQL SmallIntUnsigned round-trip
+  [32m+[0m MySQL MediumIntUnsigned round-trip
+  [32m+[0m MySQL IntUnsigned round-trip
+  [32m+[0m MySQL BigIntUnsigned round-trip
+  [32m+[0m MySQL FloatVal round-trip
+  [32m+[0m MySQL DoubleVal round-trip
+  [32m+[0m MySQL Decimal round-trip
+  [32m+[0m MySQL Year round-trip
+  [32m+[0m MySQL FixChar round-trip
+  [32m+[0m MySQL VarChar round-trip
+  [32m+[0m MySQL TinyText round-trip
+  [32m+[0m MySQL Text round-trip
+  [32m+[0m MySQL MediumText round-trip
+  [32m+[0m MySQL LongText round-trip
+  [32m+[0m MySQL Binary round-trip
+  [32m+[0m MySQL VarBinary round-trip
+  [32m+[0m MySQL TinyBlob round-trip
+  [32m+[0m MySQL Blob round-trip
+  [32m+[0m MySQL MediumBlob round-trip
+  [32m+[0m MySQL LongBlob round-trip
+  [32m+[0m MySQL Enumeration round-trip
+  [32m+[0m MySQL SetVal round-trip
+  [32m+[0m MySQL Bit round-trip
+  [32m+[0m MySQL Json round-trip
+  [32m+[0m MySQL Null round-trip
+  [32m+[0m MySQL Date round-trip
+  [32m+[0m MySQL DateTime round-trip
+  [32m+[0m MySQL Timestamp round-trip
+  [32m+[0m MySQL Time round-trip
+  [32m+[0m unknown MySQL tag throws
+  [32m+[0m Postgres Character round-trip
+  [32m+[0m Postgres Int2 round-trip
+  [32m+[0m Postgres Int4 round-trip
+  [32m+[0m Postgres Int8 round-trip
+  [32m+[0m Postgres Float4 round-trip
+  [32m+[0m Postgres Float8 round-trip
+  [32m+[0m Postgres Numeric round-trip
+  [32m+[0m Postgres BooleanVal round-trip
+  [32m+[0m Postgres Text round-trip
+  [32m+[0m Postgres VarChar round-trip
+  [32m+[0m Postgres BpChar round-trip
+  [32m+[0m Postgres Json round-trip
+  [32m+[0m Postgres Jsonb round-trip
+  [32m+[0m Postgres JsonPath round-trip
+  [32m+[0m Postgres Xml round-trip
+  [32m+[0m Postgres Bytea round-trip
+  [32m+[0m Postgres Bit round-trip
+  [32m+[0m Postgres VarBit round-trip
+  [32m+[0m Postgres Null round-trip
+  [32m+[0m Postgres Money round-trip
+  [32m+[0m Postgres Oid round-trip
+  [32m+[0m Postgres Enumeration round-trip
+  [32m+[0m Postgres Timestamp round-trip
+  [32m+[0m Postgres TimestampTz round-trip
+  [32m+[0m Postgres Date round-trip
+  [32m+[0m Postgres Time round-trip
+  [32m+[0m Postgres TimeTz round-trip
+  [32m+[0m Postgres Interval round-trip
+  [32m+[0m Postgres Uuid round-trip
+  [32m+[0m Postgres Inet Ipv4 round-trip
+  [32m+[0m Postgres Cidr Ipv6 round-trip
+  [32m+[0m Postgres MacAddr round-trip
+  [32m+[0m Postgres Int4Range from dynamic
+  [32m+[0m Postgres Int8Range from dynamic
+  [32m+[0m Postgres NumRange from dynamic
+  [32m+[0m Postgres DateRange from dynamic
+  [32m+[0m unknown Postgres tag throws
+  [32m+[0m IpAddress Ipv4 from dynamic
+  [32m+[0m MysqlDbRow.getString returns None for Null
+  [32m+[0m MysqlDbRow.getString returns Some for non-Null
+  [32m+[0m MysqlDbRow.getInt extracts int types
+  [32m+[0m PostgresDbRow.getString returns None for Null
+  [32m+[0m PostgresDbRow.getInt extracts Int4
+  [32m+[0m PostgresDbRow.getLong extracts Int8
+  [32m+[0m DbError variants
+  [32m+[0m DbColumn construction
+  [32m+[0m parsePostgresResult accepts bigint column ordinals
+  [32m+[0m parseMysqlResult accepts bigint column ordinals
+  [32m+[0m PostgresDbResult construction
+  [32m+[0m MysqlDbResult construction
+[32m+[0m ResultCompileSpec
+  [32m+[0m Result.ok creates Ok variant
+  [32m+[0m Result.fromEither converts Left
+  [32m+[0m Result.fromEither converts Right
+  [32m+[0m Result.err creates Err variant
+  [32m+[0m Result.fromOption converts Some
+  [32m+[0m Result.fromOption converts None
+  [32m+[0m Result.toEither roundtrips Ok
+  [32m+[0m Result.toEither roundtrips Err
+  [32m+[0m Result.map transforms Ok value
+  [32m+[0m Result.map preserves Err
+  [32m+[0m Result.flatMap chains Ok values
+  [32m+[0m Result.flatMap short-circuits on Err
+  [32m+[0m Result.mapError transforms Err
+  [32m+[0m Result type alias resolves to WitResult
+[32m+[0m ValueMappingFuzzSpec
+  [32m+[0m schema value roundtrip fuzz: int (200 cases)
+  [32m+[0m schema value roundtrip fuzz: list (150 cases)
+  [32m+[0m schema value roundtrip fuzz: option (200 cases)
+  [32m+[0m schema value roundtrip fuzz: string (200 cases)
+  [32m+[0m schema value roundtrip fuzz: map (150 cases)
+  [32m+[0m schema value roundtrip fuzz: product (150 cases)
+  [32m+[0m schema value roundtrip fuzz: sum (150 cases)
+  [32m+[0m schema value roundtrip fuzz: uuid (100 cases)
+[32m+[0m RetryCompileSpec
+  [32m+[0m builder chain compiles and exposes fluent fields
+  [32m+[0m high-level retry overloads typecheck
+[32m+[0m WitResultSpec
+  [32m+[0m ok unwraps to value and stays Ok through map
+  [32m+[0m unwrapForWit rethrows Throwable payloads directly
+  [32m+[0m flatMap short-circuits on error
+  [32m+[0m err unwrapErr returns payload and mapError transforms it
+  [32m+[0m unwrapForWit wraps non-throwable payloads
+[32m+[0m SnapshottingSpec
+  [32m+[0m handler detection
+    [32m+[0m custom saveSnapshot/loadSnapshot generates snapshot handlers
+    [32m+[0m agent without snapshotting has no snapshot handlers
+    [32m+[0m Snapshotted[S] mixin generates snapshot handlers
+  [32m+[0m custom snapshot roundtrip
+    [32m+[0m save produces application/octet-stream payload
+    [32m+[0m save/load roundtrip restores state
+  [32m+[0m Snapshotted[S] roundtrip
+    [32m+[0m save produces application/json payload with state fields
+    [32m+[0m save/load roundtrip restores state
+  [32m+[0m WIT metadata propagation
+    [32m+[0m disabled snapshotting agent has tag 'disabled' in agentType
+    [32m+[0m enabled snapshotting agent has tag 'enabled' in agentType
+[32m+[0m AgentModeCompileSpec
+  [32m+[0m AgentMode.Durable has value 'durable'
+  [32m+[0m AgentMode.fromString parses 'ephemeral'
+  [32m+[0m AgentMode.fromString parses 'durable'
+  [32m+[0m AgentMode.Ephemeral has value 'ephemeral'
+  [32m+[0m AgentMode.fromString is case-insensitive
+  [32m+[0m AgentMode.fromString returns None for unknown values
+  [32m+[0m AgentMode.fromString returns None for null
+  [32m+[0m AgentMode sealed trait is exhaustive
+[32m+[0m PackageExportsCompileSpec
+  [32m+[0m DurabilityMode.wireValue returns correct strings
+  [32m+[0m DurabilityMode.fromWireValue is case-insensitive
+  [32m+[0m DurabilityMode.fromWireValue parses ephemeral
+  [32m+[0m DurabilityMode.fromWireValue parses durable
+  [32m+[0m DurabilityMode.fromWireValue returns None for unknown
+  [32m+[0m DurabilityMode.toString matches wireValue
+[32m+[0m DurabilityApiCompileSpec
+  [32m+[0m all DurableFunctionType variants constructed
+  [32m+[0m OplogEntryVersion exhaustive
+  [32m+[0m DurableExecutionState construction
+  [32m+[0m exhaustive DurableFunctionType match compiles
+  [32m+[0m PersistedDurableFunctionInvocation field access
+  [32m+[0m OplogIndex type alias
+[32m+[0m AgentEndToEndSpec
+  [32m+[0m echo string roundtrips through binding
+  [32m+[0m Boolean roundtrips through binding
+  [32m+[0m Int roundtrips through binding
+  [32m+[0m case class payload roundtrips through binding
+  [32m+[0m Long roundtrips through binding
+  [32m+[0m Double roundtrips through binding
+  [32m+[0m Option[String] Some roundtrips through binding
+  [32m+[0m Option[String] None roundtrips through binding
+  [32m+[0m List[Int] non-empty roundtrips through binding
+  [32m+[0m List[Int] empty roundtrips through binding
+  [32m+[0m nested case class roundtrips through binding
+  [32m+[0m multi-parameter method roundtrips through binding
+  [32m+[0m Future[Unit] return roundtrips through binding as an absent result
+[32m+[0m AgentSurfaceExportCompileSpec
+  [32m+[0m export unit-constructor agent produces valid JSON
+  [32m+[0m export agent with default name uses trait name
+  [32m+[0m export multi-param constructor includes all params
+  [32m+[0m export single-param constructor includes param
+  [32m+[0m export JSON contains package/FQN info
+  [32m+[0m export JSON contains metadata fields
+  [32m+[0m export agent without description has null
+[32m+[0m AgentTypeEncoderV2Spec
+  [32m+[0m top-level scalar JS shape: typeName/description/mode/sourceLanguage
+  [32m+[0m method output-schema: single(index) resolves to the output type
+  [32m+[0m method output-schema: unit -> { tag: unit }
+  [32m+[0m constructor input-schema uses parameters + per-field source/index
+  [32m+[0m method input params carry name + source + resolvable index
+  [32m+[0m config declarations carry source/path + resolvable valueType index
+  [32m+[0m shared defs are merged once: same type used twice has one def entry
+  [32m+[0m conflicting same-id defs are rejected with SchemaConflictError
+  [32m+[0m schema.root is a structural placeholder (empty record)
+[32m+[0m AgentTypeDeclarationSpec
+  [32m+[0m top-level declaration carries typeName/description/mode/sourceLanguage
+  [32m+[0m multi-parameter method preserves parameter order and per-field schemas
+  [32m+[0m single-parameter method input maps the parameter by name + resolvable index
+  [32m+[0m constructor parameters come from the Id class, all user-supplied, resolvable
+  [32m+[0m method returning a value emits output-schema single(index) resolving to the type
+  [32m+[0m method returning Unit emits output-schema unit with no input fields
+[32m+[0m HostApiCompileSpec
+  [32m+[0m all PersistenceLevel variants construct
+  [32m+[0m PersistenceLevel exhaustive pattern match compiles
+  [32m+[0m PersistenceLevel.fromTag returns Unknown for unrecognized tags
+  [32m+[0m PersistenceLevel.fromTag roundtrips all known tags
+  [32m+[0m ForkResult.Original and Forked variants compile
+  [32m+[0m ForkResult pattern match compiles
+  [32m+[0m AgentMetadata construction with all fields
+  [32m+[0m all AgentStatus variants accessible
+  [32m+[0m UpdateMode variants accessible
+  [32m+[0m FilterComparator variants accessible
+  [32m+[0m StringFilterComparator variants accessible
+  [32m+[0m RevertAgentTarget factory methods
+  [32m+[0m Uuid construction
+  [32m+[0m RegisteredAgentType construction
+  [32m+[0m AgentIdParts construction
+  [32m+[0m AgentIdParts with no phantom
+  [32m+[0m AgentNameFilter construction with StringFilterComparator
+  [32m+[0m AgentStatusFilter construction with FilterComparator
+  [32m+[0m AgentVersionFilter construction
+  [32m+[0m AgentCreatedAtFilter construction
+  [32m+[0m AgentEnvFilter construction
+  [32m+[0m AgentConfigFilter construction
+  [32m+[0m AgentPropertyFilter.name wraps AgentNameFilter
+  [32m+[0m AgentPropertyFilter.status wraps AgentStatusFilter
+  [32m+[0m AgentPropertyFilter.version wraps AgentVersionFilter
+  [32m+[0m AgentPropertyFilter.createdAt wraps AgentCreatedAtFilter
+  [32m+[0m AgentPropertyFilter.env wraps AgentEnvFilter
+  [32m+[0m AgentPropertyFilter.config wraps AgentConfigFilter
+  [32m+[0m AgentAllFilter combines multiple AgentPropertyFilters
+  [32m+[0m AgentAnyFilter combines multiple AgentAllFilters
+  [32m+[0m UuidLiteral companion constructs from js.BigInts
+  [32m+[0m ComponentIdLiteral companion constructs from UuidLiteral
+  [32m+[0m AgentIdLiteral companion constructs from ComponentIdLiteral and name
+  [32m+[0m PromiseIdLiteral companion constructs from AgentIdLiteral and oplog index
+[32m+[0m PrincipalConverterSpec
+  [32m+[0m toJson / fromJson roundtrip
+    [32m+[0m Agent
+    [32m+[0m Oidc with minimal fields
+    [32m+[0m Oidc with all fields
+    [32m+[0m Anonymous
+    [32m+[0m GolemUser
+  [32m+[0m fromJson error handling
+    [32m+[0m invalid JSON returns Left
+  [32m+[0m fromJs
+    [32m+[0m null/undefined tag returns Anonymous
+    [32m+[0m Anonymous through fromJs
+[32m+[0m ConfigCompileSpec
+  [32m+[0m ConfigError exhaustive match
+  [32m+[0m Either result type usage
+  [32m+[0m ConfigError field access
+[32m+[0m AgentClientTypeEndToEndSpec
+  [32m+[0m client type loopback via AgentClientRuntime.resolve (Future-returning method)
+[32m+[0m DatetimeCompileSpec
+  [32m+[0m Datetime.fromEpochMillis constructs value
+  [32m+[0m Datetime.afterMillis is in the future
+  [32m+[0m Datetime.now returns non-zero value
+  [32m+[0m Datetime.fromEpochSeconds converts correctly
+  [32m+[0m Datetime.afterSeconds is in the future
+  [32m+[0m DatetimeJs.fromTs creates Datetime
+  [32m+[0m Datetime is a value type (AnyVal)
+  [32m+[0m Uuid construction and field access
+  [32m+[0m Uuid equality
+[32m+[0m OplogApiCompileSpec
+  [32m+[0m all 41 OplogEntry variants constructed
+  [32m+[0m SpanData exhaustive match
+  [32m+[0m every entry has timestamp
+  [32m+[0m exhaustive OplogEntry match compiles
+  [32m+[0m AgentInvocation exhaustive match
+  [32m+[0m UpdateDescription exhaustive match
+  [32m+[0m LogLevel exhaustive match
+  [32m+[0m supporting record construction
+  [32m+[0m OplogIndex type alias
+[32m+[0m ConfigMetadataSpec
+  [32m+[0m agent with config
+    [32m+[0m secret field appears with Secret source
+    [32m+[0m local field appears with Local source
+    [32m+[0m metadata has correct number of config declarations
+    [32m+[0m metadata has non-empty config declarations
+    [32m+[0m local field has schema-native value type
+    [32m+[0m secret field has schema-native secret handle value type
+  [32m+[0m agent without config
+    [32m+[0m metadata has empty config declarations
+  [32m+[0m agent with nested config
+    [32m+[0m nested secret field has multi-segment path
+    [32m+[0m nested local field has multi-segment path
+    [32m+[0m top-level field has single-segment path
+    [32m+[0m metadata has declarations for all leaf fields
+[32m+[0m RetryDslSpec
+  [32m+[0m named policy roundtrips through raw retry facades
+  [32m+[0m rejects invalid jitter factors at conversion time
+  [32m+[0m rejects invalid exponential factors at conversion time
+  [32m+[0m retry properties roundtrip through raw predicate values
+  [32m+[0m rejects inverted clamp ranges at conversion time
+  [32m+[0m rejects integer predicate values outside the WIT s64 range
+  [32m+[0m rejects negative durations at conversion time
+  [32m+[0m rejects negative named policy priorities at conversion time
+  [32m+[0m rejects malformed raw predicate indices during decode
+  [32m+[0m rejects malformed raw named policy u32 values during decode
+[32m+[0m RdbmsCompileSpec
+  [32m+[0m all 36 MysqlDbValue variants constructed
+  [32m+[0m exhaustive PostgresDbValue match compiles
+  [32m+[0m all 43 PostgresDbValue variants constructed
+  [32m+[0m exhaustive MysqlDbValue match compiles
+  [32m+[0m shared types construction
+  [32m+[0m IpAddress exhaustive match
+  [32m+[0m MacAddress field access
+  [32m+[0m bound types exhaustive
+  [32m+[0m row types construction and accessors
+  [32m+[0m result types construction
+  [32m+[0m DbError exhaustive match
+  [32m+[0m connection return types compile
+  [32m+[0m all 16 IgniteDbValue variants constructed
+  [32m+[0m exhaustive IgniteDbValue match compiles
+  [32m+[0m Ignite row types construction and accessors
+  [32m+[0m Ignite connection return type compiles
+[32m+[0m SchemaVerificationSpec
+  [32m+[0m single-param method has 1 input element
+  [32m+[0m unit-returning method has 0 output elements
+  [32m+[0m single-output method has 1 output element
+  [32m+[0m multi-param method has 3 input elements
+  [32m+[0m single-param method element name is the parameter name
+  [32m+[0m multi-param method element names match parameter names
+  [32m+[0m byte method produces s8 schema body
+  [32m+[0m short method produces s16 schema body
+  [32m+[0m int method produces s32 schema body
+  [32m+[0m long method produces s64 schema body
+  [32m+[0m float method produces f32 schema body
+  [32m+[0m double method produces f64 schema body
+  [32m+[0m ubyte method produces u8 schema body
+  [32m+[0m ushort method produces u16 schema body
+  [32m+[0m uint method produces u32 schema body
+  [32m+[0m ulong method produces u64 schema body
+  [32m+[0m string method produces string schema body
+  [32m+[0m bool method produces bool schema body
+  [32m+[0m pure enum method produces enum schema body
+  [32m+[0m schema-verify agent has 18 registered methods
+[32m+[0m DurabilityApiRoundtripSpec
+  [32m+[0m ReadLocal round-trip
+  [32m+[0m WriteRemote round-trip
+  [32m+[0m ReadRemote round-trip
+  [32m+[0m WriteLocal round-trip
+  [32m+[0m WriteRemoteBatched with None round-trip
+  [32m+[0m WriteRemoteBatched with Some round-trip
+  [32m+[0m WriteRemoteTransaction with None round-trip
+  [32m+[0m WriteRemoteTransaction with Some round-trip
+  [32m+[0m unknown DurableFunctionType tag throws
+  [32m+[0m OplogEntryVersion.fromString v1
+  [32m+[0m OplogEntryVersion.fromString v2
+  [32m+[0m OplogEntryVersion.fromString unknown defaults to V1
+  [32m+[0m DurableExecutionState fields
+  [32m+[0m DurableExecutionState with all persistence levels
+  [32m+[0m PersistedDurableFunctionInvocation construction
+[32m+[0m SchemaRpcCodecSpec
+  [32m+[0m arguments (parameter-list value tree)
+    [32m+[0m encodeArgs/decodeArgs round-trip for a multi-field param list
+    [32m+[0m encodeArgs equals SchemaPayload.encode (single value-tree hub)
+    [32m+[0m encodeArgs/decodeArgs round-trip for an empty param list
+  [32m+[0m typed-schema-value (config values, custom errors)
+    [32m+[0m typedConfigValue carries path + typed-schema-value
+    [32m+[0m encodeTyped carries the self-contained graph of A
+    [32m+[0m encodeTyped/decodeTyped round-trip
+  [32m+[0m results (option<schema-value-tree>)
+    [32m+[0m decodeSingleResult on absent result is an error
+    [32m+[0m encodeSingleResult/decodeSingleResult round-trip
+    [32m+[0m decodeUnitResult is always () regardless of presence
+    [32m+[0m encodeUnitResult is absent (none on the wire)
+[32m+[0m SchemaVerificationScala3Spec
+  [32m+[0m either method produces result schema body
+[32m+[0m ReadOnlySpec
+  [32m+[0m @readOnly() with default cache policy → until-write, usesPrincipal=false
+  [32m+[0m @readOnly(cache = "ttl(30 seconds)") → ttl with 30s in nanoseconds
+  [32m+[0m @readOnly(cache = "until-write") → until-write
+  [32m+[0m @readOnly(cache = "no-cache") → no-cache
+  [32m+[0m usesPrincipal=true when the method has a Principal parameter
+  [32m+[0m methods without @readOnly have no readOnly metadata
+[32m+[0m PrincipalInjectionSpec
+  [32m+[0m constructor injection
+    [32m+[0m constructor receives Principal.Anonymous via registerClass
+    [32m+[0m constructor agent initializes with Oidc principal
+    [32m+[0m constructor agent initializes with Anonymous principal
+  [32m+[0m mixed params
+    [32m+[0m mixed agent has correct method count
+    [32m+[0m agent with Config + Principal in constructor registers successfully
+  [32m+[0m schema exclusion
+    [32m+[0m constructor input excludes Principal
+    [32m+[0m method input excludes Principal (multiple user params)
+    [32m+[0m method input excludes Principal (single user param)
+  [32m+[0m method injection
+    [32m+[0m method receives Principal.Oidc through binding invoke
+    [32m+[0m method receives Principal.Anonymous through binding invoke
+[32m+[0m OplogEntryRoundtripSpec
+  [32m+[0m Suspend from dynamic
+  [32m+[0m Exited from dynamic
+  [32m+[0m Interrupted from dynamic
+  [32m+[0m NoOp from dynamic
+  [32m+[0m BeginAtomicRegion from dynamic
+  [32m+[0m BeginRemoteWrite from dynamic
+  [32m+[0m Restart from dynamic
+  [32m+[0m Error from dynamic
+  [32m+[0m EndAtomicRegion from dynamic
+  [32m+[0m EndRemoteWrite from dynamic
+  [32m+[0m GrowMemory from dynamic
+  [32m+[0m CancelPendingInvocation from dynamic
+  [32m+[0m FinishSpan from dynamic
+  [32m+[0m ChangePersistenceLevel from dynamic
+  [32m+[0m BeginRemoteTransaction from dynamic
+  [32m+[0m PreCommitRemoteTransaction from dynamic
+  [32m+[0m PreRollbackRemoteTransaction from dynamic
+  [32m+[0m CommittedRemoteTransaction from dynamic
+  [32m+[0m RolledBackRemoteTransaction from dynamic
+  [32m+[0m Jump from dynamic
+  [32m+[0m SetRetryPolicy from dynamic
+  [32m+[0m RemoveRetryPolicy from dynamic
+  [32m+[0m FilesystemStorageUsageUpdate from dynamic
+  [32m+[0m Log from dynamic
+  [32m+[0m AgentInvocationFinished with response from dynamic (agent-method result)
+  [32m+[0m AgentInvocationFinished without response from dynamic (manual-update result)
+  [32m+[0m HostCall from dynamic
+  [32m+[0m Start durable host-call marker from dynamic
+  [32m+[0m End durable host-call marker from dynamic
+  [32m+[0m Cancelled durable host-call marker from dynamic
+  [32m+[0m CreateResource from dynamic
+  [32m+[0m DropResource from dynamic
+  [32m+[0m ActivatePlugin from dynamic
+  [32m+[0m DeactivatePlugin from dynamic
+  [32m+[0m Revert from dynamic
+  [32m+[0m StartSpan from dynamic with attributes
+  [32m+[0m StartSpan from dynamic without optional fields
+  [32m+[0m SetSpanAttribute from dynamic
+  [32m+[0m FailedUpdate with details from dynamic
+  [32m+[0m FailedUpdate without details from dynamic
+  [32m+[0m PendingUpdate auto-update from dynamic
+  [32m+[0m PendingUpdate snapshot-based from dynamic
+  [32m+[0m SuccessfulUpdate from dynamic
+  [32m+[0m PendingAgentInvocation with exported-function from dynamic
+  [32m+[0m PendingAgentInvocation with manual-update from dynamic
+  [32m+[0m unknown oplog entry tag throws
+  [32m+[0m LogLevel.fromString covers all variants
+[32m+[0m SnapshotEnvelopeSpec
+  [32m+[0m JSON envelope
+    [32m+[0m roundtrip with Oidc principal
+    [32m+[0m envelope contains version field
+    [32m+[0m roundtrip with Agent principal
+    [32m+[0m roundtrip with Anonymous principal
+    [32m+[0m Agent principal JSON matches Rust format
+    [32m+[0m Anonymous principal JSON matches Rust format
+    [32m+[0m GolemUser principal JSON matches Rust format
+    [32m+[0m Oidc principal JSON matches Rust format
+  [32m+[0m Binary envelope v2
+    [32m+[0m envelope starts with version byte 2
+    [32m+[0m roundtrip with Agent principal
+    [32m+[0m roundtrip with Anonymous principal
+    [32m+[0m roundtrip with Oidc principal
+    [32m+[0m roundtrip with empty state
+    [32m+[0m roundtrip with GolemUser principal
+[32m+[0m ContextApiCompileSpec
+  [32m+[0m AttributeValue exhaustive match
+  [32m+[0m DateTime construction and field access
+  [32m+[0m AttributeChain construction and field access
+  [32m+[0m Attribute construction and field access
+[32m+[0m BlobstoreCompileSpec
+  [32m+[0m ContainerMetadata construction and field access
+  [32m+[0m ObjectId construction and field access
+  [32m+[0m ObjectMetadata construction and field access
+[32m+[0m AgentClientRuntimeSpec
+  [32m+[0m ResolvedAgent encodes awaitable inputs and decodes results
+  [32m+[0m Trigger works for any method
+  [32m+[0m Awaitable calls reject when RPC invoker returns an error
+  [32m+[0m Schedule works for any method
+  [32m+[0m ResolvedAgent routes fire-and-forget calls through trigger and schedule
+[32m+[0m TransactionsSpec
+  [32m+[0m Operation.apply creates executable operation
+  [32m+[0m Transactions.operation convenience creates Operation
+  [32m+[0m Operation.compensate returns Left on failure
+  [32m+[0m Operation.execute returns Left on failure
+  [32m+[0m TransactionFailure.FailedAndRolledBackCompletely wraps error
+  [32m+[0m TransactionFailure.FailedAndRolledBackPartially wraps both errors
+  [32m+[0m TransactionFailure pattern match is exhaustive
+  [32m+[0m FallibleTransaction.execute with all-successful operations
+  [32m+[0m FallibleTransaction.execute propagates failure
+  [32m+[0m FallibleTransaction.onFailure runs compensations and returns complete rollback
+  [32m+[0m FallibleTransaction.onFailure reports partial rollback on compensation failure
+  [32m+[0m Operation with Unit input
+  [32m+[0m FallibleTransaction.onFailure compensates in reverse order (synchronous)
+  [32m+[0m FallibleTransaction.onFailure compensates in reverse order (async)
+  [32m+[0m FallibleTransaction with no operations returns complete rollback
+  [32m+[0m Operation with complex error type
+  [32m+[0m Operation.compensate succeeds
+[32m+[0m FutureInteropCompileSpec
+  [32m+[0m fromPromise converts js.Promise to Future
+  [32m+[0m fromEither converts Left to failed Future
+  [32m+[0m fromEither converts Right to successful Future
+  [32m+[0m toPromise converts Future to js.Promise
+  [32m+[0m failed creates failed Future
+  [32m+[0m toPromise then fromPromise roundtrips
+[32m+[0m AgentRegistrationMetadataSpec
+  [32m+[0m registered agent has correct typeName
+  [32m+[0m echo method has description from @description
+  [32m+[0m method count matches trait method count
+  [32m+[0m metadata contains all methods
+  [32m+[0m echo method has prompt from @prompt
+  [32m+[0m add method has description but no prompt
+  [32m+[0m unannotated method has no description and no prompt
+  [32m+[0m default mode is Durable
+  [32m+[0m ephemeral agent has Ephemeral mode
+  [32m+[0m constructor agent registration succeeds
+  [32m+[0m constructor agent has correct method count
+  [32m+[0m explicit durable agent has Durable mode
+  [32m+[0m echo method input has one user-supplied parameter
+  [32m+[0m echo method output is a single value
+  [32m+[0m add method input has two user-supplied parameters
+  [32m+[0m multiple methods can have different descriptions
+  [32m+[0m agent trait description is captured in metadata
+[32m+[0m WasmRpcErrorSpec
+  [32m+[0m decodes the string-carrying error cases with their messages
+  [32m+[0m falls back to 'unknown' for an unrecognized thrown value
+  [32m+[0m decodes remote-agent-error preserving the v2 agent-error payload in toString
+[32m+[0m SchemaPayloadSpec
+  [32m+[0m encode/decode round-trips through the JS boundary
+    [32m+[0m primitive Long (s64 raw-bits boundary)
+    [32m+[0m primitive Boolean
+    [32m+[0m primitive String
+    [32m+[0m primitive Int
+    [32m+[0m record
+    [32m+[0m record with option (some) + list
+    [32m+[0m record with option (none) + empty list
+    [32m+[0m sealed trait — record arm
+    [32m+[0m sealed trait — second record arm
+    [32m+[0m sealed trait — case object arm
+    [32m+[0m recursive type
+    [32m+[0m list of records
+  [32m+[0m graphFromModel matches graph[A]
+    [32m+[0m graphFromModel(IntoSchema[A].graph) == graph[A]
+  [32m+[0m graph[A] equals the JS facade of IntoSchema[A].graph
+    [32m+[0m sealed trait
+    [32m+[0m record with option + list
+    [32m+[0m record
+    [32m+[0m primitive
+    [32m+[0m recursive type
+[32m+[0m SchemaWireInteropSpec
+  [32m+[0m schema graph round-trips Wit -> Js -> Wit
+  [32m+[0m per-type-body round-trips individually
+  [32m+[0m typed schema value round-trips Wit -> Js -> Wit (all cases)
+  [32m+[0m schema value tree round-trips Wit -> Js -> Wit
+  [32m+[0m per-value-node round-trips individually
+  [32m+[0m secret handle: encode moves the owned resource and consumes the handle
+  [32m+[0m secret handle: decode wraps the owned resource in a fresh present handle
+  [32m+[0m secret handle: inbound decode rejects two nodes carrying the same raw resource
+  [32m+[0m secret handle: encode is atomic — a sibling that fails leaves the handle untouched
+  [32m+[0m quota-token handle: encode moves the owned resource and consumes the handle
+  [32m+[0m quota-token handle: decode wraps the owned resource in a fresh present handle
+  [32m+[0m quota-token handle: encode is atomic — a sibling that fails leaves the handle untouched
+  [32m+[0m raw JS shape: variant-value uses `case_`, not `case`
+  [32m+[0m raw JS shape: quantity value node tag is `quantity-value-node`
+  [32m+[0m raw JS shape: result value tags are `ok-value` / `err-value`
+  [32m+[0m raw JS shape: path direction/kind are plain strings
+  [32m+[0m raw JS shape: binary payload bytes is a Uint8Array
+  [32m+[0m raw JS shape: numeric restrictions carry bigint bounds
+  [32m+[0m raw JS shape: s64/u64 carry JS bigint, u32 carries JS number
+[32m+[0m AgentDefinitionCompileSpec
+  [32m+[0m no-arg constructor compiles
+  [32m+[0m tuple-style Constructor compiles
+  [32m+[0m multi-param Constructor compiles
+  [32m+[0m single-param Constructor compiles
+  [32m+[0m async and sync return types compile
+  [32m+[0m method count is correct for ReturnTypesAgent
+  [32m+[0m kitchen-sink agent with 18 methods registers correctly
+  [32m+[0m kitchen-sink agent method names are all present
+  [32m+[0m kitchen-sink agent described method has annotations
+  [32m+[0m @agentDefinition mode defaults and overrides
+  [32m+[0m @description and @prompt store their values
+  [32m+[0m register with factory constructor compiles
+  [32m+[0m agent with zero methods (only constructor) compiles and registers
+  [32m+[0m agent with single method compiles and registers
+[32m+[0m ReadOnlyEphemeralRejectSpec
+  [32m+[0m ephemeral agent with @readOnly method fails to compile (Scala 3)
+[info] 511 tests passed. 0 tests failed. 0 tests ignored.
+[info] 
+[info] Executed in 769 ms
+[success] Total time: 26 s, completed Jul 3, 2026, 3:12:51 PM
+[32m+[0m AgentMetadataMacroSpec
+  [32m+[0m EchoAgent combine method keeps parameter ordering and per-parameter schema
+  [32m+[0m EchoAgent metadata exposes all method names
+  [32m+[0m Agent metadata captures trait-level mode annotation
+  [32m+[0m Agent metadata omits mode when durable annotation is not provided
+  [32m+[0m AgentImplementationMacro preserves durable annotations in implementation metadata
+  [32m+[0m AgentImplementationMacro leaves mode unset for durable defaults
+  [32m+[0m AgentImplementationMacro preserves annotated agent mode
+  [32m+[0m Agent metadata omits durable default (even when explicitly set via agentDefinition)
+  [32m+[0m AgentImplementationMacro preserves method invocation kinds
+  [32m+[0m AgentClientMacro produces fire-and-forget invocation for Unit-returning method
+[32m+[0m ScaladocDescriptionSpec
+  [32m+[0m scaladoc-based descriptions
+    [32m+[0m trait scaladoc becomes the agent description, tags stripped
+    [32m+[0m Id class scaladoc becomes the constructor description
+    [32m+[0m method scaladoc becomes the method description
+    [32m+[0m undocumented method has no description
+  [32m+[0m annotation precedence
+    [32m+[0m @description on the trait wins over scaladoc
+    [32m+[0m undocumented Id class falls back to the trait description
+    [32m+[0m @description on a method wins over scaladoc
+  [32m+[0m no docs at all
+    [32m+[0m behaves as before: no description, constructor falls back to type name
+  [32m+[0m Scaladoc parser
+    [32m+[0m single-line comment
+    [32m+[0m tags-only comment yields None
+    [32m+[0m multi-line comment with margin stars
+    [32m+[0m tag sections are dropped
+    [32m+[0m email-like text is not treated as a tag
+    [32m+[0m summary and description split
+24 tests passed. 0 tests failed. 0 tests ignored.
+
+Executed in 86 ms
+
+[info] Completed tests
+[success] Total time: 0 s, completed Jul 3, 2026, 3:12:51 PM
+[error] java.lang.RuntimeException: [golem] Missing embedded resource 'golem/wasm/agent_guest.wasm' (and no repo fallback at /Users/vigoo/projects/golem/golem-4/sdks/scala/golem/sbt/src/main/resources/golem/wasm/agent_guest.wasm).
+[error] 	at scala.sys.package$.error(package.scala:30)
+[error] 	at golem.sbt.GolemPlugin$.embeddedAgentGuestWasmBytes(GolemPlugin.scala:89)
+[error] 	at golem.sbt.GolemPlugin$.$anonfun$projectSettings$9(GolemPlugin.scala:184)
+[error] 	at scala.Function1.$anonfun$compose$1(Function1.scala:49)
+[error] 	at sbt.internal.util.$tilde$greater.$anonfun$$u2219$1(TypeFunctions.scala:63)
+[error] 	at sbt.std.Transform$$anon$4.work(Transform.scala:69)
+[error] 	at sbt.Execute.$anonfun$submit$2(Execute.scala:283)
+[error] 	at sbt.internal.util.ErrorHandling$.wideConvert(ErrorHandling.scala:24)
+[error] 	at sbt.Execute.work(Execute.scala:292)
+[error] 	at sbt.Execute.$anonfun$submit$1(Execute.scala:283)
+[error] 	at sbt.ConcurrentRestrictions$$anon$4.$anonfun$submitValid$1(ConcurrentRestrictions.scala:265)
+[error] 	at sbt.CompletionService$$anon$2.call(CompletionService.scala:65)
+[error] 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+[error] 	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:572)
+[error] 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+[error] 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+[error] 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+[error] 	at java.base/java.lang.Thread.run(Thread.java:1583)
+[error] (testAgents / golemEnsureAgentGuestWasm) [golem] Missing embedded resource 'golem/wasm/agent_guest.wasm' (and no repo fallback at /Users/vigoo/projects/golem/golem-4/sdks/scala/golem/sbt/src/main/resources/golem/wasm/agent_guest.wasm).
+[error] Total time: 0 s, completed Jul 3, 2026, 3:12:51 PM

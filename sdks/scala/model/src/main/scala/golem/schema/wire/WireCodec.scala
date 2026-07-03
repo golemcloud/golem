@@ -340,7 +340,7 @@ object SchemaWire {
     // most once; track which handle nodes have already been claimed so a
     // malformed tree that references the same handle node twice cannot wrap one
     // owned resource into two handles.
-    val liftedHandle = Array.fill(nodes.length)(false)
+    val liftedHandle  = Array.fill(nodes.length)(false)
     val seenRawSecret = mutable.Set.empty[Any]
     val seenRawQuota  = mutable.Set.empty[Any]
 

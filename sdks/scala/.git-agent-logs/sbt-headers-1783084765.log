@@ -1,0 +1,775 @@
+[info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+[info] loading settings for project root from build.sbt, plugins.sbt...
+[info] loading project definition from /Users/vigoo/projects/golem/golem-4/sdks/scala/project
+[info] compiling 7 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/project/target/scala-2.12/sbt-1.0/classes ...
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/discovery/SourceDiscovery.scala:243:27: method stats in trait Template is deprecated: 4.9.9
+[warn]     val annotated = templ.stats.collectFirst {
+[warn]                           ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/discovery/SourceDiscovery.scala:248:13: method stats in trait Template is deprecated: 4.9.9
+[warn]       templ.stats.collectFirst {
+[warn]             ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/discovery/SourceDiscovery.scala:264:11: method stats in trait Template is deprecated: 4.9.9
+[warn]     templ.stats.flatMap {
+[warn]           ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/discovery/SourceDiscovery.scala:317:17: method stats in trait Pkg is deprecated: 4.9.9
+[warn]         pkgNode.stats.foreach(collect(_, nextPkg, sourcePath, warnings, traits, impls, objects, caseClassIndex))
+[warn]                 ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/discovery/SourceDiscovery.scala:321:15: method stats in trait Template is deprecated: 4.9.9
+[warn]         templ.stats.foreach(collect(_, nextPkg, sourcePath, warnings, traits, impls, objects, caseClassIndex))
+[warn]               ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/discovery/SourceDiscovery.scala:392:17: method stats in trait Pkg is deprecated: 4.9.9
+[warn]         pkgNode.stats.foreach(collectCaseClasses(_, nextPkg, builder))
+[warn]                 ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/discovery/SourceDiscovery.scala:395:15: method stats in trait Template is deprecated: 4.9.9
+[warn]         templ.stats.foreach(collectCaseClasses(_, nextPkg, builder))
+[warn]               ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/src/main/scala/golem/codegen/rpc/RpcCodegen.scala:117:17: method unapply in object Apply is deprecated: 4.6.0; use `.After_4_6_0`
+[warn]       case Type.Apply(name, args) if args.size == 1 =>
+[warn]                 ^
+[warn] 8 warnings found
+[info] done compiling
+[info] loading settings for project root from build.sbt...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] Setting Scala version to 3.8.2 on 8 projects.
+[info] Excluded 1 projects, run ++ 3.8.2 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] compiling 50 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.jvm/target/scala-3.8.2/classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:39:46 
+[warn] 39 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+[warn]    |                                              ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:42:57 
+[warn] 42 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+[warn]    |                                                         ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:32:46 
+[warn] 32 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+[warn]    |                                              ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:35:57 
+[warn] 35 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+[warn]    |                                                         ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentImplementationType.scala:35:38 
+[warn] 35 |  configBuilder: Option[ConfigBuilder[_]] = None,
+[warn]    |                                      ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:45 
+[warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+[warn]    |                                             ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:48 
+[warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+[warn]    |                                                ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:61:42 
+[warn] 61 |        scala.concurrent.ExecutionContext.parasitic
+[warn]    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:73:80 
+[warn] 73 |      raw(instance, bytes).map(_ => instance)(scala.concurrent.ExecutionContext.parasitic)
+[warn]    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] 9 warnings found
+[info] done compiling
+[info] compiling 12 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.jvm/target/scala-3.8.2/test-classes ...
+[info] done compiling
+[32m+[0m SchemaDerivationScala3Spec
+  [32m+[0m tuple derives tuple-type and round-trips
+  [32m+[0m Either derives result and round-trips Left/Right
+[32m+[0m AnnotationsSpec
+  [32m+[0m annotation classes can be constructed
+  [32m+[0m DurabilityMode wire values and parsing
+[32m+[0m SecretSchemaSpec
+  [32m+[0m Secret[Int]
+    [32m+[0m reflect is a wrapper
+    [32m+[0m wrapped reflect corresponds to Int
+    [32m+[0m typeId normalized name contains golem.config.Secret
+  [32m+[0m Secret[String]
+    [32m+[0m reflect is a wrapper
+    [32m+[0m typeId normalized name contains golem.config.Secret
+    [32m+[0m wrapped reflect corresponds to String
+[32m+[0m UuidSpec
+  [32m+[0m fromStandardString error cases
+    [32m+[0m empty string returns Left
+    [32m+[0m invalid format returns Left
+  [32m+[0m toStandardString / fromStandardString roundtrip
+    [32m+[0m roundtrip with known UUID
+    [32m+[0m standard UUID string format
+    [32m+[0m roundtrip with max values
+[32m+[0m SchemaDerivationSpec
+    [32m+[0m roundtrip with zero UUID
+  [32m+[0m Unit derives as empty tuple and round-trips
+[32m+[0m DatetimeSpec
+  [32m+[0m derives all primitives (BigDecimal/BigInt as string) and round-trips
+  [32m+[0m fromEpochMillis preserves millis
+  [32m+[0m mixed sealed trait derives a variant; all-empty derives an enum
+  [32m+[0m afterSeconds delegates to afterMillis
+  [32m+[0m case class derives a nominal record def referenced by the root
+  [32m+[0m afterMillis returns time after now
+  [32m+[0m enum values round-trip
+  [32m+[0m fromEpochSeconds scales to millis
+  [32m+[0m generic instantiations get distinct, generic-aware type ids
+  [32m+[0m now returns current-ish time
+[32m+[0m HttpValidationPrincipalSpec
+  [32m+[0m variant values round-trip (payload, record payload, no payload)
+  [32m+[0m mount Principal validation
+    [32m+[0m accepts mount when principalParamNames is empty
+    [32m+[0m accepts mount with non-Principal path variables
+  [32m+[0m no-payload case in a mixed variant encodes as VariantValue(_, None), not EnumValue
+    [32m+[0m rejects mount path variable referencing Principal param
+  [32m+[0m endpoint Principal validation
+  [32m+[0m no-payload case in a pure enum encodes as EnumValue
+    [32m+[0m rejects path variable referencing Principal param
+    [32m+[0m accepts endpoint with non-Principal params
+    [32m+[0m rejects query variable referencing Principal param
+  [32m+[0m Option derives option and round-trips Some/None
+    [32m+[0m rejects header variable referencing Principal param
+    [32m+[0m accepts endpoint when principalParamNames is empty
+    [32m+[0m rejects remaining path variable referencing Principal param
+[32m+[0m ConfigSchemaSpec
+  [32m+[0m Secret instance
+    [32m+[0m Secret[Int] produces secret declaration with int type
+    [32m+[0m Secret[String] produces secret declaration
+  [32m+[0m ConfigOverride (internal)
+    [32m+[0m Boolean override encodes correctly
+    [32m+[0m Int override has correct path and value
+    [32m+[0m String override has correct path and type
+  [32m+[0m path propagation
+    [32m+[0m empty path produces empty path in declaration
+    [32m+[0m multi-segment path is preserved
+  [32m+[0m primitive leaf instances
+    [32m+[0m Long produces local declaration
+    [32m+[0m Double produces local declaration
+    [32m+[0m String produces local declaration
+    [32m+[0m Int produces local declaration
+    [32m+[0m Boolean produces local declaration
+[32m+[0m SnapshottingParseSpec
+  [32m+[0m disabled
+  [32m+[0m periodic with millis
+  [32m+[0m periodic with seconds
+  [32m+[0m enabled
+  [32m+[0m self-recursive type closes via refs and round-trips
+  [32m+[0m periodic with minutes
+  [32m+[0m every with valid count
+  [32m+[0m invalid value
+  [32m+[0m every(1)
+  [32m+[0m periodic with invalid duration
+  [32m+[0m periodic with zero duration
+  [32m+[0m periodic with negative duration
+  [32m+[0m every with non-integer
+  [32m+[0m every with zero
+  [32m+[0m every with negative
+  [32m+[0m case insensitive
+  [32m+[0m whitespace trimmed
+[32m+[0m rich semantic types
+  [32m+[0m top-level schemas use rich nodes
+  [32m+[0m top-level values roundtrip
+  [32m+[0m quantity rejects disallowed units
+  [32m+[0m List/Set derive list; Map derives map
+  [32m+[0m mutually-recursive types round-trip
+  [32m+[0m derived record supports two distinct quantity units
+  [32m+[0m quantity schemas do not depend on global unit lifecycle
+  [32m+[0m derived record fields use rich nodes and roundtrip
+[32m+[0m ConfigIntrospectionSpec
+  [32m+[0m primitive root leaf
+    [32m+[0m String produces one local declaration
+  [32m+[0m case class with secret field
+    [32m+[0m secret field has Secret source
+    [32m+[0m local fields have Local source
+    [32m+[0m produces correct number of declarations
+  [32m+[0m Secret root leaf
+    [32m+[0m Secret[String] produces one secret declaration
+  [32m+[0m simple case class
+    [32m+[0m field names become paths
+    [32m+[0m produces local declarations for all fields
+    [32m+[0m produces correct number of declarations
+  [32m+[0m path prefix propagation
+    [32m+[0m describe with prefix prepends to all paths
+    [32m+[0m nested config with prefix produces correct deep paths
+  [32m+[0m deeply nested
+    [32m+[0m three levels of nesting produce correct paths
+  [32m+[0m multiple secrets
+    [32m+[0m each secret field gets Secret source
+  [32m+[0m nested case class
+    [32m+[0m top-level field has single-segment path
+    [32m+[0m produces declarations for all leaf fields
+  [32m+[0m collection values round-trip
+    [32m+[0m nested fields have multi-segment paths
+  [32m+[0m all-local config
+  [32m+[0m Uuid value encodes high/low as raw u64 bits
+  [32m+[0m Uuid derives the canonical cross-SDK record and round-trips
+    [32m+[0m five fields produce five local declarations
+    [32m+[0m field types are correct
+  [32m+[0m Secret[Record] stays one leaf
+  [32m+[0m EnvironmentId derives a record over the canonical Uuid built-in and round-trips
+    [32m+[0m Secret wrapping a case class emits one secret declaration
+  [32m+[0m char decode rejects out-of-Char-range code points with FromSchemaError
+  [32m+[0m malformed BigInt/BigDecimal strings decode to FromSchemaError (NonFatal boundary)
+  [32m+[0m Uuid encode rejects out-of-range high/low bits with SchemaEncodeError
+  [32m+[0m unsigned decode rejects out-of-range values with FromSchemaError
+  [32m+[0m unsigned wrappers derive u8/u16/u32/u64 and round-trip (incl. boundary)
+  [32m+[0m Secret fails loud rather than silently unwrapping
+  [32m+[0m decoding a mismatched value tree fails with FromSchemaError
+  [32m+[0m unsigned encode rejects out-of-range wrapper values with SchemaEncodeError
+[32m+[0m SchemaModelSpec
+  [32m+[0m SchemaBuilder
+    [32m+[0m mutually recursive types both close to refs
+    [32m+[0m register reserves before building so self-recursive types close to a ref
+    [32m+[0m finish fails if a reserved id was never committed
+    [32m+[0m register is idempotent: a second register of the same id does not rebuild
+  [32m+[0m graph merge
+    [32m+[0m mergeGraphDefs rejects conflicting same-id bodies
+    [32m+[0m mergeGraphDefs deduplicates identical defs across graphs
+    [32m+[0m mergeAgentGraphs keeps roots in input order and shares defs
+  [32m+[0m error paths
+    [32m+[0m encoding a graph with a dangling ref fails with SchemaEncodeError
+    [32m+[0m decoding a value tree with a cyclic reference fails
+    [32m+[0m decoding a graph with duplicate def ids fails
+    [32m+[0m decoding a value tree with an out-of-range root index fails
+    [32m+[0m decoding a graph with a def index out of range fails
+    [32m+[0m decoding a type graph with an out-of-range root index fails
+    [32m+[0m decoding a type graph with an out-of-range child index fails
+    [32m+[0m decoding a value tree with an out-of-range child index fails
+    [32m+[0m decoding a type graph with a structural type-node cycle fails
+  [32m+[0m quota-token handle affine semantics
+    [32m+[0m encoding the same quota-token handle twice in one tree fails with SchemaEncodeError
+    [32m+[0m encoding an already-transferred quota-token handle fails with SchemaEncodeError
+    [32m+[0m decoding a tree with an unreferenced quota-token handle node fails and drains it
+    [32m+[0m decoding a tree that references one quota-token handle node twice fails and drains it
+    [32m+[0m a single quota-token handle round-trips preserving handle identity
+    [32m+[0m decoding a valid root plus an unreachable handle node fails and drains both handles
+    [32m+[0m decoding fails atomically when a sibling is invalid, draining an already-reached handle
+  [32m+[0m GraphEncoder multi-root (agent carrier use case)
+    [32m+[0m encodes several roots into one shared pool with a placeholder finish root
+  [32m+[0m value tree wire roundtrip
+    [32m+[0m u64 max raw bits survive as a Long
+    [32m+[0m binary values compare structurally after a roundtrip
+    [32m+[0m kitchen-sink value round-trips through the flat WIT carrier
+  [32m+[0m edge scalars and remaining enum/discriminator arms
+    [32m+[0m unsigned and boundary scalars survive a value roundtrip
+    [32m+[0m all discriminator rules and path/role metadata arms survive a type roundtrip
+  [32m+[0m type graph wire roundtrip
+    [32m+[0m ref bodies flatten to def indices that match the sorted def order
+    [32m+[0m flattened defs are deterministically sorted by id regardless of insertion order
+    [32m+[0m numeric restrictions canonicalization drops empty values and negative zero
+    [32m+[0m numeric restrictions golden vectors round-trip and normalize
+    [32m+[0m kitchen-sink type graph round-trips through the flat WIT carrier
+  [32m+[0m typed schema value roundtrip
+    [32m+[0m typed value (graph + value) round-trips
+142 tests passed. 0 tests failed. 0 tests ignored.
+
+Executed in 203 ms
+
+[info] Completed tests
+[success] Total time: 9 s, completed Jul 3, 2026, 3:19:43 PM
+[info] compiling 50 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js/target/scala-3.8.2/classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:39:46 
+[warn] 39 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+[warn]    |                                              ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:42:57 
+[warn] 42 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+[warn]    |                                                         ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:32:46 
+[warn] 32 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+[warn]    |                                              ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:35:57 
+[warn] 35 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+[warn]    |                                                         ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentImplementationType.scala:35:38 
+[warn] 35 |  configBuilder: Option[ConfigBuilder[_]] = None,
+[warn]    |                                      ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:45 
+[warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+[warn]    |                                             ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:48 
+[warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+[warn]    |                                                ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:61:42 
+[warn] 61 |        scala.concurrent.ExecutionContext.parasitic
+[warn]    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:73:80 
+[warn] 73 |      raw(instance, bytes).map(_ => instance)(scala.concurrent.ExecutionContext.parasitic)
+[warn]    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] 9 warnings found
+[info] done compiling
+[success] Total time: 2 s, completed Jul 3, 2026, 3:19:45 PM
+[info] compiling 8 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/target/scala-3.8.2/classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentClientMacro.scala:327:59 
+[warn] 327 |            '{ InputRecordCodec.single[a](${ Expr(name) })($into, $from) }.asExprOf[InputRecordCodec[In]]
+[warn]     |                                                           ^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentClientMacro.scala:368:33 
+[warn] 368 |      '{ OutputCodec.single[Out]($into, $from) }
+[warn]     |                                 ^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:205:57 
+[warn] 205 |        val configBuilderExpr: Expr[Option[ConfigBuilder[_]]] = configParam match {
+[warn]     |                                                         ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:233:60 
+[warn] 233 |                        '{ Some($builderExpr: ConfigBuilder[_]) }
+[warn]     |                                                            ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:699:88 
+[warn] 699 |  private def detectConfigBuilder[Trait: Type](using Quotes): Expr[Option[ConfigBuilder[_]]] = {
+[warn]     |                                                                                        ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:720:54 
+[warn] 720 |                  '{ Some($builderExpr: ConfigBuilder[_]) }
+[warn]     |                                                      ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:536:60 
+[warn] 536 |          '{ InputRecordCodec.single[Ctor](${ Expr(name) })($into, $from) }
+[warn]     |                                                            ^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:929:59 
+[warn] 929 |            '{ InputRecordCodec.single[a](${ Expr(name) })($into, $from) }.asExprOf[InputRecordCodec[In]]
+[warn]     |                                                           ^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:970:33 
+[warn] 970 |      '{ OutputCodec.single[Out]($into, $from) }
+[warn]     |                                 ^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] 9 warnings found
+[info] done compiling
+[info] compiling 70 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/target/scala-3.8.2/classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala-3/golem/runtime/autowire/AgentImplementation.scala:27:59 
+[warn] 27 |    implType: golem.runtime.AgentImplementationType[Trait, _]
+[warn]    |                                                           ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:46:39 
+[warn] 46 |  def unwrapOrRevert[T](result: Either[_, T]): T =
+[warn]    |                                       ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:56:42 
+[warn] 56 |  def runOrRevert[T](fn: => Future[Either[_, T]]): Future[T] =
+[warn]    |                                          ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:88:56 
+[warn] 88 |  def withCheckpoint[T](fn: Checkpoint => Future[Either[_, T]]): Future[T] = {
+[warn]    |                                                        ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:375:105 
+[warn] 375 |    awaitPromiseRaw(promiseId).map(fromUint8Array)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:396:62 
+[warn] 396 |      }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:437:60 
+[warn] 437 |    }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:514:62 
+[warn] 514 |        scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+[warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/config/ConfigHolder.scala:20:38 
+[warn] 20 |  private var _current: Option[Config[_]] = None
+[warn]    |                                      ^
+[warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:253:67 
+[warn] 253 |      case Bit(bs)              => JsMysqlDbValue.bit(js.Array(bs: _*))
+[warn]     |                                                                   ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:706:67 
+[warn] 706 |      case Bit(bs)           => JsPostgresDbValue.bit(js.Array(bs: _*))
+[warn]     |                                                                   ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:707:70 
+[warn] 707 |      case VarBit(bs)        => JsPostgresDbValue.varbit(js.Array(bs: _*))
+[warn]     |                                                                      ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:717:69 
+[warn] 717 |      case Vector(v)         => JsPostgresDbValue.vector(js.Array(v: _*))
+[warn]     |                                                                     ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:718:70 
+[warn] 718 |      case HalfVec(v)        => JsPostgresDbValue.halfvec(js.Array(v: _*))
+[warn]     |                                                                      ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:720:79 
+[warn] 720 |        JsPostgresDbValue.sparsevec(JsPgSparseVec(sv.dim, js.Array(sv.indices: _*), js.Array(sv.values: _*)))
+[warn]     |                                                                               ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:720:104 
+[warn] 720 |        JsPostgresDbValue.sparsevec(JsPgSparseVec(sv.dim, js.Array(sv.indices: _*), js.Array(sv.values: _*)))
+[warn]     |                                                                                                        ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentConstructor.scala:54:28 
+[warn] 54 |          .decode[A](input)(inputCodec)
+[warn]    |                            ^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentRequestBuilder.scala:107:70 
+[warn] 107 |      corsOptions = JsCorsOptions(js.Array(mount.corsAllowedPatterns: _*)),
+[warn]     |                                                                      ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentRequestBuilder.scala:126:62 
+[warn] 126 |      case Some(patterns) => JsCorsOptions(js.Array(patterns: _*))
+[warn]     |                                                              ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/MethodBinding.scala:69:31 
+[warn] 69 |            .decode[In](input)(inputCodec)
+[warn]    |                               ^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/MethodBinding.scala:78:70 
+[warn] 78 |                    case Some(into) => Some(SchemaPayload.encode(out)(into))
+[warn]    |                                                                      ^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:121:51 
+[warn] 121 |    def trigger[In](method: AgentMethod[Trait, In, _], input: In): Future[Unit] =
+[warn]     |                                                   ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:124:52 
+[warn] 124 |    def schedule[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[Unit] =
+[warn]     |                                                    ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:128:37 
+[warn] 128 |      method: AgentMethod[Trait, In, _],
+[warn]     |                                     ^
+[warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:72:47 
+[warn] 72 |    try Right(SchemaRpcCodec.encodeArgs(input)(inputCodec))
+[warn]    |                                               ^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:84:103 
+[warn] 84 |      case OutputMetadata.Single(_) => SchemaRpcCodec.decodeSingleResult[Out](result)(outputCodec.from.get)
+[warn]    |                                                                                      ^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:161:66 
+[warn] 161 |          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala:121:66 
+[warn] 121 |          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+[warn]     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/host/AgentHostApi.scala:161:53 
+[warn] 161 |    AgentRegistryModule.getConfigValue(js.Array(key: _*), expected)
+[warn]     |                                                     ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/wasi/KeyValue.scala:124:31 
+[warn] 124 |      val arr = js.Array(keys: _*)
+[warn]     |                               ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/wasi/KeyValue.scala:132:64 
+[warn] 132 |      EventualBatchModule.deleteMany(underlying, js.Array(keys: _*))
+[warn]     |                                                                ^
+[warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+[warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+[warn] -- [E030] Match case Unreachable Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala:149:13 
+[warn] 149 |        case Some(res) =>
+[warn]     |             ^^^^^^^^^
+[warn]     |             Unreachable case
+[warn] 32 warnings found
+[info] done compiling
+[info] compiling 42 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/target/scala-3.8.2/test-classes ...
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/FutureInteropCompileSpec.scala:31:71 
+[warn] 31 |        future.map(v => v)(scala.scalajs.concurrent.JSExecutionContext.queue)
+[warn]    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/runtime/AgentEndToEndSpec.scala:103:57 
+[warn] 103 |    SchemaPayload.encode[A](a)(InputRecordCodec.single[A]("in"))
+[warn]     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/runtime/AgentEndToEndSpec.scala:170:35 
+[warn] 170 |        InputRecordCodec.fromParams(List(paramCodec[String]("a"), paramCodec[Int]("b")))
+[warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]     |Implicit parameters should be provided with a `using` clause.
+[warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]     |To disable the warning, please use the following option:
+[warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] -- Warning: /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/test/scala/golem/runtime/PrincipalInjectionSpec.scala:46:57 
+[warn] 46 |    SchemaPayload.encode[A](a)(InputRecordCodec.single[A]("in"))
+[warn]    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[warn]    |Implicit parameters should be provided with a `using` clause.
+[warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+[warn]    |To disable the warning, please use the following option:
+[warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+[warn] four warnings found
+[info] done compiling
+[success] Total time: 9 s, completed Jul 3, 2026, 3:19:54 PM
+[info] compiling 2 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/target/scala-3.8.2/test-classes ...
+[info] done compiling
+[32m+[0m AgentMetadataMacroSpec
+  [32m+[0m Agent metadata captures trait-level mode annotation
+  [32m+[0m EchoAgent combine method keeps parameter ordering and per-parameter schema
+  [32m+[0m EchoAgent metadata exposes all method names
+  [32m+[0m Agent metadata omits mode when durable annotation is not provided
+  [32m+[0m Agent metadata omits durable default (even when explicitly set via agentDefinition)
+  [32m+[0m AgentImplementationMacro preserves annotated agent mode
+  [32m+[0m AgentImplementationMacro leaves mode unset for durable defaults
+  [32m+[0m AgentImplementationMacro preserves durable annotations in implementation metadata
+  [32m+[0m AgentImplementationMacro preserves method invocation kinds
+  [32m+[0m AgentClientMacro produces fire-and-forget invocation for Unit-returning method
+[32m+[0m ScaladocDescriptionSpec
+  [32m+[0m annotation precedence
+    [32m+[0m @description on the trait wins over scaladoc
+    [32m+[0m @description on a method wins over scaladoc
+    [32m+[0m undocumented Id class falls back to the trait description
+  [32m+[0m no docs at all
+    [32m+[0m behaves as before: no description, constructor falls back to type name
+  [32m+[0m scaladoc-based descriptions
+    [32m+[0m Id class scaladoc becomes the constructor description
+    [32m+[0m method scaladoc becomes the method description
+    [32m+[0m trait scaladoc becomes the agent description, tags stripped
+    [32m+[0m undocumented method has no description
+  [32m+[0m Scaladoc parser
+    [32m+[0m tags-only comment yields None
+    [32m+[0m multi-line comment with margin stars
+    [32m+[0m tag sections are dropped
+    [32m+[0m single-line comment
+    [32m+[0m summary and description split
+    [32m+[0m email-like text is not treated as a tag
+24 tests passed. 0 tests failed. 0 tests ignored.
+
+Executed in 83 ms
+
+[info] Completed tests
+[success] Total time: 1 s, completed Jul 3, 2026, 3:19:54 PM
+[info] compiling 6 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/target/scala-3.8.2/classes ...
+[warn] there were 101 deprecation warnings; re-run with -deprecation for details
+[warn] one warning found
+[info] done compiling
+[success] Total time: 1 s, completed Jul 3, 2026, 3:19:55 PM
+[info] Setting Scala version to 2.13.18 on 5 projects.
+[info] Excluded 4 projects, run ++ 2.13.18 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] compiling 50 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.jvm/target/scala-2.13/classes ...
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/schema/SchemaBuilder.scala:32:28: The outer reference in this type test cannot be checked at run time.
+[warn]   private final case class Reserved(var name: Option[String], var body: Option[SchemaType])
+[warn]                            ^
+[warn] one warning found
+[info] done compiling
+[info] compiling 7 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/target/scala-2.13/classes ...
+[info] done compiling
+[info] compiling 2 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/macros/target/scala-2.13/test-classes ...
+[info] done compiling
+[success] Total time: 7 s, completed Jul 3, 2026, 3:20:03 PM
+[info] compiling 50 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/model/.js/target/scala-2.13/classes ...
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/model/src/main/scala/golem/schema/SchemaBuilder.scala:32:28: The outer reference in this type test cannot be checked at run time.
+[warn]   private final case class Reserved(var name: Option[String], var body: Option[SchemaType])
+[warn]                            ^
+[warn] one warning found
+[info] done compiling
+[info] compiling 69 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/target/scala-2.13/classes ...
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:31:64: The global execution context in Scala.js is based on JS Promises (microtasks).
+[warn] Using it may prevent macrotasks (I/O, timers, UI rendering) from running reliably.
+[warn] 
+[warn] Unfortunately, there is no way with ECMAScript only to implement a performant
+[warn] macrotask execution context (and hence Scala.js core does not contain one).
+[warn] 
+[warn] We recommend you use: https://github.com/scala-js/scala-js-macrotask-executor
+[warn] Please refer to the README.md of that project for more details regarding
+[warn] microtask vs. macrotask execution contexts.
+[warn] 
+[warn] If you do not care about macrotask fairness, you can silence this warning by:
+[warn] - Adding @nowarn("cat=other") (Scala >= 2.13.x only)
+[warn] - Setting the -P:scalajs:nowarnGlobalExecutionContext compiler option (Scala < 3.x.y only)
+[warn] - Using scala.scalajs.concurrent.JSExecutionContext.queue
+[warn]   (the implementation of ExecutionContext.global in Scala.js) directly.
+[warn] 
+[warn] If you do not care about performance, you can use
+[warn] scala.scalajs.concurrent.QueueExecutionContext.timeouts().
+[warn] It is based on setTimeout which makes it fair but slow (due to clamping).
+[warn]                 
+[warn]   private implicit val ec: ExecutionContext = ExecutionContext.global
+[warn]                                                                ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:75:64: The global execution context in Scala.js is based on JS Promises (microtasks).
+[warn] Using it may prevent macrotasks (I/O, timers, UI rendering) from running reliably.
+[warn] 
+[warn] Unfortunately, there is no way with ECMAScript only to implement a performant
+[warn] macrotask execution context (and hence Scala.js core does not contain one).
+[warn] 
+[warn] We recommend you use: https://github.com/scala-js/scala-js-macrotask-executor
+[warn] Please refer to the README.md of that project for more details regarding
+[warn] microtask vs. macrotask execution contexts.
+[warn] 
+[warn] If you do not care about macrotask fairness, you can silence this warning by:
+[warn] - Adding @nowarn("cat=other") (Scala >= 2.13.x only)
+[warn] - Setting the -P:scalajs:nowarnGlobalExecutionContext compiler option (Scala < 3.x.y only)
+[warn] - Using scala.scalajs.concurrent.JSExecutionContext.queue
+[warn]   (the implementation of ExecutionContext.global in Scala.js) directly.
+[warn] 
+[warn] If you do not care about performance, you can use
+[warn] scala.scalajs.concurrent.QueueExecutionContext.timeouts().
+[warn] It is based on setTimeout which makes it fair but slow (due to clamping).
+[warn]                 
+[warn]   private implicit val ec: ExecutionContext = ExecutionContext.global
+[warn]                                                                ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/Guards.scala:105:64: The global execution context in Scala.js is based on JS Promises (microtasks).
+[warn] Using it may prevent macrotasks (I/O, timers, UI rendering) from running reliably.
+[warn] 
+[warn] Unfortunately, there is no way with ECMAScript only to implement a performant
+[warn] macrotask execution context (and hence Scala.js core does not contain one).
+[warn] 
+[warn] We recommend you use: https://github.com/scala-js/scala-js-macrotask-executor
+[warn] Please refer to the README.md of that project for more details regarding
+[warn] microtask vs. macrotask execution contexts.
+[warn] 
+[warn] If you do not care about macrotask fairness, you can silence this warning by:
+[warn] - Adding @nowarn("cat=other") (Scala >= 2.13.x only)
+[warn] - Setting the -P:scalajs:nowarnGlobalExecutionContext compiler option (Scala < 3.x.y only)
+[warn] - Using scala.scalajs.concurrent.JSExecutionContext.queue
+[warn]   (the implementation of ExecutionContext.global in Scala.js) directly.
+[warn] 
+[warn] If you do not care about performance, you can use
+[warn] scala.scalajs.concurrent.QueueExecutionContext.timeouts().
+[warn] It is based on setTimeout which makes it fair but slow (due to clamping).
+[warn]                 
+[warn]   private implicit val ec: ExecutionContext = ExecutionContext.global
+[warn]                                                                ^
+[warn] /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/src/main/scala/golem/host/QuotaApi.scala:245:64: The global execution context in Scala.js is based on JS Promises (microtasks).
+[warn] Using it may prevent macrotasks (I/O, timers, UI rendering) from running reliably.
+[warn] 
+[warn] Unfortunately, there is no way with ECMAScript only to implement a performant
+[warn] macrotask execution context (and hence Scala.js core does not contain one).
+[warn] 
+[warn] We recommend you use: https://github.com/scala-js/scala-js-macrotask-executor
+[warn] Please refer to the README.md of that project for more details regarding
+[warn] microtask vs. macrotask execution contexts.
+[warn] 
+[warn] If you do not care about macrotask fairness, you can silence this warning by:
+[warn] - Adding @nowarn("cat=other") (Scala >= 2.13.x only)
+[warn] - Setting the -P:scalajs:nowarnGlobalExecutionContext compiler option (Scala < 3.x.y only)
+[warn] - Using scala.scalajs.concurrent.JSExecutionContext.queue
+[warn]   (the implementation of ExecutionContext.global in Scala.js) directly.
+[warn] 
+[warn] If you do not care about performance, you can use
+[warn] scala.scalajs.concurrent.QueueExecutionContext.timeouts().
+[warn] It is based on setTimeout which makes it fair but slow (due to clamping).
+[warn]                 
+[warn]   private implicit val ec: ExecutionContext = ExecutionContext.global
+[warn]                                                                ^
+[warn] four warnings found
+[info] done compiling
+[info] compiling 40 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/core/js/target/scala-2.13/test-classes ...
+[info] done compiling
+[success] Total time: 9 s, completed Jul 3, 2026, 3:20:12 PM
+[info] Forcing Scala version to 2.12.21 on all projects.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-4/sdks/scala/)
+[info] compiling 6 Scala sources to /Users/vigoo/projects/golem/golem-4/sdks/scala/codegen/target/scala-2.12/classes ...
+[warn] 8 deprecations; re-run with -deprecation for details
+[warn] one warning found
+[info] done compiling
+[info] compiling 1 Scala source to /Users/vigoo/projects/golem/golem-4/sdks/scala/sbt/target/scala-2.12/sbt-1.0/classes ...
+[info] done compiling
+[success] Total time: 3 s, completed Jul 3, 2026, 3:20:15 PM
+[success] Total time: 0 s, completed Jul 3, 2026, 3:20:15 PM

@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -80,7 +80,7 @@ object AgentDefinitionMacro {
         defaultTypeNameFromTrait(typeSymbol)
       }
 
-    val traitDescription = annotationString(typeSymbol, TypeRepr.of[description])
+    val traitDescription = annotationString(typeSymbol, TypeRepr.of[description]).orElse(docstringText(typeSymbol))
     // Note: `@agentDefinition` has a default `mode = Durable`. We omit that default in metadata via
     // `agentDefinitionMode`.
     val traitMode = agentDefinitionMode(typeSymbol)
@@ -262,7 +262,7 @@ object AgentDefinitionMacro {
     import quotes.reflect.*
 
     val methodName   = method.name
-    val descExpr     = optionalString(annotationString(method, TypeRepr.of[description]))
+    val descExpr     = optionalString(annotationString(method, TypeRepr.of[description]).orElse(docstringText(method)))
     val promptExpr   = optionalString(annotationString(method, TypeRepr.of[prompt]))
     val inputSchema  = methodInputSchema(method)
     val outputSchema = methodOutputSchema(method)
@@ -494,8 +494,13 @@ object AgentDefinitionMacro {
             }
         }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
 
-        val inputMeta = inputMetadataExpr(params)
-        '{ ConstructorMetadata(name = None, description = $descriptionExpr, promptHint = None, input = $inputMeta) }
+        val inputMeta           = inputMetadataExpr(params)
+        val ctorDescriptionExpr =
+          docstringText(classSym) match {
+            case Some(doc) => Expr(doc)
+            case None      => descriptionExpr
+          }
+        '{ ConstructorMetadata(name = None, description = $ctorDescriptionExpr, promptHint = None, input = $inputMeta) }
     }
   }
 
@@ -538,6 +543,17 @@ object AgentDefinitionMacro {
         }.filter(_ != null).toSet
     }
   }
+
+  /**
+   * Cleaned Scaladoc text of a symbol, used as description fallback when no
+   * `@description` annotation is present. Docstrings of symbols from other
+   * compilation units are only visible when the compiler reads docs from TASTy
+   * (`-Xread-docs` / `-Yread-docs`), which the Golem build plugins enable.
+   */
+  private def docstringText(using
+    Quotes
+  )(symbol: quotes.reflect.Symbol): Option[String] =
+    symbol.docstring.flatMap(Scaladoc.clean)
 
   private def annotationString(using
     Quotes
