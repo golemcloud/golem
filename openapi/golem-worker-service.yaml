@@ -4826,44 +4826,23 @@ components:
     PublicQueuedCardEvent:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventInstall'
-      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventRevoke'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
       discriminator:
         propertyName: type
         mapping:
-          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventInstall'
-          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventRevoke'
-    PublicQueuedCardEventInstall:
+          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+    PublicQueuedCardEventCard:
       type: object
-      title: PublicQueuedCardEventInstall
+      title: PublicQueuedCardEventCard
       required:
       - cardId
       properties:
         cardId:
           type: string
           format: uuid
-    PublicQueuedCardEventRevoke:
-      type: object
-      title: PublicQueuedCardEventRevoke
-      required:
-      - cardId
-      properties:
-        cardId:
-          type: string
-          format: uuid
-    PublicQueuedCardEvent_PublicQueuedCardEventInstall:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Install
-            example: Install
-      - $ref: '#/components/schemas/PublicQueuedCardEventInstall'
-    PublicQueuedCardEvent_PublicQueuedCardEventRevoke:
+    PublicQueuedCardEvent_PublicQueuedCardEventCard:
       allOf:
       - type: object
         required:
@@ -4874,7 +4853,7 @@ components:
             enum:
             - Revoke
             example: Revoke
-      - $ref: '#/components/schemas/PublicQueuedCardEventRevoke'
+      - $ref: '#/components/schemas/PublicQueuedCardEventCard'
     PublicRetryPolicyState:
       type: object
       description: |-

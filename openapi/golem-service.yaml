@@ -12753,14 +12753,14 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventInstall'
-          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventRevoke'
+          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventInstall'
-      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventRevoke'
-    PublicQueuedCardEventInstall:
-      title: PublicQueuedCardEventInstall
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+    PublicQueuedCardEventCard:
+      title: PublicQueuedCardEventCard
       type: object
       properties:
         cardId:
@@ -12768,28 +12768,7 @@ components:
           format: uuid
       required:
       - cardId
-    PublicQueuedCardEventRevoke:
-      title: PublicQueuedCardEventRevoke
-      type: object
-      properties:
-        cardId:
-          type: string
-          format: uuid
-      required:
-      - cardId
-    PublicQueuedCardEvent_PublicQueuedCardEventInstall:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Install
-            type: string
-            enum:
-            - Install
-        required:
-        - type
-      - $ref: '#/components/schemas/PublicQueuedCardEventInstall'
-    PublicQueuedCardEvent_PublicQueuedCardEventRevoke:
+    PublicQueuedCardEvent_PublicQueuedCardEventCard:
       allOf:
       - type: object
         properties:
@@ -12800,7 +12779,7 @@ components:
             - Revoke
         required:
         - type
-      - $ref: '#/components/schemas/PublicQueuedCardEventRevoke'
+      - $ref: '#/components/schemas/PublicQueuedCardEventCard'
     PublicRetryPolicyState:
       description: |-
         API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
