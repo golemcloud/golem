@@ -296,9 +296,9 @@ impl Tool {
             if body.positionals.tail.is_some() {
                 surfaces.push(CanonicalSurfaceRef::BodyTail);
             }
-            surfaces.extend((0..body.options.len()).map(|index| CanonicalSurfaceRef::BodyOption {
-                index,
-            }));
+            surfaces.extend(
+                (0..body.options.len()).map(|index| CanonicalSurfaceRef::BodyOption { index }),
+            );
             surfaces
                 .extend((0..body.flags.len()).map(|index| CanonicalSurfaceRef::BodyFlag { index }));
         }
