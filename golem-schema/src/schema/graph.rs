@@ -17,7 +17,7 @@ use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A self-contained schema graph in the recursive in-memory form.
 ///
@@ -336,5 +336,130 @@ mod tests {
             "first definition must win on duplicate ids in the indexed branch"
         );
         assert_index_matches_linear(&graph);
+    }
+}
+
+/// Collect, in the source graph's definition order, the named definitions of
+/// `graph` that are transitively reachable from `root` through
+/// [`SchemaType::Ref`] indirections.
+///
+/// A [`TypedSchemaValue`] is a self-contained, single-root carrier, so its
+/// `defs` must be exactly the definitions reachable from its `root`. The source
+/// `graph` here is the agent's whole multi-root definition registry; projecting
+/// to the reachable subset honors that contract and avoids cloning defs the
+/// value can never reference.
+///
+/// Dangling refs (no matching def in `graph`) are skipped; validation of the
+/// value against the projected graph reports them. Each reachable id is emitted
+/// once, first-def-wins on duplicate ids, matching [`SchemaGraph::lookup`].
+pub fn reachable_defs<'a>(graph: &'a SchemaGraph, root: &'a SchemaType) -> Vec<SchemaTypeDef> {
+    // Seed the worklist from refs in the synthesized root. The common
+    // primitive/no-ref input returns here without building any lookup index.
+    let mut stack: Vec<&'a TypeId> = Vec::new();
+    collect_refs(root, &mut stack);
+    if stack.is_empty() {
+        return Vec::new();
+    }
+
+    let index = GraphIndex::new(graph);
+    let mut reachable: HashSet<&'a str> = HashSet::new();
+    while let Some(id) = stack.pop() {
+        if !reachable.insert(id.as_str()) {
+            continue;
+        }
+        if let Some(def) = index.lookup(id) {
+            collect_refs(&def.body, &mut stack);
+        }
+    }
+
+    // Emit reachable defs in the source graph's order. Removing each id as it is
+    // emitted yields first-def-wins on duplicate ids (matching
+    // [`SchemaGraph::lookup`]) without a second visited set.
+    graph
+        .defs
+        .iter()
+        .filter(|d| reachable.remove(d.id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Push every [`SchemaType::Ref`] id directly contained in `ty` (descending
+/// through all structural children, but not following the refs themselves) onto
+/// `out`. All schema alternatives are visited — every variant case, every union
+/// branch, both result arms — so projection follows *schema* reachability, not
+/// the shape of any particular value.
+fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
+    match ty {
+        SchemaType::Ref { id, .. } => out.push(id),
+        SchemaType::Record { fields, .. } => {
+            for field in fields {
+                collect_refs(&field.body, out);
+            }
+        }
+        SchemaType::Variant { cases, .. } => {
+            for case in cases {
+                if let Some(payload) = &case.payload {
+                    collect_refs(payload, out);
+                }
+            }
+        }
+        SchemaType::Tuple { elements, .. } => {
+            for element in elements {
+                collect_refs(element, out);
+            }
+        }
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            collect_refs(element, out);
+        }
+        SchemaType::Map { key, value, .. } => {
+            collect_refs(key, out);
+            collect_refs(value, out);
+        }
+        SchemaType::Option { inner, .. } => collect_refs(inner, out),
+        SchemaType::Result { spec, .. } => {
+            if let Some(ok) = &spec.ok {
+                collect_refs(ok, out);
+            }
+            if let Some(err) = &spec.err {
+                collect_refs(err, out);
+            }
+        }
+        SchemaType::Union { spec, .. } => {
+            for branch in &spec.branches {
+                collect_refs(&branch.body, out);
+            }
+        }
+        SchemaType::Future { inner, .. } | SchemaType::Stream { inner, .. } => {
+            if let Some(inner) = inner {
+                collect_refs(inner, out);
+            }
+        }
+        SchemaType::Secret { spec, .. } => collect_refs(&spec.inner, out),
+        // Leaf nodes carrying no child `SchemaType`. Listed explicitly (no
+        // wildcard) so a future ref-bearing variant forces this match to be
+        // updated.
+        SchemaType::Bool { .. }
+        | SchemaType::S8 { .. }
+        | SchemaType::S16 { .. }
+        | SchemaType::S32 { .. }
+        | SchemaType::S64 { .. }
+        | SchemaType::U8 { .. }
+        | SchemaType::U16 { .. }
+        | SchemaType::U32 { .. }
+        | SchemaType::U64 { .. }
+        | SchemaType::F32 { .. }
+        | SchemaType::F64 { .. }
+        | SchemaType::Char { .. }
+        | SchemaType::String { .. }
+        | SchemaType::Enum { .. }
+        | SchemaType::Flags { .. }
+        | SchemaType::Text { .. }
+        | SchemaType::Binary { .. }
+        | SchemaType::Path { .. }
+        | SchemaType::Url { .. }
+        | SchemaType::Datetime { .. }
+        | SchemaType::Duration { .. }
+        | SchemaType::Quantity { .. }
+        | SchemaType::QuotaToken { .. } => {}
     }
 }

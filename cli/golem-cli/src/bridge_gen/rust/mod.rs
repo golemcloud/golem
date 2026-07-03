@@ -56,6 +56,7 @@ use tracing::debug;
 
 #[allow(clippy::module_inception)]
 mod rust;
+pub mod tool;
 mod type_name;
 
 pub use type_name::RustTypeName;
@@ -224,21 +225,53 @@ impl RustBridgeGenerator {
         testing: bool,
         mode: RustBridgeMode,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            mode,
+            std::iter::empty::<String>(),
+        )
+    }
+
+    pub(crate) fn new_guest_with_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        extra: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            RustBridgeMode::GuestWasmRpc,
+            extra,
+        )
+    }
+
+    fn new_with_mode_and_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: RustBridgeMode,
+        extra: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
         let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
         let type_naming = match mode {
             RustBridgeMode::ExternalRest => TypeNaming::new(&agent_type, same_language)?,
-            RustBridgeMode::GuestWasmRpc => TypeNaming::new_with_reserved_names(
-                &agent_type,
-                same_language,
-                [
+            RustBridgeMode::GuestWasmRpc => {
+                let reserved_names = [
                     RustTypeName::Derived("__golem_bridge_runtime".to_string()),
                     RustTypeName::Derived(Self::guest_client_struct_name_string(
                         &agent_type.type_name.0,
                     )),
                     RustTypeName::Derived("languages".to_string()),
                     RustTypeName::Derived("mimetypes".to_string()),
-                ],
-            )?,
+                ]
+                .into_iter()
+                .chain(extra.into_iter().map(RustTypeName::Derived));
+                TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved_names)?
+            }
         };
 
         Ok(Self {

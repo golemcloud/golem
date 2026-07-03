@@ -957,7 +957,14 @@ impl BridgeSdks {
         &self,
     ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
         self.for_all_languages().filter_map(|(lang, targets)| {
-            targets.and_then(|targets| (!targets.agents.is_empty()).then_some((lang, targets)))
+            targets.and_then(|targets| {
+                (!targets.agents.is_empty()
+                    || targets
+                        .guest
+                        .as_ref()
+                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty()))
+                .then_some((lang, targets))
+            })
         })
     }
 
@@ -973,18 +980,20 @@ impl BridgeSdks {
                         BridgeMode::External,
                         BridgeSdkModeTargetsRef {
                             agents: &targets.agents,
+                            tools: None,
                             output_dir: targets.output_dir.as_ref(),
                         },
                     ));
                 }
                 if let Some(guest) = &targets.guest
-                    && !guest.agents.is_empty()
+                    && (!guest.agents.is_empty() || !guest.tools.is_empty())
                 {
                     result.push((
                         language,
                         BridgeMode::Guest,
                         BridgeSdkModeTargetsRef {
                             agents: &guest.agents,
+                            tools: Some(&guest.tools),
                             output_dir: guest.output_dir.as_ref(),
                         },
                     ));
@@ -1011,6 +1020,8 @@ pub struct BridgeSdkLanguageTargets {
 pub struct BridgeSdkModeTargets {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub agents: LenientTokenList,
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub tools: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
 }
@@ -1018,6 +1029,7 @@ pub struct BridgeSdkModeTargets {
 #[derive(Clone, Copy, Debug)]
 pub struct BridgeSdkModeTargetsRef<'a> {
     pub agents: &'a LenientTokenList,
+    pub tools: Option<&'a LenientTokenList>,
     pub output_dir: Option<&'a String>,
 }
 
@@ -1781,8 +1793,16 @@ mod test {
     }
 
     fn arb_bridge_sdk_mode_targets() -> BoxedStrategy<BridgeSdkModeTargets> {
-        (arb_token_list_model(), arb_opt(arb_ident()))
-            .prop_map(|(agents, output_dir)| BridgeSdkModeTargets { agents, output_dir })
+        (
+            arb_token_list_model(),
+            arb_token_list_model(),
+            arb_opt(arb_ident()),
+        )
+            .prop_map(|(agents, tools, output_dir)| BridgeSdkModeTargets {
+                agents,
+                tools,
+                output_dir,
+            })
             .boxed()
     }
 

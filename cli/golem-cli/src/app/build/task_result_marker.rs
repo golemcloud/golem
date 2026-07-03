@@ -317,7 +317,8 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
 
 pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub component_name: &'a ComponentName,
-    pub agent_type_name: &'a AgentTypeName,
+    pub target_name: &'a str,
+    pub kind: &'static str,
     pub language: &'a GuestLanguage,
     pub bridge_mode: crate::bridge_gen::BridgeMode,
 }
@@ -334,20 +335,21 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
         Ok(HashFromString(serde_json::to_string(&serde_json::json!({
             "componentName": self.component_name.to_string(),
-            "agentTypeName": self.agent_type_name.as_str(),
+            "targetName": self.target_name,
+            "kind": self.kind,
             "language": self.language.id(),
             "bridgeMode": self.bridge_mode.id(),
         }))?))
     }
 }
 
-pub struct ExtractAgentTypeMarkerHash<'a> {
+pub struct ExtractComponentMetadataMarkerHash<'a> {
     pub component_name: &'a ComponentName,
 }
 
-impl TaskResultMarkerHashSource for ExtractAgentTypeMarkerHash<'_> {
+impl TaskResultMarkerHashSource for ExtractComponentMetadataMarkerHash<'_> {
     fn kind() -> &'static str {
-        "ExtractAgentTypeMarkerHash"
+        "ExtractComponentMetadataMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
@@ -545,7 +547,8 @@ mod tests {
 
         let external_source = GenerateBridgeSdkMarkerHash {
             component_name: &component_name,
-            agent_type_name: &agent_type_name,
+            target_name: agent_type_name.as_str(),
+            kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::External,
         }
@@ -553,7 +556,8 @@ mod tests {
         .unwrap();
         let guest_source = GenerateBridgeSdkMarkerHash {
             component_name: &component_name,
-            agent_type_name: &agent_type_name,
+            target_name: agent_type_name.as_str(),
+            kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::Guest,
         }
@@ -583,7 +587,8 @@ mod tests {
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
                 component_name: &ComponentName::try_from("app:producer-a").unwrap(),
-                agent_type_name: &AgentTypeName("b".to_string()),
+                target_name: "b",
+                kind: "agent",
                 language: &language,
                 bridge_mode,
             },
@@ -593,7 +598,8 @@ mod tests {
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
                 component_name: &ComponentName::try_from("app:producer").unwrap(),
-                agent_type_name: &AgentTypeName("a-b".to_string()),
+                target_name: "a-b",
+                kind: "agent",
                 language: &language,
                 bridge_mode,
             },

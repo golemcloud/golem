@@ -16,15 +16,22 @@ use crate::log::LogColorize;
 use anyhow::bail;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::tool::Tool;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub struct AgentTypeRegistry {
-    cache: Cache<ComponentName, (), Vec<AgentTypeSchema>, Arc<anyhow::Error>>,
+/// Returns the name of a tool: the name of the root node of its command tree.
+pub fn tool_name(tool: &Tool) -> Option<&str> {
+    tool.commands.nodes.first().map(|node| node.name.as_str())
+}
+
+pub struct ComponentMetadataRegistry {
+    cache: Cache<ComponentName, (), ExtractedComponentMetadata, Arc<anyhow::Error>>,
     uniqueness: tokio::sync::RwLock<UniquenessIndex>,
     enable_wasmtime_fs_cache: bool,
 }
@@ -33,31 +40,32 @@ pub struct AgentTypeRegistry {
 struct UniquenessIndex {
     agent_type_wrapper_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
     agent_type_name_sources: BTreeMap<AgentTypeName, BTreeSet<ComponentName>>,
+    tool_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
 }
 
-impl AgentTypeRegistry {
+impl ComponentMetadataRegistry {
     pub fn new(enable_wasmtime_fs_cache: bool) -> Self {
         Self {
             cache: Cache::new(
                 None,
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
-                "agent_types",
+                "component_metadata",
             ),
             uniqueness: tokio::sync::RwLock::new(UniquenessIndex::default()),
             enable_wasmtime_fs_cache,
         }
     }
 
-    pub async fn get_or_extract_component_agent_types(
+    pub async fn get_or_extract_component_metadata(
         &self,
         component_name: &ComponentName,
         wasm_path: &Path,
-    ) -> anyhow::Result<Vec<AgentTypeSchema>> {
+    ) -> anyhow::Result<ExtractedComponentMetadata> {
         let wasm_path = wasm_path.to_path_buf();
         let enable_wasmtime_fs_cache = self.enable_wasmtime_fs_cache;
 
-        let agent_types = self
+        let metadata = self
             .cache
             .get_or_insert_simple(component_name, async || {
                 extract(wasm_path, enable_wasmtime_fs_cache).await
@@ -65,31 +73,32 @@ impl AgentTypeRegistry {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        self.validate_uniqueness(component_name, &agent_types)
-            .await?;
+        self.validate_uniqueness(component_name, &metadata).await?;
 
-        Ok(agent_types)
+        Ok(metadata)
     }
 
-    pub async fn add_cached_component_agent_types(
+    pub async fn add_cached_component_metadata(
         &self,
         component_name: &ComponentName,
-        agent_types: Vec<AgentTypeSchema>,
-    ) -> anyhow::Result<Vec<AgentTypeSchema>> {
-        let normalized = AgentTypeSchema::normalized_vec(agent_types);
+        metadata: ExtractedComponentMetadata,
+    ) -> anyhow::Result<ExtractedComponentMetadata> {
+        let normalized = ExtractedComponentMetadata {
+            agent_types: AgentTypeSchema::normalized_vec(metadata.agent_types),
+            tools: metadata.tools,
+        };
 
         self.cache.remove(component_name).await;
 
-        let agent_types = self
+        let metadata = self
             .cache
             .get_or_insert_simple(component_name, async || Ok(normalized))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        self.validate_uniqueness(component_name, &agent_types)
-            .await?;
+        self.validate_uniqueness(component_name, &metadata).await?;
 
-        Ok(agent_types)
+        Ok(metadata)
     }
 
     pub async fn get_all_extracted_agent_type_names(&self) -> Vec<AgentTypeName> {
@@ -105,12 +114,12 @@ impl AgentTypeRegistry {
     async fn validate_uniqueness(
         &self,
         component_name: &ComponentName,
-        agent_types: &[AgentTypeSchema],
+        metadata: &ExtractedComponentMetadata,
     ) -> anyhow::Result<()> {
         let mut index = self.uniqueness.write().await;
 
         // Validate first, before mutating the index
-        for agent_type in agent_types {
+        for agent_type in &metadata.agent_types {
             let wrapper_name = agent_type.type_name.0.clone();
             if let Some(existing) = index.agent_type_wrapper_name_sources.get(&wrapper_name)
                 && !existing.contains(component_name)
@@ -141,8 +150,27 @@ impl AgentTypeRegistry {
             }
         }
 
+        for tool in &metadata.tools {
+            let Some(tool_name) = tool_name(tool) else {
+                continue;
+            };
+            if let Some(existing) = index.tool_name_sources.get(tool_name)
+                && !existing.contains(component_name)
+            {
+                let mut all = existing.clone();
+                all.insert(component_name.clone());
+                bail!(
+                    "Tool name {} is defined by multiple components: {}",
+                    tool_name.log_color_highlight(),
+                    all.iter()
+                        .map(|s| s.as_str().log_color_highlight())
+                        .join(", ")
+                );
+            }
+        }
+
         // Only mutate after validation succeeds
-        for agent_type in agent_types {
+        for agent_type in &metadata.agent_types {
             index
                 .agent_type_wrapper_name_sources
                 .entry(agent_type.type_name.0.clone())
@@ -156,6 +184,16 @@ impl AgentTypeRegistry {
                 .insert(component_name.clone());
         }
 
+        for tool in &metadata.tools {
+            if let Some(tool_name) = tool_name(tool) {
+                index
+                    .tool_name_sources
+                    .entry(tool_name.to_string())
+                    .or_default()
+                    .insert(component_name.clone());
+            }
+        }
+
         Ok(())
     }
 }
@@ -163,12 +201,15 @@ impl AgentTypeRegistry {
 async fn extract(
     wasm_path: PathBuf,
     enable_wasmtime_fs_cache: bool,
-) -> Result<Vec<AgentTypeSchema>, Arc<anyhow::Error>> {
-    let agent_types = crate::model::agent::extraction::extract_agent_type_schemas(
+) -> Result<ExtractedComponentMetadata, Arc<anyhow::Error>> {
+    let metadata = crate::model::agent::extraction::extract_component_metadata(
         &wasm_path,
         enable_wasmtime_fs_cache,
     )
     .await
     .map_err(Arc::new)?;
-    Ok(AgentTypeSchema::normalized_vec(agent_types))
+    Ok(ExtractedComponentMetadata {
+        agent_types: AgentTypeSchema::normalized_vec(metadata.agent_types),
+        tools: metadata.tools,
+    })
 }

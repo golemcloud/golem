@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
+use crate::app::component_metadata::tool_name;
 use crate::bridge_gen::{
     BridgeMode, bridge_client_directory_name, bridge_client_directory_name_for_mode,
+    tool_bridge_client_directory_name,
 };
 use crate::fs;
 use crate::log::LogColorize;
@@ -40,6 +42,7 @@ use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::tool::Tool;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -277,10 +280,33 @@ pub enum AppBuildStep {
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
-    pub agent_type: AgentTypeSchema,
+    pub kind: BridgeSdkTargetKind,
     pub target_language: GuestLanguage,
     pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum BridgeSdkTargetKind {
+    Agent(AgentTypeSchema),
+    Tool(Tool),
+}
+
+impl BridgeSdkTargetKind {
+    pub fn display_name(&self) -> &str {
+        match self {
+            BridgeSdkTargetKind::Agent(agent_type) => agent_type.type_name.as_str(),
+            BridgeSdkTargetKind::Tool(tool) => tool_name(tool).unwrap_or_default(),
+        }
+    }
+
+    pub fn as_agent(&self) -> Option<&AgentTypeSchema> {
+        match self {
+            BridgeSdkTargetKind::Agent(agent_type) => Some(agent_type),
+            BridgeSdkTargetKind::Tool(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -879,6 +905,29 @@ impl Application {
                     .join(mode.id())
                     .join(bridge_client_directory_name_for_mode(agent_type_name, mode)),
             },
+        }
+    }
+
+    pub fn tool_bridge_sdk_dir(&self, tool_name: &str, language: GuestLanguage) -> PathBuf {
+        let output_dir = self
+            .bridge_sdks
+            .value
+            .for_language(language)
+            .and_then(|sdk| sdk.guest.as_ref())
+            .and_then(|sdk| sdk.output_dir.as_ref());
+
+        match output_dir {
+            Some(output_dir) => self
+                .bridge_sdks
+                .source
+                .join(output_dir)
+                .join(tool_bridge_client_directory_name(tool_name)),
+            None => self
+                .temp_dir()
+                .join("bridge-sdk")
+                .join(language.id())
+                .join(BridgeMode::Guest.id())
+                .join(tool_bridge_client_directory_name(tool_name)),
         }
     }
 
@@ -1685,13 +1734,15 @@ impl<'a> Component<'a> {
         self.final_wasm()
     }
 
-    /// File for storing extracted agent types
-    pub fn extracted_agent_types(&self, source_wasm_path: &Path) -> PathBuf {
-        self.temp_dir.join("extracted-agent-types").join(format!(
-            "{}-{}.json",
-            self.component_name.as_str(),
-            blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
-        ))
+    /// File for storing extracted component metadata (agent types and tools)
+    pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
+        self.temp_dir
+            .join("extracted-component-metadata")
+            .join(format!(
+                "{}-{}.json",
+                self.component_name.as_str(),
+                blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+            ))
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -4182,6 +4233,42 @@ mod test {
                 bridge_client_directory_name_for_mode(&alpha_agent, BridgeMode::Guest)
             )
         );
+    }
+
+    #[test]
+    fn bridge_sdk_guest_tools_are_accepted_and_use_tool_bridge_dir() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                guest:
+                  tools:
+                    - MyTool
+                  outputDir: bridge-sdk/rust-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::Rust),
+            app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
+                crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
+            )
+        );
+
+        let used_modes = app.bridge_sdks().for_all_used_modes();
+        assert_eq!(used_modes.len(), 1);
+        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
+        assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 
     #[test]

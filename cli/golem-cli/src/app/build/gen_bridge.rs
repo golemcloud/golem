@@ -1,8 +1,10 @@
-use crate::app::build::extract_agent_type::extract_and_store_agent_types;
+use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
+use crate::app::component_metadata::tool_name;
 use crate::app::context::BuildContext;
 use crate::bridge_gen::moonbit::MoonBitBridgeGenerator;
+use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
 use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode};
 use crate::bridge_gen::scala::ScalaBridgeGenerator;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
@@ -13,33 +15,42 @@ use crate::fs;
 use crate::log::log_error;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, logln};
 use crate::model::GuestLanguage;
-use crate::model::app::{BridgeSdkTarget, CustomBridgeSdkTarget};
+use crate::model::app::{BridgeSdkTarget, BridgeSdkTargetKind, CustomBridgeSdkTarget};
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use anyhow::bail;
 use camino::Utf8PathBuf;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default)]
-pub(crate) struct AgentMetadataCache {
-    agent_types_by_component: BTreeMap<ComponentName, Vec<golem_common::schema::AgentTypeSchema>>,
+pub(crate) struct ComponentMetadataCache {
+    metadata_by_component: BTreeMap<ComponentName, ExtractedComponentMetadata>,
 }
 
-impl AgentMetadataCache {
+impl ComponentMetadataCache {
     pub(crate) async fn get(
         &mut self,
         ctx: &BuildContext<'_>,
         component_name: &ComponentName,
-    ) -> anyhow::Result<Vec<golem_common::schema::AgentTypeSchema>> {
-        if let Some(agent_types) = self.agent_types_by_component.get(component_name) {
-            Ok(agent_types.clone())
+    ) -> anyhow::Result<ExtractedComponentMetadata> {
+        if let Some(metadata) = self.metadata_by_component.get(component_name) {
+            Ok(metadata.clone())
         } else {
-            let agent_types = extract_and_store_agent_types(ctx, component_name).await?;
-            self.agent_types_by_component
-                .insert(component_name.clone(), agent_types.clone());
-            Ok(agent_types)
+            let metadata = extract_and_store_component_metadata(ctx, component_name).await?;
+            self.metadata_by_component
+                .insert(component_name.clone(), metadata.clone());
+            Ok(metadata)
         }
+    }
+
+    pub(crate) async fn get_agent_types(
+        &mut self,
+        ctx: &BuildContext<'_>,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<Vec<golem_common::schema::AgentTypeSchema>> {
+        Ok(self.get(ctx, component_name).await?.agent_types)
     }
 }
 
@@ -114,7 +125,7 @@ pub(crate) async fn plan_bridge_generation(
     ctx: &BuildContext<'_>,
     manifest_bridge_mode_filter: Option<BridgeMode>,
 ) -> anyhow::Result<BridgeGenerationPlan> {
-    let mut agent_metadata_cache = AgentMetadataCache::default();
+    let mut agent_metadata_cache = ComponentMetadataCache::default();
     plan_bridge_generation_with_metadata_cache(
         ctx,
         manifest_bridge_mode_filter,
@@ -126,32 +137,37 @@ pub(crate) async fn plan_bridge_generation(
 pub(crate) async fn plan_bridge_generation_with_metadata_cache(
     ctx: &BuildContext<'_>,
     manifest_bridge_mode_filter: Option<BridgeMode>,
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
-    let mut plan = BridgeGenerationPlan::default();
-
-    plan.targets = match &ctx.custom_bridge_sdk_target() {
-        Some(custom_target) => {
-            collect_custom_targets(ctx, custom_target, agent_metadata_cache).await?
-        }
-        None => {
-            collect_manifest_targets(ctx, manifest_bridge_mode_filter, agent_metadata_cache).await?
-        }
+    let mut plan = BridgeGenerationPlan {
+        targets: match &ctx.custom_bridge_sdk_target() {
+            Some(custom_target) => {
+                collect_custom_targets(ctx, custom_target, agent_metadata_cache).await?
+            }
+            None => {
+                collect_manifest_targets(ctx, manifest_bridge_mode_filter, agent_metadata_cache)
+                    .await?
+            }
+        },
+        ..Default::default()
     };
 
     if let Some(target) = ctx.repl_bridge_sdk_target() {
         let repl_targets = collect_custom_targets(ctx, target, agent_metadata_cache).await?;
 
         for target in &repl_targets {
+            let Some(agent_type) = target.kind.as_agent() else {
+                continue;
+            };
             plan.repl_metadata_by_language
                 .entry(target.target_language)
                 .or_default()
                 .agents
                 .insert(
-                    target.agent_type.type_name.clone(),
+                    agent_type.type_name.clone(),
                     ReplAgentMetadata {
                         client_dir: target.output_dir.clone(),
-                        mode: target.agent_type.mode,
+                        mode: agent_type.mode,
                     },
                 );
         }
@@ -185,7 +201,7 @@ pub(crate) async fn plan_manifest_guest_bridge_generation_for_components_lenient
     ctx: &BuildContext<'_>,
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     Ok(BridgeGenerationPlan {
         targets: collect_manifest_targets_for_components_and_mode(
@@ -205,7 +221,7 @@ pub(crate) async fn plan_manifest_guest_bridge_generation_for_components_lenient
 pub(crate) async fn plan_manifest_external_bridge_generation_for_components_lenient(
     ctx: &BuildContext<'_>,
     component_names: &[ComponentName],
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     Ok(BridgeGenerationPlan {
         targets: collect_manifest_external_bridge_targets_for_components_lenient(
@@ -221,7 +237,7 @@ pub(crate) async fn plan_manifest_external_bridge_generation_for_components_leni
 pub(crate) async fn plan_custom_bridge_generation_lenient(
     ctx: &BuildContext<'_>,
     custom_target: &CustomBridgeSdkTarget,
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     Ok(BridgeGenerationPlan {
         targets: collect_custom_targets_lenient(ctx, custom_target, agent_metadata_cache).await?,
@@ -232,21 +248,24 @@ pub(crate) async fn plan_custom_bridge_generation_lenient(
 pub(crate) async fn plan_repl_bridge_generation_lenient(
     ctx: &BuildContext<'_>,
     repl_target: &CustomBridgeSdkTarget,
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     let targets = collect_custom_targets_lenient(ctx, repl_target, agent_metadata_cache).await?;
     let mut repl_metadata_by_language = BTreeMap::<GuestLanguage, ReplMetadata>::new();
 
     for target in &targets {
+        let Some(agent_type) = target.kind.as_agent() else {
+            continue;
+        };
         repl_metadata_by_language
             .entry(target.target_language)
             .or_default()
             .agents
             .insert(
-                target.agent_type.type_name.clone(),
+                agent_type.type_name.clone(),
                 ReplAgentMetadata {
                     client_dir: target.output_dir.clone(),
-                    mode: target.agent_type.mode,
+                    mode: agent_type.mode,
                 },
             );
     }
@@ -260,7 +279,7 @@ pub(crate) async fn plan_repl_bridge_generation_lenient(
 pub(crate) async fn collect_manifest_external_bridge_targets_for_components_lenient(
     ctx: &BuildContext<'_>,
     component_names: &[ComponentName],
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     collect_manifest_targets_for_components_and_mode(
         ctx,
@@ -277,7 +296,7 @@ pub(crate) async fn collect_manifest_external_bridge_targets_for_components_leni
 pub(crate) async fn collect_custom_targets_lenient(
     ctx: &BuildContext<'_>,
     custom_target: &CustomBridgeSdkTarget,
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
 
@@ -294,7 +313,9 @@ pub(crate) async fn collect_custom_targets_lenient(
             .or_else(|| component.guess_language())
             .unwrap_or(GuestLanguage::TypeScript);
 
-        let mut agent_types = agent_metadata_cache.get(ctx, component_name).await?;
+        let mut agent_types = agent_metadata_cache
+            .get_agent_types(ctx, component_name)
+            .await?;
         if should_filter_by_agent_type_name {
             agent_types.retain(|agent_type| agent_type_names.remove(&agent_type.type_name));
         }
@@ -316,7 +337,7 @@ pub(crate) async fn collect_custom_targets_lenient(
 
             targets.push(BridgeSdkTarget {
                 component_name: component_name.clone(),
-                agent_type,
+                kind: BridgeSdkTargetKind::Agent(agent_type),
                 target_language,
                 bridge_mode: BridgeMode::External,
                 output_dir,
@@ -341,7 +362,7 @@ pub(crate) async fn gen_bridge_sdk_targets(
 async fn collect_manifest_targets(
     ctx: &BuildContext<'_>,
     bridge_mode_filter: Option<BridgeMode>,
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let component_names = ctx
         .application_context()
@@ -368,7 +389,7 @@ async fn collect_manifest_targets_for_components_and_mode(
     bridge_mode_filter: Option<BridgeMode>,
     ignore_unmatched_matchers: bool,
     skip_missing_sources: bool,
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
     let application_component_names = ctx
@@ -384,81 +405,38 @@ async fn collect_manifest_targets_for_components_and_mode(
             continue;
         }
 
-        let mut matchers = sdk_targets.agents.clone().into_set();
+        collect_agent_manifest_targets_for_entry(
+            ctx,
+            source_component_names,
+            selection_scope_component_names,
+            bridge_mode,
+            target_language,
+            sdk_targets.agents.clone().into_set(),
+            &application_component_names,
+            ignore_unmatched_matchers,
+            skip_missing_sources,
+            agent_metadata_cache,
+            &mut targets,
+        )
+        .await?;
 
-        if matchers.is_empty() {
-            continue;
-        }
-
-        let is_matching_all = matchers.remove("*");
-
-        for component_name in source_component_names {
-            if skip_missing_sources
-                && !ctx
-                    .application()
-                    .component(component_name)
-                    .agent_type_extraction_source_wasm()
-                    .exists()
-            {
-                continue;
-            }
-
-            let is_matching_component = matchers.remove(component_name.as_str());
-
-            if !is_matching_all
-                && !is_matching_component
-                && matchers
-                    .iter()
-                    .all(|matcher| application_component_names.contains(matcher.as_str()))
-            {
-                continue;
-            }
-
-            let mut agent_types = agent_metadata_cache.get(ctx, component_name).await?;
-
-            if !is_matching_all && !is_matching_component {
-                agent_types.retain(|agent_type| matchers.contains(agent_type.type_name.as_str()));
-            }
-
-            for agent_type in agent_types {
-                matchers.remove(agent_type.type_name.as_str());
-
-                let output_dir = ctx.application().bridge_sdk_dir(
-                    &agent_type.type_name,
-                    target_language,
-                    bridge_mode,
-                );
-                targets.push(BridgeSdkTarget {
-                    component_name: component_name.clone(),
-                    agent_type,
-                    target_language,
-                    bridge_mode,
-                    output_dir,
-                });
-            }
-        }
-
-        if !ignore_unmatched_matchers && !matchers.is_empty() {
-            // Remove "non-selected" components
-            for component_name in ctx.application().component_names() {
-                if !selection_scope_component_names.contains(component_name) {
-                    matchers.remove(component_name.as_str());
-                }
-            }
-        }
-
-        if !ignore_unmatched_matchers && !matchers.is_empty() {
-            logln("");
-            log_error(format!(
-                "The following agent matchers were not found during {} bridge SDK generation: {}",
-                bridge_sdk_target_name(target_language, bridge_mode).log_color_highlight(),
-                matchers
-                    .iter()
-                    .map(|at| at.as_str().log_color_highlight().to_string())
-                    .join(", ")
-            ));
-            bail!(NonSuccessfulExit)
-        }
+        collect_tool_manifest_targets_for_entry(
+            ctx,
+            source_component_names,
+            selection_scope_component_names,
+            bridge_mode,
+            target_language,
+            sdk_targets
+                .tools
+                .map(|tools| tools.clone().into_set())
+                .unwrap_or_default(),
+            &application_component_names,
+            ignore_unmatched_matchers,
+            skip_missing_sources,
+            agent_metadata_cache,
+            &mut targets,
+        )
+        .await?;
     }
 
     if bridge_mode_filter.is_none_or(|bridge_mode| bridge_mode == BridgeMode::Guest) {
@@ -476,11 +454,198 @@ async fn collect_manifest_targets_for_components_and_mode(
     Ok(targets)
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn collect_agent_manifest_targets_for_entry(
+    ctx: &BuildContext<'_>,
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
+    bridge_mode: BridgeMode,
+    target_language: GuestLanguage,
+    mut matchers: BTreeSet<String>,
+    application_component_names: &BTreeSet<String>,
+    ignore_unmatched_matchers: bool,
+    skip_missing_sources: bool,
+    agent_metadata_cache: &mut ComponentMetadataCache,
+    targets: &mut Vec<BridgeSdkTarget>,
+) -> anyhow::Result<()> {
+    if matchers.is_empty() {
+        return Ok(());
+    }
+
+    let is_matching_all = matchers.remove("*");
+
+    for component_name in source_component_names {
+        if skip_missing_sources
+            && !ctx
+                .application()
+                .component(component_name)
+                .agent_type_extraction_source_wasm()
+                .exists()
+        {
+            continue;
+        }
+
+        let is_matching_component = matchers.remove(component_name.as_str());
+
+        if !is_matching_all
+            && !is_matching_component
+            && matchers
+                .iter()
+                .all(|matcher| application_component_names.contains(matcher.as_str()))
+        {
+            continue;
+        }
+
+        let mut agent_types = agent_metadata_cache
+            .get_agent_types(ctx, component_name)
+            .await?;
+
+        if !is_matching_all && !is_matching_component {
+            agent_types.retain(|agent_type| matchers.contains(agent_type.type_name.as_str()));
+        }
+
+        for agent_type in agent_types {
+            matchers.remove(agent_type.type_name.as_str());
+
+            let output_dir = ctx.application().bridge_sdk_dir(
+                &agent_type.type_name,
+                target_language,
+                bridge_mode,
+            );
+            targets.push(BridgeSdkTarget {
+                component_name: component_name.clone(),
+                kind: BridgeSdkTargetKind::Agent(agent_type),
+                target_language,
+                bridge_mode,
+                output_dir,
+            });
+        }
+    }
+
+    if !ignore_unmatched_matchers && !matchers.is_empty() {
+        for component_name in ctx.application().component_names() {
+            if !selection_scope_component_names.contains(component_name) {
+                matchers.remove(component_name.as_str());
+            }
+        }
+    }
+
+    if !ignore_unmatched_matchers && !matchers.is_empty() {
+        logln("");
+        log_error(format!(
+            "The following agent matchers were not found during {} bridge SDK generation: {}",
+            bridge_sdk_target_name(target_language, bridge_mode).log_color_highlight(),
+            matchers
+                .iter()
+                .map(|at| at.as_str().log_color_highlight().to_string())
+                .join(", ")
+        ));
+        bail!(NonSuccessfulExit)
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn collect_tool_manifest_targets_for_entry(
+    ctx: &BuildContext<'_>,
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
+    bridge_mode: BridgeMode,
+    target_language: GuestLanguage,
+    mut matchers: BTreeSet<String>,
+    application_component_names: &BTreeSet<String>,
+    ignore_unmatched_matchers: bool,
+    skip_missing_sources: bool,
+    agent_metadata_cache: &mut ComponentMetadataCache,
+    targets: &mut Vec<BridgeSdkTarget>,
+) -> anyhow::Result<()> {
+    if matchers.is_empty() {
+        return Ok(());
+    }
+
+    if bridge_mode != BridgeMode::Guest || target_language != GuestLanguage::Rust {
+        logln("");
+        log_error("tool guest bridge SDKs are only supported for Rust yet");
+        bail!(NonSuccessfulExit)
+    }
+
+    let is_matching_all = matchers.remove("*");
+
+    for component_name in source_component_names {
+        if skip_missing_sources
+            && !ctx
+                .application()
+                .component(component_name)
+                .agent_type_extraction_source_wasm()
+                .exists()
+        {
+            continue;
+        }
+
+        let is_matching_component = matchers.remove(component_name.as_str());
+
+        if !is_matching_all
+            && !is_matching_component
+            && matchers
+                .iter()
+                .all(|matcher| application_component_names.contains(matcher.as_str()))
+        {
+            continue;
+        }
+
+        let mut tools = agent_metadata_cache.get(ctx, component_name).await?.tools;
+
+        if !is_matching_all && !is_matching_component {
+            tools.retain(|tool| tool_name(tool).is_some_and(|name| matchers.contains(name)));
+        }
+
+        for tool in tools {
+            let Some(name) = tool_name(&tool) else {
+                continue;
+            };
+            matchers.remove(name);
+
+            let output_dir = ctx.application().tool_bridge_sdk_dir(name, target_language);
+            targets.push(BridgeSdkTarget {
+                component_name: component_name.clone(),
+                kind: BridgeSdkTargetKind::Tool(tool),
+                target_language,
+                bridge_mode: BridgeMode::Guest,
+                output_dir,
+            });
+        }
+    }
+
+    if !ignore_unmatched_matchers && !matchers.is_empty() {
+        for component_name in ctx.application().component_names() {
+            if !selection_scope_component_names.contains(component_name) {
+                matchers.remove(component_name.as_str());
+            }
+        }
+    }
+
+    if !ignore_unmatched_matchers && !matchers.is_empty() {
+        logln("");
+        log_error(format!(
+            "The following tool matchers were not found during {} bridge SDK generation: {}",
+            bridge_sdk_target_name(target_language, bridge_mode).log_color_highlight(),
+            matchers
+                .iter()
+                .map(|at| at.as_str().log_color_highlight().to_string())
+                .join(", ")
+        ));
+        bail!(NonSuccessfulExit)
+    }
+
+    Ok(())
+}
+
 async fn collect_dependency_guest_bridge_targets(
     ctx: &BuildContext<'_>,
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = Vec::new();
 
@@ -503,7 +668,9 @@ async fn collect_dependency_guest_bridge_targets(
             continue;
         }
 
-        let agent_types = agent_metadata_cache.get(ctx, component_name).await?;
+        let agent_types = agent_metadata_cache
+            .get_agent_types(ctx, component_name)
+            .await?;
         for target_language in target_languages {
             let explicit_matchers = explicit_guest_bridge_matchers(ctx, target_language);
             let explicitly_matches_all = explicit_matchers.contains("*");
@@ -523,7 +690,7 @@ async fn collect_dependency_guest_bridge_targets(
                 );
                 targets.push(BridgeSdkTarget {
                     component_name: component_name.clone(),
-                    agent_type: agent_type.clone(),
+                    kind: BridgeSdkTargetKind::Agent(agent_type.clone()),
                     target_language,
                     bridge_mode: BridgeMode::Guest,
                     output_dir,
@@ -577,7 +744,7 @@ fn explicit_guest_bridge_matchers(
 async fn collect_custom_targets(
     ctx: &BuildContext<'_>,
     custom_target: &CustomBridgeSdkTarget,
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
 
@@ -591,7 +758,9 @@ async fn collect_custom_targets(
             .unwrap_or(GuestLanguage::TypeScript);
 
         let agent_types = {
-            let mut agent_types = agent_metadata_cache.get(ctx, component_name).await?;
+            let mut agent_types = agent_metadata_cache
+                .get_agent_types(ctx, component_name)
+                .await?;
 
             if should_filter_by_agent_type_name {
                 agent_types.retain(|agent_type| agent_type_names.remove(&agent_type.type_name));
@@ -617,7 +786,7 @@ async fn collect_custom_targets(
 
             targets.push(BridgeSdkTarget {
                 component_name: component_name.clone(),
-                agent_type,
+                kind: BridgeSdkTargetKind::Agent(agent_type),
                 target_language,
                 bridge_mode: BridgeMode::External,
                 output_dir,
@@ -646,13 +815,18 @@ async fn gen_bridge_sdk_target(
 ) -> anyhow::Result<()> {
     let component = ctx.application().component(&target.component_name);
     let final_wasm = component.final_wasm();
-    let agent_type_name = target.agent_type.type_name.clone();
+    let target_name = target.kind.display_name().to_string();
+    let target_kind = match &target.kind {
+        BridgeSdkTargetKind::Agent(_) => "agent",
+        BridgeSdkTargetKind::Tool(_) => "tool",
+    };
     let output_dir = Utf8PathBuf::try_from(target.output_dir)?;
 
     new_task_up_to_date_check(ctx)
         .with_task_result_marker(GenerateBridgeSdkMarkerHash {
             component_name: &target.component_name,
-            agent_type_name: &target.agent_type.type_name,
+            target_name: &target_name,
+            kind: target_kind,
             language: &target.target_language,
             bridge_mode: target.bridge_mode,
         })?
@@ -666,17 +840,18 @@ async fn gen_bridge_sdk_target(
                         "{} bridge SDK for {} to {}",
                         bridge_sdk_target_name(target.target_language, target.bridge_mode)
                             .log_color_highlight(),
-                        agent_type_name.as_str().log_color_highlight(),
+                        target_name.as_str().log_color_highlight(),
                         output_dir.log_color_highlight(),
                     ),
                 );
                 let _indent = LogIndent::new();
 
-                let mut generator: Box<dyn BridgeGenerator> =
-                    match (target.target_language, target.bridge_mode) {
+                match target.kind {
+                    BridgeSdkTargetKind::Agent(agent_type) => {
+                        let mut generator: Box<dyn BridgeGenerator> = match (target.target_language, target.bridge_mode) {
                         (GuestLanguage::Rust, BridgeMode::External) => {
                             Box::new(RustBridgeGenerator::new_with_mode(
-                                target.agent_type,
+                                agent_type,
                                 &output_dir,
                                 false,
                                 RustBridgeMode::ExternalRest,
@@ -684,36 +859,45 @@ async fn gen_bridge_sdk_target(
                         }
                         (GuestLanguage::Rust, BridgeMode::Guest) => {
                             Box::new(RustBridgeGenerator::new_with_mode(
-                                target.agent_type,
+                                agent_type,
                                 &output_dir,
                                 false,
                                 RustBridgeMode::GuestWasmRpc,
                             )?)
                         }
                         (GuestLanguage::TypeScript, BridgeMode::External) => Box::new(
-                            TypeScriptBridgeGenerator::new(target.agent_type, &output_dir, false)?,
+                            TypeScriptBridgeGenerator::new(agent_type, &output_dir, false)?,
                         ),
-                        (GuestLanguage::Scala, BridgeMode::External) => Box::new(
-                            ScalaBridgeGenerator::new(target.agent_type, &output_dir, false)?,
-                        ),
-                        (GuestLanguage::MoonBit, BridgeMode::External) => Box::new(
-                            MoonBitBridgeGenerator::new(target.agent_type, &output_dir, false)?,
-                        ),
+                        (GuestLanguage::Scala, BridgeMode::External) => {
+                            Box::new(ScalaBridgeGenerator::new(agent_type, &output_dir, false)?)
+                        }
+                        (GuestLanguage::MoonBit, BridgeMode::External) => {
+                            Box::new(MoonBitBridgeGenerator::new(agent_type, &output_dir, false)?)
+                        }
                         (language, BridgeMode::Guest) => bail!(
                             "guest bridge mode is not supported for {} yet",
                             language.to_string().log_color_highlight()
                         ),
                     };
 
-                fs::remove(&output_dir)?;
-                generator.generate()
+                        fs::remove(&output_dir)?;
+                        generator.generate()
+                    }
+                    BridgeSdkTargetKind::Tool(tool) => match (target.target_language, target.bridge_mode) {
+                        (GuestLanguage::Rust, BridgeMode::Guest) => {
+                            fs::remove(&output_dir)?;
+                            RustToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                        }
+                        _ => bail!("tool guest bridge generation is only implemented for Rust guest bridges"),
+                    },
+                }
             },
             || {
                 log_skipping_up_to_date(format!(
                     "generating {} bridge SDK for {} to {}",
                     bridge_sdk_target_name(target.target_language, target.bridge_mode)
                         .log_color_highlight(),
-                    agent_type_name.as_str().log_color_highlight(),
+                    target_name.as_str().log_color_highlight(),
                     output_dir.log_color_highlight()
                 ));
             },
@@ -754,10 +938,10 @@ pub(crate) fn validate_no_output_dir_collisions(targets: &[BridgeSdkTarget]) -> 
             log_error(format!(
                 "Bridge SDK target output directories overlap: {} for {} resolves to {}, {} for {} resolves to {}",
                 bridge_sdk_target_name(left_target.target_language, left_target.bridge_mode),
-                left_target.agent_type.type_name.as_str(),
+                left_target.kind.display_name(),
                 left_output_dir.log_color_highlight(),
                 bridge_sdk_target_name(right_target.target_language, right_target.bridge_mode),
-                right_target.agent_type.type_name.as_str(),
+                right_target.kind.display_name(),
                 right_output_dir.log_color_highlight(),
             ));
         }
@@ -769,6 +953,13 @@ pub(crate) fn validate_no_output_dir_collisions(targets: &[BridgeSdkTarget]) -> 
 
 pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> anyhow::Result<()> {
     for target in targets {
+        if matches!(target.kind, BridgeSdkTargetKind::Tool(_))
+            && (target.bridge_mode != BridgeMode::Guest
+                || target.target_language != GuestLanguage::Rust)
+        {
+            bail!("tool guest bridge SDKs are only supported for rust yet");
+        }
+
         if target.bridge_mode == BridgeMode::Guest && target.target_language != GuestLanguage::Rust
         {
             bail!(
@@ -787,6 +978,7 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::component::ComponentName;
+    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
     use tempfile::tempdir;
     use test_r::test;
@@ -865,6 +1057,26 @@ mod tests {
         validate_supported_bridge_targets(&targets).unwrap();
     }
 
+    #[test]
+    fn validate_supported_bridge_targets_rejects_non_rust_tool_targets() {
+        let targets = vec![BridgeSdkTarget {
+            component_name: ComponentName("component".to_string()),
+            kind: BridgeSdkTargetKind::Tool(tool("MyTool")),
+            target_language: GuestLanguage::TypeScript,
+            bridge_mode: BridgeMode::Guest,
+            output_dir: tempdir()
+                .unwrap()
+                .path()
+                .join("bridge/my-tool-guest-client"),
+        }];
+
+        let error = validate_supported_bridge_targets(&targets).unwrap_err();
+        assert!(
+            format!("{error:?}").contains("tool guest bridge SDKs are only supported for rust yet"),
+            "unexpected error: {error:?}"
+        );
+    }
+
     fn bridge_sdk_target(
         agent_type_name: &str,
         target_language: GuestLanguage,
@@ -886,7 +1098,7 @@ mod tests {
     ) -> BridgeSdkTarget {
         BridgeSdkTarget {
             component_name: ComponentName("component".to_string()),
-            agent_type: agent_type(agent_type_name),
+            kind: BridgeSdkTargetKind::Agent(agent_type(agent_type_name)),
             target_language,
             bridge_mode,
             output_dir: output_dir.into(),
@@ -911,6 +1123,23 @@ mod tests {
             http_mount: None,
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
+        }
+    }
+
+    fn tool(name: &str) -> Tool {
+        Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: name.to_string(),
+                    aliases: vec![],
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: vec![],
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
         }
     }
 }

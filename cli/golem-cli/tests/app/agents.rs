@@ -670,6 +670,219 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // .await;
 }
 
+/// End-to-end test for the Rust guest tool bridge: a provider component
+/// defines an `echo` tool with `#[tool_definition]`, the app manifest requests
+/// a guest tool bridge for it, and a consumer component in the same app calls
+/// the tool through the generated `echo-tool-guest-client` crate.
+///
+/// The build covers the full pipeline: provider component build -> bundled
+/// component metadata extraction (`discover-tools`) -> tool matcher planning ->
+/// guest tool client generation -> consumer compilation and linking against the
+/// generated crate. The deployment covers registering a tool-only component
+/// (the provider exports no agents).
+///
+/// The invocation currently asserts the worker executor's `golem:tool/host`
+/// stub error: through a real deployed invocation, the generated client is
+/// proven to reach the executor's `tool-rpc.new` host function (execution
+/// stops there today, before `invoke-and-await`). Once the tool runtime is
+/// implemented in the worker executor, the invocation is expected to succeed
+/// and return `ok:echo:hello`; flip the trailing assertions accordingly —
+/// only then does this test validate the generated command path and input
+/// encoding against the provider.
+#[test]
+#[timeout("15 minutes")]
+async fn test_rust_tool_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "tool-bridge";
+
+    ctx.start_server().await;
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for component_name in ["tool-bridge:provider", "tool-bridge:consumer"] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                "rust",
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    // Replace the generated app manifest: both template components ship a
+    // CounterAgent (which would collide across components) and an httpApi
+    // section referencing it; instead the provider becomes a tool-only
+    // component and the consumer depends on it, with a guest tool bridge
+    // requested for the `echo` tool.
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: tool-bridge
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              tool-bridge:provider:
+                dir: "provider"
+                templates: rust
+              tool-bridge:consumer:
+                dir: "consumer"
+                templates: rust
+                dependencies:
+                  - tool-bridge:provider
+
+            bridge:
+              rust:
+                guest:
+                  tools:
+                    - echo
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    // The provider's `src/lib.rs` re-exports `counter_agent::*`, so replacing
+    // the module contents keeps the template wiring intact.
+    fs::write_str(
+        ctx.cwd_path_join("provider/src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::{tool_definition, tool_implementation};
+
+            /// Echo a message back to the caller.
+            #[tool_definition(version = "1.0.0")]
+            pub trait Echo {
+                fn echo(&self, message: String) -> String;
+            }
+
+            struct EchoImpl;
+
+            #[tool_implementation]
+            impl Echo for EchoImpl {
+                fn echo(&self, message: String) -> String {
+                    format!("echo:{message}")
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! { r#"
+            use echo_tool_guest_client::EchoClient;
+            use golem_rust::{agent_definition, agent_implementation};
+
+            #[agent_definition]
+            pub trait EchoConsumerAgent {
+                fn new(name: String) -> Self;
+                async fn call_echo(&self, message: String) -> String;
+            }
+
+            struct EchoConsumerImpl;
+
+            #[agent_implementation]
+            impl EchoConsumerAgent for EchoConsumerImpl {
+                fn new(_name: String) -> Self {
+                    Self
+                }
+
+                async fn call_echo(&self, message: String) -> String {
+                    match EchoClient::new().echo(message).await {
+                        Ok(value) => format!("ok:{value}"),
+                        Err(error) => format!("err:{error:?}"),
+                    }
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let consumer_cargo_toml_path = ctx.cwd_path_join("consumer/Cargo.toml");
+    let consumer_cargo_toml = fs::read_to_string(&consumer_cargo_toml_path).unwrap();
+    assert!(consumer_cargo_toml.contains("[dependencies]"));
+    fs::write_str(
+        &consumer_cargo_toml_path,
+        consumer_cargo_toml.replace(
+            "[dependencies]",
+            indoc! { r#"
+                [dependencies]
+                echo-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/echo-tool-guest-client" }
+            "# }
+            .trim_end(),
+        ),
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let generated_client_dir =
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/echo-tool-guest-client");
+    assert!(generated_client_dir.join("Cargo.toml").exists());
+
+    // The consumer build above already compiled the generated client crate as
+    // a dependency; this standalone build additionally validates that the
+    // generated crate compiles to wasm32-wasip2 on its own (its manifest and
+    // dependency resolution are self-contained).
+    let output = std::process::Command::new("cargo")
+        .arg("build")
+        .arg("--target")
+        .arg("wasm32-wasip2")
+        .current_dir(&generated_client_dir)
+        .output()
+        .expect("failed to run cargo; is it installed?");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "standalone wasm32-wasip2 build of the generated tool client failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        generated_client_dir.display()
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let uuid = Uuid::new_v4().to_string();
+    let agent_constructor = format!("EchoConsumerAgent(\"{uuid}\")");
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &agent_constructor,
+            "call_echo",
+            "\"hello\"",
+        ])
+        .await;
+
+    // The worker executor's `golem:tool/host` is not implemented yet:
+    // `tool-rpc.new` traps (before `invoke-and-await` is ever reached), so the
+    // invocation must fail with the stub error, proving the generated client
+    // reaches the executor's tool host. Once the tool runtime lands, replace
+    // this with:
+    //     assert!(outputs.success_or_dump());
+    //     assert!(outputs.stdout_contains("ok:echo:hello"));
+    let invocation_reached_tool_host_stub =
+        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    if !invocation_reached_tool_host_stub {
+        outputs.dump();
+    }
+    assert!(
+        invocation_reached_tool_host_stub,
+        "expected the tool invocation to fail with the executor's golem:tool/host stub error"
+    );
+}
+
 #[test]
 async fn test_ts_counter() {
     let mut ctx = TestContext::new();
@@ -1777,7 +1990,7 @@ fn check_agent_types_golden_file(
     let mut mint_file =
         mint.new_goldenfile(format!("code_first_snippets_{}.json", language.id()))?;
 
-    let extract_dir = application_path.join("golem-temp/extracted-agent-types");
+    let extract_dir = application_path.join("golem-temp/extracted-component-metadata");
     let entries = std::fs::read_dir(&extract_dir)
         .with_context(|| format!("Failed to read directory {}", extract_dir.display()))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1788,12 +2001,19 @@ fn check_agent_types_golden_file(
             entries
         );
     }
-    let agent_types_source = entries[0].path();
+    let metadata_source = entries[0].path();
 
-    let formatted_agent_types_json =
-        serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(
-            &fs::read_to_string(&agent_types_source)?,
-        )?)?;
+    // The extracted metadata file bundles agent types and tools; the golden
+    // files cover the agent type list only (as a bare array).
+    let metadata_json =
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&metadata_source)?)?;
+    let agent_types_json = metadata_json.get("agentTypes").with_context(|| {
+        format!(
+            "Missing agentTypes field in extracted component metadata {}",
+            metadata_source.display()
+        )
+    })?;
+    let formatted_agent_types_json = serde_json::to_string_pretty(agent_types_json)?;
 
     mint_file.write_all(formatted_agent_types_json.as_bytes())?;
 

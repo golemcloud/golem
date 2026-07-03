@@ -77,6 +77,10 @@ pub fn bridge_client_directory_name(agent_type_name: &AgentTypeName) -> String {
     format!("{}-client", agent_type_name.as_str().to_kebab_case())
 }
 
+pub fn tool_bridge_client_directory_name(tool_name: &str) -> String {
+    format!("{}-tool-guest-client", tool_name.to_kebab_case())
+}
+
 pub fn bridge_client_directory_name_for_mode(
     agent_type_name: &AgentTypeName,
     mode: BridgeMode,

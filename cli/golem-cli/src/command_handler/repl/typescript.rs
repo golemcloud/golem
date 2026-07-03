@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::extract_agent_type::extract_and_store_agent_types;
+use crate::app::build::extract_component_metadata::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::GenerateBridgeReplMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;

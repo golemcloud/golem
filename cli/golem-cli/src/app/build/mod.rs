@@ -18,13 +18,14 @@ use crate::app::build::add_metadata::{
 };
 use crate::app::build::componentize::{build_components, build_selected_components};
 use crate::app::build::gen_bridge::{
-    AgentMetadataCache, BridgeGenerationPlan, gen_bridge, gen_bridge_sdk_targets,
+    BridgeGenerationPlan, ComponentMetadataCache, gen_bridge, gen_bridge_sdk_targets,
     plan_custom_bridge_generation_lenient,
     plan_manifest_external_bridge_generation_for_components_lenient,
     plan_manifest_guest_bridge_generation_for_components_lenient,
     plan_repl_bridge_generation_lenient, validate_no_output_dir_collisions,
     validate_supported_bridge_targets, write_repl_metadata,
 };
+use crate::app::component_metadata::tool_name;
 use crate::app::context::BuildContext;
 use crate::bridge_gen::BridgeMode;
 use crate::error::NonSuccessfulExit;
@@ -32,8 +33,8 @@ use crate::log::{LogColorize, log_error, logln};
 use crate::model::GuestLanguage;
 use crate::model::app::{AppBuildStep, BridgeSdkTarget, CustomBridgeSdkTarget};
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
-use golem_common::schema::AgentTypeSchema;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ pub mod check;
 pub mod clean;
 pub mod command;
 pub mod componentize;
-pub mod extract_agent_type;
+pub mod extract_component_metadata;
 pub mod gen_bridge;
 pub mod task_result_marker;
 pub mod up_to_date_check;
@@ -84,7 +85,7 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
     } else {
         Vec::new()
     };
-    let mut agent_metadata_cache = AgentMetadataCache::default();
+    let mut agent_metadata_cache = ComponentMetadataCache::default();
     let mut validated_targets = Vec::<(BridgeRequestId, BridgeSdkTarget)>::new();
     let claims = bridge_output_dir_claims(ctx, &effective_component_names);
     let mut pending_components = effective_component_names
@@ -304,7 +305,7 @@ fn report_guest_bridge_build_cycle(
     available_guest_bridge_components: &BTreeSet<ComponentName>,
 ) -> anyhow::Result<()> {
     logln("");
-    log_error("Build graph has a cycle involving guest bridge generation:".to_string());
+    log_error("Build graph has a cycle involving guest bridge generation:");
     for component_name in pending_components {
         let missing = component_guest_bridge_requirements(ctx, component_name)
             .difference(available_guest_bridge_components)
@@ -325,7 +326,8 @@ fn report_guest_bridge_build_cycle(
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct BridgeSdkTargetKey {
     component_name: ComponentName,
-    agent_type_name: AgentTypeName,
+    target_name: String,
+    kind: &'static str,
     target_language: GuestLanguage,
     bridge_mode: BridgeMode,
     output_dir: PathBuf,
@@ -335,7 +337,11 @@ impl BridgeSdkTargetKey {
     fn from_bridge_target(ctx: &BuildContext<'_>, target: &BridgeSdkTarget) -> Self {
         Self {
             component_name: target.component_name.clone(),
-            agent_type_name: target.agent_type.type_name.clone(),
+            target_name: target.kind.display_name().to_string(),
+            kind: match &target.kind {
+                crate::model::app::BridgeSdkTargetKind::Agent(_) => "agent",
+                crate::model::app::BridgeSdkTargetKind::Tool(_) => "tool",
+            },
             target_language: target.target_language,
             bridge_mode: target.bridge_mode,
             output_dir: crate::fs::absolute_lexical_path(&target.output_dir).unwrap_or_else(|_| {
@@ -403,7 +409,7 @@ async fn plan_bridge_request(
     request_id: BridgeRequestId,
     selected_component_names: &[ComponentName],
     guest_source_component_names: &[ComponentName],
-    agent_metadata_cache: &mut AgentMetadataCache,
+    agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     match request_id {
         BridgeRequestId::ManifestGuest => {
@@ -459,22 +465,40 @@ fn bridge_output_dir_claims(
 
     if ctx.custom_bridge_sdk_target().is_none() {
         for (language, mode, sdk_targets) in ctx.application().bridge_sdks().for_all_used_modes() {
-            if !manifest_bridge_request_may_match_selected_components(
+            if manifest_bridge_request_may_match_selected_components(
                 ctx,
                 sdk_targets.agents,
                 selected_component_names,
             ) {
-                continue;
+                add_manifest_bridge_output_dir_claims(
+                    ctx,
+                    &mut claims,
+                    language,
+                    mode,
+                    sdk_targets.agents,
+                    sdk_targets.output_dir.map(|output_dir| output_dir.as_str()),
+                    selected_component_names,
+                );
             }
-            add_manifest_bridge_output_dir_claims(
-                ctx,
-                &mut claims,
-                language,
-                mode,
-                sdk_targets.agents,
-                sdk_targets.output_dir.map(|output_dir| output_dir.as_str()),
-                selected_component_names,
-            );
+
+            if mode == BridgeMode::Guest
+                && let Some(tools) = sdk_targets.tools
+                && manifest_bridge_request_may_match_selected_components(
+                    ctx,
+                    tools,
+                    selected_component_names,
+                )
+            {
+                add_manifest_tool_bridge_output_dir_claims(
+                    ctx,
+                    &mut claims,
+                    language,
+                    mode,
+                    tools,
+                    sdk_targets.output_dir.map(|output_dir| output_dir.as_str()),
+                    selected_component_names,
+                );
+            }
         }
     }
 
@@ -519,27 +543,34 @@ fn add_manifest_bridge_output_dir_claims(
         .collect::<BTreeSet<_>>();
 
     for matcher in agents.clone().into_set() {
-        if matcher == "*"
-            || component_names
-                .iter()
-                .any(|component_name| component_name.as_str() == matcher.as_str())
-        {
+        let is_component_matcher = component_names
+            .iter()
+            .any(|component_name| component_name.as_str() == matcher.as_str());
+        let is_selected_component_matcher = selected_component_names
+            .iter()
+            .any(|component_name| component_name.as_str() == matcher.as_str());
+
+        if matcher == "*" || is_component_matcher {
+            if matcher != "*" && !is_selected_component_matcher {
+                continue;
+            }
+
             if matcher == "*"
-                || selected_component_names
-                    .iter()
-                    .any(|component_name| component_name.as_str() == matcher.as_str())
+                || !add_existing_component_manifest_bridge_output_dir_claims(
+                    ctx,
+                    claims,
+                    request_id,
+                    language,
+                    mode,
+                    &matcher,
+                    BridgeTargetNameKind::Agent,
+                )
             {
-                if matcher == "*"
-                    || !add_existing_component_manifest_bridge_output_dir_claims(
-                        ctx, claims, request_id, language, mode, &matcher,
-                    )
-                {
-                    claims.push(OutputDirClaim {
-                        request_id,
-                        base_dir: base_dir.clone(),
-                        description: format!("{language} {mode:?} manifest bridge outputDir"),
-                    });
-                }
+                claims.push(OutputDirClaim {
+                    request_id,
+                    base_dir: base_dir.clone(),
+                    description: format!("{language} {mode:?} manifest bridge outputDir"),
+                });
             }
         } else {
             let agent_type_name = AgentTypeName(matcher.clone());
@@ -558,6 +589,79 @@ fn add_manifest_bridge_output_dir_claims(
     }
 }
 
+fn add_manifest_tool_bridge_output_dir_claims(
+    ctx: &BuildContext<'_>,
+    claims: &mut Vec<OutputDirClaim>,
+    language: GuestLanguage,
+    mode: BridgeMode,
+    tools: &crate::model::app_raw::LenientTokenList,
+    output_dir: Option<&str>,
+    selected_component_names: &[ComponentName],
+) {
+    let request_id = match mode {
+        BridgeMode::Guest => BridgeRequestId::ManifestGuest,
+        BridgeMode::External => BridgeRequestId::ManifestExternal,
+    };
+    let base_dir = manifest_bridge_claim_base(ctx, language, mode, output_dir);
+    let component_names = ctx
+        .application()
+        .component_names()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    for matcher in tools.clone().into_set() {
+        let is_component_matcher = component_names
+            .iter()
+            .any(|component_name| component_name.as_str() == matcher.as_str());
+        let is_selected_component_matcher = selected_component_names
+            .iter()
+            .any(|component_name| component_name.as_str() == matcher.as_str());
+
+        if matcher == "*" || is_component_matcher {
+            if matcher != "*" && !is_selected_component_matcher {
+                continue;
+            }
+
+            if matcher == "*"
+                || !add_existing_component_manifest_bridge_output_dir_claims(
+                    ctx,
+                    claims,
+                    request_id,
+                    language,
+                    mode,
+                    &matcher,
+                    BridgeTargetNameKind::Tool,
+                )
+            {
+                claims.push(OutputDirClaim {
+                    request_id,
+                    base_dir: base_dir.clone(),
+                    description: format!("{language} {mode:?} manifest tool bridge outputDir"),
+                });
+            }
+        } else {
+            claims.push(OutputDirClaim {
+                request_id,
+                base_dir: ctx.application().tool_bridge_sdk_dir(&matcher, language),
+                description: format!(
+                    "{} manifest tool bridge target for {}",
+                    bridge_sdk_target_name(language, mode),
+                    matcher
+                ),
+            });
+        }
+    }
+}
+
+/// Which kind of manifest bridge matchers a component-based output-dir claim
+/// is collected for: agent matchers claim the component's agent type client
+/// directories, tool matchers its tool client directories.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BridgeTargetNameKind {
+    Agent,
+    Tool,
+}
+
 fn add_existing_component_manifest_bridge_output_dir_claims(
     ctx: &BuildContext<'_>,
     claims: &mut Vec<OutputDirClaim>,
@@ -565,6 +669,7 @@ fn add_existing_component_manifest_bridge_output_dir_claims(
     language: GuestLanguage,
     mode: BridgeMode,
     component_name: &str,
+    kind: BridgeTargetNameKind,
 ) -> bool {
     let component_name = ComponentName(component_name.to_string());
     let component = ctx.application().component(&component_name);
@@ -576,33 +681,58 @@ fn add_existing_component_manifest_bridge_output_dir_claims(
     }
 
     let wasm = component.agent_type_extraction_source_wasm();
-    let extracted_agent_types = component.extracted_agent_types(&wasm);
-    if !extracted_agent_types.exists() {
+    let extracted_component_metadata = component.extracted_component_metadata(&wasm);
+    if !extracted_component_metadata.exists() {
         return false;
     }
-    if !path_is_fresh_against(&extracted_agent_types, &wasm) {
+    if !path_is_fresh_against(&extracted_component_metadata, &wasm) {
         return false;
     }
 
-    let Ok(agent_types) = crate::fs::read_to_string(&extracted_agent_types).and_then(|contents| {
-        serde_json::from_str::<Vec<AgentTypeSchema>>(&contents).map_err(Into::into)
-    }) else {
+    let Ok(metadata) =
+        crate::fs::read_to_string(&extracted_component_metadata).and_then(|contents| {
+            serde_json::from_str::<ExtractedComponentMetadata>(&contents).map_err(Into::into)
+        })
+    else {
         return false;
     };
 
-    for agent_type in agent_types {
-        claims.push(OutputDirClaim {
-            request_id,
-            base_dir: ctx
-                .application()
-                .bridge_sdk_dir(&agent_type.type_name, language, mode),
-            description: format!(
-                "{} manifest bridge target for {} from {}",
-                bridge_sdk_target_name(language, mode),
-                agent_type.type_name.as_str(),
-                component_name.as_str(),
-            ),
-        });
+    match kind {
+        BridgeTargetNameKind::Agent => {
+            for agent_type in metadata.agent_types {
+                claims.push(OutputDirClaim {
+                    request_id,
+                    base_dir: ctx.application().bridge_sdk_dir(
+                        &agent_type.type_name,
+                        language,
+                        mode,
+                    ),
+                    description: format!(
+                        "{} manifest bridge target for {} from {}",
+                        bridge_sdk_target_name(language, mode),
+                        agent_type.type_name.as_str(),
+                        component_name.as_str(),
+                    ),
+                });
+            }
+        }
+        BridgeTargetNameKind::Tool => {
+            for tool in metadata.tools {
+                let Some(name) = tool_name(&tool) else {
+                    continue;
+                };
+                claims.push(OutputDirClaim {
+                    request_id,
+                    base_dir: ctx.application().tool_bridge_sdk_dir(name, language),
+                    description: format!(
+                        "{} manifest tool bridge target for {} from {}",
+                        bridge_sdk_target_name(language, mode),
+                        name,
+                        component_name.as_str(),
+                    ),
+                });
+            }
+        }
     }
 
     true
@@ -711,7 +841,7 @@ fn validate_exact_targets_against_claims(
                 log_error(format!(
                     "Bridge SDK target output directory {} for {} may overlap unresolved {} at {}",
                     target_output_dir.log_color_highlight(),
-                    target.agent_type.type_name.as_str(),
+                    target.kind.display_name(),
                     claim.description,
                     claim_base_dir.log_color_highlight(),
                 ));
@@ -749,32 +879,65 @@ fn validate_manifest_matchers_resolved(
             continue;
         }
 
-        let mut matchers = sdk_targets.agents.clone().into_set();
-        if matchers.remove("*") {
-            continue;
-        }
+        let mut agent_matchers = sdk_targets.agents.clone().into_set();
+        if !agent_matchers.remove("*") {
+            for component_name in ctx.application().component_names() {
+                agent_matchers.remove(component_name.as_str());
+            }
 
-        for component_name in ctx.application().component_names() {
-            matchers.remove(component_name.as_str());
-        }
+            for target in exact_targets {
+                if target.target_language == target_language
+                    && target.bridge_mode == bridge_mode
+                    && let Some(agent_type) = target.kind.as_agent()
+                {
+                    agent_matchers.remove(agent_type.type_name.as_str());
+                }
+            }
 
-        for target in exact_targets {
-            if target.target_language == target_language && target.bridge_mode == bridge_mode {
-                matchers.remove(target.agent_type.type_name.as_str());
+            if !agent_matchers.is_empty() {
+                logln("");
+                log_error(format!(
+                    "The following agent matchers were not found during {} bridge SDK generation: {}",
+                    bridge_sdk_target_name(target_language, bridge_mode).log_color_highlight(),
+                    agent_matchers
+                        .iter()
+                        .map(|at| at.as_str().log_color_highlight().to_string())
+                        .join(", ")
+                ));
+                anyhow::bail!(NonSuccessfulExit)
             }
         }
 
-        if !matchers.is_empty() {
-            logln("");
-            log_error(format!(
-                "The following agent matchers were not found during {} bridge SDK generation: {}",
-                bridge_sdk_target_name(target_language, bridge_mode).log_color_highlight(),
-                matchers
-                    .iter()
-                    .map(|at| at.as_str().log_color_highlight().to_string())
-                    .join(", ")
-            ));
-            anyhow::bail!(NonSuccessfulExit)
+        let mut tool_matchers = sdk_targets
+            .tools
+            .map(|tools| tools.clone().into_set())
+            .unwrap_or_default();
+        if !tool_matchers.remove("*") {
+            for component_name in ctx.application().component_names() {
+                tool_matchers.remove(component_name.as_str());
+            }
+
+            for target in exact_targets {
+                if target.target_language == target_language
+                    && target.bridge_mode == bridge_mode
+                    && matches!(target.kind, crate::model::app::BridgeSdkTargetKind::Tool(_))
+                {
+                    tool_matchers.remove(target.kind.display_name());
+                }
+            }
+
+            if !tool_matchers.is_empty() {
+                logln("");
+                log_error(format!(
+                    "The following tool matchers were not found during {} bridge SDK generation: {}",
+                    bridge_sdk_target_name(target_language, bridge_mode).log_color_highlight(),
+                    tool_matchers
+                        .iter()
+                        .map(|at| at.as_str().log_color_highlight().to_string())
+                        .join(", ")
+                ));
+                anyhow::bail!(NonSuccessfulExit)
+            }
         }
     }
 
@@ -846,11 +1009,17 @@ fn has_explicit_manifest_guest_bridge_request(
         .into_iter()
         .any(|(_, mode, sdk_targets)| {
             mode == BridgeMode::Guest
-                && manifest_bridge_request_may_match_selected_components(
+                && (manifest_bridge_request_may_match_selected_components(
                     ctx,
                     sdk_targets.agents,
                     selected_component_names,
-                )
+                ) || sdk_targets.tools.is_some_and(|tools| {
+                    manifest_bridge_request_may_match_selected_components(
+                        ctx,
+                        tools,
+                        selected_component_names,
+                    )
+                }))
         })
 }
 
