@@ -21,7 +21,7 @@ use golem_common::schema::FromSchema;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{
-    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+    DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_matches;
@@ -29,12 +29,19 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use test_r::{test, test_dep, timeout};
+use test_r::{define_matrix_dimension, test, test_dep, timeout};
 use tracing::Instrument;
 use tracing::debug;
 use tracing::info;
 
 test_r::enable!();
+
+// Matrix dimension for the DB backend. Each test below declares
+// `#[dimension(db)]` on its `deps: &EnvBasedTestDependencies` parameter,
+// producing one test per case named `<test>_postgres` / `<test>_sqlite`,
+// each carrying the `db_postgres` / `db_sqlite` auto-tag (selectable via
+// `:tag:db_postgres` / `:tag:db_sqlite`).
+define_matrix_dimension!(db: EnvBasedTestDependencies -> "postgres", "sqlite");
 
 #[derive(Debug)]
 pub struct Tracing;
@@ -62,6 +69,39 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 1,
         oplog_archive_interval: Some(Duration::from_secs(2)),
+        db_type: DbType::Postgres,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .expect("Failed constructing test dependencies");
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
+
+#[test_dep(tagged_as = "postgres")]
+pub async fn create_deps_postgres(_tracing: &Tracing) -> EnvBasedTestDependencies {
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 1,
+        oplog_archive_interval: Some(Duration::from_secs(2)),
+        db_type: DbType::Postgres,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .expect("Failed constructing test dependencies");
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
+
+#[test_dep(tagged_as = "sqlite")]
+pub async fn create_deps_sqlite(_tracing: &Tracing) -> EnvBasedTestDependencies {
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 1,
+        oplog_archive_interval: Some(Duration::from_secs(2)),
+        db_type: DbType::Sqlite,
         ..EnvBasedTestDependenciesConfig::new()
     })
     .await
@@ -83,7 +123,7 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
 #[tracing::instrument]
 #[timeout("2m")]
 async fn environment_deletion_stops_self_scheduling_agent(
-    deps: &EnvBasedTestDependencies,
+    #[dimension(db)] deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -190,7 +230,7 @@ async fn environment_deletion_stops_self_scheduling_agent(
 #[tracing::instrument]
 #[timeout("2m")]
 async fn oplog_archive_in_deleted_environment_does_not_panic(
-    deps: &EnvBasedTestDependencies,
+    #[dimension(db)] deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -258,7 +298,7 @@ async fn oplog_archive_in_deleted_environment_does_not_panic(
 #[tracing::instrument]
 #[timeout("2m")]
 async fn invoke_existing_agent_in_deleted_environment_fails(
-    deps: &EnvBasedTestDependencies,
+    #[dimension(db)] deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -306,7 +346,7 @@ async fn invoke_existing_agent_in_deleted_environment_fails(
 #[tracing::instrument]
 #[timeout("2m")]
 async fn invoke_new_agent_in_deleted_environment_fails(
-    deps: &EnvBasedTestDependencies,
+    #[dimension(db)] deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -352,7 +392,7 @@ async fn invoke_new_agent_in_deleted_environment_fails(
 #[tracing::instrument]
 #[timeout("2m")]
 async fn complete_promise_in_deleted_environment_results_in_404(
-    deps: &EnvBasedTestDependencies,
+    #[dimension(db)] deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;

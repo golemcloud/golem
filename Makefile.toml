@@ -1,8 +1,8 @@
 # List of top-level tasks intended for use:
 #
 # - `cargo make dev-flow` or just `cargo make`: runs a full development flow, including fixing format and clippy, building and running tests and generating OpenAPI specs
-# - `cargo make wit`: fetches the WIT dependencies based on wit/deps.toml
-# - `cargo make check-wit`: deletes then fetches the WIT dependencies based on wit/deps.toml, then checks if it's up-to-date
+# - `cargo make wit`: syncs the per-crate wit/deps copies from the canonical top-level wit/deps
+# - `cargo make check-wit`: re-syncs the per-crate wit/deps and fails if the committed copies are out of date
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
@@ -72,11 +72,17 @@ dependencies = [
 ]
 
 # WIT DEPENDENCIES
+#
+# Sync the per-crate wit/deps copies from the canonical top-level wit/deps with the
+# dir-mirror tool (dev-tools/dir-mirror) rather than cp: it preserves the mtime of
+# unchanged files, so cargo (which tracks these .wit files via rerun-if-changed from
+# bindgen!) doesn't rebuild the workspace on every run. The <source> <target> pairs
+# below replace the old cp/glob_cp lines one-for-one. golem-common/cli take a per-subdir
+# subset of the deps, so removing a dep means also removing its pair here.
 [tasks.wit]
-description = "Fetches the WIT dependencies based on wit/deps.toml"
+description = "Syncs the per-crate WIT dependency copies from the canonical wit/deps"
 run_task = [
     { name = [
-        "remove-wit-deps",
         "wit-golem-common",
         "wit-golem-cli",
         "wit-sdks",
@@ -85,65 +91,66 @@ run_task = [
 
 [tasks.wit-golem-common]
 private = true
-script_runner = "@duckscript"
-script = """
-rm -r golem-common/wit/deps
-mkdir golem-common/wit/deps
-cp wit/deps/io golem-common/wit/deps
-cp wit/deps/clocks golem-common/wit/deps
-cp wit/deps/golem-1.x golem-common/wit/deps
-cp wit/deps/golem-core-v2 golem-common/wit/deps
-cp wit/deps/golem-agent golem-common/wit/deps
-"""
+command = "cargo"
+args = [
+    "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
+    "--src", "wit/deps/io", "--dst", "golem-common/wit/deps/io",
+    "--src", "wit/deps/clocks", "--dst", "golem-common/wit/deps/clocks",
+    "--src", "wit/deps/golem-1.x", "--dst", "golem-common/wit/deps/golem-1.x",
+    "--src", "wit/deps/golem-core-v2", "--dst", "golem-common/wit/deps/golem-core-v2",
+    "--src", "wit/deps/golem-agent", "--dst", "golem-common/wit/deps/golem-agent",
+    "--src", "wit/deps/golem-secrets", "--dst", "golem-common/wit/deps/golem-secrets",
+    "--src", "wit/deps/golem-tool", "--dst", "golem-common/wit/deps/golem-tool",
+]
 
 [tasks.wit-sdks]
 private = true
-script_runner = "@duckscript"
-script = """
-rm -r sdks/rust/golem-rust/wit/deps
-rm -r sdks/ts/wit/deps
-rm -r sdks/scala/wit/deps
-rm -r sdks/moonbit/golem_sdk/wit/deps
-mkdir sdks/rust/golem-rust/wit/deps
-mkdir sdks/ts/wit/deps
-mkdir sdks/scala/wit/deps
-mkdir sdks/moonbit/golem_sdk/wit/deps
-glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
-glob_cp sdks/rust/golem-rust/wit/golem-ai/**/* sdks/rust/golem-rust/wit/deps
-glob_cp wit/deps/**/* sdks/ts/wit/deps
-glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
-glob_cp wit/deps/**/* sdks/scala/wit/deps
-glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
-"""
+command = "cargo"
+args = [
+    "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
+    "--src", "wit/deps", "--dst", "sdks/rust/golem-rust/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/ts/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
+]
 
 [tasks.wit-golem-cli]
 private = true
-script_runner = "@duckscript"
-script = """
-rm -r cli/golem-cli/wit/deps
-mkdir cli/golem-cli/wit/deps
-cp wit/deps/clocks cli/golem-cli/wit/deps
-cp wit/deps/io cli/golem-cli/wit/deps
-cp wit/deps/golem-1.x cli/golem-cli/wit/deps
-cp wit/deps/golem-core-v2 cli/golem-cli/wit/deps
-cp wit/deps/golem-agent cli/golem-cli/wit/deps
-cp wit/deps/logging cli/golem-cli/wit/deps
-"""
-
-[tasks.remove-wit-deps]
-private = true
-script_runner = "@duckscript"
-script = """
-rm -rf golem-common/wit/deps
-rm -rf cli/golem-cli/wit/deps
-"""
+command = "cargo"
+args = [
+    "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
+    "--src", "wit/deps/clocks", "--dst", "cli/golem-cli/wit/deps/clocks",
+    "--src", "wit/deps/io", "--dst", "cli/golem-cli/wit/deps/io",
+    "--src", "wit/deps/golem-1.x", "--dst", "cli/golem-cli/wit/deps/golem-1.x",
+    "--src", "wit/deps/golem-core-v2", "--dst", "cli/golem-cli/wit/deps/golem-core-v2",
+    "--src", "wit/deps/golem-agent", "--dst", "cli/golem-cli/wit/deps/golem-agent",
+    "--src", "wit/deps/logging", "--dst", "cli/golem-cli/wit/deps/logging",
+]
 
 [tasks.diff-wit]
 private = true
-script = "git diff --exit-code wit golem-common/wit"
+script_runner = "@duckscript"
+script = '''
+status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
+ok = eq ${status.code} 0
+if not ${ok}
+    echo "git status failed (exit ${status.code}):"
+    echo ${status.stderr}
+    trigger_error "git status failed while checking wit/deps"
+end
+changes = trim ${status.stdout}
+empty = is_empty ${changes}
+if not ${empty}
+    echo "Per-crate wit/deps copies are out of sync with the canonical wit/deps:"
+    echo ${changes}
+    echo "Run 'cargo make wit' and commit the result."
+    trigger_error "wit/deps copies are out of sync"
+end
+'''
 
 [tasks.check-wit]
-run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
+description = "Re-syncs wit/deps and fails if the committed per-crate copies are out of date"
+run_task = [{ name = ["wit", "diff-wit"] }]
 
 # BUILD
 
@@ -412,7 +419,13 @@ rm -f target/.local-publish-marker
 
 [tasks.check]
 description = "Runs rustfmt and clippy checks without applying any fix"
-dependencies = ["wit", "check-clippy", "check-rustfmt"]
+dependencies = [
+    "wit",
+    "check-clippy",
+    "check-rustfmt",
+    "check-clippy-dev-tools",
+    "check-rustfmt-dev-tools",
+]
 
 [tasks.check-rustfmt]
 description = "Runs rustfmt checks without applying any fix"
@@ -426,12 +439,36 @@ install_crate = "clippy"
 command = "cargo"
 args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
+# The dev-tools workspace is separate, so it needs its own fmt/clippy invocations.
+[tasks.check-rustfmt-dev-tools]
+description = "Runs rustfmt checks on the dev-tools workspace without applying any fix"
+command = "cargo"
+args = ["fmt", "--manifest-path", "dev-tools/Cargo.toml", "--all", "--", "--check"]
+
+[tasks.check-clippy-dev-tools]
+description = "Runs clippy checks on the dev-tools workspace without applying any fix"
+command = "cargo"
+args = [
+    "clippy",
+    "--manifest-path",
+    "dev-tools/Cargo.toml",
+    "--all-targets",
+    "--",
+    "--no-deps",
+    "-Dwarnings",
+]
+
 ## ** FIX **
 
 [tasks.fix]
 description = "Runs rustfmt and clippy checks and applies fixes"
 #dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
-dependencies = ["fix-clippy", "fix-rustfmt"]
+dependencies = [
+    "fix-clippy",
+    "fix-rustfmt",
+    "fix-clippy-dev-tools",
+    "fix-rustfmt-dev-tools",
+]
 
 [tasks.fix-rustfmt]
 description = "Runs rustfmt checks and applies fixes"
@@ -445,6 +482,27 @@ install_crate = "clippy"
 command = "cargo"
 args = [
     "clippy",
+    "--all-targets",
+    "--fix",
+    "--allow-dirty",
+    "--allow-staged",
+    "--",
+    "--no-deps",
+    "-Dwarnings",
+]
+
+[tasks.fix-rustfmt-dev-tools]
+description = "Runs rustfmt on the dev-tools workspace and applies fixes"
+command = "cargo"
+args = ["fmt", "--manifest-path", "dev-tools/Cargo.toml", "--all"]
+
+[tasks.fix-clippy-dev-tools]
+description = "Runs clippy on the dev-tools workspace and applies fixes"
+command = "cargo"
+args = [
+    "clippy",
+    "--manifest-path",
+    "dev-tools/Cargo.toml",
     "--all-targets",
     "--fix",
     "--allow-dirty",
@@ -468,8 +526,13 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo-test-r run --workspace --lib -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --workspace --exclude golem-schema-derive --lib -- --nocapture --report-time $JUNIT_OPTS
 '''
+
+[tasks.dev-tools-tests]
+description = "Runs the dev-tools workspace unit tests"
+command = "cargo"
+args = ["test", "--manifest-path", "dev-tools/Cargo.toml", "--lib"]
 
 [tasks.worker-executor-tests]
 dependencies = ["wit"]
@@ -541,45 +604,46 @@ dependencies = [
     "integration-tests-group7",
     "integration-tests-group8",
     "integration-tests-group9",
+    "integration-tests-group10",
+    "integration-tests-group11",
     "integration-tests-group12",
     "integration-tests-group13",
     "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests (group 1/11 - worker, fork)"
+description = "Runs integration tests (group 1/11 - worker, fork with postgres)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
-cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
-cargo-test-r run --package integration-tests --test environment_deletion -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group1&db_postgres' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test environment-deletion :tag:db_postgres -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/13 - api)"
+description = "Runs integration tests (group 2/13 - api with postgres)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration :tag:group2 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group2&db_postgres' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group3]
 description = "Runs integration tests (group 3/11 - worker, fork with sqlite)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
-cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
-cargo-test-r run --package integration-tests --test environment_deletion -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group1&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test environment-deletion :tag:db_sqlite -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4]
 description = "Runs integration tests (group 4/13 - api with sqlite)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration :tag:group2 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group2&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group5]
@@ -610,51 +674,51 @@ cargo-test-r run --package integration-tests --test integration :tag:group7 -- -
 '''
 
 [tasks.integration-tests-group8]
-description = "Runs integration tests (group 8/11 - live agent secret mutation)"
+description = "Runs integration tests (group 8/11 - live agent secret mutation with postgres)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test agent-config-live-mutation -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test agent-config-live-mutation :tag:db_postgres -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group9]
 description = "Runs integration tests (group 9/11 - live agent secret mutation with sqlite)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test agent-config-live-mutation -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test agent-config-live-mutation :tag:db_sqlite -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group10]
-description = "Runs integration tests (group 10/11 - custom_api, quota)"
+description = "Runs integration tests (group 10/11 - custom_api, quota with postgres)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration :tag:group10 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group10&db_postgres' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group11]
 description = "Runs integration tests (group 11/13 - custom_api, quota with sqlite)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration :tag:group10 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group10&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group12]
-description = "Runs integration tests (group 12/13 - agent_config)"
+description = "Runs integration tests (group 12/13 - agent_config with postgres)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration :tag:group12 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group12&db_postgres' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group13]
 description = "Runs integration tests (group 13/13 - agent_config with sqlite)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration :tag:group12 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration ':tag:group12&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]

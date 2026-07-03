@@ -19,9 +19,10 @@ package golem.schema
 import golem.Uuid
 import golem.{UByte, UInt, ULong, UShort}
 import zio.blocks.chunk.Chunk
-import zio.blocks.schema.{DynamicValue => DV, PrimitiveType, PrimitiveValue, Reflect, Schema}
+import zio.blocks.schema.{DynamicValue => DV, Modifier, PrimitiveType, PrimitiveValue, Reflect, Schema}
 import zio.blocks.typeid.{TypeId, TypeIdPrinter, TypeRepr}
 
+import java.time.{Duration => JDuration, Instant}
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
@@ -44,15 +45,20 @@ import scala.util.control.NonFatal
 private[golem] object Derivation {
 
   // Canonical id of the cross-SDK UUID record, byte-identical to the Rust SDK.
-  private final val UuidTypeId = "uuid.Uuid"
-  private final val UuidName   = "uuid"
-  private final val SecretFqn  = "golem.config.Secret"
+  private final val UuidTypeId  = "uuid.Uuid"
+  private final val UuidName    = "uuid"
+  private final val SecretFqn   = "golem.config.Secret"
+  private final val PathFqn     = "golem.schema.GolemPath"
+  private final val UrlFqn      = "golem.schema.Url"
+  private final val QuantityFqn = "golem.schema.Quantity"
 
-  private val ubyteTypeId: TypeId[UByte]   = TypeId.of[UByte]
-  private val ushortTypeId: TypeId[UShort] = TypeId.of[UShort]
-  private val uintTypeId: TypeId[UInt]     = TypeId.of[UInt]
-  private val ulongTypeId: TypeId[ULong]   = TypeId.of[ULong]
-  private val uuidTypeId: TypeId[Uuid]     = TypeId.of[Uuid]
+  private val ubyteTypeId: TypeId[UByte]        = TypeId.of[UByte]
+  private val ushortTypeId: TypeId[UShort]      = TypeId.of[UShort]
+  private val uintTypeId: TypeId[UInt]          = TypeId.of[UInt]
+  private val ulongTypeId: TypeId[ULong]        = TypeId.of[ULong]
+  private val uuidTypeId: TypeId[Uuid]          = TypeId.of[Uuid]
+  private val instantTypeId: TypeId[Instant]    = TypeId.of[Instant]
+  private val durationTypeId: TypeId[JDuration] = TypeId.of[JDuration]
 
   // Inclusive upper bounds of the WIT unsigned ranges.
   private final val MaxU8: Long  = 0xffL
@@ -73,7 +79,11 @@ private[golem] object Derivation {
 
   /** Convert a Scala value into its structural [[SchemaValue]]. */
   def toValue[A](schema: Schema[A], value: A): SchemaValue =
-    dynamicToSchemaValue(schema.reflect, schema.toDynamicValue(value))
+    try dynamicToSchemaValue(schema.reflect, schema.toDynamicValue(value))
+    catch {
+      case e: SchemaEncodeError => throw e
+      case NonFatal(e)          => throw SchemaEncodeError(Option(e.getMessage).getOrElse(e.toString))
+    }
 
   /** Reconstruct a Scala value from a structural [[SchemaValue]]. */
   def fromValue[A](schema: Schema[A], value: SchemaValue): Either[FromSchemaError, A] =
@@ -153,12 +163,44 @@ private[golem] object Derivation {
   private def isUuid(reflect: Reflect.Bound[?]): Boolean =
     TypeId.structurallyEqual(reflect.typeId, uuidTypeId)
 
+  private def normalizedName(reflect: Reflect.Bound[?]): String =
+    TypeId.normalize(reflect.typeId).fullName
+
+  private def isPath(reflect: Reflect.Bound[?]): Boolean                    = normalizedName(reflect) == PathFqn
+  private def isUrl(reflect: Reflect.Bound[?]): Boolean                     = normalizedName(reflect) == UrlFqn
+  private def isInstant(reflect: Reflect.Bound[?]): Boolean                 = TypeId.structurallyEqual(reflect.typeId, instantTypeId)
+  private def isDuration(reflect: Reflect.Bound[?]): Boolean                = TypeId.structurallyEqual(reflect.typeId, durationTypeId)
+  private def quantitySpec(reflect: Reflect.Bound[?]): Option[QuantitySpec] =
+    if (normalizedName(reflect) == QuantityFqn)
+      Some(
+        reflect.modifiers.collectFirst { case Modifier.config(Quantity.SpecConfigKey, value) => value }
+          .flatMap(Quantity.decodeSpec)
+          .getOrElse(throw missingQuantitySpecError)
+      )
+    else None
+
+  private def missingQuantitySpecError: SchemaEncodeError =
+    SchemaEncodeError(
+      "Quantity[U] requires Quantity.schema[U] with an implicit QuantityUnit[U]; do not use Schema.derived[Quantity[U]] directly"
+    )
+
+  private def validateNanoseconds(nanoseconds: Int): Unit =
+    if (nanoseconds < 0 || nanoseconds >= 1000000000)
+      throw FromSchemaError(s"datetime nanoseconds out of range: $nanoseconds (expected 0..999999999)")
+
+  private def richBody(reflect: Reflect.Bound[?]): Option[SchemaTypeBody] =
+    if (isPath(reflect)) Some(SchemaTypeBody.PathType(GolemPath.defaultSpec))
+    else if (isUrl(reflect)) Some(SchemaTypeBody.UrlType(Url.defaultRestrictions))
+    else if (isInstant(reflect)) Some(SchemaTypeBody.DatetimeType)
+    else if (isDuration(reflect)) Some(SchemaTypeBody.DurationType)
+    else quantitySpec(reflect).map(SchemaTypeBody.QuantityType.apply)
+
   private def unsignedBody(reflect: Reflect.Bound[?]): Option[SchemaTypeBody] = {
     val tid = reflect.typeId
-    if (TypeId.structurallyEqual(tid, ubyteTypeId)) Some(SchemaTypeBody.U8Type)
-    else if (TypeId.structurallyEqual(tid, ushortTypeId)) Some(SchemaTypeBody.U16Type)
-    else if (TypeId.structurallyEqual(tid, uintTypeId)) Some(SchemaTypeBody.U32Type)
-    else if (TypeId.structurallyEqual(tid, ulongTypeId)) Some(SchemaTypeBody.U64Type)
+    if (TypeId.structurallyEqual(tid, ubyteTypeId)) Some(SchemaTypeBody.U8Type())
+    else if (TypeId.structurallyEqual(tid, ushortTypeId)) Some(SchemaTypeBody.U16Type())
+    else if (TypeId.structurallyEqual(tid, uintTypeId)) Some(SchemaTypeBody.U32Type())
+    else if (TypeId.structurallyEqual(tid, ulongTypeId)) Some(SchemaTypeBody.U64Type())
     else None
   }
 
@@ -266,27 +308,30 @@ private[golem] object Derivation {
   private def reflectToSchema[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType = {
     failIfUnsupported(reflect)
 
-    if (isUuid(reflect))
-      ctx.register(UuidTypeId, reflect.typeId, Some(UuidName), () => uuidRecordBody)
-    else
-      unsignedBody(reflect) match {
-        case Some(body) => SchemaType(body)
-        case None       =>
-          reflect.asWrapperUnknown match {
-            case Some(unknown) =>
-              reflectToSchema(unknown.wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]], ctx)
-            case None =>
-              optionInfo(reflect) match {
-                case Some((innerRef, _)) => t.option(reflectToSchema(innerRef, ctx))
-                case None                =>
-                  eitherInfo(reflect) match {
-                    case Some((leftRef, rightRef)) =>
-                      t.result(rightRef.map(reflectToSchema(_, ctx)), leftRef.map(reflectToSchema(_, ctx)))
-                    case None => reflectToSchemaCore(reflect, ctx)
-                  }
-              }
-          }
-      }
+    richBody(reflect) match {
+      case Some(body)              => SchemaType(body)
+      case None if isUuid(reflect) =>
+        ctx.register(UuidTypeId, reflect.typeId, Some(UuidName), () => uuidRecordBody)
+      case None =>
+        unsignedBody(reflect) match {
+          case Some(body) => SchemaType(body)
+          case None       =>
+            reflect.asWrapperUnknown match {
+              case Some(unknown) =>
+                reflectToSchema(unknown.wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]], ctx)
+              case None =>
+                optionInfo(reflect) match {
+                  case Some((innerRef, _)) => t.option(reflectToSchema(innerRef, ctx))
+                  case None                =>
+                    eitherInfo(reflect) match {
+                      case Some((leftRef, rightRef)) =>
+                        t.result(rightRef.map(reflectToSchema(_, ctx)), leftRef.map(reflectToSchema(_, ctx)))
+                      case None => reflectToSchemaCore(reflect, ctx)
+                    }
+                }
+            }
+        }
+    }
   }
 
   private def reflectToSchemaCore[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType =
@@ -374,24 +419,69 @@ private[golem] object Derivation {
   private def dynamicToSchemaValue[A](reflect: Reflect.Bound[A], d: DV): SchemaValue = {
     failIfUnsupported(reflect)
 
-    if (isUuid(reflect)) uuidToSchemaValue(d)
-    else
-      unsignedFromDynamic(reflect, d).getOrElse {
-        reflect.asWrapperUnknown match {
-          case Some(unknown) =>
-            dynamicToSchemaValue(unknown.wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]], d)
-          case None =>
-            optionInfo(reflect) match {
-              case Some((valueRef, usesRecordWrapper)) => optionToSchemaValue(valueRef, usesRecordWrapper, d)
-              case None                                =>
-                eitherInfo(reflect) match {
-                  case Some((leftRef, rightRef)) => eitherToSchemaValue(leftRef, rightRef, d)
-                  case None                      => dynamicToSchemaValueCore(reflect, d)
-                }
-            }
+    richBody(reflect) match {
+      case Some(_)                 => richToSchemaValue(reflect, d)
+      case None if isUuid(reflect) => uuidToSchemaValue(d)
+      case None                    =>
+        unsignedFromDynamic(reflect, d).getOrElse {
+          reflect.asWrapperUnknown match {
+            case Some(unknown) =>
+              dynamicToSchemaValue(unknown.wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]], d)
+            case None =>
+              optionInfo(reflect) match {
+                case Some((valueRef, usesRecordWrapper)) => optionToSchemaValue(valueRef, usesRecordWrapper, d)
+                case None                                =>
+                  eitherInfo(reflect) match {
+                    case Some((leftRef, rightRef)) => eitherToSchemaValue(leftRef, rightRef, d)
+                    case None                      => dynamicToSchemaValueCore(reflect, d)
+                  }
+              }
+          }
         }
-      }
+    }
   }
+
+  private def stringFromSingleValueRecord(d: DV, typeName: String): String =
+    extractSingleRecordPrimitive[String](d, typeName) { case PrimitiveValue.String(v) => v }
+
+  private def richToSchemaValue[A](reflect: Reflect.Bound[A], d: DV): SchemaValue =
+    if (isPath(reflect)) SchemaValue.PathValue(stringFromSingleValueRecord(d, "GolemPath"))
+    else if (isUrl(reflect)) SchemaValue.UrlValue(stringFromSingleValueRecord(d, "Url"))
+    else if (isInstant(reflect))
+      d match {
+        case DV.Primitive(PrimitiveValue.String(v)) =>
+          val instant = Instant.parse(v)
+          SchemaValue.DatetimeValue(Datetime(instant.getEpochSecond, instant.getNano))
+        case other => throw SchemaEncodeError(s"Instant expected string dynamic value, got $other")
+      }
+    else if (isDuration(reflect))
+      d match {
+        case DV.Primitive(PrimitiveValue.Long(v)) => SchemaValue.DurationValue(v)
+        case other                                => throw SchemaEncodeError(s"Duration expected long dynamic value, got $other")
+      }
+    else {
+      val spec = quantitySpec(reflect).getOrElse(throw SchemaEncodeError("missing QuantityUnit for Quantity"))
+      d match {
+        case DV.Record(fields) =>
+          val map      = fields.toMap
+          val mantissa = map
+            .get("mantissa")
+            .collect { case DV.Primitive(PrimitiveValue.Long(v)) => v }
+            .getOrElse(throw SchemaEncodeError("Quantity.mantissa expected long"))
+          val scale = map
+            .get("scale")
+            .collect { case DV.Primitive(PrimitiveValue.Int(v)) => v }
+            .getOrElse(throw SchemaEncodeError("Quantity.scale expected int"))
+          val unit = map
+            .get("unit")
+            .collect { case DV.Primitive(PrimitiveValue.String(v)) => v }
+            .getOrElse(throw SchemaEncodeError("Quantity.unit expected string"))
+          if (unit != spec.baseUnit && !spec.allowedSuffixes.contains(unit))
+            throw SchemaEncodeError(s"unit '$unit' is not allowed for quantity")
+          SchemaValue.QuantityValueNode(QuantityValue(mantissa, scale, unit))
+        case other => throw SchemaEncodeError(s"Quantity expected record dynamic value, got $other")
+      }
+    }
 
   private def unsignedFromDynamic[A](reflect: Reflect.Bound[A], d: DV): Option[SchemaValue] = {
     val tid = reflect.typeId
@@ -633,24 +723,68 @@ private[golem] object Derivation {
   private def schemaValueToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV = {
     failIfUnsupported(reflect)
 
-    if (isUuid(reflect)) uuidToDynamic(reflect, value)
-    else
-      unsignedToDynamic(reflect, value).getOrElse {
-        reflect.asWrapperUnknown match {
-          case Some(unknown) =>
-            schemaValueToDynamic(unknown.wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]], value)
-          case None =>
-            optionInfo(reflect) match {
-              case Some((innerRef, usesRecordWrapper)) => optionToDynamic(innerRef, usesRecordWrapper, value)
-              case None                                =>
-                eitherInfo(reflect) match {
-                  case Some((leftRef, rightRef)) => eitherToDynamic(leftRef, rightRef, value)
-                  case None                      => schemaValueToDynamicCore(reflect, value)
-                }
-            }
+    richBody(reflect) match {
+      case Some(_)                 => richToDynamic(reflect, value)
+      case None if isUuid(reflect) => uuidToDynamic(reflect, value)
+      case None                    =>
+        unsignedToDynamic(reflect, value).getOrElse {
+          reflect.asWrapperUnknown match {
+            case Some(unknown) =>
+              schemaValueToDynamic(unknown.wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]], value)
+            case None =>
+              optionInfo(reflect) match {
+                case Some((innerRef, usesRecordWrapper)) => optionToDynamic(innerRef, usesRecordWrapper, value)
+                case None                                =>
+                  eitherInfo(reflect) match {
+                    case Some((leftRef, rightRef)) => eitherToDynamic(leftRef, rightRef, value)
+                    case None                      => schemaValueToDynamicCore(reflect, value)
+                  }
+              }
+          }
         }
-      }
+    }
   }
+
+  private def richToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
+    if (isPath(reflect))
+      value match {
+        case SchemaValue.PathValue(v) => DV.Record(Chunk("value" -> DV.Primitive(PrimitiveValue.String(v))))
+        case other                    => throw FromSchemaError(s"expected path value for GolemPath, got $other")
+      }
+    else if (isUrl(reflect))
+      value match {
+        case SchemaValue.UrlValue(v) => DV.Record(Chunk("value" -> DV.Primitive(PrimitiveValue.String(v))))
+        case other                   => throw FromSchemaError(s"expected url value for Url, got $other")
+      }
+    else if (isInstant(reflect))
+      value match {
+        case SchemaValue.DatetimeValue(v) =>
+          validateNanoseconds(v.nanoseconds)
+          DV.Primitive(PrimitiveValue.String(Instant.ofEpochSecond(v.seconds, v.nanoseconds.toLong).toString))
+        case other => throw FromSchemaError(s"expected datetime value for Instant, got $other")
+      }
+    else if (isDuration(reflect))
+      value match {
+        case SchemaValue.DurationValue(v) => DV.Primitive(PrimitiveValue.Long(v))
+        case other                        => throw FromSchemaError(s"expected duration value for Duration, got $other")
+      }
+    else {
+      val spec =
+        try quantitySpec(reflect).get
+        catch { case e: SchemaEncodeError => throw FromSchemaError(e.message) }
+      value match {
+        case SchemaValue.QuantityValueNode(v) if v.unit == spec.baseUnit || spec.allowedSuffixes.contains(v.unit) =>
+          DV.Record(
+            Chunk(
+              "mantissa" -> DV.Primitive(PrimitiveValue.Long(v.mantissa)),
+              "scale"    -> DV.Primitive(PrimitiveValue.Int(v.scale)),
+              "unit"     -> DV.Primitive(PrimitiveValue.String(v.unit))
+            )
+          )
+        case SchemaValue.QuantityValueNode(v) => throw FromSchemaError(s"unit '${v.unit}' is not allowed for quantity")
+        case other                            => throw FromSchemaError(s"expected quantity value for Quantity, got $other")
+      }
+    }
 
   private def unsignedToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): Option[DV] = {
     val tid = reflect.typeId

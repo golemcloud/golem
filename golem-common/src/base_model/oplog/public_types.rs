@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::CardId;
+use crate::base_model::card::{CardId, StoredCard};
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
@@ -573,37 +573,50 @@ pub enum PublicRetryPolicyState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+pub struct QueuedCardEventCard {
+    pub card_id: CardId,
+    pub card: Option<StoredCard>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicQueuedCardEventCard {
+    pub card_id: CardId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum QueuedCardEvent {
-    Install { card_id: CardId },
-    Revoke { card_id: CardId },
+    Install(QueuedCardEventCard),
+    Revoke(QueuedCardEventCard),
 }
 
 impl QueuedCardEvent {
     pub fn card_id(&self) -> CardId {
         match self {
-            Self::Install { card_id } | Self::Revoke { card_id } => *card_id,
+            Self::Install(event) | Self::Revoke(event) => event.card_id,
         }
     }
-}
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct PublicQueuedCardEventInstall {
-    pub card_id: CardId,
-}
+    pub fn install(card: impl Into<StoredCard>) -> Self {
+        let card = card.into();
+        Self::Install(QueuedCardEventCard {
+            card_id: card.card_id(),
+            card: Some(card),
+        })
+    }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct PublicQueuedCardEventRevoke {
-    pub card_id: CardId,
+    pub fn revoke(card_id: CardId) -> Self {
+        Self::Revoke(QueuedCardEventCard {
+            card_id,
+            card: None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -613,15 +626,14 @@ pub struct PublicQueuedCardEventRevoke {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum PublicQueuedCardEvent {
-    Install(PublicQueuedCardEventInstall),
-    Revoke(PublicQueuedCardEventRevoke),
+    Install(PublicQueuedCardEventCard),
+    Revoke(PublicQueuedCardEventCard),
 }
 
 impl PublicQueuedCardEvent {
     pub fn card_id(&self) -> CardId {
         match self {
-            Self::Install(event) => event.card_id,
-            Self::Revoke(event) => event.card_id,
+            Self::Install(event) | Self::Revoke(event) => event.card_id,
         }
     }
 }
@@ -629,12 +641,12 @@ impl PublicQueuedCardEvent {
 impl From<QueuedCardEvent> for PublicQueuedCardEvent {
     fn from(value: QueuedCardEvent) -> Self {
         match value {
-            QueuedCardEvent::Install { card_id } => {
-                Self::Install(PublicQueuedCardEventInstall { card_id })
-            }
-            QueuedCardEvent::Revoke { card_id } => {
-                Self::Revoke(PublicQueuedCardEventRevoke { card_id })
-            }
+            QueuedCardEvent::Install(event) => Self::Install(PublicQueuedCardEventCard {
+                card_id: event.card_id,
+            }),
+            QueuedCardEvent::Revoke(event) => Self::Revoke(PublicQueuedCardEventCard {
+                card_id: event.card_id,
+            }),
         }
     }
 }

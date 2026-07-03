@@ -4245,6 +4245,8 @@ dependencies = [
  "async-recursion",
  "async-scoped",
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
  "axum",
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -4311,6 +4313,7 @@ dependencies = [
  "system-interface",
  "tempfile",
  "test-r",
+ "testcontainers",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.25.0",
@@ -4321,6 +4324,7 @@ dependencies = [
  "tonic-tracing-opentelemetry",
  "tracing",
  "try_match",
+ "tryhard",
  "url",
  "uuid",
  "wasmtime",
@@ -5229,6 +5233,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
+ "chrono",
  "clap",
  "convert_case 0.11.0",
  "futures",
@@ -5258,6 +5263,7 @@ dependencies = [
  "tokio-tungstenite 0.25.0",
  "tracing",
  "tracing-opentelemetry",
+ "url",
  "uuid",
  "wac-graph",
 ]
@@ -9879,9 +9885,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "3.0.10"
+version = "3.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54f55a46ee6142eaef8e458cea84684ee2de40508fd41c27a547b845e3a74e78"
+checksum = "c6a37b0a7d3976dccffa7df6aae2dba4127093484ec6376b658d6902e2b44d9f"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -9891,9 +9897,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "10.0.0"
+version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d08af1f9ada11675cdd8b69bddca2717aa419d7b5a76289803145aaee2dde4a8"
+checksum = "42f1fc242d348bea66fb6204811b77d55a726cf043db4e256c8a6e78c6d62a7a"
 dependencies = [
  "anstream",
  "anstyle",
@@ -9919,9 +9925,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.4.10"
+version = "1.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80deea1873f22a09ef943c254ea709f4e863f2c50ffa19d1a0e2b9676899cc17"
+checksum = "0c63874a7c31d8c0dba68e6dcc8809470dfb54002407b90831ea1cf86dca167f"
 dependencies = [
  "darling 0.21.3",
  "humantime",
@@ -11411,9 +11417,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.3.4"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "444d2eef3cfd42a26f2a852d95cbde84bdbfb72bde3a7c998054c1c91cb01101"
+checksum = "3b97802faed27e133d390e0a08afa00a112e525f51fb4a0aac320db6f1fb42de"
 dependencies = [
  "anyhow",
  "camino",

@@ -21,6 +21,7 @@
 // covered by `tests/schema-mapping/recursion.test.ts`.
 
 import { describe, it, expect } from 'vitest';
+import { buildTypeFromJSON, LiteTypeJSON } from '@golemcloud/golem-ts-types-core';
 import {
   getTestObjectType,
   getTestMapType,
@@ -31,6 +32,10 @@ import {
 } from '../testUtils';
 import { SchemaType, SchemaTypeDef } from '../../src/internal/schema-model';
 import { project } from './helpers';
+import * as Either from '../../src/newTypes/either';
+import { mapTsTypeToResolvedGraph } from '../../src/internal/mapping/types/resolvedMapper';
+import { resolvedGraphToSchemaType } from '../../src/internal/mapping/types/schemaType';
+import { TypeScope } from '../../src/internal/mapping/types/scope';
 
 function def(mapping: { graph: { defs: Map<string, SchemaTypeDef> } }, id: string): SchemaType {
   const d = mapping.graph.defs.get(id);
@@ -97,5 +102,25 @@ describe('Type projection (resolvedGraphToSchemaType)', () => {
       expect(mapping.root.body.ok?.body.tag).toBe('f64');
       expect(mapping.root.body.err?.body.tag).toBe('string');
     }
+  });
+
+  it('optional Secret<T> makes the handle optional without making the revealed payload optional', () => {
+    const secretType: LiteTypeJSON = {
+      kind: 'secret',
+      optional: false,
+      typeArg: { kind: 'string', optional: false },
+    };
+    const result = mapTsTypeToResolvedGraph(
+      buildTypeFromJSON(secretType),
+      TypeScope.method('Agent.method', 'secret', true),
+    );
+    const graph = Either.getOrThrowWith(result, (err) => new Error(`mapping failed: ${err}`));
+    const mapping = resolvedGraphToSchemaType(graph);
+
+    expect(mapping.root.body.tag).toBe('option');
+    if (mapping.root.body.tag !== 'option') return;
+    expect(mapping.root.body.element.body.tag).toBe('secret');
+    if (mapping.root.body.element.body.tag !== 'secret') return;
+    expect(mapping.root.body.element.body.inner.body.tag).toBe('string');
   });
 });

@@ -1116,7 +1116,7 @@ impl ComponentCommandHandler {
                 .plugin_grants(environment)
                 .await?,
             None,
-        );
+        )?;
 
         let wasm = component_stager.open_wasm().await?;
         let agent_types: Vec<AgentTypeSchema> = component_stager.agent_types().clone();
@@ -1211,7 +1211,8 @@ impl ComponentCommandHandler {
                 .await
                 .map_err(UpdateStagedComponentError::Other)?,
             Some(diff),
-        );
+        )
+        .map_err(UpdateStagedComponentError::Other)?;
 
         let wasm = component_stager
             .open_wasm_if_changed()

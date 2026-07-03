@@ -18,6 +18,13 @@ export type ConfigProperty = {
   path: string[];
   secret: boolean;
   type: Type;
+  secretHandleOptional?: boolean;
+};
+
+export type QuantityValue = { mantissa: bigint; scale: number; unit: string };
+export type QuantitySpec = {
+  baseUnit: string;
+  allowedSuffixes: string[];
 };
 
 export type Type =
@@ -70,8 +77,14 @@ export type Type =
       properties: ConfigProperty[];
       requiredMembers: { path: string[]; requiredKeys: string[] }[];
     }
+  | { kind: 'secret'; name?: string; owner?: string; element: Type; optional: boolean }
   | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | { kind: 'principal'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'path'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'url'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'datetime'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'duration'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'quantity'; name?: string; owner?: string; optional: boolean; spec?: QuantitySpec }
   | {
       kind: 'unresolved-type';
       name?: string;

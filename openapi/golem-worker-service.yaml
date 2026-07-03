@@ -3675,6 +3675,61 @@ components:
           $ref: '#/components/schemas/MetadataEnvelope'
     NormalizedJsonValue:
       type: object
+    NumericBound:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - signed
+          value:
+            type: integer
+            format: int64
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - unsigned
+          value:
+            type: integer
+            format: uint64
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - float-bits
+          value:
+            type: integer
+            format: uint64
+    NumericRestrictions:
+      type: object
+      properties:
+        min:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/NumericBound'
+          - nullable: true
+        max:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/NumericBound'
+          - nullable: true
+        unit:
+          type: string
+          nullable: true
     OplogCursor:
       type: object
       title: OplogCursor
@@ -5439,6 +5494,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5453,6 +5513,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5467,6 +5532,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5481,6 +5551,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5495,6 +5570,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5509,6 +5589,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5523,6 +5608,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5537,6 +5627,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5551,6 +5646,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -5565,6 +5665,11 @@ components:
           value:
             type: object
             properties:
+              restrictions:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/NumericRestrictions'
+                - nullable: true
               metadata:
                 $ref: '#/components/schemas/MetadataEnvelope'
       - type: object
@@ -6468,16 +6573,35 @@ components:
     SecretSpec:
       type: object
       properties:
+        inner:
+          $ref: '#/components/schemas/SchemaType'
         category:
           type: string
           nullable: true
     SecretValuePayload:
       type: object
       required:
-      - secretRef
+      - secretId
+      - version
+      - resolvedAt
       properties:
-        secretRef:
+        secretId:
           type: string
+          format: uuid
+        configKey:
+          type: array
+          items:
+            type: string
+          nullable: true
+        version:
+          type: integer
+          format: uint64
+        resolvedAt:
+          type: string
+          format: date-time
+        category:
+          type: string
+          nullable: true
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters

@@ -1,0 +1,73 @@
+package golem:secrets@0.1.0;
+
+/// The secret resource, plus the metadata records other interfaces
+/// reference. Components that only need to *receive and pass*
+/// secrets — most tools, audit middleware, MCP-import bridges —
+/// import only this interface.
+interface types {
+  use wasi:clocks/wall-clock@0.2.3.{datetime};
+  use golem:core/types@2.0.0.{secret};
+
+  /// The opaque handle to a sensitive value is defined in
+  /// `golem:core/types` so it can travel inside a `schema-value-tree` as an
+  /// unforgeable owned handle. This interface exposes only safe metadata
+  /// operations over that handle.
+  ///
+  /// Resource handles are scoped to a component instance's
+  /// resource table. When a secret is passed across a component
+  /// boundary (e.g., agent → tool via `tool-rpc.invoke`'s
+  /// `value-tree`), the runtime issues a fresh handle in the
+  /// receiving instance's table that points at the same
+  /// host-side state. The wire form carries only the
+  /// `secret-id`, never plaintext.
+
+  /// Stable, opaque identifier scoped to the deployment.
+  record secret-id {
+    bytes: list<u8>,
+  }
+
+  record secret-metadata {
+    /// Config-key path the secret resolved from, when applicable.
+    /// `none` for secrets returned in tool-result position.
+    config-key:  option<list<string>>,
+    /// Pinned version captured at resolve-time. `none` for
+    /// dynamic-origin secrets (e.g. returned from a tool that
+    /// didn't itself have a versioned source).
+    version:     option<secret-version>,
+    /// Time of resolution.
+    resolved-at: datetime,
+    /// The semantic category declared on the secret's schema type, when
+    /// known. Mirrors `secret-spec.category` in `golem:core/types`.
+    category:    option<string>,
+  }
+
+  /// A secret-store-assigned, monotonic version identifier. The
+  /// secret-store backend defines the ordering and the format;
+  /// the type-tree treats it as opaque.
+  record secret-version {
+    bytes: list<u8>,
+  }
+
+  /// Stable opaque identifier. Comparing equal across two `secret` handles
+  /// means "same secret material, same version" — useful for caching and audit
+  /// correlation. Safe to log, oplog, and emit in traces.
+  id: func(s: borrow<secret>) -> secret-id;
+
+  /// Immutable metadata captured at resolve-time. Includes the config-key
+  /// path, the resolved version, and the resolution timestamp. No plaintext.
+  metadata: func(s: borrow<secret>) -> secret-metadata;
+
+  /// Errors common to operations on secrets.
+  variant secret-error {
+    /// The secret was bound but its current resolution failed
+    /// (e.g., the secret-store entry was deleted between binding
+    /// and reveal, or the network to the store is partitioned).
+    unavailable(string),
+    /// The secret was version-pinned and the pinned version no
+    /// longer exists (administratively destroyed).
+    version-not-found(secret-version),
+    /// Internal runtime error (carries an opaque message; never
+    /// includes plaintext).
+    internal(string),
+  }
+}

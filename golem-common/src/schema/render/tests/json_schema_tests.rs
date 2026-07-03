@@ -219,15 +219,25 @@ fn secret_emits_canonical_object_shape() {
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("object"));
-    assert_eq!(schema["properties"]["secretRef"]["type"], json!("string"));
-    assert_eq!(schema["properties"]["secretRef"]["minLength"], json!(1));
-    assert_eq!(schema["additionalProperties"], json!(false));
-    assert!(
-        schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&Value::String("secretRef".to_string()))
+    assert_eq!(schema["properties"]["secretId"]["type"], json!("string"));
+    assert_eq!(schema["properties"]["secretId"]["format"], json!("uuid"));
+    assert_eq!(schema["properties"]["configKey"]["type"], json!("array"));
+    assert_eq!(
+        schema["properties"]["configKey"]["items"]["type"],
+        json!("string")
     );
+    assert_eq!(schema["properties"]["version"]["type"], json!("integer"));
+    assert_eq!(schema["properties"]["resolvedAt"]["type"], json!("string"));
+    assert_eq!(
+        schema["properties"]["resolvedAt"]["format"],
+        json!("date-time")
+    );
+    assert_eq!(schema["properties"]["category"]["type"], json!("string"));
+    assert_eq!(schema["additionalProperties"], json!(false));
+    let required = schema["required"].as_array().unwrap();
+    assert!(required.contains(&Value::String("secretId".to_string())));
+    assert!(required.contains(&Value::String("version".to_string())));
+    assert!(required.contains(&Value::String("resolvedAt".to_string())));
 }
 
 #[test]
@@ -237,6 +247,31 @@ fn datetime_emits_date_time_format() {
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("string"));
     assert_eq!(schema["format"], json!("date-time"));
+}
+
+#[test]
+fn path_emits_file_path_format() {
+    use crate::schema::schema_type::{PathDirection, PathKind, PathSpec};
+    let ty = SchemaType::path(PathSpec {
+        direction: PathDirection::Input,
+        kind: PathKind::File,
+        allowed_mime_types: None,
+        allowed_extensions: None,
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let schema = to_json_schema(&graph, &ty);
+    assert_eq!(schema["type"], json!("string"));
+    assert_eq!(schema["format"], json!("file-path"));
+}
+
+#[test]
+fn url_emits_uri_format() {
+    use crate::schema::schema_type::UrlRestrictions;
+    let ty = SchemaType::url(UrlRestrictions::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let schema = to_json_schema(&graph, &ty);
+    assert_eq!(schema["type"], json!("string"));
+    assert_eq!(schema["format"], json!("uri"));
 }
 
 #[test]

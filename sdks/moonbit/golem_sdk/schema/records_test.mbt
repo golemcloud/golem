@@ -34,12 +34,12 @@ struct Point {
 } derive(Eq, Show)
 
 ///|
-pub impl IntoSchema for Point with type_id() {
+pub impl IntoSchema for Point with fn type_id() {
   "test.Point"
 }
 
 ///|
-pub impl IntoSchema for Point with register_in(b) {
+pub impl IntoSchema for Point with fn register_in(b) {
   b.register(
     "test.Point",
     () => {
@@ -55,12 +55,12 @@ pub impl IntoSchema for Point with register_in(b) {
 }
 
 ///|
-pub impl IntoSchema for Point with to_value(self) {
+pub impl IntoSchema for Point with fn to_value(self) {
   Record([to_value_as(self.x), to_value_as(self.y)])
 }
 
 ///|
-pub impl FromSchema for Point with from_value(v) {
+pub impl FromSchema for Point with fn from_value(v) {
   let fields = expect_record(v, "Point")
   let x : Int = from_value_as(record_field(fields, 0, "Point"))
   let y : Int = from_value_as(record_field(fields, 1, "Point"))
@@ -90,12 +90,12 @@ enum Color {
 } derive(Eq, Show)
 
 ///|
-pub impl IntoSchema for Color with type_id() {
+pub impl IntoSchema for Color with fn type_id() {
   "test.Color"
 }
 
 ///|
-pub impl IntoSchema for Color with register_in(b) {
+pub impl IntoSchema for Color with fn register_in(b) {
   b.register(
     "test.Color",
     () => @model.schema_type(Enum(["Red", "Green", "Blue"])),
@@ -104,7 +104,7 @@ pub impl IntoSchema for Color with register_in(b) {
 }
 
 ///|
-pub impl IntoSchema for Color with to_value(self) {
+pub impl IntoSchema for Color with fn to_value(self) {
   match self {
     Red => Enum(0)
     Green => Enum(1)
@@ -113,7 +113,7 @@ pub impl IntoSchema for Color with to_value(self) {
 }
 
 ///|
-pub impl FromSchema for Color with from_value(v) {
+pub impl FromSchema for Color with fn from_value(v) {
   let case = expect_enum(v, "Color")
   check_case_index(case, 3, "Color")
   match case {
@@ -155,12 +155,12 @@ enum Shape {
 } derive(Eq, Show)
 
 ///|
-pub impl IntoSchema for Shape with type_id() {
+pub impl IntoSchema for Shape with fn type_id() {
   "test.Shape"
 }
 
 ///|
-pub impl IntoSchema for Shape with register_in(b) {
+pub impl IntoSchema for Shape with fn register_in(b) {
   b.register(
     "test.Shape",
     () => {
@@ -186,7 +186,7 @@ pub impl IntoSchema for Shape with register_in(b) {
 }
 
 ///|
-pub impl IntoSchema for Shape with to_value(self) {
+pub impl IntoSchema for Shape with fn to_value(self) {
   match self {
     Empty => Variant(0, None)
     Circle(d) => Variant(1, Some(to_value_as(d)))
@@ -195,7 +195,7 @@ pub impl IntoSchema for Shape with to_value(self) {
 }
 
 ///|
-pub impl FromSchema for Shape with from_value(v) {
+pub impl FromSchema for Shape with fn from_value(v) {
   let (case, payload) = expect_variant(v, "Shape")
   check_case_index(case, 3, "Shape")
   match case {
@@ -239,12 +239,12 @@ struct Boxed[T] {
 } derive(Eq, Show)
 
 ///|
-pub impl[T : IntoSchema] IntoSchema for Boxed[T] with type_id() {
+pub impl[T : IntoSchema] IntoSchema for Boxed[T] with fn type_id() {
   type_id_with_args("test.Boxed", [T::type_id()])
 }
 
 ///|
-pub impl[T : IntoSchema] IntoSchema for Boxed[T] with register_in(b) {
+pub impl[T : IntoSchema] IntoSchema for Boxed[T] with fn register_in(b) {
   b.register(
     type_id_with_args("test.Boxed", [T::type_id()]),
     () => {
@@ -262,12 +262,12 @@ pub impl[T : IntoSchema] IntoSchema for Boxed[T] with register_in(b) {
 }
 
 ///|
-pub impl[T : IntoSchema] IntoSchema for Boxed[T] with to_value(self) {
+pub impl[T : IntoSchema] IntoSchema for Boxed[T] with fn to_value(self) {
   Record([to_value_as(self.inner)])
 }
 
 ///|
-pub impl[T : FromSchema] FromSchema for Boxed[T] with from_value(v) {
+pub impl[T : FromSchema] FromSchema for Boxed[T] with fn from_value(v) {
   let fields = expect_record(v, "Boxed")
   let inner : T = from_value_as(record_field(fields, 0, "Boxed"))
   { inner, }
@@ -300,12 +300,12 @@ struct Tree {
 } derive(Eq, Show)
 
 ///|
-pub impl IntoSchema for Tree with type_id() {
+pub impl IntoSchema for Tree with fn type_id() {
   "test.Tree"
 }
 
 ///|
-pub impl IntoSchema for Tree with register_in(b) {
+pub impl IntoSchema for Tree with fn register_in(b) {
   b.register(
     "test.Tree",
     () => {
@@ -327,12 +327,12 @@ pub impl IntoSchema for Tree with register_in(b) {
 }
 
 ///|
-pub impl IntoSchema for Tree with to_value(self) {
+pub impl IntoSchema for Tree with fn to_value(self) {
   Record([to_value_as(self.value), to_value_as(self.children)])
 }
 
 ///|
-pub impl FromSchema for Tree with from_value(v) {
+pub impl FromSchema for Tree with fn from_value(v) {
   let fields = expect_record(v, "Tree")
   let value : Int = from_value_as(record_field(fields, 0, "Tree"))
   let children : Array[Tree] = from_value_as(record_field(fields, 1, "Tree"))
@@ -366,12 +366,12 @@ test "recursive record round-trip + single def via reserve/commit" {
 struct BadEnum {} derive(Eq, Show)
 
 ///|
-pub impl IntoSchema for BadEnum with type_id() {
+pub impl IntoSchema for BadEnum with fn type_id() {
   "test.BadEnum"
 }
 
 ///|
-pub impl IntoSchema for BadEnum with register_in(b) {
+pub impl IntoSchema for BadEnum with fn register_in(b) {
   b.register(
     "test.BadEnum",
     () => @model.schema_type(Enum([])),
@@ -380,7 +380,7 @@ pub impl IntoSchema for BadEnum with register_in(b) {
 }
 
 ///|
-pub impl IntoSchema for BadEnum with to_value(_self) {
+pub impl IntoSchema for BadEnum with fn to_value(_self) {
   Enum(0)
 }
 

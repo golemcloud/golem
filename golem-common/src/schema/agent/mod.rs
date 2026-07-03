@@ -138,7 +138,7 @@ pub fn typed_schema_value_with_projected_defs(
 /// Dangling refs (no matching def in `graph`) are skipped; validation of the
 /// value against the projected graph reports them. Each reachable id is emitted
 /// once, first-def-wins on duplicate ids, matching [`SchemaGraph::lookup`].
-fn reachable_defs<'a>(graph: &'a SchemaGraph, root: &'a SchemaType) -> Vec<SchemaTypeDef> {
+pub fn reachable_defs<'a>(graph: &'a SchemaGraph, root: &'a SchemaType) -> Vec<SchemaTypeDef> {
     // Seed the worklist from refs in the synthesized root. The common
     // primitive/no-ref input returns here without building any lookup index.
     let mut stack: Vec<&'a TypeId> = Vec::new();
@@ -220,6 +220,7 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
                 collect_refs(inner, out);
             }
         }
+        SchemaType::Secret { spec, .. } => collect_refs(&spec.inner, out),
         // Leaf nodes carrying no child `SchemaType`. Listed explicitly (no
         // wildcard) so a future ref-bearing variant forces this match to be
         // updated.
@@ -245,7 +246,6 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
-        | SchemaType::Secret { .. }
         | SchemaType::QuotaToken { .. } => {}
     }
 }
@@ -661,6 +661,8 @@ pub mod bindings {
           anyhow: true,
           with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams.input-stream": wasmtime_wasi::DynInputStream,
+            "wasi:io/streams.output-stream": wasmtime_wasi::DynOutputStream,
           },
           wasmtime_crate: ::wasmtime
     });

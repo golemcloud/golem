@@ -21,7 +21,6 @@ use crate::agentic::agent_definition_http_endpoint::{
 use crate::agentic::agent_definition_read_only::extract_read_only;
 use crate::agentic::helpers::{
     AgentConfigAttrRemover, has_agent_config_attr, is_async_trait_attr, is_constructor_method,
-    is_static_method,
 };
 use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
@@ -30,6 +29,7 @@ use crate::agentic::{
     invalid_static_method_in_agent_error, multiple_constructor_methods_error,
     no_constructor_method_error,
 };
+use crate::rpc_client_common::is_static_method;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::ItemTrait;

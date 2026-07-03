@@ -22,6 +22,7 @@ import {
   deserializeGraphFromWit,
   compileGraphEncoder,
   compileGraphDecoder,
+  getGraphCodec,
 } from '../src/internal/mapping/values/schemaValue';
 import {
   r,
@@ -30,6 +31,7 @@ import {
   TypeId,
 } from '../src/internal/mapping/types/resolvedType';
 import { Result } from '../src/host/result';
+import { Duration, Path, Quantity } from '../src/richTypes';
 
 interface Case {
   label: string;
@@ -324,4 +326,40 @@ describe('compiled codec parity', () => {
       expect(compileGraphDecoder(c.graph)(wit)).toEqual(expected);
     });
   }
+
+  test('getGraphCodec round-trips rich semantic values', () => {
+    const graph: ResolvedGraph = {
+      defs: new Map(),
+      root: r.record(
+        [
+          resolvedField('path', r.path({ direction: 'in-out', kind: 'any' })),
+          resolvedField('url', r.url({})),
+          resolvedField('datetime', r.datetime()),
+          resolvedField('duration', r.duration()),
+          resolvedField('quantity', r.quantity({ baseUnit: 'm', allowedSuffixes: ['m', 'cm'] })),
+        ],
+        'RichValues',
+        'M',
+      ),
+    };
+    const codec = getGraphCodec(graph);
+    expect(codec).not.toBeNull();
+
+    const value = {
+      path: new Path('/tmp/input.txt'),
+      url: new URL('https://example.com/a'),
+      datetime: new Date(-1),
+      duration: new Duration(-42n),
+      quantity: new Quantity({ mantissa: 123n, scale: 2, unit: 'm' }),
+    };
+    const encoded = codec!.encode(value);
+    expect(encoded).toEqual(serializeGraphToWit(value, graph));
+
+    const decoded = codec!.decode(encoded);
+    expect(decoded.path).toEqual(value.path);
+    expect(decoded.url.toString()).toBe(value.url.toString());
+    expect(decoded.datetime).toEqual(value.datetime);
+    expect(decoded.duration).toEqual(value.duration);
+    expect(decoded.quantity).toEqual(value.quantity);
+  });
 });

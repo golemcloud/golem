@@ -26,7 +26,7 @@ use golem_common::schema::FALLBACK_OUTPUT_FIELD_NAME;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::to_json_value;
+use golem_common::schema::render::json_value::to_json_value_redacted;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
@@ -272,7 +272,36 @@ fn schema_value_to_tool_result(
         };
     }
 
-    to_json_value(graph, ty, value)
+    // Bare rich `Url` / `Path` scalars map onto MCP resource references: a URL
+    // becomes a `resource_link` to the external resource, an absolute
+    // filesystem path becomes a `resource_link` to its `file://` URI. The arms
+    // are gated on the resolved schema type as well as the value so a value
+    // that does not match its declared type still surfaces the normal
+    // JSON renderer mismatch error. (The unstructured `variant { inline, url }`
+    // wrapper is handled above; this covers values typed directly as
+    // `Url` / `Path`.)
+    match (graph.resolve_ref(ty).map_err(internal_error)?, value) {
+        (SchemaType::Url { .. }, SchemaValue::Url { url }) => {
+            return Ok(ToolResult::Content(
+                RawContent::resource_link(RawResource::new(url.clone(), url.clone()))
+                    .no_annotation(),
+            ));
+        }
+        (SchemaType::Path { .. }, SchemaValue::Path { path }) => {
+            // `from_file_path` percent-encodes the path and rejects non-absolute
+            // paths; a relative path has no well-defined `file://` URI, so it
+            // falls through to the structured JSON string rendering below.
+            if let Ok(file_url) = url::Url::from_file_path(path) {
+                return Ok(ToolResult::Content(
+                    RawContent::resource_link(RawResource::new(file_url.to_string(), path.clone()))
+                        .no_annotation(),
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    to_json_value_redacted(graph, ty, value)
         .map_err(|e| internal_error(format!("Failed to serialize component model response: {e}")))
         .map(ToolResult::Default)
 }
@@ -508,6 +537,86 @@ mod tests {
             .as_resource_link()
             .expect("expected a resource_link content block");
         assert_eq!(resource.uri, "https://example.com/blob.bin");
+    }
+
+    #[test]
+    fn bare_url_output_to_resource_link() {
+        use golem_common::schema::schema_type::UrlRestrictions;
+        let output = OutputSchema::Single(Box::new(SchemaType::url(UrlRestrictions::default())));
+        let response = SchemaValue::Url {
+            url: "https://example.com/page".to_string(),
+        };
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let raw_content = &result.content[0].raw;
+        let resource = raw_content
+            .as_resource_link()
+            .expect("expected a resource_link content block");
+        assert_eq!(resource.uri, "https://example.com/page");
+    }
+
+    #[test]
+    fn bare_path_output_to_file_resource_link() {
+        use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec};
+        let output = OutputSchema::Single(Box::new(SchemaType::path(PathSpec {
+            direction: PathDirection::Output,
+            kind: PathKind::File,
+            allowed_mime_types: None,
+            allowed_extensions: None,
+        })));
+        let response = SchemaValue::Path {
+            path: "/tmp/report.txt".to_string(),
+        };
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let raw_content = &result.content[0].raw;
+        let resource = raw_content
+            .as_resource_link()
+            .expect("expected a resource_link content block");
+        assert_eq!(resource.uri, "file:///tmp/report.txt");
+    }
+
+    #[test]
+    fn bare_path_with_spaces_is_percent_encoded() {
+        use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec};
+        let output = OutputSchema::Single(Box::new(SchemaType::path(PathSpec {
+            direction: PathDirection::Output,
+            kind: PathKind::File,
+            allowed_mime_types: None,
+            allowed_extensions: None,
+        })));
+        let response = SchemaValue::Path {
+            path: "/tmp/a b.txt".to_string(),
+        };
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let resource = result.content[0]
+            .raw
+            .as_resource_link()
+            .expect("expected a resource_link content block");
+        assert_eq!(resource.uri, "file:///tmp/a%20b.txt");
+    }
+
+    #[test]
+    fn bare_relative_path_falls_back_to_structured_string() {
+        use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec};
+        let output = OutputSchema::Single(Box::new(SchemaType::path(PathSpec {
+            direction: PathDirection::Output,
+            kind: PathKind::File,
+            allowed_mime_types: None,
+            allowed_extensions: None,
+        })));
+        let response = SchemaValue::Path {
+            path: "relative.txt".to_string(),
+        };
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        // A relative path has no `file://` URI, so it renders as structured JSON.
+        assert!(result.content.is_empty() || result.content[0].raw.as_resource_link().is_none());
+        assert_eq!(
+            result.structured_content,
+            Some(json!({"value": "relative.txt"}))
+        );
     }
 
     #[test]

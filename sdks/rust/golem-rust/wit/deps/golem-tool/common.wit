@@ -1,0 +1,380 @@
+package golem:tool@0.1.0;
+
+/// Data model for Golem tool metadata.
+///
+/// A "tool" is a callable unit declared from a single piece of
+/// metadata. From that metadata the SDKs project two delivered
+/// surfaces — typed function signatures in TypeScript / Rust /
+/// Python / Scala / MoonBit for programmatic invocation, and
+/// help-text rendering for any node in the command tree — and the
+/// same metadata is sufficient to drive a future full-CLI
+/// projection (parseable args, shell completions, exit codes,
+/// terminal-runnable as a Unix utility) without further authoring.
+/// The CLI projection is a future possibility enabled by the model;
+/// it is not part of the current specification's deliverable.
+///
+/// The model is CLI-native: commands, subcommands, options, flags, and
+/// positionals are primary — not a generic data schema with CLI mappings
+/// layered on top. Constraint-by-construction is preferred over runtime
+/// validation: variadic-only-at-tail is structural; mutual exclusion is
+/// expressed by subcommand choice or by an explicit `mutex-groups`
+/// constraint; co-occurrence is structural via sub-records or via
+/// `all-or-none`.
+///
+/// Types and values are not modeled by this package: every input/output
+/// type and every metadata-time or runtime value is expressed with the
+/// shared `golem:core/types@2.0.0` schema model. A tool owns a single
+/// `schema-graph` type-node pool (the `tool.schema` field); command bodies
+/// reference entries in it by `type-node-index`, exactly the same way the
+/// agent model (`golem:agent/common`) references its per-agent
+/// `schema-graph`. Metadata-time values (option/positional defaults, the
+/// literal side of `value-is` constraint refs) are `schema-value-tree`s
+/// interpreted against the referenced type node in `tool.schema`; runtime
+/// invocation inputs, results, and custom-error payloads are self-contained
+/// `typed-schema-value`s.
+///
+/// The remaining tool-specific recursion site is the command tree: a
+/// flattened command hierarchy with the root at index 0 and children
+/// referenced by `command-index`.
+///
+/// Construction invariants (validated by the producer; the WIT shape
+/// alone does not enforce them):
+///
+///   • All identifier-like strings (command names, option/flag long
+///     names, positional names, error names, formatter names) match
+///     `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
+///   • Subcommand names + aliases are pairwise unique among siblings.
+///   • Within a `command-body`: option long-names + flag long-names +
+///     positional names + aliases + short forms are pairwise unique,
+///     AND unique against globals inherited from any ancestor command.
+///   • Constraint `ref` names resolve against body-declared options /
+///     flags / positionals AND globals inherited from any ancestor.
+///   • For `ref::value-is(name, lit)`, the literal must be a valid value
+///     for the declared type node of `name` in `tool.schema`.
+///   • `default-formatter` resolves to a name in `formatters`.
+///   • `tail-positional`: if `verbatim` is true, `separator` must be
+///     `some`; `separator` with `min = 0` is legal (the separator alone,
+///     no items, is valid).
+///   • A `positional` / `option` / `result` / `error` `type-node-index`
+///     resolves to a node in `tool.schema`.
+///   • A `repeatable-list` option's `default`, if present, is a `list`
+///     whose elements are values of the `repeatable-list-shape.item-type`
+///     node. A `repeatable-map` option's `default`, if present, is a `map`
+///     value of the `repeatable-map-shape.map-type` node.
+///   • A `value-is` ref naming a `repeatable-list` option, tail positional,
+///     or otherwise list-shaped target means "any occurrence / element
+///     equals this literal"; the literal is a value of the element type. For
+///     a `repeatable-map` option the literal is a value of the map's value
+///     type (any entry's value equals this literal).
+///   • The tool's identity is its root command name
+///     (`commands.nodes[0].name`); `get-tool(name)` and
+///     `guest.invoke(tool-name, …)` match against it. `commands.nodes`
+///     is always non-empty.
+///
+/// Capability scoping (WASI preopens, env masking, outbound-socket
+/// filters, subprocess-exec capability, and `golem:agent/host`'s
+/// `get-config-value` resolution) is performed by the host by inspecting
+/// the component's WIT imports — what a component *can* do is already
+/// declared structurally by which interfaces it imports — not by reading
+/// a declarative metadata record.
+interface common {
+  use golem:core/types@2.0.0.{schema-graph, type-node-index, schema-value-tree,
+    typed-schema-value};
+  use wasi:io/streams@0.2.3.{output-stream};
+
+  // Top level
+  record tool {
+    version:  string,
+    commands: command-tree,
+    /// Self-contained type-node pool holding every type referenced from
+    /// this tool's commands. Command bodies reference entries by
+    /// `type-node-index`. `schema.root` is a structurally-required
+    /// placeholder and is not the semantic root of the tool (mirrors
+    /// `golem:agent/common`'s `agent-type.schema`).
+    schema:   schema-graph,
+  }
+
+  // Command tree
+  type command-index = s32;
+
+  record command-tree {
+    /// Always non-empty; the root command is at index 0.
+    nodes: list<command-node>,
+  }
+
+  /// A command may dispatch to subcommands, run its own body, or both.
+  /// Globals declared here apply to this command's own body and to
+  /// every descendant subcommand body (recursive globals — "this level
+  /// and downward").
+  record command-node {
+    name:        string,
+    aliases:     list<string>,
+    doc:         doc,
+    globals:     globals,
+    subcommands: list<command-index>,
+    body:        option<command-body>,
+  }
+
+  record globals {
+    options: list<option-spec>,
+    %flags:  list<flag-spec>,
+  }
+
+  record command-body {
+    positionals: positionals,
+    options:     list<option-spec>,
+    %flags:      list<flag-spec>,
+    constraints: list<constraint>,
+    stdin:       option<stream-spec>,
+    stdout:      option<stream-spec>,
+    %result:     option<result-spec>,
+    errors:      list<error-case>,
+    annotations: option<command-annotations>,
+  }
+
+  /// Behavioral hints surfaced to MCP and other LLM-facing
+  /// surfaces. All four follow the MCP convention. When absent
+  /// the surface treats them as untrusted defaults
+  /// (`destructive: true`, `open-world: true`, `read-only: false`,
+  /// `idempotent: false`), per MCP guidance.
+  record command-annotations {
+    /// Tool performs no destructive updates; safe to call freely.
+    read-only:   bool,
+    /// Tool may delete or overwrite (default true per MCP semantics).
+    destructive: bool,
+    /// Repeated calls with the same input have the same effect.
+    idempotent:  bool,
+    /// Tool reaches outside the host's controlled environment
+    /// (network calls, external APIs, the open world).
+    open-world:  bool,
+  }
+
+  // Positionals (variadic only at the tail, structurally)
+  record positionals {
+    fixed: list<positional>,
+    tail:  option<tail-positional>,
+  }
+
+  record positional {
+    name:       string,
+    doc:        doc,
+    value-name: option<string>,
+    /// Index into `tool.schema`.
+    %type:      type-node-index,
+    /// Default value, interpreted against `%type` in `tool.schema`.
+    default:    option<schema-value-tree>,
+    required:   bool,
+    /// If true, the positional's value may be read from standard input
+    /// (e.g. grep's trailing `files` accepting piped input).
+    accepts-stdio: bool,
+  }
+
+  record tail-positional {
+    name:       string,
+    doc:        doc,
+    value-name: option<string>,
+    /// Index into `tool.schema`.
+    item-type:  type-node-index,
+    min:        u32,
+    max:        option<u32>,
+    /// Token required before tail items (e.g. "--" for `git log -- <paths>`).
+    separator:  option<string>,
+    /// If true, tokens after `separator` are not flag-parsed (for
+    /// `kubectl exec -- CMD ARGS...`).
+    verbatim:   bool,
+    /// If true, the tail items may be read from standard input
+    /// (e.g. grep's trailing `files` accepting piped input).
+    accepts-stdio: bool,
+  }
+
+  // Options and flags
+  record option-spec {
+    long:       string,
+    short:      option<char>,
+    aliases:    list<string>,
+    doc:        doc,
+    value-name: option<string>,
+    shape:      option-shape,
+    /// Default value, interpreted against the option's type node in
+    /// `tool.schema`.
+    default:    option<schema-value-tree>,
+    required:   bool,
+    env-var:    option<string>,
+  }
+
+  variant option-shape {
+    /// Required value: --opt VALUE or --opt=VALUE. Index into `tool.schema`.
+    scalar(type-node-index),
+    /// Bare presence collapses to `default`; with value parses normally
+    /// (--decorate, --signed[=mode], --force-with-lease[=ref]). Index into
+    /// `tool.schema`.
+    optional-scalar(type-node-index),
+    /// Repeatable scalar option (`-e a -e b`); the collected value is a
+    /// `list` of the element type.
+    repeatable-list(repeatable-list-shape),
+    /// Repeatable key-value option (`-c a=1 -c b=2`); the collected value is a
+    /// `golem:core` `map` node, never a `list<tuple>`.
+    repeatable-map(repeatable-map-shape),
+  }
+
+  record repeatable-list-shape {
+    repetition: repetition,
+    /// Index into `tool.schema`; the element type of the collected `list`.
+    item-type:  type-node-index,
+  }
+
+  record repeatable-map-shape {
+    repetition:           repetition,
+    /// Index into `tool.schema`; a `golem:core` `map` (key + value) node. The
+    /// collected value is this map.
+    map-type:             type-node-index,
+    /// What happens when the same key is supplied more than once.
+    duplicate-key-policy: duplicate-key-policy,
+  }
+
+  /// Resolution policy for a repeated key in a `repeatable-map` option.
+  enum duplicate-key-policy {
+    /// A repeated key is a usage error.
+    reject,
+    /// A repeated key takes the last supplied value.
+    last-wins,
+  }
+
+  variant repetition {
+    /// --inc a --inc b
+    repeated,
+    /// --inc=a,b
+    delimited(char),
+    /// Both surface forms accepted.
+    either(char),
+  }
+
+  record flag-spec {
+    long:    string,
+    short:   option<char>,
+    aliases: list<string>,
+    doc:     doc,
+    shape:   flag-shape,
+    env-var: option<string>,
+  }
+
+  variant flag-shape {
+    bool-flag(bool-flag-shape),
+    /// Counted flag (-vvv); optional max count.
+    count-flag(option<u32>),
+  }
+
+  record bool-flag-shape {
+    default:   bool,
+    /// If true, --no-<name> is auto-synthesized.
+    negatable: bool,
+  }
+
+  // Constraints
+  variant ref {
+    present(string),
+    value-is(value-is-ref),
+  }
+
+  record value-is-ref {
+    name:  string,
+    /// Literal value, interpreted against the declared type node of `name`
+    /// in `tool.schema`.
+    value: schema-value-tree,
+  }
+
+  variant constraint {
+    requires-all(list<ref>),
+    all-or-none(list<ref>),
+    requires-any(list<ref>),
+    mutex-groups(list<ref-group>),
+    implies(implies-c),
+    forbids(forbids-c),
+  }
+
+  record ref-group {
+    refs: list<ref>,
+  }
+
+  record implies-c {
+    lhs-quant: quantifier,
+    lhs:       list<ref>,
+    rhs-quant: quantifier,
+    rhs:       list<ref>,
+  }
+
+  record forbids-c {
+    lhs-quant: quantifier,
+    lhs:       list<ref>,
+    rhs:       list<ref>,
+  }
+
+  enum quantifier { all, any }
+
+  // Streams, structured results, errors
+  record stream-spec {
+    doc:      doc,
+    mime:     list<string>,
+    required: bool,
+  }
+
+  record result-spec {
+    /// Index into `tool.schema`.
+    %type:             type-node-index,
+    doc:               doc,
+    formatters:        list<formatter>,
+    default-formatter: string,
+  }
+
+  record formatter {
+    name: string,
+    doc:  doc,
+  }
+
+  record error-case {
+    name:      string,
+    doc:       doc,
+    kind:      error-kind,
+    exit-code: u8,
+    /// Index into `tool.schema`.
+    payload:   option<type-node-index>,
+  }
+
+  enum error-kind { usage-error, runtime-error }
+
+  // Documentation, examples
+  record doc {
+    summary:     string,
+    description: string,
+    examples:    list<example>,
+  }
+
+  record example {
+    title: string,
+    body:  string,
+  }
+
+  // Invocation contract — shared between guest and host
+  variant tool-error {
+    invalid-tool-name(string),
+    invalid-command-path(list<string>),
+    invalid-input(string),
+    constraint-violation(string),
+    /// Returned `invocation-result` does not match the body's
+    /// declared `result-spec` (e.g., the returned value's root type
+    /// does not match the body's declared result schema; see §6.1
+    /// transparency invariant).
+    invalid-result(string),
+    /// Tool-defined failure. Mirrors `golem:agent/common`'s
+    /// `agent-error::custom-error`: the payload is a self-contained
+    /// `typed-schema-value` carrying the error value. Producers SHOULD
+    /// shape it so its root type matches one of the body's declared
+    /// `error-case` payload types.
+    custom-error(typed-schema-value),
+  }
+
+  record invocation-result {
+    %result: option<typed-schema-value>,
+    stdout:  option<output-stream>,
+  }
+}

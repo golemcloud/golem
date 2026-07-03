@@ -61,7 +61,7 @@ impl Guest for Component {
 
         register_principal(&principal);
 
-        let input = decode_value(&input)
+        let input = decode_value(input)
             .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
 
         with_agent_initiator(
@@ -77,12 +77,13 @@ impl Guest for Component {
         input: crate::schema::wit::wire::SchemaValueTree,
         principal: Principal,
     ) -> Result<Option<crate::schema::wit::wire::SchemaValueTree>, AgentError> {
-        let (_agent_type_name, _, _) = parse_agent_id(
-            &std::env::var("GOLEM_AGENT_ID")
-                .expect("GOLEM_AGENT_ID environment variable must be set"),
-        )
-        .map_err(|e| AgentError::InvalidInput(e.to_string()))?;
-        let input = decode_value(&input)
+        {
+            let agent_id = std::env::var("GOLEM_AGENT_ID")
+                .expect("GOLEM_AGENT_ID environment variable must be set");
+            parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;
+        }
+
+        let input = decode_value(input)
             .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
 
         with_agent_instance_async(|resolved_agent| async move {
@@ -92,7 +93,17 @@ impl Guest for Component {
                 .as_mut()
                 .invoke(method_name, input, principal)
                 .await
-                .map(|value| value.map(|value| encode_value(&value)))
+                .and_then(|value| {
+                    value
+                        .map(|value| {
+                            encode_value(&value).map_err(|e| {
+                                AgentError::InvalidInput(format!(
+                                    "invalid schema value output: {e}"
+                                ))
+                            })
+                        })
+                        .transpose()
+                })
         })
     }
 

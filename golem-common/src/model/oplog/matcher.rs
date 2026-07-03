@@ -761,7 +761,20 @@ impl PublicOplogEntry {
                     )
             }
             SchemaValue::Secret(payload) => {
-                Self::string_match(&payload.secret_ref, path_stack, query_path, query)
+                Self::string_match(
+                    &payload.secret_id.to_string(),
+                    path_stack,
+                    query_path,
+                    query,
+                ) || payload
+                    .config_key
+                    .as_ref()
+                    .map(|segments| {
+                        segments.iter().any(|segment| {
+                            Self::string_match(segment, path_stack, query_path, query)
+                        })
+                    })
+                    .unwrap_or(false)
             }
             SchemaValue::QuotaToken(payload) => {
                 Self::string_match(&payload.resource_name, path_stack, query_path, query)

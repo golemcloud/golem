@@ -21,7 +21,7 @@
 //! union branches are filtered to ones whose body satisfies their
 //! discriminator rule.
 
-use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
+use crate::schema::graph::{RefResolutionError, SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::proptest_strategies::schema_graph_strategy;
 use crate::schema::schema_type::{
@@ -49,6 +49,26 @@ pub fn wellformed_schema_graph_strategy() -> impl Strategy<Value = SchemaGraph> 
             .collect();
         g.defs = new_defs;
         g.root = sanitise_type(&g.root, &known);
+        // Break pure alias cycles: a def/root whose top-level ref chain loops
+        // without ever reaching a concrete type (`A -> ref B`, `B -> ref A`) is
+        // ill-formed, so replace such bodies with a harmless primitive. Only
+        // pure alias chains are affected; recursion through a value-shrinking
+        // constructor (record/list/...) resolves to that constructor.
+        let alias_snapshot = g.clone();
+        for def in &mut g.defs {
+            if matches!(
+                alias_snapshot.resolve_ref(&def.body),
+                Err(RefResolutionError::RecursiveRef(_))
+            ) {
+                def.body = SchemaType::bool();
+            }
+        }
+        if matches!(
+            alias_snapshot.resolve_ref(&g.root),
+            Err(RefResolutionError::RecursiveRef(_))
+        ) {
+            g.root = SchemaType::bool();
+        }
         // Second pass: now that the full def set is known, walk every type
         // and wrap option<X> whose X (after ref resolution) is nullable. The
         // first sanitise_type pass treats `Ref(id)` conservatively because

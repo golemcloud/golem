@@ -2,7 +2,6 @@
 package "golemcloud/golem_sdk/quota"
 
 import {
-  "golemcloud/golem_sdk/interface/golem/quota/types",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
 }
@@ -21,12 +20,10 @@ pub(all) struct QuotaToken {
   // private fields
 }
 pub fn QuotaToken::drop(Self) -> Unit
-pub fn QuotaToken::from_record(@types.QuotaTokenRecord) -> Self
 pub fn QuotaToken::merge(Self, Self) -> Unit
 pub fn QuotaToken::new(String, UInt64) -> Self
 pub fn QuotaToken::reserve(Self, UInt64) -> Result[Reservation, FailedReservation]
 pub fn QuotaToken::split(Self, UInt64) -> Self
-pub fn QuotaToken::to_record(Self) -> @types.QuotaTokenRecord
 pub impl @schema.FromSchema for QuotaToken
 pub impl @schema.IntoSchema for QuotaToken
 
@@ -37,7 +34,6 @@ pub fn Reservation::commit(Self, UInt64) -> Unit
 pub fn Reservation::drop(Self) -> Unit
 
 // Type aliases
-pub using @types {type QuotaTokenRecord}
 
 // Traits
 

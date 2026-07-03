@@ -660,8 +660,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = handle
             .run(self, async move |ctx| {
-                ctx.public_state.worker().queue_card_install(card_id).await;
-                Ok::<_, anyhow::Error>(HostResponseGolemApiInstallCard { result: Ok(()) })
+                let card = ctx
+                    .state
+                    .card_service
+                    .check_cards(vec![card_id])
+                    .await?
+                    .remove(&card_id);
+                let result = match card {
+                    Some(crate::services::card::CardState::Live(card)) => {
+                        ctx.apply_card_install(None, *card).await?
+                    }
+                    Some(crate::services::card::CardState::Revoked) => {
+                        Err(CardInstallFailure::CardRevoked)
+                    }
+                    Some(crate::services::card::CardState::Unknown) => {
+                        Err(CardInstallFailure::NotFound)
+                    }
+                    None => Err(CardInstallFailure::NotFound),
+                };
+
+                Ok::<_, anyhow::Error>(HostResponseGolemApiInstallCard { result })
             })
             .await?;
 
@@ -1571,6 +1589,21 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
         component_revision: u64,
     ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
+
+        // The raw oplog entries are guest-owned: their only live
+        // `schema-value-tree` (each `create.local-agent-config[].value`) may
+        // carry owned `quota-token` handles that were transferred into the
+        // resource table at the WIT boundary. The pure `TryFrom` conversion
+        // below rejects quota tokens but cannot delete the handles, and this
+        // function returns its error as a non-trapping `result::err`, so drain
+        // any such handle up front (rejecting the batch) before any other
+        // non-trapping early return can drop the entries without cleanup.
+        let entries = match crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
+            entries, self,
+        ) {
+            Ok(entries) => entries,
+            Err(e) => return Ok(Err(e)),
+        };
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();

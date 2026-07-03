@@ -313,6 +313,13 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn remove_from_active_workers(&self) {
+        self.deps
+            .active_workers()
+            .remove(&self.owned_agent_id.agent_id())
+            .await;
+    }
+
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
@@ -2124,42 +2131,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
-    pub async fn queue_card_install(&self, card_id_to_install: CardId) -> Option<OplogIndex> {
-        let status = self.get_last_known_status().await;
-
-        let card_already_pending = status.pending_card_events.iter().any(|pending_event| {
-            matches!(&pending_event.event, QueuedCardEvent::Install { card_id } | QueuedCardEvent::Revoke { card_id } if *card_id == card_id_to_install)
-        });
-
-        if card_already_pending {
-            None
-        } else {
-            Some(
-                self.add_and_commit_oplog(OplogEntry::card_event_queued(
-                    QueuedCardEvent::Install {
-                        card_id: card_id_to_install,
-                    },
-                ))
-                .await,
-            )
-        }
-    }
-
-    pub async fn queue_card_revocation(&self, card_id_to_revoke: CardId) -> Option<OplogIndex> {
+    pub async fn queue_card_revocation(&self, card_id: CardId) -> Option<OplogIndex> {
         let status = self.get_last_known_status().await;
         let revoke_already_pending = || {
             status.pending_card_events.iter().any(|pending_event| {
-                matches!(&pending_event.event, QueuedCardEvent::Revoke { card_id } if *card_id == card_id_to_revoke)
-            })
+            matches!(&pending_event.event, QueuedCardEvent::Revoke(event) if event.card_id == card_id)
+        })
         };
 
-        if status.revoked_cards.contains(&card_id_to_revoke) || revoke_already_pending() {
+        if status.revoked_cards.contains(&card_id) || revoke_already_pending() {
             None
         } else {
             Some(
-                self.add_and_commit_oplog(OplogEntry::card_event_queued(QueuedCardEvent::Revoke {
-                    card_id: card_id_to_revoke,
-                }))
+                self.add_and_commit_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
+                    card_id,
+                )))
                 .await,
             )
         }

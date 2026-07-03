@@ -22,8 +22,8 @@ pub use wstd;
 pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, Schema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
+    SchemaType, SchemaValue, TypedSchemaValue,
 };
 pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 
@@ -39,12 +39,14 @@ pub fn decode_schema_graph(
     schema::wit::decode_graph(graph)
 }
 
-pub fn encode_schema_value(value: &SchemaValue) -> schema::wit::wire::SchemaValueTree {
+pub fn encode_schema_value(
+    value: &SchemaValue,
+) -> Result<schema::wit::wire::SchemaValueTree, schema::wit::EncodeError> {
     schema::wit::encode_value(value)
 }
 
 pub fn decode_schema_value(
-    value: &schema::wit::wire::SchemaValueTree,
+    value: schema::wit::wire::SchemaValueTree,
 ) -> Result<SchemaValue, schema::wit::DecodeError> {
     schema::wit::decode_value(value)
 }
@@ -72,6 +74,7 @@ mod raw_bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
         }
@@ -95,8 +98,16 @@ pub mod bindings {
             pub(crate) use crate::raw_bindings::golem::quota::types;
         }
 
+        pub mod secrets {
+            pub use crate::raw_bindings::golem::secrets::{reveal, types};
+        }
+
         pub mod agent {
             pub use crate::raw_bindings::golem::agent::host;
+        }
+
+        pub mod tool {
+            pub use crate::raw_bindings::golem::tool::host;
         }
 
         pub use crate::raw_bindings::golem::{rdbms, websocket};
@@ -115,15 +126,19 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -153,15 +168,19 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -192,6 +211,7 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
@@ -201,6 +221,8 @@ pub mod golem_agentic {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -212,6 +234,7 @@ pub mod golem_agentic {
             "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
             "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
             "wasi:logging/logging": crate::bindings::wasi::logging::logging,
+            "wasi:config/store@0.2.0-draft": crate::bindings::wasi::config::store,
         }
     });
 
@@ -246,15 +269,19 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams@0.2.3": wasip2::io::streams,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -286,6 +313,7 @@ pub use json::*;
 
 mod checkpoint;
 pub mod quota;
+pub mod secrets;
 mod transaction;
 
 use std::future::Future;
@@ -300,6 +328,7 @@ pub type OplogIndex = u64;
 pub mod websocket;
 pub use checkpoint::*;
 pub use quota::*;
+pub use secrets::*;
 pub mod retry;
 pub use transaction::*;
 pub use websocket::{WebSocketCloseInfo, WebSocketError, WebSocketMessage, WebsocketConnection};

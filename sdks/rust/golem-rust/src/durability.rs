@@ -192,8 +192,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
 
             persist_durable_function_invocation(
                 &function_name,
-                &request,
-                &response,
+                request,
+                response,
                 self.function_type,
             );
             end_durable_function(self.function_type, self.begin_index, self.forced_commit);

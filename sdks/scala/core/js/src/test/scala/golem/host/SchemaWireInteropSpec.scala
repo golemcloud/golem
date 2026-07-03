@@ -16,12 +16,11 @@
 
 package golem.host
 
-import golem.{EnvironmentId, Uuid}
 import golem.schema._
 import golem.schema.wire._
 import golem.schema.wire.WitSchemaTypeBody._
 import golem.schema.wire.WitSchemaValueNode._
-import golem.host.js.schema.{JsSchemaTypeBody, JsSchemaValueNode}
+import golem.host.js.schema.{JsSchemaTypeBody, JsSchemaValueNode, JsSchemaValueTree}
 import zio.test._
 
 import scala.scalajs.js
@@ -48,6 +47,12 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
 
   private val textFull = TextRestrictions(Some(List("en", "hu")), Some(1), Some(99), Some("a.*z"))
   private val textNone = TextRestrictions.empty
+
+  private val numericFull = NumericRestrictions(
+    min = Some(NumericBound.Unsigned(-2L)),
+    max = Some(NumericBound.Unsigned(-1L)),
+    unit = Some("bytes")
+  )
 
   private val binFull = BinaryRestrictions(Some(List("image/png")), Some(0), Some(1024))
   private val binNone = BinaryRestrictions.empty
@@ -84,16 +89,16 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   private val typeBodies: Vector[WitSchemaTypeBody] = Vector(
     RefType(0),
     BoolType,
-    S8Type,
-    S16Type,
-    S32Type,
-    S64Type,
-    U8Type,
-    U16Type,
-    U32Type,
-    U64Type,
-    F32Type,
-    F64Type,
+    S8Type(),
+    S16Type(),
+    S32Type(),
+    S64Type(),
+    U8Type(),
+    U16Type(),
+    U32Type(Some(NumericRestrictions(min = Some(NumericBound.Unsigned(1L)), unit = Some("items")))),
+    U64Type(Some(numericFull)),
+    F32Type(Some(NumericRestrictions(max = Some(NumericBound.FloatBits(java.lang.Double.doubleToRawLongBits(1.5d)))))),
+    F64Type(Some(NumericRestrictions(min = Some(NumericBound.FloatBits(0L)), unit = Some("seconds")))),
     CharType,
     StringType,
     RecordType(Vector(WitNamedFieldType("x", 1, mdFull), WitNamedFieldType("y", 2, md0))),
@@ -123,8 +128,8 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     QuantityType(quantFull),
     QuantityType(quantNone),
     UnionType(unionSpec),
-    SecretType(SecretSpec(Some("api-key"))),
-    SecretType(SecretSpec(None)),
+    SecretType(WitSecretSpec(0, Some("api-key"))),
+    SecretType(WitSecretSpec(0, None)),
     QuotaTokenType(QuotaTokenSpec(Some("res"))),
     QuotaTokenType(QuotaTokenSpec(None)),
     FutureType(Some(11)),
@@ -149,8 +154,10 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
 
   private val datetime = Datetime(1_700_000_000L, 123_456_789)
 
-  private val envId = EnvironmentId(Uuid(BigInt("1234567890123456789"), BigInt("987654321")))
-
+  // Quota-token handle nodes are intentionally excluded from this structural
+  // round-trip vector: an owned `quota-token` handle is affine, so encoding
+  // consumes it and decoding wraps a fresh handle, which cannot compare equal by
+  // identity. Their interop is covered by dedicated tests below.
   private val valueNodes: Vector[WitSchemaValueNode] = Vector(
     BoolValue(true),
     S8Value(-8),
@@ -190,8 +197,6 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     DurationValue(WitDurationValuePayload(987654321L)),
     QuantityValueNode(qvalue),
     UnionValue(WitUnionValuePayload("branch0", 1)),
-    SecretValue(WitSecretValuePayload("secret-ref-1")),
-    QuotaTokenValue(QuotaTokenValuePayload(envId, "res", 5L, 3L, datetime)),
     // --- numeric / boundary samples -----------------------------------------
     CharValue(0x1f600),    // astral-plane code point (emoji), needs surrogate pair
     U32Value(4294967295L), // u32 max
@@ -199,8 +204,7 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     S64Value(Long.MaxValue),
     U64Value(Long.MinValue), // raw bits => unsigned 2^63
     DurationValue(WitDurationValuePayload(Long.MinValue)),
-    QuantityValueNode(QuantityValue(Long.MinValue, -2147483648, "u")),
-    QuotaTokenValue(QuotaTokenValuePayload(envId, "res2", -1L, -7L, datetime)) // expectedUse raw bits = 2^64-1
+    QuantityValueNode(QuantityValue(Long.MinValue, -2147483648, "u"))
   )
 
   private val valueTree = WitSchemaValueTree(valueNodes, root = 0)
@@ -231,6 +235,100 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
           SchemaWireInterop.valueTreeFromJs(SchemaWireInterop.valueTreeToJs(v)) == v
         }
         assertTrue(results.forall(identity))
+      },
+      test("secret handle: encode moves the owned resource and consumes the handle") {
+        val raw    = js.Dynamic.literal(marker = 43).asInstanceOf[js.Any]
+        val handle = GuestSecretHandle.fromRaw(raw)
+        val jsNode =
+          SchemaWireInterop.valueTreeToJs(WitSchemaValueTree(Vector(SecretValue(handle)), 0)).valueNodes(0)
+        assertTrue(
+          jsNode.tag == "secret-value",
+          rawVal(jsNode).asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef],
+          !handle.isPresent
+        )
+      },
+      test("secret handle: decode wraps the owned resource in a fresh present handle") {
+        val raw    = js.Dynamic.literal(marker = 8).asInstanceOf[js.Any]
+        val jsTree = SchemaWireInterop.valueTreeToJs(
+          WitSchemaValueTree(Vector(SecretValue(GuestSecretHandle.fromRaw(raw))), 0)
+        )
+        val decoded = SchemaWireInterop.valueTreeFromJs(jsTree)
+        decoded.valueNodes(0) match {
+          case SecretValue(h) =>
+            assertTrue(h.isPresent, h.take().exists(_.asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef]))
+          case other => assertTrue(false).label(s"expected SecretValue, got $other")
+        }
+      },
+      test("secret handle: inbound decode rejects two nodes carrying the same raw resource") {
+        val raw = js.Dynamic.literal(marker = 44).asInstanceOf[js.Any]
+        val jsTree = JsSchemaValueTree(
+          js.Array(
+            JsSchemaValueNode.recordValue(js.Array(1, 2)),
+            JsSchemaValueNode.secretValue(raw),
+            JsSchemaValueNode.secretValue(raw)
+          ),
+          0
+        )
+        val wit    = SchemaWireInterop.valueTreeFromJs(jsTree)
+        val result = scala.util.Try(SchemaWire.schemaValueFromWit(wit))
+        result match {
+          case scala.util.Failure(_: SchemaDecodeError) => assertTrue(true)
+          case other                                    => assertTrue(false).label(s"expected SchemaDecodeError, got $other")
+        }
+      },
+      test("secret handle: encode is atomic — a sibling that fails leaves the handle untouched") {
+        val raw    = js.Dynamic.literal(marker = 100).asInstanceOf[js.Any]
+        val handle = GuestSecretHandle.fromRaw(raw)
+        val tree   = WitSchemaValueTree(
+          Vector(
+            TupleValue(Vector(1, 2)),
+            SecretValue(handle),
+            DatetimeValue(Datetime(0L, -1))
+          ),
+          0
+        )
+        val result = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree))
+        assertTrue(result.isFailure, handle.isPresent)
+      },
+      test("quota-token handle: encode moves the owned resource and consumes the handle") {
+        val raw    = js.Dynamic.literal(marker = 42).asInstanceOf[js.Any]
+        val handle = GuestQuotaTokenHandle.fromRaw(raw)
+        val jsNode =
+          SchemaWireInterop.valueTreeToJs(WitSchemaValueTree(Vector(QuotaTokenHandle(handle)), 0)).valueNodes(0)
+        assertTrue(
+          jsNode.tag == "quota-token-handle",
+          rawVal(jsNode).asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef],
+          !handle.isPresent
+        )
+      },
+      test("quota-token handle: decode wraps the owned resource in a fresh present handle") {
+        val raw    = js.Dynamic.literal(marker = 7).asInstanceOf[js.Any]
+        val jsTree = SchemaWireInterop.valueTreeToJs(
+          WitSchemaValueTree(Vector(QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(raw))), 0)
+        )
+        val decoded = SchemaWireInterop.valueTreeFromJs(jsTree)
+        decoded.valueNodes(0) match {
+          case QuotaTokenHandle(h) =>
+            assertTrue(h.isPresent, h.take().exists(_.asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef]))
+          case other => assertTrue(false).label(s"expected QuotaTokenHandle, got $other")
+        }
+      },
+      test("quota-token handle: encode is atomic — a sibling that fails leaves the handle untouched") {
+        val raw    = js.Dynamic.literal(marker = 99).asInstanceOf[js.Any]
+        val handle = GuestQuotaTokenHandle.fromRaw(raw)
+        // Tuple([quota-token-handle, datetime-with-invalid-nanoseconds]): the
+        // datetime would be rejected by the boundary, so the preflight must fail
+        // before the affine handle is moved out of its cell.
+        val tree = WitSchemaValueTree(
+          Vector(
+            TupleValue(Vector(1, 2)),
+            QuotaTokenHandle(handle),
+            DatetimeValue(Datetime(0L, -1))
+          ),
+          0
+        )
+        val result = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree))
+        assertTrue(result.isFailure, handle.isPresent)
       },
       // The round-trip tests above only prove encode/decode self-consistency. These
       // smoke tests assert the *raw* emitted JS shape against the wasm-rquickjs d.ts
@@ -266,6 +364,20 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
         val ctorName = pay("bytes").asInstanceOf[js.Dynamic].constructor.name.asInstanceOf[String]
         val bytes    = pay("bytes").asInstanceOf[Uint8Array]
         assertTrue(ctorName == "Uint8Array", bytes.length == 3, bytes(0).toInt == 1, bytes(2).toInt == 3)
+      },
+      test("raw JS shape: numeric restrictions carry bigint bounds") {
+        val body = singleTypeBodyJs(U64Type(Some(numericFull)))
+        val r    = valDict(body)
+        val min  = r("min").asInstanceOf[js.Dynamic]
+        val max  = r("max").asInstanceOf[js.Dynamic]
+        assertTrue(
+          body.tag == "u64-type",
+          min.selectDynamic("tag").asInstanceOf[String] == "unsigned",
+          max.selectDynamic("tag").asInstanceOf[String] == "unsigned",
+          js.typeOf(min.selectDynamic("val")) == "bigint",
+          js.typeOf(max.selectDynamic("val")) == "bigint",
+          r("unit").asInstanceOf[String] == "bytes"
+        )
       },
       test("raw JS shape: s64/u64 carry JS bigint, u32 carries JS number") {
         val s64 = rawVal(singleValueNodeJs(S64Value(-64L)))

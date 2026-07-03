@@ -36,4 +36,4 @@ mod tests;
 
 pub use subtyping::{is_assignable, is_equivalent_cross_graph};
 pub use value::{ValueError, ValuePath, ValuePathSegment, validate_value};
-pub use well_formedness::{SchemaError, validate_graph};
+pub use well_formedness::{SchemaError, validate_graph, validate_root_type};
