@@ -52,7 +52,6 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
@@ -760,17 +759,54 @@ impl OplogService for ForwardingOplogService {
 }
 
 /// A wrapper for `Oplog` that periodically sends buffered oplog entries to oplog processor plugins
+///
+/// Structured as an actor for the same reason as `PrimaryOplog` (see its doc comment): this
+/// wrapper is called both from futures polled by wasmtime's store event loop and from host code
+/// running on store-keeping wasm fibers, and while such a fiber is suspended the event loop
+/// cannot poll store-polled futures (wasmtime#11869/#11870). A shared async mutex held across the
+/// inner-oplog delegation — or even fairly handed to a queued store-polled future — deadlocks the
+/// store, so instead the state is exclusively owned by an independent actor task and callers only
+/// await oneshot replies.
+///
+/// ORDERING: `add`, `add_pair` and `add_start_with_reserved_raw_payload` rely on the mirrored
+/// `buffer`/`last_oplog_idx` staying in lockstep with the order the inner (leaf) oplog assigns
+/// indices. The single-consumer job channel processes jobs in enqueue order, which is the same
+/// FIFO guarantee the previous FIFO-fair mutex provided via `lock()` acquisition order.
 pub struct ForwardingOplog {
     inner: Arc<dyn Oplog>,
-    /// MUST stay a FIFO-fair async mutex (`tokio::sync::Mutex`), like `PrimaryOplog::state`.
-    /// `add_start_with_reserved_raw_payload` holds this lock across delegation to the inner oplog to
-    /// keep the mirrored buffer/`last_oplog_idx` in lockstep with the inner `Start` ordering, so the
-    /// wrapper must not reorder concurrent callers relative to initiation order. `tokio::sync::Mutex`
-    /// guarantees FIFO acquisition; `async_lock::Mutex` does not.
-    state: Arc<Mutex<ForwardingOplogState>>,
-    max_commit_count: usize,
+    jobs: tokio::sync::mpsc::UnboundedSender<ForwardingJob>,
+    actor: JoinHandle<()>,
     timer: Option<JoinHandle<()>>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+/// A request processed by the [`ForwardingOplog`] actor task, which exclusively owns the
+/// [`ForwardingOplogState`].
+enum ForwardingJob {
+    Add {
+        entry: OplogEntry,
+        done: tokio::sync::oneshot::Sender<OplogIndex>,
+    },
+    AddPair {
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    },
+    AddStart {
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+    },
+    Commit {
+        level: CommitLevel,
+        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
+    },
+    SetWorkerEventService {
+        service: Arc<dyn WorkerEventService>,
+        done: tokio::sync::oneshot::Sender<()>,
+    },
+    /// Periodic tick from the timer task: runs locality recovery and a time-based flush.
+    Tick,
 }
 
 impl ForwardingOplog {
@@ -815,7 +851,7 @@ impl ForwardingOplog {
             state
         };
 
-        let state = Arc::new(Mutex::new(ForwardingOplogState {
+        let mut state = ForwardingOplogState {
             buffer: VecDeque::new(),
             buffer_start_idx: last_oplog_idx.next(),
             commit_count: 0,
@@ -831,24 +867,105 @@ impl ForwardingOplog {
             pending_direct_commits: BTreeMap::new(),
             worker_event_service: None,
             monitor_tasks: Vec::new(),
-        }));
+        };
+
+        let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<ForwardingJob>();
+        let actor = tokio::spawn(
+            async move {
+                while let Some(job) = job_rx.recv().await {
+                    match job {
+                        ForwardingJob::Add { entry, done } => {
+                            state.buffer.push_back(entry.clone());
+                            state.last_oplog_idx = state.last_oplog_idx.next();
+                            let idx = state.inner.add(entry).await;
+                            let _ = done.send(idx);
+                        }
+                        ForwardingJob::AddPair {
+                            start,
+                            make_second,
+                            done,
+                        } => {
+                            // The `Start` will be appended at the next index; this wrapper tracks
+                            // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
+                            // index matches the one the inner oplog assigns.
+                            let first_idx = state.last_oplog_idx.next();
+                            let second = make_second(first_idx);
+                            state.buffer.push_back(start.clone());
+                            state.last_oplog_idx = state.last_oplog_idx.next();
+                            state.buffer.push_back(second.clone());
+                            state.last_oplog_idx = state.last_oplog_idx.next();
+                            let result =
+                                state.inner.add_pair(start, Box::new(move |_| second)).await;
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::AddStart {
+                            serialized_request,
+                            build_start,
+                            done,
+                        } => {
+                            // The `Start` entry is built deep in the leaf from the reserved payload
+                            // reference, so — unlike `Add`/`AddPair` — it is mirrored into the
+                            // buffer only after the delegation returns it.
+                            let result = state
+                                .inner
+                                .add_start_with_reserved_raw_payload(
+                                    serialized_request,
+                                    build_start,
+                                )
+                                .await;
+                            if let Ok(ordered) = &result {
+                                state.buffer.push_back(ordered.entry.clone());
+                                state.last_oplog_idx = state.last_oplog_idx.next();
+                            }
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::Commit { level, done } => {
+                            let mut result = state.inner.commit(level).await;
+                            // Update last_committed_idx from committed entries
+                            if let Some(max_idx) = result.keys().max()
+                                && *max_idx > state.last_committed_idx
+                            {
+                                state.last_committed_idx = *max_idx;
+                            }
+                            state.commit_count += 1;
+                            if state.commit_count >= max_commit_count {
+                                state.try_flush().await;
+                            }
+                            // Merge entries committed directly to inner during flush
+                            // so the Worker folds them into AgentStatusRecord
+                            result.append(&mut state.pending_direct_commits);
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::SetWorkerEventService { service, done } => {
+                            state.worker_event_service = Some(service);
+                            let _ = done.send(());
+                        }
+                        ForwardingJob::Tick => {
+                            state.try_locality_recovery().await;
+                            state.try_flush().await;
+                        }
+                    }
+                }
+            }
+            .in_current_span(),
+        );
 
         let timer = tokio::spawn({
-            let state = state.clone();
+            let jobs = jobs.clone();
             async move {
                 loop {
                     tokio::time::sleep(max_elapsed_time).await;
-                    let mut state = state.lock().await;
-                    state.try_locality_recovery().await;
-                    state.try_flush().await;
+                    if jobs.send(ForwardingJob::Tick).is_err() {
+                        break;
+                    }
                 }
             }
             .in_current_span()
         });
         Self {
             inner,
-            state,
-            max_commit_count,
+            jobs,
+            actor,
             timer: Some(timer),
             close_fn: Some(close_fn),
         }
@@ -858,8 +975,30 @@ impl ForwardingOplog {
         &self,
         worker_event_service: Arc<dyn WorkerEventService>,
     ) {
-        let mut state = self.state.lock().await;
-        state.worker_event_service = Some(worker_event_service);
+        self.run_job(|done| ForwardingJob::SetWorkerEventService {
+            service: worker_event_service,
+            done,
+        })
+        .await
+    }
+
+    /// Enqueues a job for the actor task and awaits its reply.
+    ///
+    /// Panics if the actor task is gone: the actor is only aborted from `Drop` (when no caller
+    /// can be in flight anymore), so a missing reply means the actor itself panicked and the
+    /// oplog's state is no longer trustworthy.
+    async fn run_job<R>(
+        &self,
+        make_job: impl FnOnce(tokio::sync::oneshot::Sender<R>) -> ForwardingJob,
+    ) -> R {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(make_job(done)).is_err() {
+            panic!("Forwarding oplog actor terminated unexpectedly");
+        }
+        match done_rx.await {
+            Ok(result) => result,
+            Err(_) => panic!("Forwarding oplog actor dropped a request without replying"),
+        }
     }
 }
 
@@ -877,23 +1016,20 @@ impl Drop for ForwardingOplog {
         if let Some(timer) = self.timer.take() {
             timer.abort();
         }
-        // Abort all background monitor tasks to prevent them from
-        // outliving this oplog and causing resource contention.
-        if let Ok(mut state) = self.state.try_lock() {
-            for task in state.monitor_tasks.drain(..) {
-                task.abort();
-            }
-        }
+        // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
+        // job reply anymore and aborting the actor cannot lose an observed operation. Dropping
+        // the actor's state aborts all background monitor tasks (they are
+        // `AbortOnDropJoinHandle`s), preventing them from outliving this oplog and causing
+        // resource contention.
+        self.actor.abort();
     }
 }
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        let mut state = self.state.lock().await;
-        state.buffer.push_back(entry.clone());
-        state.last_oplog_idx = state.last_oplog_idx.next();
-        self.inner.add(entry).await
+        self.run_job(|done| ForwardingJob::Add { entry, done })
+            .await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -901,22 +1037,8 @@ impl Oplog for ForwardingOplog {
     }
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut state = self.state.lock().await;
-        let mut result = self.inner.commit(level).await;
-        // Update last_committed_idx from committed entries
-        if let Some(max_idx) = result.keys().max()
-            && *max_idx > state.last_committed_idx
-        {
-            state.last_committed_idx = *max_idx;
-        }
-        state.commit_count += 1;
-        if state.commit_count >= self.max_commit_count {
-            state.try_flush().await;
-        }
-        // Merge entries committed directly to inner during flush
-        // so the Worker folds them into AgentStatusRecord
-        result.append(&mut state.pending_direct_commits);
-        result
+        self.run_job(|done| ForwardingJob::Commit { level, done })
+            .await
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -964,17 +1086,12 @@ impl Oplog for ForwardingOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
-        let mut state = self.state.lock().await;
-        // The `Start` will be appended at the next index; this wrapper tracks
-        // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
-        // index matches the one the inner oplog assigns.
-        let first_idx = state.last_oplog_idx.next();
-        let second = make_second(first_idx);
-        state.buffer.push_back(start.clone());
-        state.last_oplog_idx = state.last_oplog_idx.next();
-        state.buffer.push_back(second.clone());
-        state.last_oplog_idx = state.last_oplog_idx.next();
-        self.inner.add_pair(start, Box::new(move |_| second)).await
+        self.run_job(|done| ForwardingJob::AddPair {
+            start,
+            make_second,
+            done,
+        })
+        .await
     }
 
     async fn add_start_with_reserved_raw_payload(
@@ -982,19 +1099,12 @@ impl Oplog for ForwardingOplog {
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
     ) -> Result<OrderedOplogStart, String> {
-        // Hold this wrapper's lock across the delegation so concurrent calls are serialized here in
-        // the same order the inner (leaf) oplog assigns their `Start` indices, keeping this layer's
-        // mirrored `buffer`/`last_oplog_idx` in lockstep with the inner oplog. The `Start` entry is
-        // built deep in the leaf from the reserved payload reference, so — unlike `add`/`add_pair` —
-        // it is mirrored into the buffer only after the delegation returns it.
-        let mut state = self.state.lock().await;
-        let ordered = self
-            .inner
-            .add_start_with_reserved_raw_payload(serialized_request, build_start)
-            .await?;
-        state.buffer.push_back(ordered.entry.clone());
-        state.last_oplog_idx = state.last_oplog_idx.next();
-        Ok(ordered)
+        self.run_job(|done| ForwardingJob::AddStart {
+            serialized_request,
+            build_start,
+            done,
+        })
+        .await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -1021,7 +1131,9 @@ struct ForwardingOplogState {
     /// so the Worker folds them into `AgentStatusRecord`.
     pending_direct_commits: BTreeMap<OplogIndex, OplogEntry>,
     worker_event_service: Option<Arc<dyn WorkerEventService>>,
-    monitor_tasks: Vec<JoinHandle<()>>,
+    /// Abort-on-drop so that dropping this state (when the owning actor task is aborted) also
+    /// stops all in-flight send-monitor tasks.
+    monitor_tasks: Vec<wasmtime_wasi::runtime::AbortOnDropJoinHandle<()>>,
 }
 
 impl ForwardingOplogState {
@@ -1375,7 +1487,7 @@ impl ForwardingOplogState {
                     }
                     .in_current_span(),
                 );
-                self.monitor_tasks.push(monitor);
+                self.monitor_tasks.push(monitor.into());
             }
             Err(err) => {
                 tracing::error!("Failed to enqueue oplog entries to plugin {grant_id}: {err}");

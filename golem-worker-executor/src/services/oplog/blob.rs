@@ -17,7 +17,6 @@ use crate::services::oplog::{
     CompressedOplogChunk, OplogArchiveService, cursor_value, next_scan_cursor, scan_modes,
 };
 use anyhow::anyhow;
-use async_lock::RwLockUpgradableReadGuard;
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::agent::AgentMode;
@@ -279,30 +278,33 @@ impl BlobOplogArchive {
     }
 
     async fn ensure_is_created(&self) {
-        let created = self.created.upgradable_read().await;
-        if !*created {
-            let mut created = RwLockUpgradableReadGuard::upgrade(created).await;
-            self.blob_storage
-                .with("blob_oplog", "new")
-                .create_dir(
-                    BlobStorageNamespace::CompressedOplog {
-                        environment_id: self.owned_agent_id.environment_id(),
-                        component_id: self.owned_agent_id.component_id(),
-                        agent_mode: self.agent_mode,
-                        level: self.level,
-                    },
-                    Path::new(&self.owned_agent_id.agent_name()),
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to create compressed oplog directory for worker {} in blob storage: {err}",
-                        self.owned_agent_id.agent_id
-                    )
-                });
-
-            *created = true;
+        // The `created` lock must not be held across the storage call: an async lock held across
+        // IO by a wasmtime store-polled future can deadlock the store (wasmtime#11869/#11870).
+        // `create_dir` is idempotent in every blob storage backend, so racing creators are
+        // harmless.
+        if *self.created.read().await {
+            return;
         }
+        self.blob_storage
+            .with("blob_oplog", "new")
+            .create_dir(
+                BlobStorageNamespace::CompressedOplog {
+                    environment_id: self.owned_agent_id.environment_id(),
+                    component_id: self.owned_agent_id.component_id(),
+                    agent_mode: self.agent_mode,
+                    level: self.level,
+                },
+                Path::new(&self.owned_agent_id.agent_name()),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to create compressed oplog directory for worker {} in blob storage: {err}",
+                    self.owned_agent_id.agent_id
+                )
+            });
+
+        *self.created.write().await = true;
     }
 
     pub(crate) async fn exists(
@@ -389,9 +391,14 @@ impl BlobOplogArchive {
         beginning_of_range: OplogIndex,
         end_of_range: OplogIndex,
     ) -> anyhow::Result<Option<Vec<(OplogIndex, OplogEntry)>>> {
-        let entries = self.entries.read().await;
-        // Find the first chunk whose last index is >= end_of_range
-        let last_idx = entries.keys().find(|k| **k >= end_of_range);
+        // The `entries` lock must not be held across the storage read below: an async lock held
+        // across IO by a wasmtime store-polled future can deadlock the store
+        // (wasmtime#11869/#11870). The chunk key is copied out under a short lock instead.
+        let last_idx = {
+            let entries = self.entries.read().await;
+            // Find the first chunk whose last index is >= end_of_range
+            entries.keys().find(|k| **k >= end_of_range).copied()
+        };
 
         let last_idx = if let Some(last_idx) = last_idx {
             last_idx
@@ -399,7 +406,7 @@ impl BlobOplogArchive {
             return Ok(None);
         };
 
-        let chunk: CompressedOplogChunk = self
+        let chunk: CompressedOplogChunk = match self
             .blob_storage
             .with("blob_oplog", "read")
             .get(
@@ -409,18 +416,29 @@ impl BlobOplogArchive {
                     agent_mode: self.agent_mode,
                     level: self.level,
                 },
-                &self.oplog_index_to_path(*last_idx),
+                &self.oplog_index_to_path(last_idx),
             )
             .await?
-            .ok_or_else(|| anyhow!("compressed chunk for {last_idx} not found"))?;
+        {
+            Some(chunk) => chunk,
+            None => {
+                // The chunk may have been dropped by a concurrent `drop_prefix` between copying
+                // its key and fetching it. If its key is gone from the entries map, treat it as
+                // the layer boundary; otherwise the storage is genuinely inconsistent.
+                if self.entries.read().await.contains_key(&last_idx) {
+                    return Err(anyhow!("compressed chunk for {last_idx} not found"));
+                } else {
+                    return Ok(None);
+                }
+            }
+        };
 
         let entries = chunk.decompress()?;
         let mut cache = self.cache.write().await;
 
         let mut collected = Vec::new();
 
-        for (current_idx, entry) in (Into::<u64>::into(*last_idx) - chunk.count + 1..).zip(entries)
-        {
+        for (current_idx, entry) in (Into::<u64>::into(last_idx) - chunk.count + 1..).zip(entries) {
             let oplog_index = OplogIndex::from_u64(current_idx);
 
             cache.insert(oplog_index, entry.clone());
@@ -508,8 +526,10 @@ impl OplogArchive for BlobOplogArchive {
 
             total_bytes += compressed_chunk.compressed_data.len() as u64;
 
-            let mut entries_map = self.entries.write().await;
-
+            // The `entries` lock must not be held across the storage write: an async lock held
+            // across IO by a wasmtime store-polled future can deadlock the store
+            // (wasmtime#11869/#11870). The chunk becomes visible to readers only after the write
+            // succeeded, which is the same observable order as before.
             self.blob_storage
                 .with("blob_oplog", "append")
                 .put(
@@ -530,7 +550,7 @@ impl OplogArchive for BlobOplogArchive {
                     )
                 });
 
-            entries_map.insert(oplog_index, path);
+            self.entries.write().await.insert(oplog_index, path);
         }
 
         total_bytes
@@ -548,13 +568,23 @@ impl OplogArchive for BlobOplogArchive {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.ensure_is_created().await;
 
-        let mut entries = self.entries.write().await;
-
-        let idx_to_drop = entries
-            .keys()
-            .filter(|key| **key <= last_dropped_id)
-            .cloned()
-            .collect::<Vec<_>>();
+        // The `entries` and `created` locks must not be held across the storage calls below: an
+        // async lock held across IO by a wasmtime store-polled future can deadlock the store
+        // (wasmtime#11869/#11870). The keys are removed from the map before the blobs are
+        // deleted, so concurrent readers either still find the chunk in storage or observe its
+        // key gone from the map and treat it as the layer boundary.
+        let (idx_to_drop, is_empty) = {
+            let mut entries = self.entries.write().await;
+            let idx_to_drop = entries
+                .keys()
+                .filter(|key| **key <= last_dropped_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            for idx in &idx_to_drop {
+                let _ = entries.remove(idx);
+            }
+            (idx_to_drop, entries.is_empty())
+        };
 
         let drop_count = idx_to_drop.len();
         let to_drop = idx_to_drop
@@ -585,13 +615,14 @@ impl OplogArchive for BlobOplogArchive {
                 )
             });
 
-        for idx in idx_to_drop {
-            let _ = entries.remove(&idx);
-        }
-
-        if entries.is_empty() {
-            let mut created = self.created.write().await;
-            if *created {
+        if is_empty {
+            let was_created = {
+                let mut created = self.created.write().await;
+                let was_created = *created;
+                *created = false;
+                was_created
+            };
+            if was_created {
                 self.blob_storage
                 .with("blob_oplog", "drop_prefix")
                 .delete_dir(BlobStorageNamespace::CompressedOplog {
@@ -606,7 +637,6 @@ impl OplogArchive for BlobOplogArchive {
                         self.owned_agent_id.agent_id
                     )
                 });
-                *created = false;
             }
         }
 

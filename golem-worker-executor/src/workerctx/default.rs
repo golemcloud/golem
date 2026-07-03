@@ -479,10 +479,10 @@ impl ResourceLimiterAsync for Context {
         let delta = (desired as u64).saturating_sub(current_known);
 
         if delta > 0 {
-            // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
+            // Request more permits from the host on a detached task; if that fails
+            // the worker gets restarted and reacquires memory on startup.
             self.durable_ctx
                 .increase_memory(delta)
-                .await
                 .map_err(wasmtime::Error::from_anyhow)?;
             record_allocated_memory(desired);
         }

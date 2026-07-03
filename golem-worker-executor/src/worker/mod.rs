@@ -2078,13 +2078,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .commit_oplog_and_update_state_internal(commit_level)
             .await;
         if changed {
-            let instance_guard = self.instance.lock().await;
-            if let WorkerInstance::Running(running) = &*instance_guard {
-                running
-                    .sender
-                    .send(WorkerCommand::InternalStatusChanged)
-                    .unwrap();
-            };
+            // The notification is sent from a detached tokio task so that this method never
+            // waits on (or becomes a queued owner of) the instance lock. This method runs inside
+            // durable-call host futures polled by wasmtime's store event loop; if such a future
+            // queued on the instance lock, host code blocked on a store-keeping wasm fiber (e.g.
+            // the `memory.grow` limiter, which locks the instance in `Worker::increase_memory`)
+            // could deadlock the store by waiting behind it, because the event loop cannot poll a
+            // queued lock owner while the fiber keeps the store.
+            let instance = self.instance.clone();
+            tokio::spawn(async move {
+                let instance_guard = instance.lock().await;
+                if let WorkerInstance::Running(running) = &*instance_guard {
+                    let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
+                }
+            });
         }
         result
     }

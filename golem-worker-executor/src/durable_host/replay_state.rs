@@ -100,6 +100,14 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
+    /// Hashes of log entries persisted since the last read non-hint oplog entry.
+    ///
+    /// Deliberately *not* part of [`CursorState`]: `seen_log`/`remove_seen_log` are called from
+    /// the stdio host-call path, which runs on store-keeping wasm fibers, and must never queue on
+    /// the cursor lock — a transaction holds that lock across oplog IO from store-polled futures,
+    /// which can deadlock the store (wasmtime#11869/#11870). This std mutex is only ever held for
+    /// synchronous set operations, never across an `await`.
+    log_hashes: std::sync::Mutex<HashSet<(u64, u64)>>,
     /// Fired (via `notify_waiters`) after a transaction that advanced the cursor, registered a
     /// resolver awaiter, or switched to live commits and releases [`Self::state`]. A durable call
     /// suspended in [`ReplayState::await_resolution_outcome`] — because its `End`/`Cancelled` is not
@@ -109,10 +117,10 @@ struct ReplayCursor {
     progress: Notify,
 }
 
-/// The published, lock-free-readable cursor position. Every field is written only while
-/// [`ReplayCursor::state`] is held (through a [`CursorTx`], or — for `has_seen_logs` — while the
-/// same lock is held in [`ReplayState::remove_seen_log`]), so a lock-free reader never observes a
-/// partially-applied advance.
+/// The published, lock-free-readable cursor position. The index fields are written only while
+/// [`ReplayCursor::state`] is held (through a [`CursorTx`]), so a lock-free reader never observes
+/// a partially-applied advance; `has_seen_logs` is written only while [`ReplayCursor::log_hashes`]
+/// is held.
 #[derive(Debug)]
 struct PublishedPosition {
     /// The oplog index of the last replayed entry.
@@ -130,8 +138,6 @@ struct PublishedPosition {
 struct CursorState {
     skipped_regions: DeletedRegions,
     next_skipped_region: Option<OplogRegion>,
-    /// Hashes of log entries persisted since the last read non-hint oplog entry.
-    log_hashes: HashSet<(u64, u64)>,
     /// Updates that were encountered while reading the oplog.
     pending_replay_events: Vec<ReplayEvent>,
     /// `Start` entries for `GolemApiFork` whose matching `End` has not yet been replayed. When the
@@ -149,6 +155,15 @@ struct CursorState {
 }
 
 impl ReplayCursor {
+    /// Replaces the seen-log set and updates the `has_seen_logs` fast-path flag.
+    fn set_log_hashes(&self, logs: HashSet<(u64, u64)>) {
+        let has_logs = !logs.is_empty();
+        *self.log_hashes.lock().unwrap() = logs;
+        self.position
+            .has_seen_logs
+            .store(has_logs, Ordering::Relaxed);
+    }
+
     /// Begins a cursor-advance transaction by acquiring [`Self::state`]. The returned [`CursorTx`]
     /// is the sole gateway to advance the cursor or mutate the guarded state.
     async fn tx(&self) -> CursorTx<'_> {
@@ -460,11 +475,7 @@ impl CursorTx<'_> {
             }
         }
 
-        self.cursor
-            .position
-            .has_seen_logs
-            .store(!logs.is_empty(), Ordering::Relaxed);
-        self.st.log_hashes = logs;
+        self.cursor.set_log_hashes(logs);
         Ok(())
     }
 
@@ -842,7 +853,7 @@ impl CursorTx<'_> {
             .skipped_regions
             .find_next_deleted_region(OplogIndex::NONE);
         self.st.next_skipped_region = next;
-        self.st.log_hashes.clear();
+        self.cursor.set_log_hashes(HashSet::new());
         self.st.pending_replay_events.clear();
         self.cursor
             .position
@@ -877,11 +888,11 @@ impl ReplayState {
             state: Mutex::new(CursorState {
                 skipped_regions,
                 next_skipped_region,
-                log_hashes: HashSet::new(),
                 pending_replay_events: Vec::new(),
                 pending_fork_starts: HashSet::new(),
                 concurrent_resolver: ConcurrentReplayResolver::default(),
             }),
+            log_hashes: std::sync::Mutex::new(HashSet::new()),
             progress: Notify::new(),
         };
         {
@@ -1005,8 +1016,7 @@ impl ReplayState {
     pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
         if self.cursor.position.has_seen_logs.load(Ordering::Relaxed) {
             let hash = ReplayCursor::hash_log_entry(level, context, message);
-            let st = self.cursor.state.lock().await;
-            st.log_hashes.contains(&hash)
+            self.cursor.log_hashes.lock().unwrap().contains(&hash)
         } else {
             false
         }
@@ -1015,14 +1025,12 @@ impl ReplayState {
     /// Removes a seen log from the set. If the set becomes empty, `seen_log` becomes a cheap operation
     pub async fn remove_seen_log(&self, level: LogLevel, context: &str, message: &str) {
         let hash = ReplayCursor::hash_log_entry(level, context, message);
-        let mut st = self.cursor.state.lock().await;
-        st.log_hashes.remove(&hash);
-        // Written while the cursor lock is held, preserving the invariant that `has_seen_logs` is
-        // only ever stored under `state`.
+        let log_hashes = &mut *self.cursor.log_hashes.lock().unwrap();
+        log_hashes.remove(&hash);
         self.cursor
             .position
             .has_seen_logs
-            .store(!st.log_hashes.is_empty(), Ordering::Relaxed);
+            .store(!log_hashes.is_empty(), Ordering::Relaxed);
     }
 
     pub async fn lookup_oplog_entry(

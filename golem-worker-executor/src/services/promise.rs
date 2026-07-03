@@ -110,7 +110,7 @@ pub trait PromiseService: Send + Sync {
     async fn cleanup(&self);
 }
 
-pub struct LazyPromiseService(RwLock<Option<Box<dyn PromiseService>>>);
+pub struct LazyPromiseService(RwLock<Option<Arc<dyn PromiseService>>>);
 
 impl Default for LazyPromiseService {
     fn default() -> Self {
@@ -124,20 +124,28 @@ impl LazyPromiseService {
     }
 
     pub async fn set_implementation(&self, value: impl PromiseService + 'static) {
-        let _ = self.0.write().await.insert(Box::new(value));
+        let _ = self.0.write().await.insert(Arc::new(value));
+    }
+
+    /// Clones the implementation out so that the lock is never held across the delegated await:
+    /// promise host calls run in wasmtime store contexts where holding an async lock across an
+    /// await can deadlock the store (wasmtime#11869/#11870).
+    async fn implementation(&self) -> Arc<dyn PromiseService> {
+        self.0.read().await.as_ref().unwrap().clone()
     }
 }
 
 #[async_trait]
 impl PromiseService for LazyPromiseService {
     async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
-        let lock = self.0.read().await;
-        lock.as_ref().unwrap().create(agent_id, oplog_idx).await
+        self.implementation()
+            .await
+            .create(agent_id, oplog_idx)
+            .await
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
-        let lock = self.0.read().await;
-        lock.as_ref().unwrap().poll(promise_id).await
+        self.implementation().await.poll(promise_id).await
     }
 
     async fn complete(
@@ -148,8 +156,7 @@ impl PromiseService for LazyPromiseService {
         crate::metrics::promises::record_promise_data_size(data.len());
         let start = std::time::Instant::now();
 
-        let lock = self.0.read().await;
-        let result = lock.as_ref().unwrap().complete(promise_id, data).await;
+        let result = self.implementation().await.complete(promise_id, data).await;
 
         let outcome = match &result {
             Ok(true) => "fulfilled",
@@ -162,8 +169,7 @@ impl PromiseService for LazyPromiseService {
     }
 
     async fn cleanup(&self) {
-        let lock = self.0.read().await;
-        lock.as_ref().unwrap().cleanup().await
+        self.implementation().await.cleanup().await
     }
 }
 

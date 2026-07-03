@@ -47,7 +47,6 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tracing::{error, warn};
 
 async fn retry_storage_op<T, F, Fut>(
@@ -591,20 +590,106 @@ impl OplogConstructor for CreateOplogConstructor {
     }
 }
 
+/// The primary oplog behind an actor boundary.
+///
+/// A dedicated tokio task (the actor) exclusively owns [`PrimaryOplogState`]; every `Oplog`
+/// method sends an [`OplogJob`] over an unbounded channel and awaits the job's oneshot reply.
+/// There is deliberately **no shared lock** between callers.
+///
+/// This shape is required for deadlock freedom, not just style. `Oplog` methods are awaited from
+/// two kinds of callers that must never block each other through shared ownership:
+///
+/// * futures polled by wasmtime's store event loop (concurrent p3 durable host calls), and
+/// * host code running on wasm fibers that suspend while *keeping the store* (async libcalls such
+///   as the `memory.grow` resource limiter, and non-concurrent `wrap_async`-style host functions
+///   like the p2 stdio streams).
+///
+/// While such a fiber is suspended, the event loop cannot poll any store-polled future
+/// (wasmtime's documented store-blocking limitation, wasmtime#11869/#11870). With a shared lock —
+/// even a lock whose critical sections are purely synchronous — a store-polled future that is
+/// queued on the lock becomes its next owner on FIFO handoff and then cannot run until the event
+/// loop polls it, so a fiber queued behind it deadlocks the whole store. With the actor, callers
+/// only await oneshot completions, which never make an unpolled caller the owner of anything, so
+/// fiber-side waits always make progress as long as the actor task (polled directly by tokio)
+/// does.
+///
+/// The actor must therefore never await anything that is produced by a store event loop; it only
+/// performs storage I/O.
+///
+/// ORDERING (Start determinism): `add_start_with_reserved_raw_payload` relies on jobs being
+/// processed in the order they were enqueued. `mpsc::UnboundedSender::send` is synchronous, and
+/// callers enqueue as their first non-awaiting step, so enqueue order equals the order in which
+/// concurrent durable calls initiated their operation — the same guarantee the previous
+/// FIFO-fair mutex provided via `lock()` acquisition order.
 struct PrimaryOplog {
-    /// MUST stay a FIFO-fair async mutex (`tokio::sync::Mutex`).
-    /// `add_start_with_reserved_raw_payload` acquires this lock *before* assigning the `Start`
-    /// index, so deterministic replay ordering depends on tasks acquiring the lock in the same
-    /// order they called `lock()`. `tokio::sync::Mutex` documents that guarantee; `async_lock::Mutex`
-    /// does not (it bargs via a fast `try_lock` path and only enforces eventual fairness), so it
-    /// must not be used here.
-    state: Arc<Mutex<PrimaryOplogState>>,
+    jobs: tokio::sync::mpsc::UnboundedSender<OplogJob>,
+    actor: tokio::task::JoinHandle<()>,
     key: String,
     close: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
+/// A request processed by the [`PrimaryOplog`] actor task, which exclusively owns the oplog
+/// state. Mutating jobs that grow the buffer past the commit threshold run the resulting commit
+/// inside the actor before replying, preserving the pre-actor behavior where `add` blocked the
+/// caller on a threshold-triggered commit.
+enum OplogJob {
+    Add {
+        entry: OplogEntry,
+        done: tokio::sync::oneshot::Sender<OplogIndex>,
+    },
+    AddPair {
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    },
+    AddStart {
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+    },
+    Commit {
+        level: CommitLevel,
+        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
+    },
+    DropPrefix {
+        last_dropped_id: OplogIndex,
+        done: tokio::sync::oneshot::Sender<u64>,
+    },
+    CurrentIndex {
+        done: tokio::sync::oneshot::Sender<OplogIndex>,
+    },
+    LastAddedNonHintEntry {
+        done: tokio::sync::oneshot::Sender<Option<OplogIndex>>,
+    },
+    /// Snapshots the state needed for reads and replica waits; the caller performs the storage
+    /// I/O itself, off the actor, so large reads do not head-of-line block writes.
+    Reader {
+        done: tokio::sync::oneshot::Sender<OplogReader>,
+    },
+    /// Snapshots the state needed for payload blob uploads/downloads.
+    BlobContext {
+        done: tokio::sync::oneshot::Sender<OplogBlobContext>,
+    },
+    SwitchPersistenceLevel {
+        level: PersistenceLevel,
+        done: tokio::sync::oneshot::Sender<()>,
+    },
+}
+
+/// Snapshot of the state needed to upload/download oplog payload blobs outside the actor.
+struct OplogBlobContext {
+    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+    owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
+    account_id: AccountId,
+    max_payload_size: usize,
+}
+
 impl Drop for PrimaryOplog {
     fn drop(&mut self) {
+        // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
+        // job reply anymore and aborting the actor cannot lose an observed operation.
+        self.actor.abort();
         if let Some(close) = self.close.take() {
             close();
         }
@@ -628,28 +713,301 @@ impl PrimaryOplog {
         account_id: AccountId,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
+        let mut state = PrimaryOplogState {
+            indexed_storage,
+            blob_storage,
+            replicas,
+            max_operations_before_commit,
+            max_operations_before_commit_in_persist_nothing,
+            max_payload_size,
+            retry_config,
+            key: key.clone(),
+            buffer: VecDeque::new(),
+            last_committed_idx: last_oplog_idx,
+            last_oplog_idx,
+            owned_agent_id,
+            agent_mode,
+            account_id,
+            last_added_non_hint_entry: None,
+            persistence_level: PersistenceLevel::Smart,
+            pending_uploads: Vec::new(),
+        };
+
+        let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<OplogJob>();
+        let actor = tokio::spawn(async move {
+            while let Some(job) = job_rx.recv().await {
+                match job {
+                    OplogJob::Add { entry, done } => {
+                        record_oplog_call("add");
+                        let idx = state.push(entry);
+                        if state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send(idx);
+                    }
+                    OplogJob::AddPair {
+                        start,
+                        make_second,
+                        done,
+                    } => {
+                        record_oplog_call("add_pair");
+                        let first_idx = state.push(start);
+                        let second = make_second(first_idx);
+                        let second_idx = state.push(second);
+                        if state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send((first_idx, second_idx));
+                    }
+                    OplogJob::AddStart {
+                        serialized_request,
+                        build_start,
+                        done,
+                    } => {
+                        record_oplog_call("add_start_with_reserved_raw_payload");
+                        // ORDERING (Start determinism) — CRITICAL SECTION: reserving the payload,
+                        // building the `Start`, and assigning its index happen as one non-yielding
+                        // step here on the actor, so a concurrently enqueued writer cannot
+                        // interleave its own `Start` and reorder the deterministic replay
+                        // sequence. The reservation only *starts* the (possibly large) blob
+                        // upload; it is not awaited here. Durability of the blob before any
+                        // referencing entry is committed is enforced by the commit barrier in
+                        // `append`.
+                        //
+                        // The no-`.await` window is enforced at compile time by the `!Send`
+                        // `guard`: this actor future must stay `Send` for `tokio::spawn`, so a
+                        // refactor holding the guard across an `.await` is rejected rather than
+                        // silently breaking ordering. Do not move `drop(guard)` before `push`.
+                        let result = {
+                            let ReservedPayload {
+                                raw,
+                                pending,
+                                guard,
+                            } = state.reserve_raw_payload(serialized_request);
+                            match build_start(raw) {
+                                Ok(entry) => {
+                                    let index = state.push(entry.clone());
+                                    drop(guard);
+                                    Ok(OrderedOplogStart {
+                                        index,
+                                        entry,
+                                        pending_upload: pending,
+                                    })
+                                }
+                                Err(err) => Err(err),
+                            }
+                        };
+                        if result.is_ok() && state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send(result);
+                    }
+                    OplogJob::Commit { level, done } => {
+                        let result = state.commit(level).await;
+                        let _ = done.send(result);
+                    }
+                    OplogJob::DropPrefix {
+                        last_dropped_id,
+                        done,
+                    } => {
+                        let before = state.reader().length().await;
+                        state.drop_prefix(last_dropped_id).await;
+                        let remaining = state.reader().length().await;
+                        if remaining == 0 {
+                            state.delete().await;
+                        }
+                        let dropped = before - remaining;
+                        if dropped > 0 {
+                            let account_id = state.account_id.to_string();
+                            let environment_id = state.owned_agent_id.environment_id().to_string();
+                            record_storage_objects_deleted(
+                                STORAGE_TYPE_OPLOG,
+                                &account_id,
+                                &environment_id,
+                                dropped,
+                            );
+                        }
+                        let _ = done.send(dropped);
+                    }
+                    OplogJob::CurrentIndex { done } => {
+                        let _ = done.send(state.last_oplog_idx);
+                    }
+                    OplogJob::LastAddedNonHintEntry { done } => {
+                        let _ = done.send(state.last_added_non_hint_entry);
+                    }
+                    OplogJob::Reader { done } => {
+                        let _ = done.send(state.reader());
+                    }
+                    OplogJob::BlobContext { done } => {
+                        let _ = done.send(OplogBlobContext {
+                            blob_storage: state.blob_storage.clone(),
+                            owned_agent_id: state.owned_agent_id.clone(),
+                            agent_mode: state.agent_mode,
+                            account_id: state.account_id,
+                            max_payload_size: state.max_payload_size,
+                        });
+                    }
+                    OplogJob::SwitchPersistenceLevel { level, done } => {
+                        record_oplog_call("switch_persistence_level");
+                        state.switch_persistence_level(level);
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+
         Self {
-            state: Arc::new(Mutex::new(PrimaryOplogState {
-                indexed_storage,
-                blob_storage,
-                replicas,
-                max_operations_before_commit,
-                max_operations_before_commit_in_persist_nothing,
-                max_payload_size,
-                retry_config,
-                key: key.clone(),
-                buffer: VecDeque::new(),
-                last_committed_idx: last_oplog_idx,
-                last_oplog_idx,
-                owned_agent_id,
-                agent_mode,
-                account_id,
-                last_added_non_hint_entry: None,
-                persistence_level: PersistenceLevel::Smart,
-                pending_uploads: Vec::new(),
-            })),
+            jobs,
+            actor,
             key,
             close: Some(close),
+        }
+    }
+
+    /// Sends a job to the actor and waits for its reply.
+    ///
+    /// Panics if the actor task is gone: the actor is only aborted from `Drop` (when no caller
+    /// can be in flight anymore), so a missing reply means the actor itself panicked and the
+    /// oplog's state is no longer trustworthy.
+    async fn run_job<R>(
+        &self,
+        make_job: impl FnOnce(tokio::sync::oneshot::Sender<R>) -> OplogJob,
+    ) -> R {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(make_job(done)).is_err() {
+            panic!("Oplog actor for {} terminated unexpectedly", self.key);
+        }
+        match done_rx.await {
+            Ok(result) => result,
+            Err(_) => panic!(
+                "Oplog actor for {} dropped a request without replying",
+                self.key
+            ),
+        }
+    }
+}
+
+/// A snapshot of [`PrimaryOplogState`] sufficient to serve reads. Reads run on this snapshot
+/// after the state lock has been released, so read I/O never holds the lock (see the
+/// lock-discipline note on [`PrimaryOplog::state`]). The buffer snapshot keeps `read_many`'s
+/// visibility of not-yet-committed entries.
+struct OplogReader {
+    indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+    retry_config: RetryConfig,
+    key: String,
+    owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
+    last_committed_idx: OplogIndex,
+    buffer: VecDeque<OplogEntry>,
+    replicas: u8,
+}
+
+impl OplogReader {
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        record_oplog_call("read");
+
+        let entries: Vec<(u64, OplogEntry)> = {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
+            let key = self.key.clone();
+            let idx: u64 = oplog_index.into();
+            retry_storage_op(&self.retry_config, "read", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                    agent_mode,
+                };
+                let key = key.clone();
+                async move {
+                    is.with_entity("oplog", "read", "entry")
+                        .read(ns, &key, idx, idx)
+                        .await
+                }
+            })
+            .await
+        };
+
+        entries
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Missing oplog entry {oplog_index} for {} in indexed storage",
+                    self.key
+                )
+            })
+            .1
+    }
+
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        record_oplog_call("read_many");
+
+        let last_idx = oplog_index.range_end(n);
+        let mut result: BTreeMap<OplogIndex, OplogEntry> = {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
+            let key = self.key.clone();
+            let start: u64 = oplog_index.into();
+            let end: u64 = last_idx.into();
+            retry_storage_op(&self.retry_config, "read_many", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                    agent_mode,
+                };
+                let key = key.clone();
+                async move {
+                    is.with_entity("oplog", "read", "entry")
+                        .read(ns, &key, start, end)
+                        .await
+                }
+            })
+            .await
+            .into_iter()
+            .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
+            .collect()
+        };
+
+        if last_idx < self.last_committed_idx {
+            // The whole range is already committed, no further action needed
+            result
+        } else {
+            // There can be some uncommitted entries in the buffer
+            let uncommitted_count = last_idx.distance_from(self.last_committed_idx);
+            let buffered_to_take =
+                min(max(0, uncommitted_count), self.buffer.len() as i64) as usize;
+
+            let mut current = self.last_committed_idx;
+            for idx in 0..buffered_to_take {
+                current = current.next();
+                let entry = self.buffer[idx].clone();
+                result.insert(current, entry);
+            }
+
+            result
+        }
+    }
+
+    async fn length(&self) -> u64 {
+        record_oplog_call("length");
+
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
+            let key = self.key.clone();
+            retry_storage_op(&self.retry_config, "length", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                    agent_mode,
+                };
+                let key = key.clone();
+                async move { is.with("oplog", "length").length(ns, &key).await }
+            })
+            .await
         }
     }
 }
@@ -841,7 +1199,25 @@ impl PrimaryOplogState {
         self.last_oplog_idx
     }
 
-    async fn maybe_commit(&mut self) {
+    /// Snapshots everything needed to serve reads without holding the state lock across storage
+    /// I/O (see the lock-discipline note on [`PrimaryOplog::state`]).
+    fn reader(&self) -> OplogReader {
+        OplogReader {
+            indexed_storage: self.indexed_storage.clone(),
+            retry_config: self.retry_config.clone(),
+            key: self.key.clone(),
+            owned_agent_id: self.owned_agent_id.clone(),
+            agent_mode: self.agent_mode,
+            last_committed_idx: self.last_committed_idx,
+            buffer: self.buffer.clone(),
+            replicas: self.replicas,
+        }
+    }
+
+    /// Whether the buffer has grown past the commit threshold and a commit should be scheduled.
+    /// The commit itself always runs on the committer task; see the lock-discipline note on
+    /// [`PrimaryOplog::state`].
+    fn over_commit_threshold(&self) -> bool {
         let limit = match &self.persistence_level {
             PersistenceLevel::PersistNothing => {
                 self.max_operations_before_commit_in_persist_nothing
@@ -850,17 +1226,7 @@ impl PrimaryOplogState {
                 self.max_operations_before_commit
             }
         };
-        if self.buffer.len() > limit as usize {
-            self.commit(CommitLevel::Always).await;
-        }
-    }
-
-    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
-        record_oplog_call("add");
-
-        let idx = self.push(entry);
-        self.maybe_commit().await;
-        idx
+        self.buffer.len() > limit as usize
     }
 
     async fn commit(&mut self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -873,111 +1239,6 @@ impl PrimaryOplogState {
             self.append(entries).await
         } else {
             BTreeMap::new()
-        }
-    }
-
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
-        record_oplog_call("wait_for_replicas");
-
-        let replicas = replicas.min(self.replicas);
-        match self
-            .indexed_storage
-            .with("oplog", "wait_for_replicas")
-            .wait_for_replicas(replicas, timeout)
-            .await
-        {
-            Ok(n) => n == replicas,
-            Err(err) => {
-                error!("Failed to wait for replicas to sync indexed storage: {err}");
-                false
-            }
-        }
-    }
-
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        record_oplog_call("read");
-
-        let entries: Vec<(u64, OplogEntry)> = {
-            let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
-            let key = self.key.clone();
-            let idx: u64 = oplog_index.into();
-            retry_storage_op(&self.retry_config, "read", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move {
-                    is.with_entity("oplog", "read", "entry")
-                        .read(ns, &key, idx, idx)
-                        .await
-                }
-            })
-            .await
-        };
-
-        entries
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Missing oplog entry {oplog_index} for {} in indexed storage",
-                    self.key
-                )
-            })
-            .1
-    }
-
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        record_oplog_call("read_many");
-
-        let last_idx = oplog_index.range_end(n);
-        let mut result: BTreeMap<OplogIndex, OplogEntry> = {
-            let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
-            let key = self.key.clone();
-            let start: u64 = oplog_index.into();
-            let end: u64 = last_idx.into();
-            retry_storage_op(&self.retry_config, "read_many", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move {
-                    is.with_entity("oplog", "read", "entry")
-                        .read(ns, &key, start, end)
-                        .await
-                }
-            })
-            .await
-            .into_iter()
-            .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
-            .collect()
-        };
-
-        if last_idx < self.last_committed_idx {
-            // The whole range is already committed, no further action needed
-            result
-        } else {
-            // There can be some uncommitted entries in the buffer
-            let uncommitted_count = last_idx.distance_from(self.last_committed_idx);
-            let buffered_to_take =
-                min(max(0, uncommitted_count), self.buffer.len() as i64) as usize;
-
-            let mut current = self.last_committed_idx;
-            for idx in 0..buffered_to_take {
-                current = current.next();
-                let entry = self.buffer[idx].clone();
-                result.insert(current, entry);
-            }
-
-            result
         }
     }
 
@@ -1004,27 +1265,6 @@ impl PrimaryOplogState {
                 }
             })
             .await;
-        }
-    }
-
-    async fn length(&self) -> u64 {
-        record_oplog_call("length");
-
-        {
-            let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
-            let key = self.key.clone();
-            retry_storage_op(&self.retry_config, "length", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move { is.with("oplog", "length").length(ns, &key).await }
-            })
-            .await
         }
     }
 
@@ -1063,8 +1303,7 @@ impl Debug for PrimaryOplog {
 #[async_trait]
 impl Oplog for PrimaryOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        let mut state = self.state.lock().await;
-        state.add(entry).await
+        self.run_job(|done| OplogJob::Add { entry, done }).await
     }
 
     async fn add_pair(
@@ -1072,89 +1311,82 @@ impl Oplog for PrimaryOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
-        let mut state = self.state.lock().await;
-        let first_idx = state.push(start);
-        let second = make_second(first_idx);
-        let second_idx = state.push(second);
-        state.maybe_commit().await;
-        (first_idx, second_idx)
+        self.run_job(|done| OplogJob::AddPair {
+            start,
+            make_second,
+            done,
+        })
+        .await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
-        let state = self.state.lock().await;
-        let before = state.length().await;
-        state.drop_prefix(last_dropped_id).await;
-        let remaining = state.length().await;
-        if remaining == 0 {
-            state.delete().await;
-        }
-        let dropped = before - remaining;
-        if dropped > 0 {
-            let account_id = state.account_id.to_string();
-            let environment_id = state.owned_agent_id.environment_id().to_string();
-            record_storage_objects_deleted(
-                STORAGE_TYPE_OPLOG,
-                &account_id,
-                &environment_id,
-                dropped,
-            );
-        }
-        dropped
+        self.run_job(|done| OplogJob::DropPrefix {
+            last_dropped_id,
+            done,
+        })
+        .await
     }
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut state = self.state.lock().await;
-        state.commit(level).await
+        self.run_job(|done| OplogJob::Commit { level, done }).await
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
-        let state = self.state.lock().await;
-        state.last_oplog_idx
+        self.run_job(|done| OplogJob::CurrentIndex { done }).await
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
-        let state = self.state.lock().await;
-        state.last_added_non_hint_entry
+        self.run_job(|done| OplogJob::LastAddedNonHintEntry { done })
+            .await
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
-        let mut state = self.state.lock().await;
-        state.commit(CommitLevel::Always).await;
-        state.wait_for_replicas(replicas, timeout).await
+        record_oplog_call("wait_for_replicas");
+
+        self.run_job(|done| OplogJob::Commit {
+            level: CommitLevel::Always,
+            done,
+        })
+        .await;
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        let replicas = replicas.min(reader.replicas);
+        match reader
+            .indexed_storage
+            .with("oplog", "wait_for_replicas")
+            .wait_for_replicas(replicas, timeout)
+            .await
+        {
+            Ok(n) => n == replicas,
+            Err(err) => {
+                error!("Failed to wait for replicas to sync indexed storage: {err}");
+                false
+            }
+        }
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let state = self.state.lock().await;
-        state.read(oplog_index).await
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        reader.read(oplog_index).await
     }
 
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        let state = self.state.lock().await;
-        state.read_many(oplog_index, n).await
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        reader.read_many(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {
-        let state = self.state.lock().await;
-        state.length().await
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        reader.length().await
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
-        let (blob_storage, owned_agent_id, agent_mode, account_id, max_length) = {
-            let state = self.state.lock().await;
-            (
-                state.blob_storage.clone(),
-                state.owned_agent_id.clone(),
-                state.agent_mode,
-                state.account_id,
-                state.max_payload_size,
-            )
-        };
+        let ctx = self.run_job(|done| OplogJob::BlobContext { done }).await;
         let data_len = data.len() as u64;
         let result = PrimaryOplogService::upload_raw_payload(
-            blob_storage,
-            max_length,
-            &owned_agent_id,
-            agent_mode,
+            ctx.blob_storage,
+            ctx.max_payload_size,
+            &ctx.owned_agent_id,
+            ctx.agent_mode,
             data,
         )
         .await;
@@ -1162,8 +1394,8 @@ impl Oplog for PrimaryOplog {
             // Only count bytes that were actually uploaded externally
             record_storage_bytes_written(
                 STORAGE_TYPE_OPLOG,
-                &account_id.to_string(),
-                &owned_agent_id.environment_id().to_string(),
+                &ctx.account_id.to_string(),
+                &ctx.owned_agent_id.environment_id().to_string(),
                 data_len,
             );
         }
@@ -1175,18 +1407,11 @@ impl Oplog for PrimaryOplog {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        let (blob_storage, owned_agent_id, agent_mode) = {
-            let state = self.state.lock().await;
-            (
-                state.blob_storage.clone(),
-                state.owned_agent_id.clone(),
-                state.agent_mode,
-            )
-        };
+        let ctx = self.run_job(|done| OplogJob::BlobContext { done }).await;
         PrimaryOplogService::download_raw_payload(
-            blob_storage,
-            &owned_agent_id,
-            agent_mode,
+            ctx.blob_storage,
+            &ctx.owned_agent_id,
+            ctx.agent_mode,
             payload_id,
             md5_hash,
         )
@@ -1198,44 +1423,21 @@ impl Oplog for PrimaryOplog {
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
     ) -> Result<OrderedOplogStart, String> {
-        // ORDERING (Start determinism), part 1 — lock acquisition: `self.state` is a FIFO-fair
-        // `tokio::sync::Mutex`, so concurrent callers acquire it in the exact order they called
-        // `lock()`. Within a single component instance the host futures are polled on one thread and
-        // there is no `.await` between a subtask initiating its durable operation and this call, so
-        // "call order" equals "initiation order". FIFO acquisition therefore turns initiation order
-        // into `Start`-index order. A non-FIFO mutex (e.g. `async_lock::Mutex`) would let a
-        // later-initiated task barge ahead here and reorder the replay sequence.
-        let mut state = self.state.lock().await;
-        // ORDERING (Start determinism), part 2 — CRITICAL SECTION: from here until `push` assigns
-        // the index there must be NO `.await`. Reserving the payload, building the `Start`, and
-        // assigning its index happen as one non-yielding step under the held state lock, so a
-        // concurrent writer cannot interleave its own `Start` and reorder the deterministic replay
-        // sequence. The reservation only *starts* the (possibly large) blob upload; it is not
-        // awaited here. Durability of the blob before any referencing entry is committed is enforced
-        // by the commit barrier in `append`.
-        //
-        // The no-`.await` window is enforced at compile time by the `!Send` `guard`: holding it
-        // across an `.await` would make this `async_trait` (Send-bound) future fail to compile, so a
-        // future refactor that turns one of these synchronous steps into an awaited one is rejected
-        // rather than silently breaking ordering. Do not move `drop(guard)` before `push`.
-        let ReservedPayload {
-            raw,
-            pending,
-            guard,
-        } = state.reserve_raw_payload(serialized_request);
-        let entry = build_start(raw)?;
-        let index = state.push(entry.clone());
-        drop(guard);
-        state.maybe_commit().await;
-        Ok(OrderedOplogStart {
-            index,
-            entry,
-            pending_upload: pending,
+        // ORDERING (Start determinism): the job is enqueued synchronously here — there is no
+        // `.await` between a subtask initiating its durable operation and this send — and the
+        // actor assigns `Start` indices strictly in job order, so initiation order becomes
+        // `Start`-index order exactly as the ordering contract requires. See the ordering note on
+        // [`PrimaryOplog`].
+        self.run_job(|done| OplogJob::AddStart {
+            serialized_request,
+            build_start,
+            done,
         })
+        .await
     }
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        let mut state = self.state.lock().await;
-        state.switch_persistence_level(mode)
+        self.run_job(|done| OplogJob::SwitchPersistenceLevel { level: mode, done })
+            .await
     }
 }

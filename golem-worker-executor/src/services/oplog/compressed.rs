@@ -405,12 +405,17 @@ impl OplogArchive for CompressedOplogArchive {
             return 0;
         }
 
-        let mut cache = self.cache.write().await;
-        let mut total_bytes = 0u64;
-
-        for (idx, entry) in &chunk {
-            cache.insert(*idx, entry.clone());
+        // The cache lock must not be held across the storage writes below: `append` can be
+        // reached from host-call contexts (through ephemeral oplogs), and an async lock held
+        // across IO by a store-polled future can deadlock the store (wasmtime#11869/#11870).
+        {
+            let mut cache = self.cache.write().await;
+            for (idx, entry) in &chunk {
+                cache.insert(*idx, entry.clone());
+            }
         }
+
+        let mut total_bytes = 0u64;
 
         for sub_chunk in chunk.chunks(CompressedOplogArchiveService::MAX_CHUNK_SIZE) {
             let last_id = sub_chunk.last().unwrap().0;
