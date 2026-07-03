@@ -2921,6 +2921,65 @@ impl RustBridgeGenerator {
     }
 }
 
+// TODO: use published version when available
+enum GolemDependencySource {
+    Path(std::path::PathBuf),
+    GitMain,
+}
+
+impl GolemDependencySource {
+    fn dep_item(&self, crate_path: &str, features: &[&str]) -> anyhow::Result<Item> {
+        match self {
+            GolemDependencySource::Path(repo_root) => {
+                let dependency_path = repo_root.join(crate_path);
+                Ok(path_dep(fs::path_to_str(&dependency_path)?, features))
+            }
+            GolemDependencySource::GitMain => Ok(git_dep(
+                "https://github.com/golemcloud/golem",
+                "main",
+                features,
+            )),
+        }
+    }
+}
+
+fn add_features(entry: &mut InlineTable, features: &[&str]) {
+    if !features.is_empty() {
+        let mut feature_items = Array::default();
+        for feature in features {
+            feature_items.push(*feature);
+        }
+        entry.insert("default-features", Value::from(false));
+        entry.insert("features", Value::Array(feature_items));
+    }
+}
+
+fn dep(version: &str, features: &[&str]) -> Item {
+    if features.is_empty() {
+        return value(version);
+    }
+
+    let mut entry = InlineTable::new();
+    entry.insert("version", Value::from(version));
+    add_features(&mut entry, features);
+    Item::Value(Value::InlineTable(entry))
+}
+
+fn git_dep(url: &str, branch: &str, features: &[&str]) -> Item {
+    let mut entry = InlineTable::new();
+    entry.insert("git", Value::from(url));
+    entry.insert("branch", Value::from(branch));
+    add_features(&mut entry, features);
+    Item::Value(Value::InlineTable(entry))
+}
+
+fn path_dep(path: &str, features: &[&str]) -> Item {
+    let mut entry = InlineTable::new();
+    entry.insert("path", Value::from(path));
+    add_features(&mut entry, features);
+    Item::Value(Value::InlineTable(entry))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3916,63 +3975,4 @@ pub fn decode_text(
             config: vec![],
         }
     }
-}
-
-// TODO: use published version when available
-enum GolemDependencySource {
-    Path(std::path::PathBuf),
-    GitMain,
-}
-
-impl GolemDependencySource {
-    fn dep_item(&self, crate_path: &str, features: &[&str]) -> anyhow::Result<Item> {
-        match self {
-            GolemDependencySource::Path(repo_root) => {
-                let dependency_path = repo_root.join(crate_path);
-                Ok(path_dep(fs::path_to_str(&dependency_path)?, features))
-            }
-            GolemDependencySource::GitMain => Ok(git_dep(
-                "https://github.com/golemcloud/golem",
-                "main",
-                features,
-            )),
-        }
-    }
-}
-
-fn add_features(entry: &mut InlineTable, features: &[&str]) {
-    if !features.is_empty() {
-        let mut feature_items = Array::default();
-        for feature in features {
-            feature_items.push(*feature);
-        }
-        entry.insert("default-features", Value::from(false));
-        entry.insert("features", Value::Array(feature_items));
-    }
-}
-
-fn dep(version: &str, features: &[&str]) -> Item {
-    if features.is_empty() {
-        return value(version);
-    }
-
-    let mut entry = InlineTable::new();
-    entry.insert("version", Value::from(version));
-    add_features(&mut entry, features);
-    Item::Value(Value::InlineTable(entry))
-}
-
-fn git_dep(url: &str, branch: &str, features: &[&str]) -> Item {
-    let mut entry = InlineTable::new();
-    entry.insert("git", Value::from(url));
-    entry.insert("branch", Value::from(branch));
-    add_features(&mut entry, features);
-    Item::Value(Value::InlineTable(entry))
-}
-
-fn path_dep(path: &str, features: &[&str]) -> Item {
-    let mut entry = InlineTable::new();
-    entry.insert("path", Value::from(path));
-    add_features(&mut entry, features);
-    Item::Value(Value::InlineTable(entry))
 }

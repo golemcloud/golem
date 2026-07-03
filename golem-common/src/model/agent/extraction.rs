@@ -24,7 +24,9 @@ use golem_schema::schema::wit::{
     QuotaTokenHandleDropper, QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
 };
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
@@ -239,16 +241,17 @@ pub async fn extract_agent_type_schemas_with_streams(
     fail_on_missing_discover_method: bool,
     enable_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentTypeSchema>> {
-    Ok(extract_component_metadata_impl(
+    let metadata: Pin<
+        Box<dyn Future<Output = anyhow::Result<ExtractedComponentMetadata>> + Send + '_>,
+    > = Box::pin(extract_component_metadata_impl(
         wasm_path,
         stdout,
         stderr,
         fail_on_missing_discover_method,
         enable_fs_cache,
         false,
-    )
-    .await?
-    .agent_types)
+    ));
+    Ok(metadata.await?.agent_types)
 }
 
 /// Same as [`extract_agent_type_schemas_with_streams`], but inherits stdout and

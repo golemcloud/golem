@@ -258,87 +258,6 @@ impl TypedSchemaValue {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_r::test;
-
-    fn def(id: &str, name: Option<&str>) -> SchemaTypeDef {
-        SchemaTypeDef {
-            id: TypeId::new(id),
-            name: name.map(|n| n.to_string()),
-            body: SchemaType::bool(),
-        }
-    }
-
-    /// `GraphIndex::lookup` must agree with `SchemaGraph::lookup` for every id,
-    /// on both the linear (small) and indexed (wide) branches, including the
-    /// first-def-wins rule for duplicate ids.
-    fn assert_index_matches_linear(graph: &SchemaGraph) {
-        let index = GraphIndex::new(graph);
-        // Probe every present id plus a guaranteed-absent one.
-        let mut ids: Vec<TypeId> = graph.defs.iter().map(|d| d.id.clone()).collect();
-        ids.push(TypeId::new("definitely-absent-id"));
-        for id in &ids {
-            assert_eq!(
-                index.lookup(id),
-                graph.lookup(id),
-                "GraphIndex and SchemaGraph disagree on id {id:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn graph_index_matches_linear_small_with_duplicates() {
-        // 3 defs (<= threshold => linear branch), with a duplicate id whose
-        // first occurrence must win.
-        let graph = SchemaGraph {
-            defs: vec![
-                def("a", Some("first-a")),
-                def("b", Some("b")),
-                def("a", Some("second-a")),
-            ],
-            root: SchemaType::bool(),
-        };
-        let index = GraphIndex::new(&graph);
-        assert!(
-            index.index.is_none(),
-            "small graph must use linear fallback"
-        );
-        assert_eq!(
-            index
-                .lookup(&TypeId::new("a"))
-                .and_then(|d| d.name.as_deref()),
-            Some("first-a"),
-            "first definition must win on duplicate ids"
-        );
-        assert_index_matches_linear(&graph);
-    }
-
-    #[test]
-    fn graph_index_matches_linear_wide_with_duplicates() {
-        // > threshold defs => indexed branch; include a duplicate id.
-        let mut defs: Vec<SchemaTypeDef> = (0..20)
-            .map(|i| def(&format!("t{i:02}"), Some(&format!("name-{i:02}"))))
-            .collect();
-        defs.push(def("t05", Some("duplicate-of-t05")));
-        let graph = SchemaGraph {
-            defs,
-            root: SchemaType::bool(),
-        };
-        let index = GraphIndex::new(&graph);
-        assert!(index.index.is_some(), "wide graph must build an index");
-        assert_eq!(
-            index
-                .lookup(&TypeId::new("t05"))
-                .and_then(|d| d.name.as_deref()),
-            Some("name-05"),
-            "first definition must win on duplicate ids in the indexed branch"
-        );
-        assert_index_matches_linear(&graph);
-    }
-}
-
 /// Collect, in the source graph's definition order, the named definitions of
 /// `graph` that are transitively reachable from `root` through
 /// [`SchemaType::Ref`] indirections.
@@ -461,5 +380,86 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
         | SchemaType::QuotaToken { .. } => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn def(id: &str, name: Option<&str>) -> SchemaTypeDef {
+        SchemaTypeDef {
+            id: TypeId::new(id),
+            name: name.map(|n| n.to_string()),
+            body: SchemaType::bool(),
+        }
+    }
+
+    /// `GraphIndex::lookup` must agree with `SchemaGraph::lookup` for every id,
+    /// on both the linear (small) and indexed (wide) branches, including the
+    /// first-def-wins rule for duplicate ids.
+    fn assert_index_matches_linear(graph: &SchemaGraph) {
+        let index = GraphIndex::new(graph);
+        // Probe every present id plus a guaranteed-absent one.
+        let mut ids: Vec<TypeId> = graph.defs.iter().map(|d| d.id.clone()).collect();
+        ids.push(TypeId::new("definitely-absent-id"));
+        for id in &ids {
+            assert_eq!(
+                index.lookup(id),
+                graph.lookup(id),
+                "GraphIndex and SchemaGraph disagree on id {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn graph_index_matches_linear_small_with_duplicates() {
+        // 3 defs (<= threshold => linear branch), with a duplicate id whose
+        // first occurrence must win.
+        let graph = SchemaGraph {
+            defs: vec![
+                def("a", Some("first-a")),
+                def("b", Some("b")),
+                def("a", Some("second-a")),
+            ],
+            root: SchemaType::bool(),
+        };
+        let index = GraphIndex::new(&graph);
+        assert!(
+            index.index.is_none(),
+            "small graph must use linear fallback"
+        );
+        assert_eq!(
+            index
+                .lookup(&TypeId::new("a"))
+                .and_then(|d| d.name.as_deref()),
+            Some("first-a"),
+            "first definition must win on duplicate ids"
+        );
+        assert_index_matches_linear(&graph);
+    }
+
+    #[test]
+    fn graph_index_matches_linear_wide_with_duplicates() {
+        // > threshold defs => indexed branch; include a duplicate id.
+        let mut defs: Vec<SchemaTypeDef> = (0..20)
+            .map(|i| def(&format!("t{i:02}"), Some(&format!("name-{i:02}"))))
+            .collect();
+        defs.push(def("t05", Some("duplicate-of-t05")));
+        let graph = SchemaGraph {
+            defs,
+            root: SchemaType::bool(),
+        };
+        let index = GraphIndex::new(&graph);
+        assert!(index.index.is_some(), "wide graph must build an index");
+        assert_eq!(
+            index
+                .lookup(&TypeId::new("t05"))
+                .and_then(|d| d.name.as_deref()),
+            Some("name-05"),
+            "first definition must win on duplicate ids in the indexed branch"
+        );
+        assert_index_matches_linear(&graph);
     }
 }
