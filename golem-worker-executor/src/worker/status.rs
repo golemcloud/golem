@@ -744,15 +744,15 @@ fn calculate_pending_invocations(
 }
 
 fn calculate_pending_card_events(
-    initial: VecDeque<PendingCardEventRef>,
+    initial: Vec<PendingCardEventRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> VecDeque<PendingCardEventRef> {
+) -> Vec<PendingCardEventRef> {
     let mut result = initial;
 
     for (oplog_idx, entry) in entries {
         match entry {
             OplogEntry::CardEventQueued { timestamp, event } => {
-                result.push_back(PendingCardEventRef {
+                result.push(PendingCardEventRef {
                     timestamp: *timestamp,
                     oplog_index: *oplog_idx,
                     event: event.clone(),
