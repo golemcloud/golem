@@ -49,7 +49,9 @@ import { GuestQuotaTokenHandle } from '../../internal/schema-model/quotaTokenHan
 import { QUOTA_INTERNAL } from '../../internal/schema-model/quotaInternal';
 import type { Secret as RawSecret, QuotaToken as RawQuotaToken } from 'golem:core/types@2.0.0';
 import { FluentCodec } from './codec';
+import { buildResultCodec } from './result';
 import { StandardSchemaV1 } from './standardSchema';
+import { Result } from '../../host/result';
 
 /**
  * Hidden brand key carried by every marker schema. The value is a
@@ -78,7 +80,8 @@ export type MarkerKind =
   | 'multimodal'
   | 'unstructured-text'
   | 'unstructured-binary'
-  | 'secret';
+  | 'secret'
+  | 'result';
 
 /** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
 declare const MARKER_KIND: unique symbol;
@@ -587,6 +590,42 @@ function multimodalMarker(cases: MultimodalCase[]): MarkerSchema<MultimodalEleme
 }
 
 // ============================================================
+// Result (WIT `result<ok, err>`)
+// ============================================================
+
+/** Runtime guard: is `value` an SDK {@link Result} (`Result.ok`/`Result.err`)? */
+function isResultValue(value: unknown): value is Result<unknown, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'tag' in value &&
+    ((value as { tag: unknown }).tag === 'ok' || (value as { tag: unknown }).tag === 'err') &&
+    'val' in value
+  );
+}
+
+/**
+ * A `result<ok, err>` marker. Its `returns`-schema output type is `Result<Ok, Err>`
+ * (the SDK {@link Result}); the descriptor lowers it to a WIT `result-type` via
+ * {@link buildResultCodec}. The handler returns `Result.ok(v)` / `Result.err(e)`
+ * and the caller receives the decoded `Result<Ok, Err>` — the failure travels as a
+ * value inside the success payload (matching the decorator SDK), NOT the WIT
+ * `agent-error` channel.
+ */
+function resultMarker<Ok, Err>(
+  okSchema: StandardSchemaV1<Ok>,
+  errSchema: StandardSchemaV1<Err>,
+): MarkerSchema<Result<Ok, Err>, 'result'> {
+  const validate: Validator<Result<Ok, Err>> = (value) =>
+    isResultValue(value)
+      ? ok(value as Result<Ok, Err>)
+      : fail('Expected a Result value (Result.ok(...) / Result.err(...))');
+  const descriptor: MarkerDescriptor = (recurse) =>
+    buildResultCodec(recurse(okSchema), recurse(errSchema));
+  return marker<Result<Ok, Err>, 'result'>(validate, descriptor);
+}
+
+// ============================================================
 // Public `s` namespace
 // ============================================================
 
@@ -627,4 +666,8 @@ export const s = {
   multimodal: (cases: MultimodalCase[]) => multimodalMarker(cases),
   unstructuredText: (opts?: UnstructuredTextOpts) => unstructuredTextMarker(opts),
   unstructuredBinary: (opts?: UnstructuredBinaryOpts) => unstructuredBinaryMarker(opts),
+
+  // Typed method result: `returns: s.result(ok, err)` → WIT `result<ok, err>`.
+  result: <Ok, Err>(okSchema: StandardSchemaV1<Ok>, errSchema: StandardSchemaV1<Err>) =>
+    resultMarker(okSchema, errSchema),
 };

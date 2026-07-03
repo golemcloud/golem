@@ -328,7 +328,7 @@ type IsAny<V> = 0 extends 1 & V ? true : false;
 
 // Marker kinds that carry rich payloads and therefore CANNOT be bound from a
 // string path / query / header variable.
-type NonBindableKind = 'multimodal' | 'unstructured-text' | 'unstructured-binary';
+type NonBindableKind = 'multimodal' | 'unstructured-text' | 'unstructured-binary' | 'result';
 
 // A value is bindable unless it is a marker tagged with a non-bindable kind.
 // Plain schemas (Zod / Valibot / ArkType / Effect Schema) and scalar markers
