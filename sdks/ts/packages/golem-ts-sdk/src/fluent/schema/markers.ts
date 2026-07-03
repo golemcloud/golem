@@ -81,7 +81,8 @@ export type MarkerKind =
   | 'unstructured-text'
   | 'unstructured-binary'
   | 'secret'
-  | 'result';
+  | 'result'
+  | 'typed-array';
 
 /** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
 declare const MARKER_KIND: unique symbol;
@@ -335,22 +336,37 @@ function urlMarker(): MarkerSchema<string> {
   return marker(validate, descriptor);
 }
 
-function bytesMarker(): MarkerSchema<Uint8Array> {
-  const validate: Validator<Uint8Array> = (value) =>
-    value instanceof Uint8Array ? ok(value) : fail('Expected a Uint8Array for WIT list<u8>');
+/**
+ * A typed-array marker: a JS TypedArray (`Int32Array`, `Float64Array`, `Uint8Array`,
+ * …) carried as a WIT `list<primN>`. Generalises the former `bytesMarker`: the
+ * per-kind `spec` pins the concrete subclass (`ctor`), the element type node
+ * (`elemType`, e.g. `t.s32`) and the element value builder (`elemValue`, e.g.
+ * `v.s32`). Encode iterates the array → `v.list([...])`; decode reconstructs the
+ * CONCRETE subclass via `new ctor(len)`. The 64-bit kinds (`BigInt64Array` /
+ * `BigUint64Array`) carry `bigint` elements (`v.s64` / `v.u64`).
+ */
+function typedArrayMarker<TArr, E extends number | bigint>(spec: {
+  ctor: { new (length: number): TArr; readonly name: string };
+  elemType: () => SchemaType;
+  elemValue: (x: E) => SchemaValue;
+}): MarkerSchema<TArr, 'typed-array'> {
+  const validate: Validator<TArr> = (value) =>
+    value instanceof spec.ctor
+      ? ok(value)
+      : fail(`Expected a ${spec.ctor.name} for a typed-array WIT list`);
   const descriptor: MarkerDescriptor = () => ({
-    graph: { defs: new Map(), root: t.list(t.u8()) },
-    toValue: (value) => v.list(Array.from(value as Uint8Array).map((b) => v.u8(b))),
+    graph: { defs: new Map(), root: t.list(spec.elemType()) },
+    toValue: (value) => v.list(Array.from(value as Iterable<E>).map((x) => spec.elemValue(x))),
     fromValue: (sv) => {
       const elements = (sv as Extract<SchemaValue, { tag: 'list' }>).elements;
-      const out = new Uint8Array(elements.length);
+      const out = new spec.ctor(elements.length);
       elements.forEach((e, i) => {
-        out[i] = (e as { tag: 'u8'; value: number }).value;
+        (out as Record<number, E>)[i] = (e as unknown as { value: E }).value;
       });
       return out;
     },
   });
-  return marker(validate, descriptor);
+  return marker<TArr, 'typed-array'>(validate, descriptor);
 }
 
 // ============================================================
@@ -656,7 +672,20 @@ export const s = {
   datetime: () => datetimeMarker(),
   duration: () => durationMarker(),
   url: () => urlMarker(),
-  bytes: () => bytesMarker(),
+  bytes: () => typedArrayMarker({ ctor: Uint8Array, elemType: t.u8, elemValue: v.u8 }),
+
+  // Typed arrays: each JS TypedArray kind → WIT `list<primN>`, decoded to the
+  // concrete subclass. `s.bytes()` above is the `Uint8Array` alias.
+  int8Array: () => typedArrayMarker({ ctor: Int8Array, elemType: t.s8, elemValue: v.s8 }),
+  uint8Array: () => typedArrayMarker({ ctor: Uint8Array, elemType: t.u8, elemValue: v.u8 }),
+  int16Array: () => typedArrayMarker({ ctor: Int16Array, elemType: t.s16, elemValue: v.s16 }),
+  uint16Array: () => typedArrayMarker({ ctor: Uint16Array, elemType: t.u16, elemValue: v.u16 }),
+  int32Array: () => typedArrayMarker({ ctor: Int32Array, elemType: t.s32, elemValue: v.s32 }),
+  uint32Array: () => typedArrayMarker({ ctor: Uint32Array, elemType: t.u32, elemValue: v.u32 }),
+  float32Array: () => typedArrayMarker({ ctor: Float32Array, elemType: t.f32, elemValue: v.f32 }),
+  float64Array: () => typedArrayMarker({ ctor: Float64Array, elemType: t.f64, elemValue: v.f64 }),
+  bigInt64Array: () => typedArrayMarker({ ctor: BigInt64Array, elemType: t.s64, elemValue: v.s64 }),
+  bigUint64Array: () => typedArrayMarker({ ctor: BigUint64Array, elemType: t.u64, elemValue: v.u64 }),
 
   // Capability wrappers / nodes.
   secret: <Output>(inner: StandardSchemaV1<Output>) => secretMarker(inner),
