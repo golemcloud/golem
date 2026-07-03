@@ -162,6 +162,27 @@
         }
       }
     },
+    "componentDependencies": {
+      "description": "Guest bridge dependencies required by a component.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "description": "Agent type names whose guest bridge SDKs are required before this component is built.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Tool names whose guest bridge SDKs are required before this component is built.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "componentTemplate": {
       "description": "Component template definition",
       "type": "object",
@@ -179,11 +200,8 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "type": "array",
-          "description": "Component names that must be built and have guest bridge SDKs generated before this component is built.",
-          "items": {
-            "type": "string"
-          }
+          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
@@ -285,11 +303,8 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "type": "array",
-          "description": "Component names that must be built and have guest bridge SDKs generated before this component is built.",
-          "items": {
-            "type": "string"
-          }
+          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
@@ -427,11 +442,8 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "type": "array",
-          "description": "Component names that must be built and have guest bridge SDKs generated before this component is built.",
-          "items": {
-            "type": "string"
-          }
+          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
@@ -532,11 +544,8 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "type": "array",
-          "description": "Component names that must be built and have guest bridge SDKs generated before this component is built.",
-          "items": {
-            "type": "string"
-          }
+          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"

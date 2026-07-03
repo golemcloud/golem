@@ -87,6 +87,15 @@ impl<C: Serialize> Template<C> for app_raw::BuildCommand {
     }
 }
 
+impl<C: Serialize> Template<C> for app_raw::ComponentDependencies {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(app_raw::ComponentDependencies {
+            agents: self.agents.render(env, ctx)?,
+            tools: self.tools.render(env, ctx)?,
+        })
+    }
+}
+
 impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ExternalCommand {

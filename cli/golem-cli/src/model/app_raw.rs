@@ -249,7 +249,22 @@ impl Application {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentDependencies {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+}
+
+impl ComponentDependencies {
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty() && self.tools.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
@@ -258,8 +273,8 @@ pub struct ComponentTemplate {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -323,8 +338,8 @@ pub struct Component {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -386,8 +401,8 @@ pub struct ComponentPreset {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -783,7 +798,7 @@ pub struct ManifestInitialCardBound {
 pub struct ComponentLayerProperties {
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
-    pub dependencies: Vec<String>,
+    pub dependencies: ComponentDependencies,
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
@@ -1346,7 +1361,7 @@ mod test {
                     default: is_default.then_some(Marker),
                     component_wasm,
                     output_wasm,
-                    dependencies: vec![],
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
@@ -1409,7 +1424,7 @@ mod test {
                     templates,
                     component_wasm,
                     output_wasm,
-                    dependencies: vec![],
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
@@ -1476,7 +1491,7 @@ mod test {
                     dir,
                     component_wasm,
                     output_wasm,
-                    dependencies: vec![],
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,

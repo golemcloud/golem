@@ -277,6 +277,39 @@ pub enum AppBuildStep {
     GenBridge,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ToolName(String);
+
+impl ToolName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for ToolName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<&str> for ToolName {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            Err("Tool dependency name must not be empty".to_string())
+        } else {
+            Ok(Self(value.to_string()))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum ComponentDependency {
+    Agent(AgentTypeName),
+    Tool(ToolName),
+}
+
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
@@ -1473,13 +1506,26 @@ impl Layer for ComponentLayer {
                     .map_err(|err| format!("Failed to render outputWasm: {}", err))?,
             );
 
-            value.dependencies.apply_layer(
+            value.dependency_agents.apply_layer(
                 id,
                 selection,
                 (
                     VecMergeMode::Append,
                     properties
-                        .dependencies
+                        .dependency_agents
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render dependencies: {}", err))?,
+                ),
+            );
+
+            value.dependency_tools.apply_layer(
+                id,
+                selection,
+                (
+                    VecMergeMode::Append,
+                    properties
+                        .dependency_tools
                         .value()
                         .render_or_clone(template_env, template_ctx)
                         .map_err(|err| format!("Failed to render dependencies: {}", err))?,
@@ -1798,7 +1844,8 @@ pub struct ComponentLayerProperties {
 
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
-    pub dependencies: VecProperty<ComponentLayer, String>,
+    pub dependency_agents: VecProperty<ComponentLayer, String>,
+    pub dependency_tools: VecProperty<ComponentLayer, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
@@ -1823,7 +1870,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             applied_layers: vec![],
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
-            dependencies: value.dependencies.into(),
+            dependency_agents: value.dependencies.agents.into(),
+            dependency_tools: value.dependencies.tools.into(),
             build_merge_mode: value.build_merge_mode,
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
@@ -1844,7 +1892,8 @@ impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
-        self.dependencies.compact_trace();
+        self.dependency_agents.compact_trace();
+        self.dependency_tools.compact_trace();
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
@@ -2140,7 +2189,7 @@ pub struct ComponentProperties {
     pub component_dir: PathBuf, // Resolved canonical component path
     pub component_wasm: String,
     pub output_wasm: Option<String>,
-    pub dependencies: Vec<ComponentName>,
+    pub dependencies: Vec<ComponentDependency>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
@@ -2169,7 +2218,11 @@ impl ComponentProperties {
             component_dir,
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
             output_wasm: merged.output_wasm.value().clone(),
-            dependencies: Self::validate_dependencies(validation, merged.dependencies.value()),
+            dependencies: Self::validate_dependencies(
+                validation,
+                merged.dependency_agents.value(),
+                merged.dependency_tools.value(),
+            ),
             build: merged.build.value().clone(),
             custom_commands: merged
                 .custom_commands
@@ -2199,24 +2252,27 @@ impl ComponentProperties {
 
     fn validate_dependencies(
         validation: &mut ValidationBuilder,
-        dependencies: &[String],
-    ) -> Vec<ComponentName> {
-        dependencies
+        agent_dependencies: &[String],
+        tool_dependencies: &[String],
+    ) -> Vec<ComponentDependency> {
+        let agents = agent_dependencies
             .iter()
-            .map(
-                |dependency| match ComponentName::try_from(dependency.as_str()) {
-                    Ok(component_name) => component_name,
-                    Err(err) => {
-                        validation.add_error(format!(
-                            "Invalid component dependency name: {}. {}",
-                            dependency.log_color_error_highlight(),
-                            err
-                        ));
-                        ComponentName(dependency.clone())
-                    }
-                },
-            )
-            .collect()
+            .map(|dependency| ComponentDependency::Agent(AgentTypeName(dependency.clone())));
+        let tools = tool_dependencies.iter().map(|dependency| {
+            ComponentDependency::Tool(match ToolName::try_from(dependency.as_str()) {
+                Ok(tool_name) => tool_name,
+                Err(err) => {
+                    validation.add_error(format!(
+                        "Invalid tool dependency name: {}. {}",
+                        dependency.log_color_error_highlight(),
+                        err
+                    ));
+                    ToolName(dependency.clone())
+                }
+            })
+        });
+
+        agents.chain(tools).collect()
     }
 
     fn validate_and_normalize_env(
@@ -2398,10 +2454,10 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentLayer, ComponentLayerApplyContext,
-        ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
-        ComponentPresetName, ComponentPresetSelector, ComponentProperties,
-        PartitionedComponentPresets, TEMP_DIR, WithSource,
+        Application, ApplicationPreload, ComponentDependency, ComponentLayer,
+        ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
+        ComponentLayerPropertiesKind, ComponentPresetName, ComponentPresetSelector,
+        ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -3583,24 +3639,10 @@ mod app_builder {
 
         fn validate_component_dependencies(
             &self,
-            validation: &mut ValidationBuilder,
-            component_name: &ComponentName,
-            dependencies: &[ComponentName],
+            _validation: &mut ValidationBuilder,
+            _component_name: &ComponentName,
+            _dependencies: &[ComponentDependency],
         ) {
-            for dependency in dependencies {
-                if dependency == component_name {
-                    validation.add_error(format!(
-                        "Component {} cannot depend on itself",
-                        component_name.as_str().log_color_error_highlight(),
-                    ));
-                } else if !self.raw_component_names.contains(dependency.as_str()) {
-                    validation.add_error(format!(
-                        "Unknown component dependency: {}\n\n{}",
-                        dependency.as_str().log_color_error_highlight(),
-                        self.available_components(dependency.as_str())
-                    ));
-                }
-            }
         }
 
         fn validate_http_api_deployments(
@@ -3640,15 +3682,6 @@ mod app_builder {
             unknown: &str,
         ) -> String {
             self.available_options_help("profiles", "profile names", unknown, available_profiles)
-        }
-
-        fn available_components(&self, unknown: &str) -> String {
-            self.available_options_help(
-                "components",
-                "component names",
-                unknown,
-                self.raw_component_names.iter().map(|name| name.as_str()),
-            )
         }
 
         // TODO: atomic
@@ -3762,7 +3795,8 @@ mod test {
     };
     use crate::fs;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentPresetSelector, includes_from_yaml_file,
+        Application, ApplicationPreload, ComponentDependency, ComponentPresetSelector, ToolName,
+        includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use golem_common::model::agent::AgentTypeName;
@@ -4269,6 +4303,39 @@ mod test {
         assert_eq!(used_modes.len(), 1);
         assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn component_dependencies_are_agent_and_tool_guest_bridge_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - ShoppingCart
+                  tools:
+                    - grep
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+        let dependencies = &component.properties().dependencies;
+
+        assert_eq!(
+            dependencies,
+            &vec![
+                ComponentDependency::Agent(parse_agent_type_name("ShoppingCart")),
+                ComponentDependency::Tool(ToolName::try_from("grep").unwrap()),
+            ]
+        );
     }
 
     #[test]

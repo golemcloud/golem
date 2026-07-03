@@ -15,7 +15,9 @@ use crate::fs;
 use crate::log::log_error;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, logln};
 use crate::model::GuestLanguage;
-use crate::model::app::{BridgeSdkTarget, BridgeSdkTargetKind, CustomBridgeSdkTarget};
+use crate::model::app::{
+    BridgeSdkTarget, BridgeSdkTargetKind, ComponentDependency, CustomBridgeSdkTarget,
+};
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use anyhow::bail;
 use camino::Utf8PathBuf;
@@ -659,23 +661,18 @@ async fn collect_dependency_guest_bridge_targets(
             continue;
         }
 
-        let target_languages = dependency_guest_bridge_target_languages(
-            ctx,
-            component_name,
-            selection_scope_component_names,
-        );
-        if target_languages.is_empty() {
-            continue;
-        }
+        let metadata = agent_metadata_cache.get(ctx, component_name).await?;
+        for agent_type in &metadata.agent_types {
+            let dependency = ComponentDependency::Agent(agent_type.type_name.clone());
+            let target_languages = dependency_guest_bridge_target_languages(
+                ctx,
+                &dependency,
+                selection_scope_component_names,
+            );
 
-        let agent_types = agent_metadata_cache
-            .get_agent_types(ctx, component_name)
-            .await?;
-        for target_language in target_languages {
-            let explicit_matchers = explicit_guest_bridge_matchers(ctx, target_language);
-            let explicitly_matches_all = explicit_matchers.contains("*");
-
-            for agent_type in &agent_types {
+            for target_language in target_languages {
+                let explicit_matchers = explicit_guest_bridge_matchers(ctx, target_language);
+                let explicitly_matches_all = explicit_matchers.contains("*");
                 if explicitly_matches_all
                     || explicit_matchers.contains(component_name.as_str())
                     || explicit_matchers.contains(agent_type.type_name.as_str())
@@ -697,6 +694,34 @@ async fn collect_dependency_guest_bridge_targets(
                 });
             }
         }
+
+        for tool in &metadata.tools {
+            let Some(tool_name) = tool_name(tool) else {
+                continue;
+            };
+            let Ok(tool_dependency_name) = crate::model::app::ToolName::try_from(tool_name) else {
+                continue;
+            };
+            let dependency = ComponentDependency::Tool(tool_dependency_name);
+            let target_languages = dependency_guest_bridge_target_languages(
+                ctx,
+                &dependency,
+                selection_scope_component_names,
+            );
+
+            for target_language in target_languages {
+                let output_dir = ctx
+                    .application()
+                    .tool_bridge_sdk_dir(tool_name, target_language);
+                targets.push(BridgeSdkTarget {
+                    component_name: component_name.clone(),
+                    kind: BridgeSdkTargetKind::Tool(tool.clone()),
+                    target_language,
+                    bridge_mode: BridgeMode::Guest,
+                    output_dir,
+                });
+            }
+        }
     }
 
     Ok(targets)
@@ -704,7 +729,7 @@ async fn collect_dependency_guest_bridge_targets(
 
 fn dependency_guest_bridge_target_languages(
     ctx: &BuildContext<'_>,
-    source_component_name: &ComponentName,
+    dependency: &ComponentDependency,
     selection_scope_component_names: &[ComponentName],
 ) -> BTreeSet<GuestLanguage> {
     selection_scope_component_names
@@ -714,7 +739,7 @@ fn dependency_guest_bridge_target_languages(
                 .component(consumer_component_name)
                 .properties()
                 .dependencies
-                .contains(source_component_name)
+                .contains(dependency)
         })
         .filter_map(|consumer_component_name| {
             ctx.application()

@@ -740,7 +740,8 @@ async fn test_rust_tool_guest_bridge_e2e() {
                 dir: "consumer"
                 templates: rust
                 dependencies:
-                  - tool-bridge:provider
+                  tools:
+                    - echo
 
             bridge:
               rust:
