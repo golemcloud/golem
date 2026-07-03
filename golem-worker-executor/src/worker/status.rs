@@ -530,6 +530,7 @@ fn calculate_latest_worker_status(
             OplogEntry::CardInstalled { .. } => {}
             OplogEntry::CardInstallFailed { .. } => {}
             OplogEntry::CardRevoked { .. } => {}
+            OplogEntry::CardExpired { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }

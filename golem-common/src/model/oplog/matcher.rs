@@ -460,6 +460,11 @@ impl PublicOplogEntry {
                     || Self::string_match("card-install-failed", &[], query_path, query)
                     || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
             }
+            PublicOplogEntry::CardExpired(params) => {
+                Self::string_match("cardexpired", &[], query_path, query)
+                    || Self::string_match("card-expired", &[], query_path, query)
+                    || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
         }
     }
 

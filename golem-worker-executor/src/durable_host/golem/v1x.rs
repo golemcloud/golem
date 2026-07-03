@@ -666,10 +666,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .check_cards(vec![card_id])
                     .await?
                     .remove(&card_id);
-                let result = if let Some(crate::services::card::CardState::Live(card)) = card {
-                    ctx.apply_card_install(None, *card).await?
-                } else {
-                    Err(CardInstallFailure::NotFound)
+                let result = match card {
+                    Some(crate::services::card::CardState::Live(card)) => {
+                        ctx.apply_card_install(None, *card).await?
+                    }
+                    Some(crate::services::card::CardState::Revoked) => {
+                        Err(CardInstallFailure::CardRevoked)
+                    }
+                    Some(crate::services::card::CardState::Unknown) => {
+                        Err(CardInstallFailure::NotFound)
+                    }
+                    None => Err(CardInstallFailure::NotFound),
                 };
 
                 Ok::<_, anyhow::Error>(HostResponseGolemApiInstallCard { result })

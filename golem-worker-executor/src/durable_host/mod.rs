@@ -754,6 +754,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
         }
+
+        self.remove_expired_cards().await;
         Ok(())
     }
 
@@ -865,6 +867,48 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn remove_expired_cards(&mut self) {
+        let now = Utc::now();
+        let cards_to_expire = self
+            .state
+            .agent_wallet_cards
+            .iter()
+            .filter_map(|(card_id, card)| {
+                card.expires_at()
+                    .filter(|expires_at| *expires_at <= now)
+                    .map(|_| *card_id)
+            })
+            .collect::<Vec<_>>();
+
+        if cards_to_expire.is_empty() {
+            return;
+        }
+
+        for card_id in &cards_to_expire {
+            self.state.agent_wallet_cards.remove(card_id);
+        }
+
+        self.rederive_agent_effective_surface_from_wallet();
+
+        let wallet_card_ids = self
+            .state
+            .agent_wallet_cards
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        self.state
+            .card_interest_index
+            .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
+            .await;
+
+        for card_id in cards_to_expire {
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_expired(card_id))
+                .await;
+        }
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
@@ -2605,6 +2649,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::CardRevoked { card_id } => {
                     debug!(card_id = %card_id, "Applying replayed card revocation");
+                    self.apply_card_revoked(card_id, OplogIndex::NONE, false)
+                        .await?;
+                }
+                ReplayEvent::CardExpired { card_id } => {
+                    debug!(card_id = %card_id, "Applying replayed card expiry");
                     self.apply_card_revoked(card_id, OplogIndex::NONE, false)
                         .await?;
                 }

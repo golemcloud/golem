@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_service_base::clients::registry::RegistryService;
@@ -96,9 +97,18 @@ impl CardServiceDefault {
         for card in cards {
             let data = state.cards.entry(card.card_id()).or_default();
             if data.state != CardState::Revoked {
-                data.state = CardState::Live(Box::new(card));
+                data.state = if Self::card_is_expired(&card) {
+                    CardState::Revoked
+                } else {
+                    CardState::Live(Box::new(card))
+                };
             }
         }
+    }
+
+    fn card_is_expired(card: &StoredCard) -> bool {
+        card.expires_at()
+            .is_some_and(|expires_at| expires_at <= Utc::now())
     }
 
     fn cached_card_states(
@@ -114,7 +124,11 @@ impl CardServiceDefault {
                     cached_states.insert(*card_id, CardState::Revoked);
                 }
                 Some(CardState::Live(card)) => {
-                    cached_states.insert(*card_id, CardState::Live(card.clone()));
+                    if Self::card_is_expired(card) {
+                        cached_states.insert(*card_id, CardState::Revoked);
+                    } else {
+                        cached_states.insert(*card_id, CardState::Live(card.clone()));
+                    }
                 }
                 Some(CardState::Unknown) | None => {
                     if seen_unknown.insert(*card_id) {
@@ -135,6 +149,7 @@ impl CardServiceDefault {
     ) -> Vec<CardId> {
         let fetched_card_ids = fetched_cards
             .iter()
+            .filter(|card| !Self::card_is_expired(card))
             .map(StoredCard::card_id)
             .collect::<HashSet<_>>();
         let missing = requested_card_ids
@@ -150,7 +165,10 @@ impl CardServiceDefault {
     }
 
     fn card_state(state: &CardServiceState, card_id: CardId) -> Option<CardState> {
-        state.cards.get(&card_id).map(|data| data.state.clone())
+        state.cards.get(&card_id).map(|data| match &data.state {
+            CardState::Live(card) if Self::card_is_expired(card) => CardState::Revoked,
+            state => state.clone(),
+        })
     }
 }
 
@@ -213,6 +231,7 @@ impl CardService for CardServiceDefault {
                 // call, so a card is never reported live on stale evidence.
                 let fetched_live_ids = live_cards
                     .iter()
+                    .filter(|card| !Self::card_is_expired(card))
                     .map(StoredCard::card_id)
                     .collect::<HashSet<_>>();
                 let mut result = HashMap::new();
@@ -274,12 +293,14 @@ mod tests {
 
     struct BlockingRegistryService {
         existing_cards: Arc<RwLock<HashSet<CardId>>>,
+        stored_cards: Arc<RwLock<HashMap<CardId, StoredCard>>>,
         lookup_started: tokio::sync::mpsc::UnboundedSender<BlockedCardLookup>,
     }
 
     enum ExistingCards {
         All,
         Fixed(HashSet<CardId>),
+        Cards(HashMap<CardId, StoredCard>),
         Shared(Arc<RwLock<HashSet<CardId>>>),
         DelayedFirstShared {
             delayed_call_index: usize,
@@ -305,6 +326,18 @@ mod tests {
         fn with_existing(existing_cards: HashSet<CardId>, lookup_count: Arc<AtomicUsize>) -> Self {
             Self {
                 existing_cards: ExistingCards::Fixed(existing_cards),
+                lookup_count,
+            }
+        }
+
+        fn with_cards(cards: Vec<StoredCard>, lookup_count: Arc<AtomicUsize>) -> Self {
+            Self {
+                existing_cards: ExistingCards::Cards(
+                    cards
+                        .into_iter()
+                        .map(|card| (card.card_id(), card))
+                        .collect(),
+                ),
                 lookup_count,
             }
         }
@@ -358,6 +391,10 @@ mod tests {
                 ExistingCards::Fixed(existing_cards) => card_ids
                     .into_iter()
                     .filter(|card_id| existing_cards.contains(card_id))
+                    .collect(),
+                ExistingCards::Cards(cards) => card_ids
+                    .into_iter()
+                    .filter(|card_id| cards.contains_key(card_id))
                     .collect(),
                 ExistingCards::Shared(existing_cards) => {
                     let existing_cards = existing_cards.read().await;
@@ -441,6 +478,13 @@ mod tests {
                 release_first_lookup.notified().await;
 
                 return Ok(snapshot.into_iter().map(stored_card).collect());
+            }
+
+            if let ExistingCards::Cards(cards) = &self.existing_cards {
+                return Ok(card_ids
+                    .into_iter()
+                    .filter_map(|card_id| cards.get(&card_id).cloned())
+                    .collect());
             }
 
             Ok(self
@@ -645,11 +689,17 @@ mod tests {
         ) -> Result<Vec<StoredCard>, RegistryServiceError> {
             let snapshot = {
                 let existing_cards = self.existing_cards.read().await;
+                let stored_cards = self.stored_cards.read().await;
                 card_ids
                     .iter()
                     .copied()
                     .filter(|card_id| existing_cards.contains(card_id))
-                    .map(stored_card)
+                    .map(|card_id| {
+                        stored_cards
+                            .get(&card_id)
+                            .cloned()
+                            .unwrap_or_else(|| stored_card(card_id))
+                    })
                     .collect::<Vec<_>>()
             };
             let release = Arc::new(tokio::sync::Notify::new());
@@ -922,6 +972,27 @@ mod tests {
     }
 
     #[test]
+    async fn expired_card_is_not_reported_live() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let expired_card = StoredCard::Concrete(Card {
+            expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            ..match stored_card(card_id) {
+                StoredCard::Concrete(card) => card,
+                StoredCard::Polymorphic(_) => unreachable!(),
+            }
+        });
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_cards(
+            vec![expired_card],
+            lookup_count.clone(),
+        )));
+
+        let states = service.check_cards(vec![card_id]).await.unwrap();
+
+        assert_revoked(&states, card_id);
+    }
+
+    #[test]
     async fn check_cards_reuses_cached_live_card_data() {
         let lookup_count = Arc::new(AtomicUsize::new(0));
         let card_id = CardId::new();
@@ -1101,6 +1172,7 @@ mod tests {
         let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
         let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
             existing_cards: existing_cards.clone(),
+            stored_cards: Arc::new(RwLock::new(HashMap::new())),
             lookup_started,
         })));
 
@@ -1162,6 +1234,7 @@ mod tests {
         let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
         let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
             existing_cards: existing_cards.clone(),
+            stored_cards: Arc::new(RwLock::new(HashMap::new())),
             lookup_started,
         })));
 
@@ -1185,6 +1258,131 @@ mod tests {
         assert!(
             !matches!(states.get(&card_id), Some(CardState::Live(_))),
             "final fetch taken before invalidate_all was returned as live after invalidation: {states:?}"
+        );
+    }
+
+    #[test]
+    async fn exhausted_generation_retries_report_expired_fetched_card_as_revoked() {
+        let card_id = CardId::new();
+        let expired_card = StoredCard::Concrete(Card {
+            expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            ..match stored_card(card_id) {
+                StoredCard::Concrete(card) => card,
+                StoredCard::Polymorphic(_) => unreachable!(),
+            }
+        });
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([card_id])));
+        let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards,
+            stored_cards: Arc::new(RwLock::new(HashMap::from([(card_id, expired_card)]))),
+            lookup_started,
+        })));
+
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![card_id]).await.unwrap() }
+        });
+
+        for _ in 0..8 {
+            let blocked_lookup = expect_blocked_lookup(&mut lookup_started_rx, &[card_id]).await;
+            service.invalidate_all().await;
+            blocked_lookup.notify_one();
+        }
+
+        let states = lookup.await.unwrap();
+        assert_revoked(&states, card_id);
+    }
+
+    #[test]
+    async fn exhausted_generation_retries_do_not_return_expired_cached_live_card() {
+        let cached_card_id = CardId::new();
+        let fetched_card_id = CardId::new();
+        let expires_at = Utc::now() + chrono::Duration::milliseconds(300);
+        let cached_card = StoredCard::Concrete(Card {
+            expires_at: Some(expires_at),
+            ..match stored_card(cached_card_id) {
+                StoredCard::Concrete(card) => card,
+                StoredCard::Polymorphic(_) => unreachable!(),
+            }
+        });
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([
+            cached_card_id,
+            fetched_card_id,
+        ])));
+        let stored_cards = Arc::new(RwLock::new(HashMap::from([(
+            cached_card_id,
+            cached_card.clone(),
+        )])));
+        let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards: existing_cards.clone(),
+            stored_cards: stored_cards.clone(),
+            lookup_started,
+        })));
+
+        let precache = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+        });
+        expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
+            .await
+            .notify_one();
+        assert_live(&precache.await.unwrap(), cached_card_id);
+
+        let mixed_lookup = tokio::spawn({
+            let service = service.clone();
+            async move {
+                service
+                    .check_cards(vec![cached_card_id, fetched_card_id])
+                    .await
+                    .unwrap()
+            }
+        });
+
+        for _ in 0..7 {
+            let blocked_mixed_lookup =
+                expect_blocked_lookup(&mut lookup_started_rx, &[fetched_card_id]).await;
+
+            service.invalidate_all().await;
+
+            let repopulate_cached_card = tokio::spawn({
+                let service = service.clone();
+                async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+            });
+            expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
+                .await
+                .notify_one();
+            assert_live(&repopulate_cached_card.await.unwrap(), cached_card_id);
+
+            blocked_mixed_lookup.notify_one();
+        }
+
+        let final_blocked_mixed_lookup =
+            expect_blocked_lookup(&mut lookup_started_rx, &[fetched_card_id]).await;
+        service.invalidate_all().await;
+
+        let repopulate_cached_card = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+        });
+        expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
+            .await
+            .notify_one();
+        assert_live(&repopulate_cached_card.await.unwrap(), cached_card_id);
+
+        let sleep_for = expires_at
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .unwrap_or_default()
+            + std::time::Duration::from_millis(25);
+        tokio::time::sleep(sleep_for).await;
+        final_blocked_mixed_lookup.notify_one();
+
+        let states = mixed_lookup.await.unwrap();
+        assert!(
+            !matches!(states.get(&cached_card_id), Some(CardState::Live(_))),
+            "expired cached live card was returned as live from the exhausted generation retry fallback: {states:?}"
         );
     }
 }
