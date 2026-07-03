@@ -27,7 +27,9 @@ use golem_common::model::NamedRetryPolicy;
 use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
 };
-use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
+use golem_common::model::oplog::types::{
+    SerializableHttpErrorCode, SerializableHttpResponse, SerializableResponseHeaders,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, PersistenceLevel,
@@ -1554,62 +1556,72 @@ impl fmt::Display for HttpFailure {
 
 /// Classifies a WASI HTTP `ErrorCode` as transient or permanent for retry purposes.
 pub fn classify_http_error_code(code: &ErrorCode) -> HostFailureKind {
+    classify_serializable_http_error_code(&code.into())
+}
+
+/// ABI-independent classification of a WASI HTTP error code as transient or
+/// permanent for retry purposes. The P2 and P3 `ErrorCode` bindings are distinct
+/// generated types, so both paths convert to the shared
+/// [`SerializableHttpErrorCode`] (which mirrors the WIT variant one-to-one) and
+/// classify here, keeping the transient/permanent decision in a single place.
+pub fn classify_serializable_http_error_code(code: &SerializableHttpErrorCode) -> HostFailureKind {
     match code {
         // DNS errors — transient (may resolve on retry)
-        ErrorCode::DnsTimeout | ErrorCode::DnsError(_) => HostFailureKind::Transient,
+        SerializableHttpErrorCode::DnsTimeout | SerializableHttpErrorCode::DnsError(_) => {
+            HostFailureKind::Transient
+        }
 
         // Destination errors — transient (network routing may change)
-        ErrorCode::DestinationNotFound
-        | ErrorCode::DestinationUnavailable
-        | ErrorCode::DestinationIpProhibited
-        | ErrorCode::DestinationIpUnroutable => HostFailureKind::Transient,
+        SerializableHttpErrorCode::DestinationNotFound
+        | SerializableHttpErrorCode::DestinationUnavailable
+        | SerializableHttpErrorCode::DestinationIpProhibited
+        | SerializableHttpErrorCode::DestinationIpUnroutable => HostFailureKind::Transient,
 
         // TLS errors — permanent (certificate/protocol issues won't change on retry)
-        ErrorCode::TlsProtocolError
-        | ErrorCode::TlsAlertReceived(_)
-        | ErrorCode::TlsCertificateError => HostFailureKind::Permanent,
+        SerializableHttpErrorCode::TlsProtocolError
+        | SerializableHttpErrorCode::TlsAlertReceived(_)
+        | SerializableHttpErrorCode::TlsCertificateError => HostFailureKind::Permanent,
 
         // Connection errors — transient (network issues are typically transient)
-        ErrorCode::ConnectionRefused
-        | ErrorCode::ConnectionTerminated
-        | ErrorCode::ConnectionTimeout
-        | ErrorCode::ConnectionReadTimeout
-        | ErrorCode::ConnectionWriteTimeout
-        | ErrorCode::ConnectionLimitReached => HostFailureKind::Transient,
+        SerializableHttpErrorCode::ConnectionRefused
+        | SerializableHttpErrorCode::ConnectionTerminated
+        | SerializableHttpErrorCode::ConnectionTimeout
+        | SerializableHttpErrorCode::ConnectionReadTimeout
+        | SerializableHttpErrorCode::ConnectionWriteTimeout
+        | SerializableHttpErrorCode::ConnectionLimitReached => HostFailureKind::Transient,
 
         // HTTP protocol errors — permanent (deterministic for the same request)
-        ErrorCode::HttpRequestDenied
-        | ErrorCode::HttpRequestLengthRequired
-        | ErrorCode::HttpRequestBodySize(_)
-        | ErrorCode::HttpRequestMethodInvalid
-        | ErrorCode::HttpRequestUriInvalid
-        | ErrorCode::HttpRequestUriTooLong
-        | ErrorCode::HttpRequestHeaderSectionSize(_)
-        | ErrorCode::HttpRequestHeaderSize(_)
-        | ErrorCode::HttpRequestTrailerSectionSize(_)
-        | ErrorCode::HttpRequestTrailerSize(_)
-        | ErrorCode::HttpResponseHeaderSectionSize(_)
-        | ErrorCode::HttpResponseHeaderSize(_)
-        | ErrorCode::HttpResponseBodySize(_)
-        | ErrorCode::HttpResponseTrailerSectionSize(_)
-        | ErrorCode::HttpResponseTrailerSize(_)
-        | ErrorCode::HttpResponseTransferCoding(_)
-        | ErrorCode::HttpResponseContentCoding(_)
-        | ErrorCode::HttpUpgradeFailed => HostFailureKind::Permanent,
+        SerializableHttpErrorCode::HttpRequestDenied
+        | SerializableHttpErrorCode::HttpRequestLengthRequired
+        | SerializableHttpErrorCode::HttpRequestBodySize(_)
+        | SerializableHttpErrorCode::HttpRequestMethodInvalid
+        | SerializableHttpErrorCode::HttpRequestUriInvalid
+        | SerializableHttpErrorCode::HttpRequestUriTooLong
+        | SerializableHttpErrorCode::HttpRequestHeaderSectionSize(_)
+        | SerializableHttpErrorCode::HttpRequestHeaderSize(_)
+        | SerializableHttpErrorCode::HttpRequestTrailerSectionSize(_)
+        | SerializableHttpErrorCode::HttpRequestTrailerSize(_)
+        | SerializableHttpErrorCode::HttpResponseHeaderSectionSize(_)
+        | SerializableHttpErrorCode::HttpResponseHeaderSize(_)
+        | SerializableHttpErrorCode::HttpResponseBodySize(_)
+        | SerializableHttpErrorCode::HttpResponseTrailerSectionSize(_)
+        | SerializableHttpErrorCode::HttpResponseTrailerSize(_)
+        | SerializableHttpErrorCode::HttpResponseTransferCoding(_)
+        | SerializableHttpErrorCode::HttpResponseContentCoding(_)
+        | SerializableHttpErrorCode::HttpUpgradeFailed => HostFailureKind::Permanent,
 
         // HttpProtocolError is used by hyper as a catch-all for connection-level
         // failures (e.g. connection reset mid-request). Treat as transient because
         // the same request may succeed on retry to the same server.
-        ErrorCode::HttpProtocolError => HostFailureKind::Transient,
+        SerializableHttpErrorCode::HttpProtocolError => HostFailureKind::Transient,
 
         // Timeout errors — transient (may succeed with more time)
-        ErrorCode::LoopDetected
-        | ErrorCode::ConfigurationError
-        | ErrorCode::HttpResponseTimeout => HostFailureKind::Transient,
+        SerializableHttpErrorCode::LoopDetected
+        | SerializableHttpErrorCode::ConfigurationError
+        | SerializableHttpErrorCode::HttpResponseTimeout => HostFailureKind::Transient,
 
         // Incomplete/internal — transient (default)
-        ErrorCode::HttpResponseIncomplete | ErrorCode::InternalError(_) => {
-            HostFailureKind::Transient
-        }
+        SerializableHttpErrorCode::HttpResponseIncomplete
+        | SerializableHttpErrorCode::InternalError(_) => HostFailureKind::Transient,
     }
 }

@@ -19,6 +19,7 @@ use crate::durable_host::concurrent::{
 use crate::durable_host::durability::{
     DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
 };
+use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, wasi_http_view,
@@ -27,6 +28,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
 use futures::future::{Either, select};
+use golem_common::model::RetryContext;
 use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{
     P3HttpClientConsumeBody, P3HttpClientConsumeBodyChunk, P3HttpClientSend,
@@ -220,7 +222,7 @@ where
     // cases: the trace context comes from the (recorded, replayed) span and
     // the idempotency key from the call's own `Start` index, which the replay
     // claim returns unchanged.
-    {
+    let (retry_method, retry_uri) = {
         let request_head = serialize_request::<Ctx, U>(store, borrow_resource(&req))?;
         let injected = golem_outgoing_http_headers::<Ctx, U>(
             store,
@@ -231,7 +233,11 @@ where
         .map_err(HttpError::trap)?;
         apply_headers_to_request_resource::<Ctx, U>(store, &req, &injected)
             .map_err(HttpError::trap)?;
-    }
+        (
+            request_head.method.to_string(),
+            outgoing_http_request_uri(&request_head),
+        )
+    };
 
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
     let interrupt = store.with(|mut access| {
@@ -269,8 +275,30 @@ where
         }
         Err(error) => {
             if let Some(error_code) = error.downcast_ref() {
-                let result =
-                    SerializableP3HttpClientSendResult::HttpError(serialize_error_code(error_code));
+                let serialized_error = serialize_error_code(error_code);
+
+                // Worker-level retry classification, mirroring the P2
+                // outgoing-handler path: a transient transport/protocol failure
+                // raises a retry trap here (the worker goes to `Retrying` per
+                // its retry policy and re-executes the send from the abandoned
+                // `Start` on replay) instead of surfacing as a guest-visible
+                // error value. Permanent failures — and transient ones whose
+                // retry budget is exhausted — fall through and are recorded and
+                // returned to the guest, which is also what a recorded error
+                // replays as.
+                let for_retry: Result<(), &ErrorCode> = Err(error_code);
+                handle
+                    .try_trigger_retry_access(
+                        store,
+                        durable_worker_ctx::<Ctx, U>,
+                        &for_retry,
+                        |code| classify_serializable_http_error_code(&serialize_error_code(code)),
+                        RetryContext::http(&retry_method, &retry_uri),
+                    )
+                    .await
+                    .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))?;
+
+                let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
                 handle
                     .complete_access(
                         store,
@@ -312,11 +340,10 @@ fn register_response_span<Ctx: WorkerCtx, U: Send>(
     });
 }
 
-/// Span attributes for the `outgoing-http-request` invocation-context span,
-/// mirroring the P2 `http::outgoing_handler::handle` span shape.
-fn outgoing_http_request_span_attributes(
-    request: &SerializableP3HttpClientSend,
-) -> Vec<(String, AttributeValue)> {
+/// Renders the request URI of a serialized outgoing p3 HTTP request the same
+/// way the P2 `http::outgoing_handler::handle` path does, for span attributes
+/// and retry properties.
+fn outgoing_http_request_uri(request: &SerializableP3HttpClientSend) -> String {
     let scheme = match request
         .scheme
         .as_ref()
@@ -325,12 +352,20 @@ fn outgoing_http_request_span_attributes(
         SerializableP3HttpScheme::Http => "http",
         SerializableP3HttpScheme::Https | SerializableP3HttpScheme::Other(_) => "https",
     };
-    let uri = format!(
+    format!(
         "{}://{}{}",
         scheme,
         request.authority.as_deref().unwrap_or(""),
         request.path_with_query.as_deref().unwrap_or("")
-    );
+    )
+}
+
+/// Span attributes for the `outgoing-http-request` invocation-context span,
+/// mirroring the P2 `http::outgoing_handler::handle` span shape.
+fn outgoing_http_request_span_attributes(
+    request: &SerializableP3HttpClientSend,
+) -> Vec<(String, AttributeValue)> {
+    let uri = outgoing_http_request_uri(request);
     vec![
         (
             "name".to_string(),
@@ -1981,6 +2016,17 @@ where
         // completes with a marker on the normal path; the `Cancellable` policy
         // exists only for the crash/drop contract (task dropped without
         // finishing), handled by the call handle's drop machinery.
+        //
+        // A transient body-transfer error terminal (`Err` in `terminal`) is
+        // deliberately *not* routed through worker-level retry here, unlike the
+        // P2 `future_trailers::get` path: the send's `End` is already recorded,
+        // so a retry would replay the response from its recorded headers (with
+        // an empty body — the request is not re-issued) and then re-execute
+        // this scope live against that empty body, silently delivering wrong
+        // data to the guest. Routing body errors through retry requires the
+        // mid-flight send rebuild (re-issuing the recorded request on replay)
+        // and must land together with it; until then the error is recorded and
+        // surfaced to the guest exactly as a replayed terminal would be.
         //
         // Capture the parent scope's trap context first (it is a pure function of
         // the scope and survives the handle being consumed below) so every

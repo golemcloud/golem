@@ -53,9 +53,10 @@ use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData};
 
 use crate::durable_host::durability::{
-    DurabilityHost, DurableCallTrapContext, DurableCallTrapError, DurableExecutionState,
-    HostFailureKind, InFunctionRetryController, InFunctionRetryHost, InternalRetryResult,
-    TerminalCallError, mark_durable_call_trap_context, try_trigger_host_trap_retry,
+    ClassifiedHostError, DurabilityHost, DurableCallTrapContext, DurableCallTrapError,
+    DurableExecutionState, HostFailureKind, InFunctionRetryController, InFunctionRetryHost,
+    InternalRetryResult, TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
+    try_trigger_host_trap_retry,
 };
 use crate::durable_host::replay_state::OplogEntryLookupResult;
 use crate::durable_host::{
@@ -2010,6 +2011,111 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .await
         };
         outcome.map_err(|err| self.trap(err))
+    }
+
+    /// Accessor-path counterpart of [`Self::try_trigger_retry_with_properties`] for p3 host
+    /// wrappers: classifies a host error *value* that is about to be recorded and returned to the
+    /// guest and, when it is transient and the worker's retry policy allows another attempt,
+    /// raises a retry trap (`Err`) instead — routing the failure through the worker-level retry
+    /// machinery (worker goes to `Retrying`) rather than letting the guest observe it. On the
+    /// `Err` branch the handle is [`trap`](Self::trap)ped (abandoned with the call's trap
+    /// context), so `?`-style call sites stay correct; its host-call `Start` is left incomplete
+    /// and the call re-executes on the retry's replay. `Ok(())` means the error is permanent or
+    /// the retry budget is exhausted: the caller must persist the failed result and return it to
+    /// the guest, exactly as before.
+    ///
+    /// Only meaningful on the live path (recorded failures replay deterministically to the guest
+    /// without re-classification, mirroring the `&mut self` path).
+    ///
+    /// The accessor cannot hold the store across the async policy resolution, so the retry
+    /// decision runs against a [`TaskRetryContext`] snapshot taken in one short store window: the
+    /// same policy tiers as `PrivateDurableWorkerState::named_retry_policies` and the current
+    /// retry state of this call's own retry point (its atomic region or enclosing durable scope
+    /// `Start`, matching [`ScopedRetryHost::retry_point`]). `properties` are enriched with the
+    /// worker-local context (`agent-type`, `is-idempotent`) before resolution.
+    pub async fn try_trigger_retry_access<T, D, Ctx, Ok, Err>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+        properties: RetryProperties,
+    ) -> anyhow::Result<()>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        Err: Display,
+    {
+        debug_assert!(
+            self.is_live(),
+            "try_trigger_retry_access is only valid on the live path"
+        );
+        let Err(err) = result else {
+            return Ok(());
+        };
+        if classify(err) != HostFailureKind::Transient {
+            return Ok(());
+        }
+
+        let message = err.to_string();
+        let mut properties = properties;
+        properties.set(
+            "error-type",
+            golem_common::model::PredicateValue::Text("transient".to_string()),
+        );
+
+        let retry_point = self.execution_scope.trap_retry_point();
+        let (
+            environment_state_service,
+            environment_id,
+            default_retry_policy,
+            agent_config_retry_policies,
+            runtime_retry_policy_mutations,
+            worker,
+        ) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            ctx.state.enrich_retry_properties(&mut properties);
+            (
+                ctx.state.environment_state_service.clone(),
+                ctx.state.owned_agent_id.environment_id,
+                golem_common::model::NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
+                ctx.state.agent_config_retry_policies(),
+                ctx.state.runtime_retry_policy_mutations.clone(),
+                ctx.public_state.worker(),
+            )
+        });
+
+        let current_retry_policy_state = worker
+            .get_non_detached_last_known_status()
+            .await
+            .current_retry_state
+            .get(&retry_point)
+            .cloned();
+
+        let mut retry_host = TaskRetryContext {
+            retry_point,
+            environment_state_service,
+            environment_id,
+            default_retry_policy,
+            agent_config_retry_policies,
+            runtime_retry_policy_mutations,
+            max_in_function_retry_delay: self
+                .retry
+                .durable_execution_state()
+                .max_in_function_retry_delay,
+            current_retry_policy_state,
+            retry_properties: properties.clone(),
+            worker,
+        };
+
+        let failure = Error::new(ClassifiedHostError {
+            kind: HostFailureKind::Transient,
+            message,
+        });
+        try_trigger_host_trap_retry(&mut retry_host, failure, properties)
+            .await
+            .map_err(|err| self.trap(err))
     }
 
     /// Drives the full live / replay / incomplete-replay flow for a **re-executable** durable call
