@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use thiserror::Error;
 use tokio::process::Command;
+use tracing::debug;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResolvedAppVersionSource {
@@ -111,6 +112,10 @@ pub enum AppVersionError {
     )]
     NotAGitRepository(PathBuf),
     #[error(
+        "the git repository has no commits yet and no `staticFallback` version is configured; make a commit, add a `staticFallback`, or use a static/env version source"
+    )]
+    NoCommits,
+    #[error(
         "the 'git' executable was not found and no `staticFallback` version is configured; install git, add a `staticFallback`, or use a static/env version source"
     )]
     GitNotInstalled,
@@ -161,6 +166,13 @@ async fn compute_git_version(
             &source.static_fallback,
             &format!("{} is not a git repository", working_dir.display()),
             AppVersionError::NotAGitRepository(working_dir.to_path_buf()),
+        );
+    }
+    if !git.has_head().await? {
+        return fallback_or(
+            &source.static_fallback,
+            "the git repository has no commits yet",
+            AppVersionError::NoCommits,
         );
     }
 
@@ -237,8 +249,16 @@ impl GitClient {
         Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true")
     }
 
+    async fn has_head(&self) -> Result<bool, AppVersionError> {
+        let output = self.run(&["rev-parse", "--verify", "--quiet", "HEAD"]).await?;
+        Ok(output.status.success())
+    }
+
+    /// Tracked changes only; untracked files are ignored, like `git describe --dirty`.
     async fn is_dirty(&self) -> Result<bool, AppVersionError> {
-        let output = self.run(&["status", "--porcelain"]).await?;
+        let output = self
+            .run(&["status", "--porcelain", "--untracked-files=no"])
+            .await?;
         if !output.status.success() {
             return Err(AppVersionError::GitCommandFailed(
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
@@ -263,6 +283,11 @@ impl GitClient {
         if output.status.success() {
             Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
         } else {
+            // HEAD is guaranteed by the caller, so a non-zero exit means no matching tag.
+            debug!(
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "git describe found no matching tag"
+            );
             Ok(None)
         }
     }
@@ -523,6 +548,53 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(result, "v1.0.0-dirty");
+    }
+
+    #[test]
+    fn git_untracked_file_is_not_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        commit_file(dir.path(), "a.txt", "hello");
+        git(dir.path(), &["tag", "v1.0.0"]);
+        std::fs::write(dir.path().join("untracked.txt"), "scratch").unwrap();
+
+        let result = block_on(compute_version(
+            &git_source(false, Some("0.0.0")),
+            dir.path(),
+        ))
+        .unwrap();
+        assert_eq!(result, "v1.0.0");
+    }
+
+    #[test]
+    fn git_no_commits_without_fallback_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+
+        let result = block_on(compute_version(&git_source(false, None), dir.path()));
+        assert!(matches!(result, Err(AppVersionError::NoCommits)));
+    }
+
+    #[test]
+    fn git_no_commits_with_fallback_uses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+
+        let result = block_on(compute_version(
+            &git_source(false, Some("0.0.0")),
+            dir.path(),
+        ))
+        .unwrap();
+        assert_eq!(result, "0.0.0");
+    }
+
+    #[test]
+    fn git_hash_no_commits_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+
+        let result = block_on(compute_version(&resolved_hash(false, None), dir.path()));
+        assert!(matches!(result, Err(AppVersionError::NoCommits)));
     }
 
     #[test]

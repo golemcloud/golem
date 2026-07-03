@@ -54,7 +54,7 @@ version:
 | `tagPattern` | string | *(required)* | Only consider tags matching this glob (`git describe --tags --match`). Use `"*"` for all tags. |
 | `commitInfo` | bool | `true` | When HEAD is past the matching tag, append `-<commits-since-tag>-g<hash>` (e.g. `v1.2.3-5-gabc1234`). `false` gives the bare nearest tag. |
 | `hashFallback` | bool | `false` | When no matching tag is found, use the short commit hash instead of `staticFallback`. |
-| `allowDirty` | bool | `false` | Allow deploying with uncommitted changes, appending a `-dirty` marker. When `false`, a dirty working tree fails the deploy. |
+| `allowDirty` | bool | `false` | Allow deploying with uncommitted changes to tracked files, appending a `-dirty` marker. When `false`, a dirty working tree fails the deploy. Untracked files are ignored (matches `git describe --dirty`). |
 | `staticFallback` | string | *(none)* | Version used when git cannot supply one (no git, not a repo, or no matching tag without `hashFallback`). Absent means those cases are an error. |
 
 ### Hash mode
@@ -79,10 +79,10 @@ are not valid here (the two modes are mutually exclusive).
 | Past the tag, `commitInfo: false` | the nearest tag, `v1.2.3` |
 | No matching tag, `hashFallback: true` | short commit hash, e.g. `abc1234` |
 | No matching tag, `staticFallback` set | the static value |
-| No git / not a repo, `staticFallback` set | the static value (with a warning) |
+| No git / not a repo / no commits, `staticFallback` set | the static value (with a warning) |
 | Working tree dirty, `allowDirty: true` | the above + `-dirty` |
 | `hashOnly: true` | short commit hash |
-| No matching tag / no git and no fallback | error |
+| No matching tag / no git / no commits, and no fallback | error |
 | Working tree dirty, `allowDirty: false` | error |
 
 ## Per-environment override
@@ -159,7 +159,10 @@ rejects re-deploying a version that already exists.
 
 - **`tagPattern` is required for git tag mode** — set `tagPattern` on the environment override or
   the application-wide `version:` (use `"*"` for all tags), or switch to `hashOnly`/`static`/`env`.
-- **Working tree has uncommitted changes** — commit them, or set `allowDirty: true` for that source.
+- **Working tree has uncommitted changes** — commit the changed tracked files, or set
+  `allowDirty: true` for that source. Untracked files don't count as dirty.
+- **Repository has no commits yet** — make a commit, add a `staticFallback`, or switch to a
+  `static`/`env` source.
 - **Version already exists in this environment** — the environment has `versionCheck: true`; bump
   the tag/version, or roll back instead (see `golem-rollback`).
 - **Environment variable not set / empty static version** — provide the `env` variable at deploy
