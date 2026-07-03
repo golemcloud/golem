@@ -2994,13 +2994,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
-        if self.state.is_live() && self.state.snapshotting_mode.is_none() {
-            if let Err(err) = concurrent::drain_queued_dropped_call_events(self).await {
-                error!(
-                    "failed to drain dropped durable calls before invocation failure entry: {err}"
-                );
-                return RetryDecision::None;
-            }
+        if self.state.is_live()
+            && self.state.snapshotting_mode.is_none()
+            && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
+        {
+            error!("failed to drain dropped durable calls before invocation failure entry: {err}");
+            return RetryDecision::None;
         }
 
         if let TrapType::Error { error, .. } = trap_type {

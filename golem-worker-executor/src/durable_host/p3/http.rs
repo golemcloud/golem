@@ -110,6 +110,19 @@ where
     U: Send,
     P: DropPolicy,
 {
+    // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
+    // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
+    // no-op during replay and run before any durability machinery so that a
+    // denied call writes no oplog entry.
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        ctx.state
+            .check_and_increment_http_call_count()
+            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+        ctx.record_monthly_http_call()
+            .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
+    })?;
+
     let mut handle = CallHandle::<P3HttpClientSend, P>::start_access(
         store,
         durable_worker_ctx::<Ctx, U>,
@@ -329,64 +342,60 @@ fn serialize_request<Ctx: WorkerCtx, U: Send>(
     req: Resource<Request>,
 ) -> HttpResult<SerializableP3HttpClientSend> {
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-    Ok(
-        http_store.with(|mut access| -> HttpResult<SerializableP3HttpClientSend> {
-            let mut view = access.get();
-            let method = serialize_method(
-                types::HostRequest::get_method(&mut view, borrow_resource(&req))
-                    .map_err(HttpError::trap)?,
-            );
-            let scheme = types::HostRequest::get_scheme(&mut view, borrow_resource(&req))
-                .map_err(HttpError::trap)?
-                .map(serialize_scheme);
-            let authority = types::HostRequest::get_authority(&mut view, borrow_resource(&req))
+    http_store.with(|mut access| -> HttpResult<SerializableP3HttpClientSend> {
+        let mut view = access.get();
+        let method = serialize_method(
+            types::HostRequest::get_method(&mut view, borrow_resource(&req))
+                .map_err(HttpError::trap)?,
+        );
+        let scheme = types::HostRequest::get_scheme(&mut view, borrow_resource(&req))
+            .map_err(HttpError::trap)?
+            .map(serialize_scheme);
+        let authority = types::HostRequest::get_authority(&mut view, borrow_resource(&req))
+            .map_err(HttpError::trap)?;
+        let path_with_query =
+            types::HostRequest::get_path_with_query(&mut view, borrow_resource(&req))
                 .map_err(HttpError::trap)?;
-            let path_with_query =
-                types::HostRequest::get_path_with_query(&mut view, borrow_resource(&req))
-                    .map_err(HttpError::trap)?;
-            let headers_resource =
-                types::HostRequest::get_headers(&mut view, borrow_resource(&req))
-                    .map_err(HttpError::trap)?;
-            let headers = copy_fields(&mut view, headers_resource)?;
-            let options = match types::HostRequest::get_options(&mut view, borrow_resource(&req))
-                .map_err(HttpError::trap)?
-            {
-                Some(options) => {
-                    let serialized = SerializableP3HttpRequestOptions {
-                        connect_timeout_nanos: types::HostRequestOptions::get_connect_timeout(
+        let headers_resource = types::HostRequest::get_headers(&mut view, borrow_resource(&req))
+            .map_err(HttpError::trap)?;
+        let headers = copy_fields(&mut view, headers_resource)?;
+        let options = match types::HostRequest::get_options(&mut view, borrow_resource(&req))
+            .map_err(HttpError::trap)?
+        {
+            Some(options) => {
+                let serialized = SerializableP3HttpRequestOptions {
+                    connect_timeout_nanos: types::HostRequestOptions::get_connect_timeout(
+                        &mut view,
+                        borrow_resource(&options),
+                    )
+                    .map_err(HttpError::trap)?,
+                    first_byte_timeout_nanos: types::HostRequestOptions::get_first_byte_timeout(
+                        &mut view,
+                        borrow_resource(&options),
+                    )
+                    .map_err(HttpError::trap)?,
+                    between_bytes_timeout_nanos:
+                        types::HostRequestOptions::get_between_bytes_timeout(
                             &mut view,
                             borrow_resource(&options),
                         )
                         .map_err(HttpError::trap)?,
-                        first_byte_timeout_nanos:
-                            types::HostRequestOptions::get_first_byte_timeout(
-                                &mut view,
-                                borrow_resource(&options),
-                            )
-                            .map_err(HttpError::trap)?,
-                        between_bytes_timeout_nanos:
-                            types::HostRequestOptions::get_between_bytes_timeout(
-                                &mut view,
-                                borrow_resource(&options),
-                            )
-                            .map_err(HttpError::trap)?,
-                    };
-                    types::HostRequestOptions::drop(&mut view, options).map_err(HttpError::trap)?;
-                    Some(serialized)
-                }
-                None => None,
-            };
+                };
+                types::HostRequestOptions::drop(&mut view, options).map_err(HttpError::trap)?;
+                Some(serialized)
+            }
+            None => None,
+        };
 
-            Ok(SerializableP3HttpClientSend {
-                method,
-                scheme,
-                authority,
-                path_with_query,
-                headers,
-                options,
-            })
-        })?,
-    )
+        Ok(SerializableP3HttpClientSend {
+            method,
+            scheme,
+            authority,
+            path_with_query,
+            headers,
+            options,
+        })
+    })
 }
 
 fn serialize_response_headers<Ctx: WorkerCtx, U: Send>(
@@ -394,18 +403,15 @@ fn serialize_response_headers<Ctx: WorkerCtx, U: Send>(
     response: Resource<Response>,
 ) -> HttpResult<SerializableResponseHeaders> {
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-    Ok(
-        http_store.with(|mut access| -> HttpResult<SerializableResponseHeaders> {
-            let mut view = access.get();
-            let status =
-                types::HostResponse::get_status_code(&mut view, borrow_resource(&response))
-                    .map_err(HttpError::trap)?;
-            let headers_resource =
-                types::HostResponse::get_headers(&mut view, response).map_err(HttpError::trap)?;
-            let headers = copy_fields(&mut view, headers_resource)?;
-            Ok(SerializableResponseHeaders { status, headers })
-        })?,
-    )
+    http_store.with(|mut access| -> HttpResult<SerializableResponseHeaders> {
+        let mut view = access.get();
+        let status = types::HostResponse::get_status_code(&mut view, borrow_resource(&response))
+            .map_err(HttpError::trap)?;
+        let headers_resource =
+            types::HostResponse::get_headers(&mut view, response).map_err(HttpError::trap)?;
+        let headers = copy_fields(&mut view, headers_resource)?;
+        Ok(SerializableResponseHeaders { status, headers })
+    })
 }
 
 fn copy_fields(
@@ -457,7 +463,7 @@ fn response_from_recorded_headers<Ctx: WorkerCtx, U: Send>(
     *response.headers_mut() = headers;
     let (response, _io) = wasmtime_wasi_http::p3::Response::from_http(response);
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-    Ok(http_store.with(|mut access| {
+    http_store.with(|mut access| {
         access
             .get()
             .table
@@ -465,7 +471,7 @@ fn response_from_recorded_headers<Ctx: WorkerCtx, U: Send>(
             .context("failed to push replayed p3 HTTP response to table")
             .map_err(wasmtime::Error::from_anyhow)
             .map_err(HttpError::trap)
-    })?)
+    })
 }
 
 fn serialize_method(method: Method) -> SerializableHttpMethod {

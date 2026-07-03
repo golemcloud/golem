@@ -730,14 +730,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             (remote_agent_id, target_worker_fingerprint, input_value)
         };
-        let scheduled_at =
-            chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
-                .ok_or_else(|| {
-                    anyhow::Error::from(WorkerExecutorError::runtime(format!(
-                        "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
-                        datetime.seconds, datetime.nanoseconds
-                    )))
-                })?;
+        let scheduled_at = chrono::DateTime::from_timestamp(datetime.seconds, datetime.nanoseconds)
+            .ok_or_else(|| {
+                anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                    "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
+                    datetime.seconds, datetime.nanoseconds
+                )))
+            })?;
 
         // The persisted request embeds an idempotency key derived from the durable-scope begin
         // index, so this is a two-step call: open the scope first to learn the index, then build
@@ -959,6 +958,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         // outside it. The durable call handle (and, on the live path, the background task) are taken
         // out of the state here so the terminal runs while nothing in the resource table still owns
         // them: a live handle left behind and later dropped would spuriously enqueue a `Cancelled`.
+        #[allow(clippy::large_enum_variant)]
         enum GetPlan {
             /// The result is already known — a baked deterministic failure or a prior cancellation.
             Ready {
@@ -1168,6 +1168,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
     ) -> anyhow::Result<()> {
         let future_rep = this.rep();
 
+        #[allow(clippy::large_enum_variant)]
         enum DropPlan {
             /// An open durable call must be cancelled and its span finished.
             Cancel {
@@ -1254,6 +1255,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         // Decide what to cancel while holding the table borrow, taking the durable call handle out
         // of the state (a live handle must never drop while still owned here). The background task,
         // if any, is dropped together with the old `Active` state, aborting the in-flight RPC.
+        #[allow(clippy::large_enum_variant)]
         enum CancelPlan {
             /// The single durable call is still open; record its `Cancelled` and, for a live call,
             /// best-effort cancel the remote invocation.

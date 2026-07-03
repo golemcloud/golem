@@ -125,6 +125,10 @@ pub enum ResolutionOutcome {
 }
 
 /// The result of [`CallHandle::replay`].
+///
+/// Transient: callers destructure it immediately, so the size difference between the variants
+/// never lives beyond the replay call itself.
+#[allow(clippy::large_enum_variant)]
 pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     /// The call's `End` was replayed and decoded into its response.
     Replayed(Pair::Resp),
@@ -711,10 +715,9 @@ where
                             false,
                         )
                         .await
+                            && first_error.is_none()
                         {
-                            if first_error.is_none() {
-                                first_error = Some(TerminalCallError::new(err, context));
-                            }
+                            first_error = Some(TerminalCallError::new(err, context));
                         }
                         recorded += 1;
                     }
@@ -1317,9 +1320,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
         match Self::execute_access_start(prepared, request).await {
             Ok(executed) => {
-                if let Err(err) = process_pending_replay_events_access(store, get_ctx).await {
-                    return Err(err);
-                }
+                process_pending_replay_events_access(store, get_ctx).await?;
                 let result = store.with(|mut access| {
                     let ctx = get_ctx(access.data_mut());
                     Self::finish_access_start(ctx, executed)
@@ -2031,19 +2032,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     return Err(err);
                 }
             };
-            if let Some(begin_index) = self.execution_scope.atomic_region() {
-                if !ctx
+            if let Some(begin_index) = self.execution_scope.atomic_region()
+                && !ctx
                     .state
                     .mark_atomic_region_has_side_effects_for(begin_index)
-                {
-                    if let Some(begin_index) = self.atomic_region_registration.take() {
-                        ctx.state.unregister_atomic_region_call(begin_index);
-                    }
-                    return Err(WorkerExecutorError::runtime(format!(
-                        "durable call {} completed after its atomic region {begin_index} was closed",
-                        self.start_idx
-                    )));
+            {
+                if let Some(begin_index) = self.atomic_region_registration.take() {
+                    ctx.state.unregister_atomic_region_call(begin_index);
                 }
+                return Err(WorkerExecutorError::runtime(format!(
+                    "durable call {} completed after its atomic region {begin_index} was closed",
+                    self.start_idx
+                )));
             }
             let end = OplogEntry::End {
                 timestamp: Timestamp::now_utc(),
