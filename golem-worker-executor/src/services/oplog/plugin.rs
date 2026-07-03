@@ -507,7 +507,7 @@ struct CreateOplogConstructor {
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
     initial_worker_metadata: AgentMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+    last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     plugin_max_commit_count: usize,
     plugin_max_elapsed_time: Duration,
@@ -524,7 +524,7 @@ impl CreateOplogConstructor {
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         plugin_max_commit_count: usize,
         plugin_max_elapsed_time: Duration,
@@ -641,7 +641,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
@@ -671,7 +671,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
@@ -815,7 +815,7 @@ impl ForwardingOplog {
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         last_oplog_idx: OplogIndex,
         close_fn: Box<dyn FnOnce() + Send + Sync>,
         max_commit_count: usize,
@@ -824,7 +824,7 @@ impl ForwardingOplog {
         // Seed per-plugin live state from the current status snapshot (not the
         // potentially stale initial_worker_metadata.last_known_status)
         let plugin_state = {
-            let seed_status = last_known_status.read().await;
+            let seed_status = last_known_status.get();
             let mut state = HashMap::new();
             for (grant_id, cp) in &seed_status.oplog_processor_checkpoints {
                 state.insert(
@@ -1120,7 +1120,7 @@ struct ForwardingOplogState {
     last_send: Instant,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     initial_worker_metadata: AgentMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+    last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     components: Arc<dyn ComponentService>,
@@ -1144,7 +1144,7 @@ impl ForwardingOplogState {
     /// Entries are always read from the persisted oplog (canonical source) to avoid
     /// buffer/index drift caused by checkpoint entries injected during flush.
     pub async fn try_flush(&mut self) {
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.get().as_ref().clone();
         let flush_set = self.reconcile_plugin_state(&status);
 
         if flush_set.is_empty() {
@@ -1625,7 +1625,7 @@ impl ForwardingOplogState {
     /// delivery always goes to the recorded `target_agent_id` with deterministic
     /// idempotency keys.
     async fn try_locality_recovery(&mut self) {
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.get().as_ref().clone();
         // Ensure plugin_state is reconciled with current status
         self.reconcile_plugin_state(&status);
         let environment_id = self.initial_worker_metadata.environment_id;
@@ -2259,7 +2259,7 @@ mod tests {
         active_plugins: HashSet<EnvironmentPluginGrantId>,
     ) -> (
         AgentMetadata,
-        read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     ) {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
@@ -2287,8 +2287,9 @@ mod tests {
             agent_mode: AgentMode::Durable,
         };
 
-        let status_lock =
-            read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(status)));
+        let status_lock = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+            arc_swap::ArcSwap::from_pointee(status),
+        ));
 
         (metadata, status_lock)
     }

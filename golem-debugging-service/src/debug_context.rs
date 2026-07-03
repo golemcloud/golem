@@ -360,7 +360,6 @@ impl ResourceLimiterAsync for DebugContext {
         if delta > 0 {
             self.durable_ctx
                 .increase_memory(delta)
-                .await
                 .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {

@@ -573,9 +573,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 source_worker_instance.agent_mode(),
                 target_initial_oplog_entry,
                 target_worker_metadata,
-                read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
-                    initial_source_worker_metadata.last_known_status,
-                ))),
+                read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+                    arc_swap::ArcSwap::from_pointee(
+                        initial_source_worker_metadata.last_known_status,
+                    ),
+                )),
                 read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
                     ExecutionStatus::Suspended {
                         agent_mode: source_worker_instance.agent_mode(),

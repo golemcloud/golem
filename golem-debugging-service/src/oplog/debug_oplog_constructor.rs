@@ -32,7 +32,7 @@ pub struct CreateDebugOplogConstructor {
     inner: Arc<dyn OplogService + Send + Sync>,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
     initial_worker_metadata: AgentMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+    last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
 }
 
@@ -45,7 +45,7 @@ impl CreateDebugOplogConstructor {
         inner: Arc<dyn OplogService + Send + Sync>,
         debug_session: Arc<dyn DebugSessions + Send + Sync>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Self {
         Self {

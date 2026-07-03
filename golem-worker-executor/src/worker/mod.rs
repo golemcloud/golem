@@ -16,6 +16,7 @@ pub mod agent_config;
 pub mod invocation;
 mod invocation_loop;
 pub mod read_only_cache;
+mod state_actor;
 pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
@@ -23,7 +24,6 @@ pub mod status_flusher;
 use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
-use self::status::update_status_with_new_entries;
 use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
@@ -50,7 +50,6 @@ use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use chrono::Utc;
 use futures::FutureExt;
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
@@ -73,7 +72,7 @@ use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ScheduledAction, Timestamp, TimestampedAgentInvocation,
+    PendingUpdateKind, PendingUpdateRef, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -251,14 +250,23 @@ pub struct Worker<Ctx: WorkerCtx> {
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     initial_worker_metadata: AgentMetadata,
     registered_concurrent_account: RegisteredConcurrentAccount,
-    last_known_status: Arc<RwLock<AgentStatusRecord>>,
-    metrics_status: WorkerStatusMetric,
+    /// The published worker status. Read lock-free from any context; written only by the
+    /// worker-state actor's status task (and during construction, before the actor exists).
+    last_known_status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    /// Shared with the worker-state actor's status task, which records status transitions on it.
+    /// Held here so the by-status worker count gauge stays incremented for exactly as long as
+    /// this worker exists (its `Drop` decrements the gauge).
+    #[allow(dead_code)]
+    metrics_status: Arc<WorkerStatusMetric>,
     last_known_status_detached: Arc<AtomicBool>,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    update_state_lock: Mutex<()>,
+    /// Owns the commit + status-fold transaction and the fire-and-forget lifecycle jobs
+    /// (invocation-loop notification, memory-grow admission). See [`state_actor`] for the
+    /// concurrency invariants.
+    state_actor: state_actor::WorkerStateActor<Ctx>,
     worker_estimate_coefficient: f64,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
@@ -432,12 +440,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
 
-        let current_status_guard = current_status.read().await;
-        let metrics_status = WorkerStatusMetric::new(current_status_guard.status);
-        let initial_pending_invocations = current_status_guard.pending_invocations.clone();
-        let initial_invocation_results = current_status_guard.invocation_results.clone();
-        let last_oplog_idx = current_status_guard.oplog_idx;
-        drop(current_status_guard);
+        let current_status_snapshot = current_status.load_full();
+        let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
+        let initial_pending_invocations = current_status_snapshot.pending_invocations.clone();
+        let initial_invocation_results = current_status_snapshot.invocation_results.clone();
+        let last_oplog_idx = current_status_snapshot.oplog_idx;
+        drop(current_status_snapshot);
 
         let mut spans_map = HashMap::new();
         for inv in initial_pending_invocations {
@@ -512,6 +520,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps.worker_service(),
         );
 
+        let all_deps = All::from_other(deps);
+
+        let state_actor = state_actor::WorkerStateActor::new(
+            all_deps.clone(),
+            owned_agent_id.clone(),
+            initial_worker_metadata.agent_mode,
+            initial_worker_metadata.created_by,
+            oplog.clone(),
+            current_status.clone(),
+            last_known_status_detached.clone(),
+            metrics_status.clone(),
+            status_flusher.clone(),
+            instance.clone(),
+        );
+
         let worker = Worker {
             owned_agent_id,
             parsed_agent_id: agent_id.clone(),
@@ -520,7 +543,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 deps.config().limits.event_broadcast_capacity,
                 deps.config().limits.event_history_size,
             )),
-            deps: All::from_other(deps),
+            deps: all_deps,
             queue,
             external_invocation_spans,
             invocation_results,
@@ -533,7 +556,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
-            update_state_lock: Mutex::new(()),
+            state_actor,
             last_known_status_detached,
             status_flusher,
             status_checkpointer,
@@ -730,7 +753,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn get_latest_worker_metadata(&self) -> AgentMetadata {
-        let updated_status = self.last_known_status.read().await.clone();
+        let updated_status = self.last_known_status.load_full().as_ref().clone();
         let result = self.get_initial_worker_metadata();
         AgentMetadata {
             last_known_status: updated_status,
@@ -739,23 +762,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn get_last_known_status(&self) -> AgentStatusRecord {
-        self.last_known_status.read().await.clone()
+        self.last_known_status.load_full().as_ref().clone()
     }
 
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
     // This just has an additional assert built in for when decisions need to be sure that they are fully up to date on the oplog.
     // _NEVER_ call this from outside the invocation loop, as that is the only place that can reason about whether the status is detached or not.
     pub async fn get_non_detached_last_known_status(&self) -> AgentStatusRecord {
-        // hold the update lock so we know that the atomic bool and state are consistent
-        let update_state_lock_guard = self.update_state_lock.lock().await;
-
-        let is_detached = self.last_known_status_detached.load(Ordering::Relaxed);
-        assert!(!is_detached);
-        let result = self.last_known_status.read().await.clone();
-
-        // ensure we hold mutex for the full duration
-        drop(update_state_lock_guard);
-        result
+        // Runs on the worker-state actor's status queue so the detached flag and the published
+        // status are observed consistently with any in-flight commit/reattach transaction.
+        self.state_actor.non_detached_status().await
     }
 
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
@@ -1262,11 +1278,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
-        self.last_known_status
-            .read()
-            .await
-            .pending_invocations
-            .clone()
+        self.last_known_status.load().pending_invocations.clone()
     }
 
     /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
@@ -1338,11 +1350,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn invocation_results(&self) -> HashMap<IdempotencyKey, OplogIndex> {
-        self.last_known_status
-            .read()
-            .await
-            .invocation_results
-            .clone()
+        self.last_known_status.load().invocation_results.clone()
     }
 
     // should only be called from invocation loop
@@ -1368,7 +1376,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // should only be called from invocation loop
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.load_full().as_ref().clone();
         let keys_to_fail = invocation_keys_to_fail(&status, Some(key));
         let stderr = self.worker_event_service.get_last_invocation_errors();
         let golem_error = trap_type.as_golem_error(&stderr);
@@ -1691,8 +1699,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().timestamp()
     }
 
-    // Should only be called from invocation loop
-    pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
+    /// Requests additional memory for a guest `memory.grow` of `delta` bytes. Fire and forget:
+    /// the oplog hint and the global memory admission run on the worker-state actor's lifecycle
+    /// queue (see [`state_actor`]), so this is safe to call from the `memory.grow` resource
+    /// limiter, which runs on a store-keeping wasm fiber and must not await anything. If
+    /// admission fails, the worker is restarted, which reacquires its full (now larger) memory
+    /// reservation through the startup admission path.
+    pub fn request_memory_grow(self: &Arc<Self>, delta: u64) {
+        self.state_actor.grow_memory(self.clone(), delta);
+    }
+
+    // Should only be called from the worker-state actor's lifecycle queue (see
+    // `request_memory_grow`).
+    pub(crate) async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
         // The instance lock must not be held while running the admission gate:
         // it may run the eviction scan, which takes other workers' instance
         // locks. Holding this worker's instance lock across that scan while
@@ -2074,43 +2093,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn commit_oplog_and_update_state(&self, commit_level: CommitLevel) -> OplogIndex {
-        let (result, changed) = self
-            .commit_oplog_and_update_state_internal(commit_level)
-            .await;
+        let (result, changed) = self.state_actor.commit_and_update_state(commit_level).await;
         if changed {
-            // The notification is sent from a detached tokio task so that this method never
-            // waits on (or becomes a queued owner of) the instance lock. This method runs inside
-            // durable-call host futures polled by wasmtime's store event loop; if such a future
-            // queued on the instance lock, host code blocked on a store-keeping wasm fiber (e.g.
-            // the `memory.grow` limiter, which locks the instance in `Worker::increase_memory`)
-            // could deadlock the store by waiting behind it, because the event loop cannot poll a
-            // queued lock owner while the fiber keeps the store.
-            let instance = self.instance.clone();
-            tokio::spawn(async move {
-                let instance_guard = instance.lock().await;
-                if let WorkerInstance::Running(running) = &*instance_guard {
-                    let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
-                }
-            });
+            // The notification goes through the worker-state actor's lifecycle queue so that
+            // this method never waits on (or becomes a queued owner of) the instance lock. This
+            // method runs inside durable-call host futures polled by wasmtime's store event loop
+            // and on store-keeping wasm fibers, neither of which may block on locks shared with
+            // the other (see the `state_actor` module docs).
+            self.state_actor.notify_status_changed();
         }
         result
-    }
-
-    // Should only be called from invocation loop
-    async fn commit_oplog_and_update_state_internal(
-        &self,
-        commit_level: CommitLevel,
-    ) -> (OplogIndex, bool) {
-        let update_state_lock_guard = self.update_state_lock.lock().await;
-
-        let changed = self
-            .commit_and_update_state_inner(&update_state_lock_guard, commit_level)
-            .await;
-        let new_index = self.oplog.current_oplog_index().await;
-
-        // ensure we hold mutex for the full duration
-        drop(update_state_lock_guard);
-        (new_index, changed)
     }
 
     // Should only be called from invocation loop
@@ -2128,8 +2120,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         wakeup: Option<WorkerCommand>,
     ) -> OplogIndex {
         let result = self.add_to_oplog(entry).await;
+        // The caller already holds the instance lock (and sends the wakeup itself below), so
+        // this must not enqueue a `NotifyStatusChanged` lifecycle job: the commit job is safe to
+        // await while holding the instance lock precisely because the status task never takes
+        // that lock.
         let (_, changed) = self
-            .commit_oplog_and_update_state_internal(CommitLevel::Always)
+            .state_actor
+            .commit_and_update_state(CommitLevel::Always)
             .await;
 
         if changed
@@ -2357,7 +2354,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.load_full().as_ref().clone();
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result
@@ -2585,7 +2582,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.load_full().as_ref().clone();
         let keys_to_fail = invocation_keys_to_fail(&status, None);
 
         let mut invocation_results = self.invocation_results.write().await;
@@ -2723,7 +2720,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await?;
 
-                let current_status = Arc::new(RwLock::new(current_status));
+                let current_status = Arc::new(arc_swap::ArcSwap::from_pointee(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
                     let agent_id = ParsedAgentId::parse(
@@ -2761,7 +2758,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         agent_mode,
                         None,
                         initial_worker_metadata.clone(),
-                        read_only_lock::tokio::ReadOnlyLock::new(current_status.clone()),
+                        read_only_lock::arc_swap::ReadOnlyView::new(current_status.clone()),
                         read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
                     )
                     .await;
@@ -2912,7 +2909,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     instance_id,
                 );
 
-                let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));
+                let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));
                 let execution_status = Arc::new(std::sync::RwLock::new(execution_status));
 
                 let oplog = this
@@ -2922,15 +2919,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         agent_mode,
                         initial_oplog_entry,
                         initial_worker_metadata.clone(),
-                        read_only_lock::tokio::ReadOnlyLock::new(initial_status.clone()),
+                        read_only_lock::arc_swap::ReadOnlyView::new(initial_status.clone()),
                         read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
                     )
                     .await;
 
-                initial_status.write().await.oplog_idx = oplog.current_oplog_index().await;
+                {
+                    let mut status = initial_status.load_full().as_ref().clone();
+                    status.oplog_idx = oplog.current_oplog_index().await;
+                    initial_status.store(Arc::new(status));
+                }
 
                 // Cold path (worker creation): no previously cached status to diff against.
-                let initial_status_value = initial_status.read().await.clone();
+                let initial_status_value = initial_status.load_full().as_ref().clone();
                 this.worker_service()
                     .update_cached_status(owned_agent_id, None, initial_status_value)
                     .await;
@@ -2950,154 +2951,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // TODO: should be private, exposed for the invocation loop for now.
     pub async fn reattach_worker_status(&self) {
-        let update_state_lock_guard = self.update_state_lock.lock().await;
-
-        self.commit_and_update_state_inner(&update_state_lock_guard, CommitLevel::Always)
-            .await;
-        if self.last_known_status_detached.load(Ordering::Relaxed) {
-            debug!("Worker status was detached from oplog, recomputing it");
-
-            // The in-memory status is no longer foldable (a jump deleted its index, or a revert
-            // moved the oplog behind it), so we recompute. Prefer folding forward from the clean
-            // checkpoint (which predates any jump region) over a full re-read of the oplog.
-            let agent_mode = self.agent_mode();
-            let owned_agent_id = &self.owned_agent_id;
-            let worker_status =
-                calculate_last_known_status_with_checkpoint(self, owned_agent_id, agent_mode, None)
-                    .await
-                    .expect("Failed to recompute worker status for existing worker");
-
-            // Install the recomputed status while still detached, so a concurrent background sweep
-            // keeps skipping (the in-memory status is not authoritative until it is installed).
-            self.update_last_known_status(worker_status.clone()).await;
-
-            // Now the in-memory status is authoritative again; clear the flag and force a flush.
-            self.last_known_status_detached
-                .store(false, Ordering::Relaxed);
-
-            // The status was just recomputed from scratch; persist it synchronously (a full
-            // reconcile write, since the baseline was invalidated on detach) so the cache is
-            // immediately consistent rather than waiting for the next background sweep. Best-effort:
-            // a failure is logged/metered and re-queued inside `flush`.
-            if let Err(err) = self
-                .status_flusher
-                .flush(status_flusher::FlushReason::Forced)
-                .await
-            {
-                debug!("Forced status flush on reattach failed (will retry in background): {err}");
-            }
-
-            // ensure we hold mutex for the full duration
-            drop(update_state_lock_guard);
-        };
-    }
-
-    // must be called within a held update_state_lock lock.
-    async fn commit_and_update_state_inner(
-        &self,
-        _update_state_lock_guard: &MutexGuard<'_, ()>,
-        commit_level: CommitLevel,
-    ) -> bool {
-        // The oplog commit is run on a Tokio task rather than awaited inline.
-        //
-        // When a p3 concurrent durable host call commits its terminal entry (e.g. an async RPC's
-        // `future-invoke-result.get` writing its `End`), this executes inside a `wasmtime`
-        // `run_concurrent` host future. `oplog.commit()` acquires the oplog's FIFO async locks and
-        // awaits a blocking `sqlx` SQLite write. `run_concurrent` has a documented store-blocking
-        // limitation for a host future that inline-drives such a composed async operation while it
-        // is the last effectively-active subtask (here the sibling commits are serialized behind
-        // `update_state_lock`): the inline commit can stop making progress despite wake events and
-        // wedge the whole invocation. See the "Store-blocking behavior" section of wasmtime's
-        // `run_concurrent` docs and the tracking issues:
-        //   https://github.com/bytecodealliance/wasmtime/issues/11869
-        //   https://github.com/bytecodealliance/wasmtime/issues/11870
-        // Running the entire commit on a Tokio task and awaiting its handle keeps that work off the
-        // host-future poller — the same shape as an async RPC's own background task, which resumes
-        // reliably. Offloading only the inner storage write is not enough; the host future must hold
-        // no oplog frames across the await. This workaround can be removed once the wasmtime issues
-        // above are fixed.
-        //
-        // The caller still awaits the result before proceeding, so the "durably committed before we
-        // move on" barrier is preserved. `AbortOnDropJoinHandle` keeps the original inline
-        // cancellation semantics: if this future is dropped, the commit task is aborted rather than
-        // left running detached.
-        let new_entries = {
-            let oplog = self.oplog.clone();
-            wasmtime_wasi::runtime::spawn(async move { oplog.commit(commit_level).await }).await
-        };
-
-        if !self.last_known_status_detached.load(Ordering::Acquire) {
-            let old_status = self.last_known_status.read().await.clone();
-
-            let updated_status = update_status_with_new_entries(
-                self.agent_mode(),
-                old_status.clone(),
-                new_entries,
-                &self.config().retry,
-            );
-
-            if let Some(updated_status) = updated_status {
-                if updated_status != old_status {
-                    self.update_last_known_status(updated_status.clone()).await;
-
-                    self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
-                        .await;
-
-                    true
-                } else {
-                    false
-                }
-            } else {
-                // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
-                // This can happen during a revert or a snapshot update for example.
-                tracing::debug!("Detaching worker_status from oplog");
-                self.last_known_status_detached
-                    .store(true, Ordering::Release);
-                // The in-memory status is no longer authoritative, and after reattach it will be
-                // recomputed from scratch, so the persisted baseline can no longer be trusted: the
-                // next flush must be a full reconcile write.
-                self.status_flusher.invalidate_baseline().await;
-                true
-            }
-        } else {
-            false
-        }
-    }
-
-    async fn schedule_oplog_archive_if_needed(
-        &self,
-        old_status: &AgentStatusRecord,
-        new_status: &AgentStatusRecord,
-    ) {
-        if old_status.status != new_status.status
-            && matches!(
-                new_status.status,
-                AgentStatus::Idle | AgentStatus::Failed | AgentStatus::Exited
-            )
-        {
-            let archive_interval = self.config().oplog.archive_interval;
-            let last_oplog_index = new_status.oplog_idx;
-            let account_id = self.initial_worker_metadata.created_by;
-
-            debug!(
-                worker_id = %self.owned_agent_id,
-                new_status = ?new_status.status,
-                "Scheduling ArchiveOplog after status transition"
-            );
-
-            self.scheduler_service()
-                .schedule(
-                    Utc::now() + archive_interval,
-                    ScheduledAction::ArchiveOplog {
-                        account_id,
-                        owned_agent_id: self.owned_agent_id.clone(),
-                        agent_mode: self.agent_mode(),
-                        last_oplog_index,
-                        next_after: archive_interval,
-                    },
-                )
-                .await;
-        }
+        self.state_actor.reattach_worker_status().await;
     }
 
     async fn start_waiting_worker(
@@ -3150,7 +3004,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.load_full().as_ref().clone();
         self.status_checkpointer
             .maybe_checkpoint(&status, reason)
             .await;
@@ -3173,7 +3027,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.load_full().as_ref().clone();
         if let Some(marker) = min_exposed_marker
             && status.oplog_idx > marker
         {
@@ -3200,24 +3054,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             debug!("Forced status flush failed (will retry in background): {err}");
         }
-    }
-
-    async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
-        let previous_metrics_status = self.metrics_status.status();
-        // The in-memory `last_known_status` is the authoritative live status; the flusher reads it
-        // when it persists the cached blob. We replace it here and hand the (previous, new) pair to
-        // the flusher, which updates the `RunningWorkers` recovery index synchronously and either
-        // marks the worker dirty for the background sweeper or writes the blob inline (when
-        // background flushing is disabled).
-        let previous_status = {
-            let mut guard = self.last_known_status.write().await;
-            std::mem::replace(&mut *guard, new_status.clone())
-        };
-        self.metrics_status
-            .update(previous_metrics_status, new_status.status);
-        self.status_flusher
-            .on_status_changed(&previous_status, &new_status)
-            .await;
     }
 }
 
@@ -4393,7 +4229,7 @@ pub enum ResultOrSubscription {
 
 struct GetOrCreateWorkerResult {
     initial_worker_metadata: AgentMetadata,
-    current_status: Arc<RwLock<AgentStatusRecord>>,
+    current_status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     agent_id: Option<ParsedAgentId>,
     snapshot_policy: SnapshotPolicy,

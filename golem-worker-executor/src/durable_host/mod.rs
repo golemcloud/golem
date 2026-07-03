@@ -1059,27 +1059,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
-            // that libcall waits, the store cannot make progress, so any other
-            // concurrent tasks of the component are stalled and awaiting anything
-            // that (directly or indirectly) needs the invocation loop can deadlock
-            // (see https://github.com/bytecodealliance/wasmtime/issues/11869).
-            // Therefore nothing is awaited here; the oplog hint and the global
-            // memory admission run on a detached task. If admission fails, the
-            // worker is restarted, which unloads it and reacquires its full
-            // (now larger, as `total_linear_memory_size` already includes this
-            // grow) memory reservation through the startup admission path -
-            // the same net effect as failing the grow with `WorkerOutOfMemory`.
+            // that libcall waits, the store cannot make progress, so nothing may be
+            // awaited here (see https://github.com/bytecodealliance/wasmtime/issues/11869).
+            // The oplog hint and the global memory admission run as a fire-and-forget
+            // job on the worker-state actor's lifecycle queue; see
+            // `Worker::request_memory_grow` for the admission-failure semantics.
             self.state.total_linear_memory_size += delta;
-            let worker = self.public_state.worker();
-            tokio::spawn(async move {
-                worker.add_to_oplog(OplogEntry::grow_memory(delta)).await;
-                if let Err(error) = worker.increase_memory(delta).await {
-                    warn!(
-                        "Failed to acquire {delta} bytes of additional memory: {error}; restarting the worker"
-                    );
-                    worker.set_interrupting(InterruptKind::Restart).await;
-                }
-            });
+            self.public_state.worker().request_memory_grow(delta);
             Ok(())
         }
     }

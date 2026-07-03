@@ -2466,7 +2466,7 @@ mod test {
             _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
             _initial_worker_metadata: AgentMetadata,
-            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
@@ -2478,7 +2478,7 @@ mod test {
             _agent_mode: AgentMode,
             _last_oplog_index: Option<OplogIndex>,
             _initial_worker_metadata: AgentMetadata,
-            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
