@@ -3240,6 +3240,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
             }
         } else {
+            // Mirror the live-path drain: events enqueued from synchronous drops during replay
+            // (e.g. `DropEvent::FinishSpan` for a p3 HTTP response dropped unconsumed) must consume
+            // their positional entries (recorded by the live drain at this same point) before the
+            // `AgentInvocationFinished` entry is read.
+            concurrent::drain_queued_dropped_call_events(self)
+                .await
+                .map_err(|err| err.source)?;
+
             let response = self
                 .state
                 .replay_state
@@ -4904,6 +4912,12 @@ struct PrivateDurableWorkerState {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
 
+    /// `outgoing-http-request` invocation spans of open p3 HTTP responses, keyed by the p3
+    /// response resource rep. The span is started by the durable `client::send` and finished when
+    /// the response body completes (the durable consume-body terminal) or the response resource is
+    /// dropped unconsumed — mirroring the P2 `end_http_request` span lifecycle.
+    pub(crate) open_p3_http_response_spans: HashMap<u32, SpanId>,
+
     /// WebSocket connection state indexed by websocket resource rep.
     open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
 
@@ -5160,6 +5174,7 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
+            open_p3_http_response_spans: HashMap::new(),
             open_websocket_connections: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
             pending_http_outgoing_body_stream: HashMap::new(),

@@ -365,6 +365,175 @@ async fn http_client_using_reqwest_async_parallel(
 
 #[test]
 #[tracing::instrument]
+async fn outgoing_http_contains_trace_context_headers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let traceparents = Arc::new(Mutex::new(Vec::new()));
+    let traceparents_clone = traceparents.clone();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/post-example",
+                post(move |headers: HeaderMap| async move {
+                    traceparents_clone.lock().unwrap().push(
+                        headers
+                            .get("traceparent")
+                            .map(|h| h.to_str().unwrap().to_string()),
+                    );
+                    json!({
+                        "percentage": 0.0,
+                        "message": null
+                    })
+                    .to_string()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient2");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart the executor to force a full oplog replay, then run a fresh invocation: the replay
+    // must not re-send the recorded request, and the new live request must again carry a
+    // trace-context header.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    let traceparents = traceparents.lock().unwrap();
+    assert_eq!(traceparents.len(), 2);
+    for traceparent in traceparents.iter() {
+        let traceparent = traceparent
+            .as_ref()
+            .expect("the outgoing p3 HTTP request must carry a traceparent header");
+        // W3C trace context: version-traceid-spanid-flags
+        let parts: Vec<&str> = traceparent.split('-').collect();
+        assert_eq!(
+            parts.len(),
+            4,
+            "traceparent header is not in W3C format: {traceparent}"
+        );
+        assert_eq!(parts[1].len(), 32);
+        assert_eq!(parts[2].len(), 16);
+    }
+
+    Ok(())
+}
+
+/// A response created by a P3 `client::send` and dropped without consuming its
+/// body finishes its `outgoing-http-request` span through a deferred drop
+/// event; the `FinishSpan` entry it records must replay symmetrically. The
+/// restart + re-invocation would fail with an unexpected-oplog-entry error if
+/// the replay-side drain did not consume the recorded entry at the same point.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_response_dropped_without_consuming_body_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route("/", axum::routing::get(|| async { "hello" }));
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_drop_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "200");
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart and invoke again: the first invocation (send + unconsumed drop +
+    // deferred span finish) replays fully before the second runs live.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_drop_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result2, "200");
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn outgoing_http_contains_idempotency_key(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -418,12 +587,40 @@ async fn outgoing_http_contains_idempotency_key(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    // The injected key is derived from the invocation idempotency key and the send's own
+    // host-call `Start` index, so it is a deterministic value for the first call of this
+    // invocation.
+    let expected_response = "200 ExampleResponse { percentage: 0.0, message: Some(\"e7158c39-c997-5318-9d0d-a3c47f406e12\") }";
+    assert_eq!(result.into_typed::<String>()?, expected_response);
+
+    // Restart the executor to force a full oplog replay and repeat the invocation with the same
+    // idempotency key: the replayed invocation must observe the same injected key (recorded in
+    // the durable request), without re-sending the HTTP request.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let replayed_result = executor
+        .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
+        .await?;
+    assert_eq!(replayed_result.into_typed::<String>()?, expected_response);
+
+    // A fresh invocation after the restart replays the first invocation (including the durable
+    // send) and then performs a new live request, which derives a different key from its own
+    // durable call position.
+    let fresh_result = executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert!(
+        fresh_result.starts_with("200 ExampleResponse { percentage: 0.0, message: Some("),
+        "unexpected response for the post-restart invocation: {fresh_result}"
+    );
+    assert_ne!(fresh_result, expected_response);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
     drop(executor);
     http_server.abort();
 
-    assert_eq!(
-        result.into_typed::<String>()?,
-        "200 ExampleResponse { percentage: 0.0, message: Some(\"29e89d8e-585f-519d-a57b-fd8650d59edb\") }"
-    );
     Ok(())
 }

@@ -38,6 +38,7 @@ use std::marker::PhantomData;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
+use crate::durable_host::durability::DurabilityHost;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
 use wasmtime::component::{HasData, Linker};
@@ -92,6 +93,24 @@ fn expect_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut Ctx {
 
 fn durable_worker_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut DurableWorkerCtx<Ctx> {
     expect_ctx::<Ctx, U>(u).durable_ctx_mut()
+}
+
+/// Records a pass-through (non-durable) p3 host function call for metrics and debug tracing.
+/// Durable calls are observed by `CallHandle::start_access` / `prepare_access_start` with their
+/// host-function pair's interface/function names; every other host method observes explicitly
+/// through this helper, mirroring the P2 wrappers.
+fn observe_function_call<Ctx: WorkerCtx>(ctx: &Ctx, interface: &str, function: &str) {
+    DurabilityHost::observe_function_call(ctx.durable_ctx(), interface, function);
+}
+
+/// [`observe_function_call`] for `HostWithStore` methods that only have the method-generic store
+/// data type `U`.
+fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
+    u: &mut U,
+    interface: &str,
+    function: &str,
+) {
+    observe_function_call(expect_ctx::<Ctx, U>(u), interface, function);
 }
 
 async fn run_read_access<T, D, Ctx, Pair, F, Fut>(

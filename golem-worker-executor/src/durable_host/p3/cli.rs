@@ -16,7 +16,10 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx};
+use crate::durable_host::p3::{
+    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
+    observe_function_call_store,
+};
 use crate::model::event::InternalWorkerEvent;
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
@@ -301,24 +304,29 @@ where
 
 impl<Ctx: WorkerCtx> environment::Host for DurableP3View<'_, Ctx> {
     fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
+        observe_function_call(&*self.0, "cli::environment", "get-environment");
         environment::Host::get_environment(&mut WasiCliView::cli(self.0))
     }
 
     fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {
+        observe_function_call(&*self.0, "cli::environment", "get-arguments");
         environment::Host::get_arguments(&mut WasiCliView::cli(self.0))
     }
 
     fn get_initial_cwd(&mut self) -> wasmtime::Result<Option<String>> {
+        observe_function_call(&*self.0, "cli::environment", "get-initial-cwd");
         environment::Host::get_initial_cwd(&mut WasiCliView::cli(self.0))
     }
 }
 
 impl<Ctx: WorkerCtx> exit::Host for DurableP3View<'_, Ctx> {
     fn exit(&mut self, status: Result<(), ()>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "cli::exit", "exit");
         exit::Host::exit(&mut WasiCliView::cli(self.0), status)
     }
 
     fn exit_with_code(&mut self, status_code: u8) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "cli::exit", "exit-with-code");
         exit::Host::exit_with_code(&mut WasiCliView::cli(self.0), status_code)
     }
 }
@@ -327,6 +335,7 @@ impl<Ctx: WorkerCtx> terminal_input::Host for DurableP3View<'_, Ctx> {}
 
 impl<Ctx: WorkerCtx> terminal_input::HostTerminalInput for DurableP3View<'_, Ctx> {
     fn drop(&mut self, rep: Resource<TerminalInput>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "cli::terminal-input", "drop");
         terminal_input::HostTerminalInput::drop(&mut WasiCliView::cli(self.0), rep)
     }
 }
@@ -335,24 +344,28 @@ impl<Ctx: WorkerCtx> terminal_output::Host for DurableP3View<'_, Ctx> {}
 
 impl<Ctx: WorkerCtx> terminal_output::HostTerminalOutput for DurableP3View<'_, Ctx> {
     fn drop(&mut self, rep: Resource<TerminalOutput>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "cli::terminal-output", "drop");
         terminal_output::HostTerminalOutput::drop(&mut WasiCliView::cli(self.0), rep)
     }
 }
 
 impl<Ctx: WorkerCtx> terminal_stdin::Host for DurableP3View<'_, Ctx> {
     fn get_terminal_stdin(&mut self) -> wasmtime::Result<Option<Resource<TerminalInput>>> {
+        observe_function_call(&*self.0, "cli::terminal-stdin", "get-terminal-stdin");
         terminal_stdin::Host::get_terminal_stdin(&mut WasiCliView::cli(self.0))
     }
 }
 
 impl<Ctx: WorkerCtx> terminal_stdout::Host for DurableP3View<'_, Ctx> {
     fn get_terminal_stdout(&mut self) -> wasmtime::Result<Option<Resource<TerminalOutput>>> {
+        observe_function_call(&*self.0, "cli::terminal-stdout", "get-terminal-stdout");
         terminal_stdout::Host::get_terminal_stdout(&mut WasiCliView::cli(self.0))
     }
 }
 
 impl<Ctx: WorkerCtx> terminal_stderr::Host for DurableP3View<'_, Ctx> {
     fn get_terminal_stderr(&mut self) -> wasmtime::Result<Option<Resource<TerminalOutput>>> {
+        observe_function_call(&*self.0, "cli::terminal-stderr", "get-terminal-stderr");
         terminal_stderr::Host::get_terminal_stderr(&mut WasiCliView::cli(self.0))
     }
 }
@@ -363,6 +376,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> stdin::HostWithStore<U> for DurableP3<Ct
     async fn read_via_stream(
         accessor: &Accessor<U, Self>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), ErrorCode>>)> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "cli::stdin",
+                "read-via-stream",
+            )
+        });
         accessor.with(|mut store| {
             let ctx = durable_worker_ctx::<Ctx, U>(store.data_mut());
             if ctx.stdin.is_disabled() {
@@ -396,6 +416,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> stdout::HostWithStore<U> for DurableP3<C
         accessor: &Accessor<U, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), ErrorCode>>> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "cli::stdout",
+                "write-via-stream",
+            )
+        });
         write_standard_stream_via_stream::<Ctx, U>(accessor, data, StandardStream::Stdout).await
     }
 }
@@ -407,6 +434,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> stderr::HostWithStore<U> for DurableP3<C
         accessor: &Accessor<U, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), ErrorCode>>> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "cli::stderr",
+                "write-via-stream",
+            )
+        });
         write_standard_stream_via_stream::<Ctx, U>(accessor, data, StandardStream::Stderr).await
     }
 }

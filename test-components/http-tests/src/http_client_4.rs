@@ -32,6 +32,10 @@ pub trait HttpClient4 {
 
     /// Sends a buffered POST with a retry policy that retries HTTP 500 responses.
     async fn post_with_status_retry_policy(&self) -> String;
+
+    /// Sends a GET request and drops the response without reading its body,
+    /// returning only the status code.
+    async fn get_and_drop_response(&self) -> String;
 }
 
 struct HttpClient4Impl;
@@ -103,6 +107,20 @@ impl HttpClient4 for HttpClient4Impl {
         })
         .await
         .unwrap()
+    }
+
+    async fn get_and_drop_response(&self) -> String {
+        let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+        let response = wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/"))
+            .send()
+            .await
+            .expect("Request failed");
+
+        let status = response.status().as_u16();
+        drop(response);
+        format!("{status}")
     }
 }
 

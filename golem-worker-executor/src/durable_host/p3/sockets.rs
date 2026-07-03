@@ -20,7 +20,8 @@ use crate::durable_host::TcpSocketStreamDirection;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
 use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
 use crate::durable_host::p3::{
-    DurableP3, DurableP3View, durable_worker_ctx, run_read_access, wasi_sockets_view,
+    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
+    observe_function_call_store, run_read_access, wasi_sockets_view,
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
@@ -457,6 +458,7 @@ impl<D> StreamConsumer<D> for TcpReceiveForwardConsumer {
 
 impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {
     fn convert_error_code(&mut self, error: SocketError) -> wasmtime::Result<types::ErrorCode> {
+        observe_function_call(&*self.0, "sockets::types", "convert-error-code");
         types::Host::convert_error_code(&mut WasiSocketsView::sockets(self.0), error)
     }
 }
@@ -467,6 +469,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         local_address: types::IpSocketAddress,
     ) -> SocketResult<()> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "bind");
         let mut view = WasiSocketsView::sockets(self.0);
         types::HostTcpSocket::bind(&mut view, socket, local_address).await
     }
@@ -475,6 +478,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         address_family: types::IpAddressFamily,
     ) -> SocketResult<Resource<TcpSocket>> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "create");
         types::HostTcpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family)
     }
 
@@ -482,6 +486,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::IpSocketAddress> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-local-address");
         types::HostTcpSocket::get_local_address(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -489,10 +494,12 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::IpSocketAddress> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-remote-address");
         types::HostTcpSocket::get_remote_address(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
     fn get_is_listening(&mut self, socket: Resource<TcpSocket>) -> wasmtime::Result<bool> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-is-listening");
         types::HostTcpSocket::get_is_listening(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -500,6 +507,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<types::IpAddressFamily> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-address-family");
         types::HostTcpSocket::get_address_family(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -508,6 +516,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         value: u64,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "set-listen-backlog-size",
+        );
         types::HostTcpSocket::set_listen_backlog_size(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -516,6 +529,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn get_keep_alive_enabled(&mut self, socket: Resource<TcpSocket>) -> SocketResult<bool> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "get-keep-alive-enabled",
+        );
         types::HostTcpSocket::get_keep_alive_enabled(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -524,6 +542,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         value: bool,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "set-keep-alive-enabled",
+        );
         types::HostTcpSocket::set_keep_alive_enabled(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -535,6 +558,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "get-keep-alive-idle-time",
+        );
         types::HostTcpSocket::get_keep_alive_idle_time(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -546,6 +574,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         value: types::Duration,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "set-keep-alive-idle-time",
+        );
         types::HostTcpSocket::set_keep_alive_idle_time(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -557,6 +590,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "get-keep-alive-interval",
+        );
         types::HostTcpSocket::get_keep_alive_interval(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -565,6 +603,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         value: types::Duration,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "set-keep-alive-interval",
+        );
         types::HostTcpSocket::set_keep_alive_interval(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -573,6 +616,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn get_keep_alive_count(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u32> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "get-keep-alive-count",
+        );
         types::HostTcpSocket::get_keep_alive_count(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -581,6 +629,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         value: u32,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "set-keep-alive-count",
+        );
         types::HostTcpSocket::set_keep_alive_count(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -589,14 +642,21 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn get_hop_limit(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u8> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-hop-limit");
         types::HostTcpSocket::get_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
     fn set_hop_limit(&mut self, socket: Resource<TcpSocket>, value: u8) -> SocketResult<()> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "set-hop-limit");
         types::HostTcpSocket::set_hop_limit(&mut WasiSocketsView::sockets(self.0), socket, value)
     }
 
     fn get_receive_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "get-receive-buffer-size",
+        );
         types::HostTcpSocket::get_receive_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -605,6 +665,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         value: u64,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "set-receive-buffer-size",
+        );
         types::HostTcpSocket::set_receive_buffer_size(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -613,6 +678,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn get_send_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "get-send-buffer-size",
+        );
         types::HostTcpSocket::get_send_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -621,6 +691,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
         value: u64,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::tcp-socket",
+            "set-send-buffer-size",
+        );
         types::HostTcpSocket::set_send_buffer_size(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -629,6 +704,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn drop(&mut self, sock: Resource<TcpSocket>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "sockets::types::tcp-socket", "drop");
         // Clear the one-shot send/receive taken shadow before the resource (and
         // its rep) can be reused, so a future socket cannot inherit stale flags.
         self.0
@@ -1353,6 +1429,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         socket: Resource<TcpSocket>,
         remote_address: types::IpSocketAddress,
     ) -> SocketResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "sockets::types::tcp-socket",
+                "connect",
+            )
+        });
         let store = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
         <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(&store, socket, remote_address)
             .await
@@ -1362,6 +1445,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         mut store: Access<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<StreamReader<Resource<TcpSocket>>> {
+        observe_function_call_store::<Ctx, U>(
+            store.as_context_mut().data_mut(),
+            "sockets::types::tcp-socket",
+            "listen",
+        );
         let store =
             Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
         <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket)
@@ -1479,6 +1567,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<UdpSocket>,
         local_address: types::IpSocketAddress,
     ) -> SocketResult<()> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "bind");
         let mut view = WasiSocketsView::sockets(self.0);
         types::HostUdpSocket::bind(&mut view, socket, local_address).await
     }
@@ -1488,6 +1577,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<UdpSocket>,
         remote_address: types::IpSocketAddress,
     ) -> SocketResult<()> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "connect");
         let mut view = WasiSocketsView::sockets(self.0);
         types::HostUdpSocket::connect(&mut view, socket, remote_address).await
     }
@@ -1496,10 +1586,12 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         address_family: types::IpAddressFamily,
     ) -> SocketResult<Resource<UdpSocket>> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "create");
         types::HostUdpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family)
     }
 
     fn disconnect(&mut self, socket: Resource<UdpSocket>) -> SocketResult<()> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "disconnect");
         types::HostUdpSocket::disconnect(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -1507,6 +1599,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<UdpSocket>,
     ) -> SocketResult<types::IpSocketAddress> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "get-local-address");
         types::HostUdpSocket::get_local_address(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -1514,6 +1607,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<UdpSocket>,
     ) -> SocketResult<types::IpSocketAddress> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "get-remote-address");
         types::HostUdpSocket::get_remote_address(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -1521,10 +1615,16 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         &mut self,
         socket: Resource<UdpSocket>,
     ) -> wasmtime::Result<types::IpAddressFamily> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "get-address-family");
         types::HostUdpSocket::get_address_family(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
     fn get_unicast_hop_limit(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u8> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::udp-socket",
+            "get-unicast-hop-limit",
+        );
         types::HostUdpSocket::get_unicast_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -1533,6 +1633,11 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<UdpSocket>,
         value: u8,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::udp-socket",
+            "set-unicast-hop-limit",
+        );
         types::HostUdpSocket::set_unicast_hop_limit(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -1541,6 +1646,11 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn get_receive_buffer_size(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u64> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::udp-socket",
+            "get-receive-buffer-size",
+        );
         types::HostUdpSocket::get_receive_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -1549,6 +1659,11 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<UdpSocket>,
         value: u64,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::udp-socket",
+            "set-receive-buffer-size",
+        );
         types::HostUdpSocket::set_receive_buffer_size(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -1557,6 +1672,11 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn get_send_buffer_size(&mut self, socket: Resource<UdpSocket>) -> SocketResult<u64> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::udp-socket",
+            "get-send-buffer-size",
+        );
         types::HostUdpSocket::get_send_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
     }
 
@@ -1565,6 +1685,11 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<UdpSocket>,
         value: u64,
     ) -> SocketResult<()> {
+        observe_function_call(
+            &*self.0,
+            "sockets::types::udp-socket",
+            "set-send-buffer-size",
+        );
         types::HostUdpSocket::set_send_buffer_size(
             &mut WasiSocketsView::sockets(self.0),
             socket,
@@ -1573,6 +1698,7 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
     }
 
     fn drop(&mut self, sock: Resource<UdpSocket>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "sockets::types::udp-socket", "drop");
         types::HostUdpSocket::drop(&mut WasiSocketsView::sockets(self.0), sock)
     }
 }

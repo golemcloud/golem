@@ -13,16 +13,21 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, DropPolicy, LeaveIncompleteOnDrop, NotCancellable,
+    AccessStartContext, CallHandle, CallReplayOutcome, Cancellable, DropEvent, DropPolicy,
+    LeaveIncompleteOnDrop, NotCancellable, finish_span_access, start_span_access,
 };
 use crate::durable_host::durability::{
     DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
 };
-use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
+use crate::durable_host::p3::{
+    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
+    observe_function_call_store, wasi_http_view,
+};
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
 use futures::future::{Either, select};
+use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{
     P3HttpClientConsumeBody, P3HttpClientConsumeBodyChunk, P3HttpClientSend,
 };
@@ -36,8 +41,10 @@ use golem_common::model::oplog::payload::types::{
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestP3HttpClientSend,
     HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientSendResult,
+    HostResponseP3HttpClientSendResult, OplogIndex,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::BodyExt as _;
 use http_body_util::Empty;
@@ -77,13 +84,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
         store: &Accessor<U, Self>,
         req: Resource<Request>,
     ) -> HttpResult<Resource<Response>> {
-        let request = serialize_request::<Ctx, U>(store, borrow_resource(&req))?;
+        let method = {
+            let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+            http_store.with(|mut access| {
+                let mut view = access.get();
+                types::HostRequest::get_method(&mut view, borrow_resource(&req))
+                    .map_err(HttpError::trap)
+            })?
+        };
 
-        if is_idempotent_http_method(&request.method) {
+        if is_idempotent_http_method(&serialize_method(method)) {
             send_with_durability::<Ctx, U, LeaveIncompleteOnDrop>(
                 store,
                 req,
-                request,
                 DurableFunctionType::WriteRemote,
             )
             .await
@@ -91,7 +104,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
             send_with_durability::<Ctx, U, Cancellable>(
                 store,
                 req,
-                request,
                 DurableFunctionType::WriteRemoteBatched(None),
             )
             .await
@@ -102,12 +114,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
 async fn send_with_durability<Ctx, U, P>(
     store: &Accessor<U, DurableP3<Ctx>>,
     req: Resource<Request>,
-    request: SerializableP3HttpClientSend,
     function_type: DurableFunctionType,
 ) -> HttpResult<Resource<Response>>
 where
     Ctx: WorkerCtx,
-    U: Send,
+    U: Send + 'static,
     P: DropPolicy,
 {
     // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
@@ -123,14 +134,48 @@ where
             .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
     })?;
 
-    let mut handle = CallHandle::<P3HttpClientSend, P>::start_access(
+    // The request head is serialized (and recorded) exactly as the guest built
+    // it. Inside the two-phase start (see `CallHandle::start_access_with`) an
+    // `outgoing-http-request` invocation-context span is started (durably:
+    // `StartSpan` live, consumed on replay) between the durable scope `Start`
+    // and the host-call `Start`, exactly like P2 starts it after
+    // `begin_durable_function`. The span id is smuggled out for the injection
+    // and completion paths below.
+    //
+    // The Golem-managed headers (`traceparent`/`tracestate` and the derived
+    // `idempotency-key`) are injected into the request *resource* only, after
+    // the host-call `Start` is written/claimed: like on P2 they are not part of
+    // the recorded head, because they are deterministic functions of recorded
+    // state — the trace context of the replayed span (same span id) and the
+    // idempotency key derived from the call's own `Start` index, which is
+    // stable across live execution and replay.
+    let mut send_span: Option<SpanId> = None;
+    let send_span_out = &mut send_span;
+    let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with(
         store,
         durable_worker_ctx::<Ctx, U>,
-        HostRequestP3HttpClientSend { request },
         function_type,
+        async |_start_context: AccessStartContext| {
+            let request =
+                serialize_request::<Ctx, U>(store, borrow_resource(&req)).map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to serialize outgoing p3 HTTP request: {err}"
+                    ))
+                })?;
+            let span_id = start_span_access(
+                store,
+                durable_worker_ctx::<Ctx, U>,
+                &outgoing_http_request_span_attributes(&request),
+            )
+            .await?;
+            *send_span_out = Some(span_id);
+            Ok(HostRequestP3HttpClientSend { request })
+        },
     )
     .await
     .map_err(HttpError::trap)?;
+
+    let span_id = send_span.expect("p3 HTTP send request builder did not run");
 
     if !handle.is_live() {
         match handle
@@ -145,10 +190,47 @@ where
                 // response — otherwise the request leaks and a guest
                 // streaming a body or awaiting its transmission future hangs.
                 consume_replayed_request::<Ctx, U>(store, req).await?;
-                return replay_send_response::<Ctx, U>(store, response.result);
+                let result = replay_send_response::<Ctx, U>(store, response.result);
+                match result {
+                    Ok(response) => {
+                        // The span stays open until the response body
+                        // completes; hand it to the replayed response so the
+                        // consume-body / drop paths consume the recorded
+                        // `FinishSpan` at the same point it was written live.
+                        register_response_span::<Ctx, U>(store, &response, span_id);
+                        return Ok(response);
+                    }
+                    Err(error) => {
+                        // A recorded send error closed the span live right
+                        // after the `End`; consume its `FinishSpan` here.
+                        finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span_id)
+                            .await
+                            .map_err(HttpError::trap)?;
+                        return Err(error);
+                    }
+                }
             }
             CallReplayOutcome::Incomplete(live_handle) => handle = live_handle,
         }
+    }
+
+    // Inject the Golem-managed headers into the request resource before the
+    // live send. This runs both for a fresh live call and for an
+    // incomplete-replay re-execution, and derives identical values in both
+    // cases: the trace context comes from the (recorded, replayed) span and
+    // the idempotency key from the call's own `Start` index, which the replay
+    // claim returns unchanged.
+    {
+        let request_head = serialize_request::<Ctx, U>(store, borrow_resource(&req))?;
+        let injected = golem_outgoing_http_headers::<Ctx, U>(
+            store,
+            &span_id,
+            handle.start_index(),
+            &request_head.headers,
+        )
+        .map_err(HttpError::trap)?;
+        apply_headers_to_request_resource::<Ctx, U>(store, &req, &injected)
+            .map_err(HttpError::trap)?;
     }
 
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
@@ -179,6 +261,10 @@ where
                 )
                 .await
                 .map_err(HttpError::trap)?;
+            // The span stays open until the response body completes (the
+            // durable consume-body terminal or an unconsumed drop), mirroring
+            // the P2 `end_http_request` span lifecycle.
+            register_response_span::<Ctx, U>(store, &response, span_id);
             Ok(response)
         }
         Err(error) => {
@@ -193,14 +279,171 @@ where
                     )
                     .await
                     .map_err(HttpError::trap)?;
+                finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span_id)
+                    .await
+                    .map_err(HttpError::trap)?;
                 Err(error)
             } else {
+                // Trap path: the invocation is torn down and retried from the
+                // oplog, so the span is not finished here (no `FinishSpan` is
+                // recorded after an incomplete `Start`).
                 Err(HttpError::trap(wasmtime::Error::from_anyhow(
                     handle.trap(error),
                 )))
             }
         }
     }
+}
+
+/// Associates the `outgoing-http-request` span with the response resource
+/// created by (a live or replayed) `client::send`. The span is finished when
+/// the response body completes: the durable consume-body task takes ownership
+/// of it in `consume_body`, or the response `drop` finishes it via a deferred
+/// [`DropEvent::FinishSpan`] when the body was never consumed.
+fn register_response_span<Ctx: WorkerCtx, U: Send>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    response: &Resource<Response>,
+    span_id: SpanId,
+) {
+    let rep = response.rep();
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        ctx.state.open_p3_http_response_spans.insert(rep, span_id);
+    });
+}
+
+/// Span attributes for the `outgoing-http-request` invocation-context span,
+/// mirroring the P2 `http::outgoing_handler::handle` span shape.
+fn outgoing_http_request_span_attributes(
+    request: &SerializableP3HttpClientSend,
+) -> Vec<(String, AttributeValue)> {
+    let scheme = match request
+        .scheme
+        .as_ref()
+        .unwrap_or(&SerializableP3HttpScheme::Https)
+    {
+        SerializableP3HttpScheme::Http => "http",
+        SerializableP3HttpScheme::Https | SerializableP3HttpScheme::Other(_) => "https",
+    };
+    let uri = format!(
+        "{}://{}{}",
+        scheme,
+        request.authority.as_deref().unwrap_or(""),
+        request.path_with_query.as_deref().unwrap_or("")
+    );
+    vec![
+        (
+            "name".to_string(),
+            AttributeValue::String("outgoing-http-request".to_string()),
+        ),
+        ("request.uri".to_string(), AttributeValue::String(uri)),
+        (
+            "request.method".to_string(),
+            AttributeValue::String(request.method.to_string()),
+        ),
+    ]
+}
+
+/// Computes the Golem-managed headers to inject into an outgoing p3 HTTP
+/// request, mirroring P2 (`http/outgoing_http.rs`): the trace-context headers
+/// of the request's invocation span (when `forward_trace_context_headers` is
+/// enabled) and an `idempotency-key` derived from the send's own host-call
+/// `Start` index (when `set_outgoing_http_idempotency_key` is enabled and the
+/// guest did not set the header itself). The `Start` index is stable across
+/// live execution and replay, so a retried send reuses the same key.
+/// `guest_headers` is the serialized request head used to detect a
+/// guest-provided idempotency key.
+fn golem_outgoing_http_headers<Ctx: WorkerCtx, U: Send>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    span_id: &SpanId,
+    start_index: OplogIndex,
+    guest_headers: &HashMap<String, Vec<Vec<u8>>>,
+) -> Result<Vec<(String, String)>, WorkerExecutorError> {
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        let mut headers = Vec::new();
+        if ctx.state.forward_trace_context_headers {
+            let invocation_context =
+                ctx.state
+                    .invocation_context
+                    .get_stack(span_id)
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "span {span_id} missing from the invocation context while injecting trace context headers: {err}"
+                        ))
+                    })?;
+            let trace_context_headers =
+                TraceContextHeaders::from_invocation_context(invocation_context);
+            headers.extend(trace_context_headers.to_raw_headers_map());
+        }
+        if ctx.state.set_outgoing_http_idempotency_key
+            && !guest_headers.contains_key("idempotency-key")
+        {
+            let idempotency_key = ctx.derive_idempotency_key(start_index);
+            headers.push(("idempotency-key".to_string(), idempotency_key.to_string()));
+        }
+        Ok(headers)
+    })
+}
+
+/// Applies the injected headers to the actual request resource (replacing any
+/// existing values for the same names) so the network request carries them.
+/// The guest constructed the request with immutable headers, so they are
+/// briefly remarked mutable, mirroring the P2 injection.
+fn apply_headers_to_request_resource<Ctx: WorkerCtx, U: Send>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    req: &Resource<Request>,
+    headers: &[(String, String)],
+) -> Result<(), WorkerExecutorError> {
+    if headers.is_empty() {
+        return Ok(());
+    }
+    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+    http_store.with(|mut access| {
+        let view = access.get();
+        let field_size_limit = view.ctx.field_size_limit;
+        let request = view
+            .table
+            .get_mut(&Resource::<wasmtime_wasi_http::p3::Request>::new_borrow(
+                req.rep(),
+            ))
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get outgoing p3 HTTP request from table: {err}"
+                ))
+            })?;
+        request.headers.set_mutable(field_size_limit);
+        let mut result = Ok(());
+        for (name, value) in headers {
+            let header_name = match HeaderName::try_from(name.as_str()) {
+                Ok(name) => name,
+                Err(err) => {
+                    result = Err(WorkerExecutorError::runtime(format!(
+                        "invalid injected header name {name}: {err}"
+                    )));
+                    break;
+                }
+            };
+            let header_value = match HeaderValue::try_from(value.as_str()) {
+                Ok(value) => value,
+                Err(err) => {
+                    result = Err(WorkerExecutorError::runtime(format!(
+                        "invalid injected header value for {name}: {err}"
+                    )));
+                    break;
+                }
+            };
+            let _ = request.headers.remove_all(header_name.clone());
+            if let Err(err) = request.headers.append(header_name, header_value) {
+                result = Err(WorkerExecutorError::runtime(format!(
+                    "failed to inject header {name} into outgoing p3 HTTP request: {err:?}"
+                )));
+                break;
+            }
+        }
+        request.headers.set_immutable();
+        result
+    })
 }
 
 fn is_idempotent_http_method(method: &SerializableHttpMethod) -> bool {
@@ -701,10 +944,12 @@ fn deserialize_field_size_payload(
 
 impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {
     fn convert_error_code(&mut self, error: HttpError) -> wasmtime::Result<ErrorCode> {
+        observe_function_call(&*self.0, "http::types", "convert-error-code");
         types::Host::convert_error_code(&mut WasiHttpView::http(self.0), error)
     }
 
     fn convert_header_error(&mut self, error: HeaderError) -> wasmtime::Result<types::HeaderError> {
+        observe_function_call(&*self.0, "http::types", "convert-header-error");
         types::Host::convert_header_error(&mut WasiHttpView::http(self.0), error)
     }
 
@@ -712,12 +957,14 @@ impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {
         &mut self,
         error: RequestOptionsError,
     ) -> wasmtime::Result<types::RequestOptionsError> {
+        observe_function_call(&*self.0, "http::types", "convert-request-options-error");
         types::Host::convert_request_options_error(&mut WasiHttpView::http(self.0), error)
     }
 }
 
 impl<Ctx: WorkerCtx> types::HostFields for DurableP3View<'_, Ctx> {
     fn new(&mut self) -> wasmtime::Result<Resource<Fields>> {
+        observe_function_call(&*self.0, "http::types::fields", "new");
         types::HostFields::new(&mut WasiHttpView::http(self.0))
     }
 
@@ -725,6 +972,7 @@ impl<Ctx: WorkerCtx> types::HostFields for DurableP3View<'_, Ctx> {
         &mut self,
         entries: Vec<(FieldName, FieldValue)>,
     ) -> HeaderResult<Resource<Fields>> {
+        observe_function_call(&*self.0, "http::types::fields", "from-list");
         types::HostFields::from_list(&mut WasiHttpView::http(self.0), entries)
     }
 
@@ -733,10 +981,12 @@ impl<Ctx: WorkerCtx> types::HostFields for DurableP3View<'_, Ctx> {
         fields: Resource<Fields>,
         name: FieldName,
     ) -> wasmtime::Result<Vec<FieldValue>> {
+        observe_function_call(&*self.0, "http::types::fields", "get");
         types::HostFields::get(&mut WasiHttpView::http(self.0), fields, name)
     }
 
     fn has(&mut self, fields: Resource<Fields>, name: FieldName) -> wasmtime::Result<bool> {
+        observe_function_call(&*self.0, "http::types::fields", "has");
         types::HostFields::has(&mut WasiHttpView::http(self.0), fields, name)
     }
 
@@ -746,10 +996,12 @@ impl<Ctx: WorkerCtx> types::HostFields for DurableP3View<'_, Ctx> {
         name: FieldName,
         value: Vec<FieldValue>,
     ) -> HeaderResult<()> {
+        observe_function_call(&*self.0, "http::types::fields", "set");
         types::HostFields::set(&mut WasiHttpView::http(self.0), fields, name, value)
     }
 
     fn delete(&mut self, fields: Resource<Fields>, name: FieldName) -> HeaderResult<()> {
+        observe_function_call(&*self.0, "http::types::fields", "delete");
         types::HostFields::delete(&mut WasiHttpView::http(self.0), fields, name)
     }
 
@@ -758,6 +1010,7 @@ impl<Ctx: WorkerCtx> types::HostFields for DurableP3View<'_, Ctx> {
         fields: Resource<Fields>,
         name: FieldName,
     ) -> HeaderResult<Vec<FieldValue>> {
+        observe_function_call(&*self.0, "http::types::fields", "get-and-delete");
         types::HostFields::get_and_delete(&mut WasiHttpView::http(self.0), fields, name)
     }
 
@@ -767,6 +1020,7 @@ impl<Ctx: WorkerCtx> types::HostFields for DurableP3View<'_, Ctx> {
         name: FieldName,
         value: FieldValue,
     ) -> HeaderResult<()> {
+        observe_function_call(&*self.0, "http::types::fields", "append");
         types::HostFields::append(&mut WasiHttpView::http(self.0), fields, name, value)
     }
 
@@ -774,20 +1028,24 @@ impl<Ctx: WorkerCtx> types::HostFields for DurableP3View<'_, Ctx> {
         &mut self,
         fields: Resource<Fields>,
     ) -> wasmtime::Result<Vec<(FieldName, FieldValue)>> {
+        observe_function_call(&*self.0, "http::types::fields", "copy-all");
         types::HostFields::copy_all(&mut WasiHttpView::http(self.0), fields)
     }
 
     fn clone(&mut self, fields: Resource<Fields>) -> wasmtime::Result<Resource<Fields>> {
+        observe_function_call(&*self.0, "http::types::fields", "clone");
         types::HostFields::clone(&mut WasiHttpView::http(self.0), fields)
     }
 
     fn drop(&mut self, fields: Resource<Fields>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "http::types::fields", "drop");
         types::HostFields::drop(&mut WasiHttpView::http(self.0), fields)
     }
 }
 
 impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
     fn get_method(&mut self, req: Resource<Request>) -> wasmtime::Result<Method> {
+        observe_function_call(&*self.0, "http::types::request", "get-method");
         types::HostRequest::get_method(&mut WasiHttpView::http(self.0), req)
     }
 
@@ -796,10 +1054,12 @@ impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
         req: Resource<Request>,
         method: Method,
     ) -> wasmtime::Result<Result<(), ()>> {
+        observe_function_call(&*self.0, "http::types::request", "set-method");
         types::HostRequest::set_method(&mut WasiHttpView::http(self.0), req, method)
     }
 
     fn get_path_with_query(&mut self, req: Resource<Request>) -> wasmtime::Result<Option<String>> {
+        observe_function_call(&*self.0, "http::types::request", "get-path-with-query");
         types::HostRequest::get_path_with_query(&mut WasiHttpView::http(self.0), req)
     }
 
@@ -808,6 +1068,7 @@ impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
         req: Resource<Request>,
         path_with_query: Option<String>,
     ) -> wasmtime::Result<Result<(), ()>> {
+        observe_function_call(&*self.0, "http::types::request", "set-path-with-query");
         types::HostRequest::set_path_with_query(
             &mut WasiHttpView::http(self.0),
             req,
@@ -816,6 +1077,7 @@ impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
     }
 
     fn get_scheme(&mut self, req: Resource<Request>) -> wasmtime::Result<Option<Scheme>> {
+        observe_function_call(&*self.0, "http::types::request", "get-scheme");
         types::HostRequest::get_scheme(&mut WasiHttpView::http(self.0), req)
     }
 
@@ -824,10 +1086,12 @@ impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
         req: Resource<Request>,
         scheme: Option<Scheme>,
     ) -> wasmtime::Result<Result<(), ()>> {
+        observe_function_call(&*self.0, "http::types::request", "set-scheme");
         types::HostRequest::set_scheme(&mut WasiHttpView::http(self.0), req, scheme)
     }
 
     fn get_authority(&mut self, req: Resource<Request>) -> wasmtime::Result<Option<String>> {
+        observe_function_call(&*self.0, "http::types::request", "get-authority");
         types::HostRequest::get_authority(&mut WasiHttpView::http(self.0), req)
     }
 
@@ -836,6 +1100,7 @@ impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
         req: Resource<Request>,
         authority: Option<String>,
     ) -> wasmtime::Result<Result<(), ()>> {
+        observe_function_call(&*self.0, "http::types::request", "set-authority");
         types::HostRequest::set_authority(&mut WasiHttpView::http(self.0), req, authority)
     }
 
@@ -843,10 +1108,12 @@ impl<Ctx: WorkerCtx> types::HostRequest for DurableP3View<'_, Ctx> {
         &mut self,
         req: Resource<Request>,
     ) -> wasmtime::Result<Option<Resource<RequestOptions>>> {
+        observe_function_call(&*self.0, "http::types::request", "get-options");
         types::HostRequest::get_options(&mut WasiHttpView::http(self.0), req)
     }
 
     fn get_headers(&mut self, req: Resource<Request>) -> wasmtime::Result<Resource<Headers>> {
+        observe_function_call(&*self.0, "http::types::request", "get-headers");
         types::HostRequest::get_headers(&mut WasiHttpView::http(self.0), req)
     }
 }
@@ -859,6 +1126,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
         trailers: FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
         options: Option<Resource<RequestOptions>>,
     ) -> wasmtime::Result<(Resource<Request>, FutureReader<Result<(), ErrorCode>>)> {
+        observe_function_call_store::<Ctx, U>(
+            store.as_context_mut().data_mut(),
+            "http::types::request",
+            "new",
+        );
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostRequestWithStore<U>>::new(
             store, headers, contents, trailers, options,
@@ -873,11 +1145,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
         StreamReader<u8>,
         FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
     )> {
+        observe_function_call_store::<Ctx, U>(
+            store.as_context_mut().data_mut(),
+            "http::types::request",
+            "consume-body",
+        );
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostRequestWithStore<U>>::consume_body(store, req, fut)
     }
 
     fn drop(mut store: Access<U, Self>, req: Resource<Request>) -> wasmtime::Result<()> {
+        observe_function_call_store::<Ctx, U>(
+            store.as_context_mut().data_mut(),
+            "http::types::request",
+            "drop",
+        );
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostRequestWithStore<U>>::drop(store, req)
     }
@@ -885,6 +1167,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
 
 impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
     fn new(&mut self) -> wasmtime::Result<Resource<RequestOptions>> {
+        observe_function_call(&*self.0, "http::types::request-options", "new");
         types::HostRequestOptions::new(&mut WasiHttpView::http(self.0))
     }
 
@@ -892,6 +1175,11 @@ impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
         &mut self,
         opts: Resource<RequestOptions>,
     ) -> wasmtime::Result<Option<Duration>> {
+        observe_function_call(
+            &*self.0,
+            "http::types::request-options",
+            "get-connect-timeout",
+        );
         types::HostRequestOptions::get_connect_timeout(&mut WasiHttpView::http(self.0), opts)
     }
 
@@ -900,6 +1188,11 @@ impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
         opts: Resource<RequestOptions>,
         duration: Option<Duration>,
     ) -> RequestOptionsResult<()> {
+        observe_function_call(
+            &*self.0,
+            "http::types::request-options",
+            "set-connect-timeout",
+        );
         types::HostRequestOptions::set_connect_timeout(
             &mut WasiHttpView::http(self.0),
             opts,
@@ -911,6 +1204,11 @@ impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
         &mut self,
         opts: Resource<RequestOptions>,
     ) -> wasmtime::Result<Option<Duration>> {
+        observe_function_call(
+            &*self.0,
+            "http::types::request-options",
+            "get-first-byte-timeout",
+        );
         types::HostRequestOptions::get_first_byte_timeout(&mut WasiHttpView::http(self.0), opts)
     }
 
@@ -919,6 +1217,11 @@ impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
         opts: Resource<RequestOptions>,
         duration: Option<Duration>,
     ) -> RequestOptionsResult<()> {
+        observe_function_call(
+            &*self.0,
+            "http::types::request-options",
+            "set-first-byte-timeout",
+        );
         types::HostRequestOptions::set_first_byte_timeout(
             &mut WasiHttpView::http(self.0),
             opts,
@@ -930,6 +1233,11 @@ impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
         &mut self,
         opts: Resource<RequestOptions>,
     ) -> wasmtime::Result<Option<Duration>> {
+        observe_function_call(
+            &*self.0,
+            "http::types::request-options",
+            "get-between-bytes-timeout",
+        );
         types::HostRequestOptions::get_between_bytes_timeout(&mut WasiHttpView::http(self.0), opts)
     }
 
@@ -938,6 +1246,11 @@ impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
         opts: Resource<RequestOptions>,
         duration: Option<Duration>,
     ) -> RequestOptionsResult<()> {
+        observe_function_call(
+            &*self.0,
+            "http::types::request-options",
+            "set-between-bytes-timeout",
+        );
         types::HostRequestOptions::set_between_bytes_timeout(
             &mut WasiHttpView::http(self.0),
             opts,
@@ -949,16 +1262,19 @@ impl<Ctx: WorkerCtx> types::HostRequestOptions for DurableP3View<'_, Ctx> {
         &mut self,
         opts: Resource<RequestOptions>,
     ) -> wasmtime::Result<Resource<RequestOptions>> {
+        observe_function_call(&*self.0, "http::types::request-options", "clone");
         types::HostRequestOptions::clone(&mut WasiHttpView::http(self.0), opts)
     }
 
     fn drop(&mut self, opts: Resource<RequestOptions>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "http::types::request-options", "drop");
         types::HostRequestOptions::drop(&mut WasiHttpView::http(self.0), opts)
     }
 }
 
 impl<Ctx: WorkerCtx> types::HostResponse for DurableP3View<'_, Ctx> {
     fn get_status_code(&mut self, res: Resource<Response>) -> wasmtime::Result<StatusCode> {
+        observe_function_call(&*self.0, "http::types::response", "get-status-code");
         types::HostResponse::get_status_code(&mut WasiHttpView::http(self.0), res)
     }
 
@@ -967,10 +1283,12 @@ impl<Ctx: WorkerCtx> types::HostResponse for DurableP3View<'_, Ctx> {
         res: Resource<Response>,
         status_code: StatusCode,
     ) -> wasmtime::Result<Result<(), ()>> {
+        observe_function_call(&*self.0, "http::types::response", "set-status-code");
         types::HostResponse::set_status_code(&mut WasiHttpView::http(self.0), res, status_code)
     }
 
     fn get_headers(&mut self, res: Resource<Response>) -> wasmtime::Result<Resource<Headers>> {
+        observe_function_call(&*self.0, "http::types::response", "get-headers");
         types::HostResponse::get_headers(&mut WasiHttpView::http(self.0), res)
     }
 }
@@ -1371,6 +1689,12 @@ struct HttpConsumeBodyTask<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     demand_rx: mpsc::UnboundedReceiver<HttpBodyDemand>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
+    /// The `outgoing-http-request` span of the send that produced this
+    /// response, taken over from the response resource in `consume_body`.
+    /// Finished (durably) right after the parent terminal, mirroring the P2
+    /// `end_http_request` span lifecycle. `None` for responses that did not
+    /// come from `client::send`.
+    response_span: Option<SpanId>,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -1379,11 +1703,13 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::UnboundedReceiver<HttpBodyDemand>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
+        response_span: Option<SpanId>,
     ) -> Self {
         Self {
             body,
             demand_rx,
             trailers_tx,
+            response_span,
             _phantom: PhantomData,
         }
     }
@@ -1399,6 +1725,7 @@ where
             mut body,
             mut demand_rx,
             trailers_tx,
+            response_span,
             ..
         } = self;
 
@@ -1725,6 +2052,25 @@ where
             }
         };
 
+        // The response body reached its terminal and the parent marker is
+        // committed/replayed: finish the send's `outgoing-http-request` span
+        // (live: append `FinishSpan`; replay: consume it) before resolving the
+        // guest-facing trailers, so the entry's position is stable relative to
+        // the parent terminal on both paths.
+        if let Some(span_id) = response_span
+            && let Err(error) =
+                finish_span_access(accessor, durable_worker_ctx::<Ctx, U>, &span_id).await
+        {
+            return fail_consume_body_task(
+                trailers_tx,
+                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                    anyhow::Error::from(error),
+                    parent_trap_context,
+                )),
+                Some(parent_trap_context),
+            );
+        }
+
         let _ = trailers_tx.send(HttpTrailersResolution::Outcome(outcome));
         Ok(())
     }
@@ -1737,6 +2083,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         contents: Option<StreamReader<u8>>,
         trailers: FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
     ) -> wasmtime::Result<(Resource<Response>, FutureReader<Result<(), ErrorCode>>)> {
+        observe_function_call_store::<Ctx, U>(
+            store.as_context_mut().data_mut(),
+            "http::types::response",
+            "new",
+        );
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostResponseWithStore<U>>::new(store, headers, contents, trailers)
     }
@@ -1749,6 +2100,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         StreamReader<u8>,
         FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
     )> {
+        // Take ownership of the response's `outgoing-http-request` span (if
+        // this response came from `client::send`): the durable consume-body
+        // task finishes it when the body reaches its terminal. Removing the
+        // mapping here also keeps the later `drop` of the response resource
+        // from finishing it a second time.
+        let response_span = {
+            let mut store_ctx = store.as_context_mut();
+            let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
+            ctx.state.open_p3_http_response_spans.remove(&res.rep())
+        };
+
         // Delegate to the built-in implementation to wire `fut` into the body's
         // transmission-result channel and to build the host body stream.
         let (upstream_stream, mut upstream_trailers) = {
@@ -1771,7 +2133,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                 }
                 Err(stream) => {
                     // Guest-constructed response body (not from `send`): fall back
-                    // to the non-durable passthrough.
+                    // to the non-durable passthrough. No span was registered for
+                    // such responses (`response_span` is `None` here).
+                    debug_assert!(response_span.is_none());
                     return Ok((stream, upstream_trailers));
                 }
             };
@@ -1804,11 +2168,33 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             body,
             demand_rx,
             trailers_tx,
+            response_span,
         ));
         Ok((stream, trailers))
     }
 
     fn drop(mut store: Access<U, Self>, res: Resource<Response>) -> wasmtime::Result<()> {
+        observe_function_call_store::<Ctx, U>(
+            store.as_context_mut().data_mut(),
+            "http::types::response",
+            "drop",
+        );
+
+        // A send-created response dropped before its body was consumed still
+        // owns its `outgoing-http-request` span. This host call is synchronous,
+        // so the durable finish is deferred to the next drop-event drain point
+        // (a deterministic replay point), mirroring P2's `end_http_request` on
+        // response drop.
+        {
+            let mut store_ctx = store.as_context_mut();
+            let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
+            if let Some(span_id) = ctx.state.open_p3_http_response_spans.remove(&res.rep())
+                && let Some(sink) = ctx.state.dropped_call_event_sender()
+            {
+                let _ = sink.send(DropEvent::FinishSpan { span_id });
+            }
+        }
+
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostResponseWithStore<U>>::drop(store, res)
     }

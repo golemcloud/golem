@@ -22,7 +22,8 @@ use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
 use crate::durable_host::p3::{
-    DurableP3, DurableP3View, durable_worker_ctx, run_read_access, wasi_filesystem_view,
+    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
+    observe_function_call_store, run_read_access, wasi_filesystem_view,
 };
 use crate::workerctx::WorkerCtx;
 use cap_std::fs::FileExt;
@@ -746,18 +747,21 @@ async fn run_live_filesystem_write_chunk(
 
 impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {
     fn convert_error_code(&mut self, error: FilesystemError) -> wasmtime::Result<types::ErrorCode> {
+        observe_function_call(&*self.0, "filesystem::types", "convert-error-code");
         types::Host::convert_error_code(&mut WasiFilesystemView::filesystem(self.0), error)
     }
 }
 
 impl<Ctx: WorkerCtx> types::HostDescriptor for DurableP3View<'_, Ctx> {
     fn drop(&mut self, fd: Resource<Descriptor>) -> wasmtime::Result<()> {
+        observe_function_call(&*self.0, "filesystem::types::descriptor", "drop");
         types::HostDescriptor::drop(&mut WasiFilesystemView::filesystem(self.0), fd)
     }
 }
 
 impl<Ctx: WorkerCtx> preopens::Host for DurableP3View<'_, Ctx> {
     fn get_directories(&mut self) -> wasmtime::Result<Vec<(Resource<Descriptor>, String)>> {
+        observe_function_call(&*self.0, "filesystem::preopens", "get-directories");
         preopens::Host::get_directories(&mut WasiFilesystemView::filesystem(self.0))
     }
 }
@@ -768,6 +772,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         offset: types::Filesize,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "read-via-stream",
+            )
+        });
         // Reads are not recorded in the oplog. On replay the guest re-reads the
         // reconstructed worker filesystem, so we simply delegate to the
         // underlying host stream, matching WASI P2.
@@ -782,6 +793,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data: StreamReader<u8>,
         offset: types::Filesize,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "write-via-stream",
+            )
+        });
         let write_error = accessor
             .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))?;
         if let Some(error) = write_error {
@@ -817,6 +835,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "append-via-stream",
+            )
+        });
         let write_error = accessor
             .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))?;
         if let Some(error) = write_error {
@@ -854,6 +879,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         length: types::Filesize,
         advice: types::Advice,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "advise",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::advise(
             &store, fd, offset, length, advice,
@@ -865,6 +897,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "sync-data",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::sync_data(&store, fd).await
     }
@@ -873,6 +912,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorFlags> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "get-flags",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::get_flags(&store, fd).await
     }
@@ -881,6 +927,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorType> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "get-type",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::get_type(&store, fd).await
     }
@@ -890,6 +943,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         size: types::Filesize,
     ) -> FilesystemResult<()> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "set-size",
+            )
+        });
         // Charge growth before resizing and credit shrink afterwards, matching
         // the WASI P2 storage-quota accounting. The quota helpers are no-ops
         // during replay, so the storage usage is rebuilt purely from the oplog.
@@ -928,6 +988,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "set-times",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::set_times(
             &store,
@@ -945,6 +1012,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         StreamReader<types::DirectoryEntry>,
         FutureReader<Result<(), types::ErrorCode>>,
     )> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "read-directory",
+            )
+        });
         // The directory listing is snapshotted and sorted by name before the
         // stream is returned. This matches WASI P2 and guarantees deterministic
         // ordering across live execution and replay, regardless of OS iteration
@@ -990,6 +1064,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn sync(store: &Accessor<U, Self>, fd: Resource<Descriptor>) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "sync",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::sync(&store, fd).await
     }
@@ -999,6 +1080,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "create-directory-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::create_directory_at(&store, fd, path)
             .await
@@ -1093,6 +1181,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "set-times-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::set_times_at(
             &store,
@@ -1113,6 +1208,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "link-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::link_at(
             &store,
@@ -1133,6 +1235,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         open_flags: types::OpenFlags,
         flags: types::DescriptorFlags,
     ) -> FilesystemResult<Resource<Descriptor>> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "open-at",
+            )
+        });
         // Opening with TRUNCATE discards the existing file contents, so credit
         // the freed bytes back to the storage quota on success, matching WASI
         // P2. The release helper is a no-op during replay.
@@ -1170,6 +1279,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<String> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "readlink-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::readlink_at(&store, fd, path).await
     }
@@ -1179,6 +1295,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "remove-directory-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::remove_directory_at(&store, fd, path)
             .await
@@ -1191,6 +1314,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "rename-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::rename_at(
             &store, fd, old_path, new_fd, new_path,
@@ -1204,6 +1334,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         old_path: String,
         new_path: String,
     ) -> FilesystemResult<()> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "symlink-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::symlink_at(
             &store, fd, old_path, new_path,
@@ -1216,6 +1353,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "unlink-file-at",
+            )
+        });
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
@@ -1247,6 +1391,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         other: Resource<Descriptor>,
     ) -> wasmtime::Result<bool> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "is-same-object",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::is_same_object(&store, fd, other)
             .await
@@ -1256,6 +1407,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::MetadataHashValue> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "metadata-hash",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::metadata_hash(&store, fd).await
     }
@@ -1266,6 +1424,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path_flags: types::PathFlags,
         path: String,
     ) -> FilesystemResult<types::MetadataHashValue> {
+        store.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "metadata-hash-at",
+            )
+        });
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::metadata_hash_at(
             &store, fd, path_flags, path,

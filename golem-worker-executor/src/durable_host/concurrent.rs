@@ -36,7 +36,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::invocation_context::SpanId;
+use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
@@ -384,6 +384,11 @@ pub enum DropEvent {
         begin_index: OplogIndex,
         span_id: Option<SpanId>,
     },
+    /// A durable invocation-context span whose owning resource was dropped from a synchronous host
+    /// context (e.g. a p3 HTTP response dropped before its body was consumed). Finish it (durably)
+    /// from the next drain point; live writes the `FinishSpan` there and replay consumes it at the
+    /// same point, since drain points are deterministic replay points.
+    FinishSpan { span_id: SpanId },
 }
 
 struct AccessDropEventDrainGuard {
@@ -657,6 +662,11 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 }
             }
         }
+        DropEvent::FinishSpan { span_id } => {
+            ctx.finish_span(&span_id)
+                .await
+                .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
+        }
     }
     Ok(())
 }
@@ -845,6 +855,22 @@ where
                             ));
                         }
                     }
+                }
+            }
+            DropEvent::FinishSpan { span_id } => {
+                let span_id = span_id.clone();
+                if let Err(err) = finish_span_access(store, get_ctx, &span_id).await {
+                    if first_error.is_none() {
+                        first_error = Some(TerminalCallError::new(
+                            err,
+                            store.with(|mut access| {
+                                let ctx = get_ctx(access.data_mut());
+                                ambient_trap_context(ctx)
+                            }),
+                        ));
+                    }
+                } else {
+                    recorded += 1;
                 }
             }
         }
@@ -1071,6 +1097,19 @@ struct AccessOpenedScope {
 
 struct AccessStartCleanup {
     atomic_region_registration: Option<OplogIndex>,
+}
+
+/// Context handed to the request builder of [`CallHandle::start_access_with`], available after the
+/// durable scope (if any) has been opened but before the host-call `Start` is written or claimed.
+pub struct AccessStartContext {
+    /// The begin index of the call, mirroring `begin_durable_function`: the durable-scope `Start`
+    /// index when the call opens a scope, otherwise the pre-call oplog index. Stable across
+    /// live/replay for scope-opening calls; approximately stable otherwise (see
+    /// [`CallHandle::start_access_with`]).
+    pub begin_index: OplogIndex,
+    /// Whether the call executes live (the built request will be persisted) or replays (the built
+    /// request is discarded; the builder still runs for its positional replay side effects).
+    pub is_live: bool,
 }
 
 struct AccessStartAtomicGuard {
@@ -1300,6 +1339,40 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        Self::start_access_with(store, get_ctx, function_type, async move |_| Ok(request)).await
+    }
+
+    /// Like [`Self::start_access`], but the request payload is built by `build_request` *between*
+    /// the durable-scope open and the host-call `Start` write/claim. This is the accessor
+    /// counterpart of the two-step [`Self::begin`] + [`BegunCall::start_live`] flow: it exists for
+    /// calls whose persisted request depends on the begin index (e.g. a derived idempotency key) or
+    /// that must interleave other positional oplog entries (e.g. a `StartSpan`) between the scope
+    /// `Start` and the host-call `Start`.
+    ///
+    /// The builder runs on **both** the live and the replay path (so positional side entries it
+    /// replays, like `StartSpan`, are consumed in the same order they were written), but its
+    /// returned request is only persisted on the live path. It receives an [`AccessStartContext`]
+    /// with the begin index — the durable-scope `Start` index when the call opens a scope, or the
+    /// pre-call oplog index otherwise, mirroring `begin_durable_function` — and the liveness flag.
+    /// For non-scope-opening calls the pre-call index is not perfectly stable between a live run
+    /// and an incomplete-replay re-execution under concurrent siblings; callers deriving identity
+    /// from it accept the same tradeoff as the RPC `async-invoke-and-await` path.
+    ///
+    /// A builder error aborts the call like any other start failure: the atomic-region
+    /// registration is cleaned up and any already-written durable-scope `Start` is left incomplete,
+    /// to be recovered by scope recovery on the next replay.
+    pub async fn start_access_with<T, D, Ctx, F>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        build_request: F,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
         if !is_accessor_supported_function_type(&function_type) {
             return Err(WorkerExecutorError::runtime(format!(
                 "p3 accessor durable call path currently supports only ReadLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
@@ -1318,7 +1391,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             return Err(err.source);
         }
 
-        match Self::execute_access_start(prepared, request).await {
+        match Self::execute_access_start(prepared, build_request).await {
             Ok(executed) => {
                 process_pending_replay_events_access(store, get_ctx).await?;
                 let result = store.with(|mut access| {
@@ -1411,10 +1484,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         })
     }
 
-    async fn execute_access_start<Ctx: WorkerCtx>(
+    async fn execute_access_start<Ctx: WorkerCtx, F>(
         prepared: PreparedAccessStart<Pair, P, Ctx>,
-        request: Pair::Req,
-    ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)> {
+        build_request: F,
+    ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)>
+    where
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
         let starts_scope = opens_accessor_scope(
             prepared.retry.function_type(),
             prepared.retry.durable_execution_state().assume_idempotence,
@@ -1447,6 +1523,35 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 is_live = true;
             }
         }
+
+        // Build the request between the scope open and the host-call `Start` write/claim. The
+        // builder's begin index mirrors `begin_durable_function`: the scope `Start` index when a
+        // scope was opened, otherwise the pre-call index (last added / last replayed non-hint
+        // entry). It runs on the replay path too so any positional side entries it wrote live are
+        // consumed here in the same order.
+        let builder_begin_index = match &scope_start {
+            Some(scope) => scope.begin_index,
+            None => {
+                if is_live {
+                    prepared.oplog.current_oplog_index().await
+                } else {
+                    prepared.replay_state.last_replayed_non_hint_index()
+                }
+            }
+        };
+        let request = build_request(AccessStartContext {
+            begin_index: builder_begin_index,
+            is_live,
+        })
+        .await
+        .map_err(|err| {
+            (
+                err,
+                AccessStartCleanup {
+                    atomic_region_registration: prepared.atomic_region_registration,
+                },
+            )
+        })?;
 
         if is_live {
             if prepared.snapshotting {
@@ -2744,7 +2849,99 @@ where
     }
 }
 
-async fn finish_span_access<T, D, Ctx>(
+/// Accessor counterpart of `DurableWorkerCtx::start_child_span` with the current span as parent
+/// and without activation: starts a (durable) invocation-context span. On the live path the span
+/// is created in the in-memory invocation context and a positional `StartSpan` entry is appended;
+/// on replay the next `StartSpan` entry is consumed and the recorded span (same span id and start
+/// timestamp) is reconstructed, so trace identifiers derived from it are deterministic.
+///
+/// Like the P2 path this is a *positional* oplog entry: callers must write and consume it at the
+/// same point relative to their other durable records on both paths. This is only sound while the
+/// caller's whole entry sequence around the span cannot interleave with sibling host calls'
+/// entries: accessor host calls run concurrently and this append has await points, so two
+/// overlapping calls that both write a `StartSpan` can interleave their entries live and then
+/// consume each other's `StartSpan` on replay (wrong span id, or an unexpected-oplog-entry
+/// failure). Until span entries are keyed to their owning call (or appended atomically with its
+/// `Start`), callers accept that limitation for concurrent use.
+pub(crate) async fn start_span_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    initial_attributes: &[(String, AttributeValue)],
+) -> Result<SpanId, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (is_live, worker, replay_state) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.state.is_live(),
+            ctx.public_state.worker(),
+            ctx.state.replay_state.clone(),
+        )
+    });
+
+    if is_live {
+        let (entry, span_id) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            let parent = ctx.state.current_span_id.clone();
+            let span = ctx
+                .state
+                .invocation_context
+                .start_span(&parent, None)
+                .map_err(WorkerExecutorError::runtime)?;
+            for (name, value) in initial_attributes {
+                span.set_attribute(name.clone(), value.clone());
+            }
+            let entry = OplogEntry::StartSpan {
+                timestamp: span.start().unwrap_or(Timestamp::now_utc()),
+                span_id: span.span_id().clone(),
+                parent: Some(parent),
+                linked_context_id: None,
+                attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
+            };
+            Ok::<_, WorkerExecutorError>((entry, span.span_id().clone()))
+        })?;
+        worker.add_to_oplog(entry).await;
+        Ok(span_id)
+    } else {
+        let (_, entry) = crate::get_oplog_entry!(replay_state, OplogEntry::StartSpan)?;
+        let (timestamp, span_id) = match entry {
+            OplogEntry::StartSpan {
+                timestamp, span_id, ..
+            } => (timestamp, span_id),
+            other => {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "StartSpan",
+                    format!("{other:?}"),
+                ));
+            }
+        };
+        store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            let parent = ctx.state.current_span_id.clone();
+            let parent_span = ctx.state.invocation_context.get(&parent).map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "parent span {parent} missing during StartSpan replay: {err}"
+                ))
+            })?;
+            let span = InvocationContextSpan::local()
+                .with_span_id(span_id.clone())
+                .with_start(timestamp)
+                .with_parent(parent_span)
+                .build();
+            for (name, value) in initial_attributes {
+                span.set_attribute(name.clone(), value.clone());
+            }
+            ctx.state.invocation_context.add_span(span);
+            Ok::<_, WorkerExecutorError>(())
+        })?;
+        Ok(span_id)
+    }
+}
+
+pub(crate) async fn finish_span_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     span_id: &SpanId,
