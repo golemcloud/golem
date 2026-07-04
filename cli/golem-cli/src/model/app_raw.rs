@@ -978,7 +978,7 @@ impl BridgeSdks {
                     .as_ref()
                     .is_some_and(|external| !external.agents.is_empty())
                     || targets
-                        .guest
+                        .internal
                         .as_ref()
                         .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty()))
                 .then_some((lang, targets))
@@ -1005,7 +1005,7 @@ impl BridgeSdks {
                         },
                     ));
                 }
-                if let Some(guest) = &targets.guest
+                if let Some(guest) = &targets.internal
                     && (!guest.agents.is_empty() || !guest.tools.is_empty())
                 {
                     result.push((
@@ -1030,7 +1030,7 @@ pub struct BridgeSdkLanguageTargets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<BridgeSdkExternalTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub guest: Option<BridgeSdkModeTargets>,
+    pub internal: Option<BridgeSdkModeTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1810,7 +1810,7 @@ mod test {
             arb_opt(arb_bridge_sdk_external_targets()),
             arb_opt(arb_bridge_sdk_mode_targets()),
         )
-            .prop_map(|(external, guest)| BridgeSdkLanguageTargets { external, guest })
+            .prop_map(|(external, internal)| BridgeSdkLanguageTargets { external, internal })
             .boxed()
     }
 
@@ -2218,7 +2218,7 @@ mod test {
 
         assert_eq!(external.agents.into_vec(), vec!["CounterAgent".to_string()]);
         assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
-        assert!(rust.guest.is_none());
+        assert!(rust.internal.is_none());
     }
 
     #[test]
@@ -2231,7 +2231,7 @@ mod test {
                 external:
                   agents: ExternalAgent
                   outputDir: bridge/rust
-                guest:
+                internal:
                   agents:
                     - GuestAgent
                   outputDir: bridge/rust-guest
@@ -2240,7 +2240,7 @@ mod test {
         let app = Application::from_yaml_str(source).unwrap();
         let rust = app.bridge.unwrap().rust.unwrap();
         let external = rust.external.unwrap();
-        let guest = rust.guest.unwrap();
+        let guest = rust.internal.unwrap();
 
         assert_eq!(
             external.agents.into_vec(),

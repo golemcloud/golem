@@ -597,7 +597,7 @@ mod tests {
 
         assert_ne!(external_source, guest_source);
         assert!(external_source.contains(r#""bridgeMode":"external""#));
-        assert!(guest_source.contains(r#""bridgeMode":"guest""#));
+        assert!(guest_source.contains(r#""bridgeMode":"internal""#));
     }
 
     #[test]

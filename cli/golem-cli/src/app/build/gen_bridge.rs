@@ -899,7 +899,7 @@ async fn gen_bridge_sdk_target(
                             Box::new(MoonBitBridgeGenerator::new(agent_type, &output_dir, false)?)
                         }
                         (language, BridgeMode::Guest) => bail!(
-                            "guest bridge mode is not supported for {} yet",
+                            "internal bridge mode is not supported for {} yet",
                             language.to_string().log_color_highlight()
                         ),
                     };
@@ -932,7 +932,7 @@ async fn gen_bridge_sdk_target(
 fn bridge_sdk_target_name(language: GuestLanguage, bridge_mode: BridgeMode) -> String {
     match bridge_mode {
         BridgeMode::External => language.to_string(),
-        BridgeMode::Guest => format!("{} guest", language),
+        BridgeMode::Guest => format!("{} internal", language),
     }
 }
 
@@ -987,7 +987,7 @@ pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> 
         if target.bridge_mode == BridgeMode::Guest && target.target_language != GuestLanguage::Rust
         {
             bail!(
-                "guest bridge mode is not supported for {} yet",
+                "internal bridge mode is not supported for {} yet",
                 target.target_language.to_string().log_color_highlight()
             );
         }
@@ -1062,7 +1062,7 @@ mod tests {
 
             assert!(
                 error.to_string().contains(&format!(
-                    "guest bridge mode is not supported for {unsupported_language} yet"
+                    "internal bridge mode is not supported for {unsupported_language} yet"
                 )),
                 "unexpected error for {unsupported_language}: {error:?}"
             );

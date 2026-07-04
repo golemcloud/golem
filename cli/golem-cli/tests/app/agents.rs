@@ -747,7 +747,7 @@ async fn test_rust_tool_guest_bridge_e2e() {
 
             bridge:
               rust:
-                guest:
+                internal:
                   tools:
                     - echo
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
@@ -819,7 +819,7 @@ async fn test_rust_tool_guest_bridge_e2e() {
             "[dependencies]",
             indoc! { r#"
                 [dependencies]
-                echo-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/echo-tool-guest-client" }
+                echo-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/echo-tool-guest-client" }
             "# }
             .trim_end(),
         ),
@@ -830,7 +830,7 @@ async fn test_rust_tool_guest_bridge_e2e() {
     assert!(outputs.success_or_dump());
 
     let generated_client_dir =
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/echo-tool-guest-client");
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/echo-tool-guest-client");
     assert!(generated_client_dir.join("Cargo.toml").exists());
 
     // The consumer build above already compiled the generated client crate as

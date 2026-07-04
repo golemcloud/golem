@@ -1403,7 +1403,7 @@ mod tests {
             kind: BridgeSdkTargetKind::Agent(bar_agent_type()),
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::Guest,
-            output_dir: base_dir.join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client"),
+            output_dir: base_dir.join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client"),
         };
         let custom_claim = OutputDirClaim {
             request_id: BridgeRequestId::Custom,

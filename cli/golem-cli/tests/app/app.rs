@@ -204,14 +204,14 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -223,7 +223,7 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
@@ -331,14 +331,14 @@ async fn dependency_and_explicit_guest_bridge_default_output_dedupe_with_matcher
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: {matcher}
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -349,7 +349,7 @@ async fn dependency_and_explicit_guest_bridge_default_output_dedupe_with_matcher
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -434,7 +434,7 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
@@ -452,7 +452,7 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
@@ -552,7 +552,7 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
@@ -561,7 +561,7 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
               rust:
                 external:
                   agents: "*"
-                  outputDir: golem-temp/bridge-sdk/rust/guest
+                  outputDir: golem-temp/bridge-sdk/rust/internal
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -571,11 +571,11 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-client/Cargo.toml")
             .exists()
     );
 }
@@ -651,7 +651,7 @@ async fn manifest_guest_component_matcher_generates_for_selected_component_witho
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:producer
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -754,7 +754,7 @@ async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skip
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:missing
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -793,7 +793,7 @@ async fn explicit_guest_wildcard_matcher_with_missing_wasm_is_not_silently_skipp
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: "*"
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -865,7 +865,7 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -895,7 +895,7 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -906,7 +906,7 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -999,7 +999,7 @@ async fn dependency_guest_bridge_generates_for_rust_manifest_dependency(_tracing
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -1215,7 +1215,7 @@ async fn dependency_guest_bridge_generates_for_rust_producer_used_by_rust_consum
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -1320,7 +1320,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
@@ -1432,7 +1432,7 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
@@ -1647,7 +1647,7 @@ async fn selected_dependency_guest_bridge_resolves_dependencies_of_fallback_prov
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} middle.wasm
                   - command: cp {producer_wasm} middle-final.wasm
                   - command: cp ../middle-agent-types.json ../golem-temp/extracted-component-metadata/{middle_extracted_component_metadata}
@@ -1662,7 +1662,7 @@ async fn selected_dependency_guest_bridge_resolves_dependencies_of_fallback_prov
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
@@ -1773,7 +1773,7 @@ async fn dependency_guest_bridge_gen_bridge_step_includes_selected_dependencies(
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -1866,7 +1866,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -1895,7 +1895,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} middle.wasm
                   - command: cp {producer_wasm} middle-final.wasm
                   - command: touch ../{middle_extracted_component_metadata}
@@ -1910,7 +1910,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -1921,11 +1921,11 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -2015,7 +2015,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -2030,7 +2030,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
             edition = "2021"
 
             [dependencies]
-            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client" }
+            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -2087,11 +2087,11 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -2183,7 +2183,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -2198,7 +2198,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
             edition = "2021"
 
             [dependencies]
-            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client" }
+            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -2262,11 +2262,11 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -2406,7 +2406,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
                 componentWasm: rust-consumer.wasm
                 outputWasm: rust-consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} rust-consumer.wasm
                   - command: cp {producer_wasm} rust-consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{rust_consumer_extracted_component_metadata}
@@ -2441,11 +2441,11 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
-        !ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml")
+        !ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -2552,7 +2552,7 @@ async fn selected_typed_dependency_guest_bridge_does_not_build_unselected_compon
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
@@ -2679,7 +2679,7 @@ async fn selected_typed_dependency_guest_bridge_discovers_prebuilt_provider_meta
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/counter-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client/Cargo.toml
                   - command: cp ../provider-final.wasm consumer.wasm
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -2816,7 +2816,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml
                   - command: cp {component_wasm} middle.wasm
                   - command: cp {component_wasm} middle-final.wasm
                   - command: cp ../middle-agent-types.json ../golem-temp/extracted-component-metadata/{middle_extracted_component_metadata}
@@ -2831,7 +2831,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {component_wasm} consumer.wasm
                   - command: cp {component_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
@@ -2916,7 +2916,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -2966,9 +2966,9 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:base
-                  outputDir: golem-temp/bridge-sdk/rust/guest
+                  outputDir: golem-temp/bridge-sdk/rust/internal
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -2985,7 +2985,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -3024,7 +3024,7 @@ async fn selected_explicit_guest_bridge_ignores_matcher_outside_effective_depend
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:producer
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -3179,14 +3179,14 @@ async fn selected_dependency_fallback_does_not_expand_explicit_guest_bridge_scop
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:unrelated
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -3205,7 +3205,7 @@ async fn selected_dependency_fallback_does_not_expand_explicit_guest_bridge_scop
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
     assert!(
@@ -3312,14 +3312,14 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
                   - command: cp {producer_wasm} consumer-final.wasm
                   - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: FooAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -3442,7 +3442,7 @@ async fn dependency_guest_bridge_does_not_infer_rust_guest_target_from_cargo_fil
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        !ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml")
+        !ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -3507,7 +3507,7 @@ async fn dependency_guest_bridge_ignores_unselected_manifest_guest_targets(_trac
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:producer
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -3726,7 +3726,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -3741,7 +3741,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
             edition = "2021"
 
             [dependencies]
-            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client" }
+            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -3756,7 +3756,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
             edition = "2021"
 
             [dependencies]
-            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client" }
+            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -3912,7 +3912,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -3927,7 +3927,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             edition = "2021"
 
             [dependencies]
-            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client" }
+            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -3984,7 +3984,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -4076,7 +4076,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -4093,7 +4093,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             edition = "2021"
 
             [dependencies]
-            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client" }
+            foo-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -4144,9 +4144,9 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
-                  outputDir: golem-temp/bridge-sdk/rust/guest
+                  outputDir: golem-temp/bridge-sdk/rust/internal
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -4156,7 +4156,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/foo-agent-guest-client/Cargo.toml")
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/foo-agent-guest-client/Cargo.toml")
             .exists()
     );
 }
@@ -4234,12 +4234,12 @@ async fn custom_build_env_guest_bridge_path_waits_for_guest_bridge_sdks(_tracing
                 build:
                   - command: sh -c 'test -f "$SDK_PATH"'
                     env:
-                      SDK_PATH: ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml
+                      SDK_PATH: ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml
                   - command: cp {producer_wasm} consumer.wasm
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4327,12 +4327,12 @@ async fn dependency_guest_bridge_shell_command_literal_guest_bridge_path_waits_f
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: sh -c 'test -f ../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client/Cargo.toml'
+                  - command: sh -c 'test -f ../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml'
                   - command: cp {producer_wasm} consumer.wasm
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4482,7 +4482,7 @@ async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tr
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -4523,7 +4523,7 @@ async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tr
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4591,7 +4591,7 @@ async fn rust_manifest_path_cargo_guest_bridge_dependency_waits_for_guest_bridge
             edition = "2021"
 
             [dependencies]
-            bar-agent-guest-client = { path = "golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -4643,7 +4643,7 @@ async fn rust_manifest_path_cargo_guest_bridge_dependency_waits_for_guest_bridge
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4710,7 +4710,7 @@ async fn rust_target_specific_cargo_path_guest_bridge_dependency_waits_for_guest
             edition = "2021"
 
             [target.wasm32-wasip2.dependencies]
-            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -4751,7 +4751,7 @@ async fn rust_target_specific_cargo_path_guest_bridge_dependency_waits_for_guest
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4816,7 +4816,7 @@ async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridg
             resolver = "2"
 
             [workspace.dependencies]
-            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -4871,7 +4871,7 @@ async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridg
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -4938,7 +4938,7 @@ async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge
             [workspace.dependencies]
             bar = {
                 package = "bar-agent-guest-client",
-                path = "golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client",
+                path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client",
             }
         "#},
     )
@@ -4994,7 +4994,7 @@ async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5057,7 +5057,7 @@ async fn rust_workspace_multiline_dependency_use_waits_for_guest_bridge_sdks(_tr
             resolver = "2"
 
             [workspace.dependencies]
-            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -5114,7 +5114,7 @@ async fn rust_workspace_multiline_dependency_use_waits_for_guest_bridge_sdks(_tr
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5177,7 +5177,7 @@ async fn rust_workspace_dependency_name_prefix_does_not_make_guest_bridge_consum
             resolver = "2"
 
             [workspace.dependencies]
-            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar = { package = "bar-agent-guest-client", path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
             barista = "0.0.1"
         "#},
     )
@@ -5222,7 +5222,7 @@ async fn rust_workspace_dependency_name_prefix_does_not_make_guest_bridge_consum
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5326,7 +5326,7 @@ async fn rust_no_build_producer_generates_guest_bridge_before_consumer_build(_tr
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5408,7 +5408,7 @@ async fn custom_unknown_language_build_producer_generates_guest_bridge(_tracing:
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5508,7 +5508,7 @@ async fn custom_unknown_language_build_consumer_waits_for_custom_guest_bridge_ou
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: sdk
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5565,7 +5565,7 @@ async fn rust_guest_bridge_choreography_allows_metadata_before_later_builds(_tra
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:a
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -5663,7 +5663,7 @@ async fn rust_template_no_build_producer_generates_guest_bridge_before_consumer_
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5745,7 +5745,7 @@ async fn rust_build_that_does_not_use_guest_bridge_can_generate_own_guest_bridge
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/rust-guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5809,7 +5809,7 @@ async fn rust_dev_dependency_on_guest_bridge_does_not_make_build_a_guest_bridge_
             edition = "2021"
 
             [dev-dependencies]
-            bar-agent-guest-client = { path = "golem-temp/bridge-sdk/rust/guest/bar-agent-guest-client" }
+            bar-agent-guest-client = { path = "golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client" }
         "#},
     )
     .unwrap();
@@ -5837,7 +5837,7 @@ async fn rust_dev_dependency_on_guest_bridge_does_not_make_build_a_guest_bridge_
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -5913,7 +5913,7 @@ async fn guest_and_external_bridge_output_dir_overlap_is_rejected(_tracing: &Tra
                 external:
                   agents: BarAgent
                   outputDir: bridge
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/bar-agent-client
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6036,7 +6036,7 @@ async fn guest_bridge_output_dir_overlap_with_default_external_dir_is_rejected_b
               rust:
                 external:
                   agents: BarAgent
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: golem-temp/bridge-sdk/rust/bar-agent-client
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6127,7 +6127,7 @@ async fn guest_and_external_bridge_same_output_dir_base_generates_sibling_sdks(_
                 external:
                   agents: BarAgent
                   outputDir: bridge
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6222,7 +6222,7 @@ async fn component_matcher_guest_and_external_same_output_dir_base_generates_sib
                 external:
                   agents: app:producer
                   outputDir: bridge
-                guest:
+                internal:
                   agents: app:producer
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6326,7 +6326,7 @@ async fn component_matcher_same_output_dir_base_with_guest_consumer_generates_si
                 external:
                   agents: app:producer
                   outputDir: bridge
-                guest:
+                internal:
                   agents: app:producer
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6442,7 +6442,7 @@ async fn post_build_guest_bridge_scan_rejects_duplicate_agent_output_dir(_tracin
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6535,7 +6535,7 @@ async fn post_build_guest_bridge_scan_rejects_newly_built_duplicate_agent_output
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6626,7 +6626,7 @@ async fn unselected_external_bridge_output_dir_does_not_block_selected_guest_bri
                 external:
                   agents: app:consumer
                   outputDir: bridge/bar-agent-guest-client
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6724,7 +6724,7 @@ async fn external_bridge_missing_agent_matcher_is_rejected_with_guest_build_plan
                 external:
                   agents: MissingAgent
                   outputDir: bridge/external
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6772,7 +6772,7 @@ async fn unselected_guest_component_matcher_does_not_create_selected_build_cycle
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:unselected
                   outputDir: bridge/guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6863,7 +6863,7 @@ async fn guest_and_repl_bridge_output_dir_overlap_is_rejected_before_generation(
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: golem-temp/repl/rust/bridge-sdk/bar-agent-client
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -6986,7 +6986,7 @@ async fn guest_and_repl_bridge_output_dir_overlap_with_different_agent_is_reject
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: golem-temp/repl/rust/bridge-sdk/foo-agent-client
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -7115,7 +7115,7 @@ async fn guest_and_build_produced_repl_bridge_output_dir_overlap_with_different_
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: golem-temp/repl/rust/bridge-sdk/foo-agent-client
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -7257,7 +7257,7 @@ async fn guest_and_rust_consumer_external_bridge_output_dir_overlap_is_rejected_
                 external:
                   agents: app:consumer
                   outputDir: bridge/bar-agent-client/bar-agent-guest-client
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/bar-agent-client
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -7381,7 +7381,7 @@ async fn guest_and_build_produced_external_bridge_output_dir_overlap_is_rejected
                 external:
                   agents: app:consumer
                   outputDir: bridge/bar-agent-client/bar-agent-guest-client
-                guest:
+                internal:
                   agents: BarAgent
                   outputDir: bridge/bar-agent-client
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
@@ -7425,7 +7425,7 @@ async fn rust_guest_bridge_matcher_without_non_rust_component_is_rejected(_traci
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: MissingAgent
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
@@ -7464,7 +7464,7 @@ async fn rust_guest_bridge_component_matcher_without_non_rust_component_is_rejec
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents: app:producer
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )

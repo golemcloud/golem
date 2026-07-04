@@ -915,7 +915,7 @@ impl Application {
                 .bridge_sdks
                 .value
                 .for_language(language)
-                .and_then(|sdk| sdk.guest.as_ref())
+                .and_then(|sdk| sdk.internal.as_ref())
                 .and_then(|sdk| sdk.output_dir.as_ref()),
         };
 
@@ -961,7 +961,7 @@ impl Application {
             .bridge_sdks
             .value
             .for_language(language)
-            .and_then(|sdk| sdk.guest.as_ref())
+            .and_then(|sdk| sdk.internal.as_ref())
             .and_then(|sdk| sdk.output_dir.as_ref());
 
         match output_dir {
@@ -3248,13 +3248,13 @@ mod app_builder {
                                 self.bridge_sdks.value.for_all_languages()
                             {
                                 if target_language != crate::model::GuestLanguage::Rust
-                                    && sdk_targets.is_some_and(|targets| targets.guest.is_some())
+                                    && sdk_targets.is_some_and(|targets| targets.internal.is_some())
                                 {
                                     validation.with_context(
                                         vec![("bridge SDK language", target_language.to_string())],
                                         |validation| {
                                             validation.add_error(format!(
-                                                "guest bridge mode is not supported for {} yet",
+                                                "internal bridge mode is not supported for {} yet",
                                                 target_language.to_string().log_color_error_highlight()
                                             ));
                                         },
@@ -4226,7 +4226,7 @@ mod test {
                 external:
                   agents:
                     - AlphaAgent
-                guest:
+                internal:
                   agents:
                     - AlphaAgent
         "# };
@@ -4254,7 +4254,7 @@ mod test {
             app.temp_dir()
                 .join("bridge-sdk")
                 .join("rust")
-                .join("guest")
+                .join("internal")
                 .join(bridge_client_directory_name_for_mode(
                     &alpha_agent,
                     BridgeMode::Guest
@@ -4277,7 +4277,7 @@ mod test {
 
             bridge:
               rust:
-                guest:
+                internal:
                   agents:
                     - AlphaAgent
                   outputDir: bridge-sdk/rust-guest
@@ -4313,7 +4313,7 @@ mod test {
 
             bridge:
               rust:
-                guest:
+                internal:
                   tools:
                     - MyTool
                   outputDir: bridge-sdk/rust-guest
@@ -4382,7 +4382,7 @@ mod test {
 
             bridge:
               ts:
-                guest:
+                internal:
                   agents: SomeAgent
         "# };
 
@@ -4415,7 +4415,7 @@ mod test {
 
         assert_eq!(errors.len(), 1);
         assert!(
-            errors[0].contains("guest bridge mode is not supported for TypeScript yet"),
+            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
             "unexpected error: {}",
             errors[0]
         );
@@ -4439,7 +4439,7 @@ mod test {
                 external:
                   agents: ExternalAgent
                   outputDir: bridge/ts
-                guest:
+                internal:
                   outputDir: bridge/ts-guest
         "# };
 
@@ -4473,7 +4473,7 @@ mod test {
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert_eq!(errors.len(), 1);
         assert!(
-            errors[0].contains("guest bridge mode is not supported for TypeScript yet"),
+            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
             "unexpected error: {}",
             errors[0]
         );

@@ -51,7 +51,7 @@ impl BridgeMode {
     pub fn id(&self) -> &'static str {
         match self {
             BridgeMode::External => "external",
-            BridgeMode::Guest => "guest",
+            BridgeMode::Guest => "internal",
         }
     }
 }

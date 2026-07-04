@@ -1307,8 +1307,8 @@
           "description": "External bridge SDK configuration for use outside Golem components",
           "$ref": "#/definitions/bridgeSdkExternalTargets"
         },
-        "guest": {
-          "description": "Guest bridge SDK configuration for use inside Golem components",
+        "internal": {
+          "description": "Internal bridge SDK configuration for use inside Golem components",
           "$ref": "#/definitions/bridgeSdkModeTargets"
         }
       }
