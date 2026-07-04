@@ -796,8 +796,6 @@ impl RustBridgeGenerator {
 
             #[derive(Debug)]
             pub struct #client_struct_name {
-                agent_id: String,
-                phantom_id: Option<golem_rust::Uuid>,
                 wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
             }
 
@@ -820,13 +818,6 @@ impl RustBridgeGenerator {
                     #(#constructor_param_defs),*
                 ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_value: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    let agent_id = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
-                        #agent_type_name,
-                        golem_rust::encode_schema_value(&constructor_value)
-                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?,
-                        #phantom_id_param.map(Into::into),
-                    ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
-
                     let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
                         #agent_type_name,
                         golem_rust::encode_schema_value(&constructor_value)
@@ -835,7 +826,7 @@ impl RustBridgeGenerator {
                         #agent_config_param,
                     );
 
-                    Ok(Self { agent_id, phantom_id: #phantom_id_param, wasm_rpc })
+                    Ok(Self { wasm_rpc })
                 }
 
                 #(#methods)*
@@ -3106,13 +3097,10 @@ pub fn decode_text(
 
         let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
         for guest_shape in [
-            "agent_id: String",
-            "phantom_id: Option<golem_rust::Uuid>",
             "wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc",
             "pub fn get(",
             "pub fn get_phantom(",
             "pub fn new_phantom(",
-            "golem_rust::golem_agentic::golem::agent::host::make_agent_id",
             "golem_rust::golem_agentic::golem::agent::host::WasmRpc::new",
             "pub async fn run(\n        &self,\n        value: i32,",
             "pub fn trigger_run(\n        &self,\n        value: i32,",
@@ -3135,6 +3123,11 @@ pub fn decode_text(
         assert!(!lib_rs.contains("golem_client"));
         assert!(!lib_rs.contains("reqwest"));
         assert!(!lib_rs.contains("constructor_parameters"));
+        assert!(!lib_rs.contains("agent_id: String"));
+        assert!(
+            !lib_rs.contains("phantom_id: Option<golem_rust::Uuid>,\n                wasm_rpc")
+        );
+        assert!(!lib_rs.contains("golem_rust::golem_agentic::golem::agent::host::make_agent_id"));
 
         let output = std::process::Command::new("cargo")
             .arg("check")
@@ -3328,7 +3321,7 @@ pub fn decode_text(
     }
 
     #[test]
-    fn guest_generation_compiles_when_method_name_matches_phantom_id_accessor() {
+    fn guest_generation_compiles_when_method_name_matches_phantom_id_helper() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
@@ -3367,7 +3360,7 @@ pub fn decode_text(
     }
 
     #[test]
-    fn guest_generation_compiles_when_method_name_matches_agent_id_accessor() {
+    fn guest_generation_compiles_when_method_name_matches_removed_agent_id_field() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
