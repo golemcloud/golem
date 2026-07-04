@@ -667,7 +667,7 @@ async fn manifest_guest_component_matcher_generates_for_selected_component_witho
 }
 
 #[test]
-async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skipped_in_scheduler(
+async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skipped_in_build_plan(
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
@@ -726,7 +726,7 @@ async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skip
         formatdoc! {r#"
             manifestVersion: {MANIFEST_VERSION}
 
-            app: explicit-guest-missing-component-matcher-with-dependency-scheduler
+            app: explicit-guest-missing-component-matcher-with-dependency-build-plan
 
             environments:
               local:
@@ -765,6 +765,41 @@ async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skip
         !ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
+}
+
+#[test]
+async fn explicit_guest_wildcard_matcher_with_missing_wasm_is_not_silently_skipped_in_build_plan(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: explicit-guest-missing-wildcard-matcher
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:missing:
+                componentWasm: missing.wasm
+                outputWasm: missing-final.wasm
+
+            bridge:
+              rust:
+                guest:
+                  agents: "*"
+                  outputDir: bridge/rust-guest
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
+    assert!(!outputs.success());
 }
 
 #[test]
@@ -6607,7 +6642,7 @@ async fn unselected_external_bridge_output_dir_does_not_block_selected_guest_bri
 }
 
 #[test]
-async fn external_bridge_missing_agent_matcher_is_rejected_with_guest_scheduler(
+async fn external_bridge_missing_agent_matcher_is_rejected_with_guest_build_plan(
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();

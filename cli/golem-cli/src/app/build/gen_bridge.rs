@@ -254,13 +254,13 @@ pub(crate) async fn plan_manifest_external_bridge_generation_for_components_leni
     })
 }
 
-pub(crate) async fn plan_custom_bridge_generation_lenient(
+pub(crate) async fn plan_custom_bridge_generation(
     ctx: &BuildContext<'_>,
     custom_target: &CustomBridgeSdkTarget,
     agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     Ok(BridgeGenerationPlan {
-        targets: collect_custom_targets_lenient(ctx, custom_target, agent_metadata_cache).await?,
+        targets: collect_custom_targets(ctx, custom_target, agent_metadata_cache).await?,
         repl_metadata_by_language: BTreeMap::new(),
     })
 }
