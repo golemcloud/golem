@@ -71,6 +71,7 @@ struct GuestMethodNames {
     await_name: Ident,
     trigger_name: Ident,
     schedule_name: Ident,
+    schedule_cancelable_name: Ident,
     internal_name: Ident,
     scheduled_time_param: Ident,
     param_names: Vec<String>,
@@ -407,7 +408,9 @@ impl RustBridgeGenerator {
             });
         }
 
-        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable {
+        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable
+            && !local_configs.is_empty()
+        {
             quote! {
                 pub async fn get_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
@@ -624,7 +627,28 @@ impl RustBridgeGenerator {
             .cloned()
             .collect();
 
-        let guest_method_names = self.allocate_guest_method_names(!local_configs.is_empty())?;
+        let mut impl_names = ParameterNaming::new();
+        let guest_method_names = self.allocate_guest_method_names(&mut impl_names)?;
+        let has_get_method = guest_method_names
+            .iter()
+            .any(|names| names.await_name.to_string() == "get");
+        let get_method_name = (self.agent_type.mode == AgentMode::Durable).then(|| {
+            if has_get_method {
+                Self::ident_from_name(impl_names.fresh("get_"))
+            } else {
+                Self::ident_from_name(impl_names.fresh("get"))
+            }
+        });
+        let get_phantom_method_name = Self::ident_from_name(impl_names.fresh("get_phantom"));
+        let new_phantom_method_name = Self::ident_from_name(impl_names.fresh("new_phantom"));
+        let get_with_config_method_name = (self.agent_type.mode == AgentMode::Durable
+            && !local_configs.is_empty())
+        .then(|| Self::ident_from_name(impl_names.fresh("get_with_config")));
+        let get_phantom_with_config_method_name = (!local_configs.is_empty())
+            .then(|| Self::ident_from_name(impl_names.fresh("get_phantom_with_config")));
+        let new_phantom_with_config_method_name = (!local_configs.is_empty())
+            .then(|| Self::ident_from_name(impl_names.fresh("new_phantom_with_config")));
+        let create_method_name = Self::ident_from_name(impl_names.fresh("__create"));
 
         let mut methods = Vec::new();
         for (method, names) in self
@@ -701,12 +725,17 @@ impl RustBridgeGenerator {
             });
         }
 
-        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable {
+        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable
+            && !local_configs.is_empty()
+        {
+            let get_with_config_method_name = get_with_config_method_name
+                .as_ref()
+                .expect("durable agents with local config allocate get_with_config");
             quote! {
-                pub fn get_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                pub fn #get_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let mut #agent_config_values = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::__create(None, #agent_config_values, #(#constructor_param_refs),*)
+                    Self::#create_method_name(None, #agent_config_values, #(#constructor_param_refs),*)
                 }
             }
         } else {
@@ -714,19 +743,25 @@ impl RustBridgeGenerator {
         };
 
         let with_config_methods = if !local_configs.is_empty() {
+            let get_phantom_with_config_method_name = get_phantom_with_config_method_name
+                .as_ref()
+                .expect("agents with local config allocate get_phantom_with_config");
+            let new_phantom_with_config_method_name = new_phantom_with_config_method_name
+                .as_ref()
+                .expect("agents with local config allocate new_phantom_with_config");
             quote! {
                 #get_with_config_method
 
-                pub fn get_phantom_with_config(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                pub fn #get_phantom_with_config_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let mut #agent_config_values = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::__create(Some(#phantom_id_param), #agent_config_values, #(#constructor_param_refs),*)
+                    Self::#create_method_name(Some(#phantom_id_param), #agent_config_values, #(#constructor_param_refs),*)
                 }
 
-                pub fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                pub fn #new_phantom_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let mut #agent_config_values = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::__create(Some(golem_rust::Uuid::new_v4()), #agent_config_values, #(#constructor_param_refs),*)
+                    Self::#create_method_name(Some(golem_rust::Uuid::new_v4()), #agent_config_values, #(#constructor_param_refs),*)
                 }
             }
         } else {
@@ -734,9 +769,12 @@ impl RustBridgeGenerator {
         };
 
         let get_method = if self.agent_type.mode == AgentMode::Durable {
+            let get_method_name = get_method_name
+                .as_ref()
+                .expect("durable agents allocate get");
             quote! {
-                pub fn get(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::__create(None, Vec::new(), #(#constructor_param_refs),*)
+                pub fn #get_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    Self::#create_method_name(None, Vec::new(), #(#constructor_param_refs),*)
                 }
             }
         } else {
@@ -766,17 +804,17 @@ impl RustBridgeGenerator {
             impl #client_struct_name {
                 #get_method
 
-                pub fn get_phantom(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::__create(Some(#phantom_id_param), Vec::new(), #(#constructor_param_refs),*)
+                pub fn #get_phantom_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    Self::#create_method_name(Some(#phantom_id_param), Vec::new(), #(#constructor_param_refs),*)
                 }
 
-                pub fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::__create(Some(golem_rust::Uuid::new_v4()), Vec::new(), #(#constructor_param_refs),*)
+                pub fn #new_phantom_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    Self::#create_method_name(Some(golem_rust::Uuid::new_v4()), Vec::new(), #(#constructor_param_refs),*)
                 }
 
                 #with_config_methods
 
-                fn __create(
+                fn #create_method_name(
                     #phantom_id_param: Option<golem_rust::Uuid>,
                     #agent_config_param: Vec<golem_rust::golem_agentic::golem::agent::common::TypedAgentConfigValue>,
                     #(#constructor_param_defs),*
@@ -918,27 +956,15 @@ impl RustBridgeGenerator {
             self.guest_await_method(method, names)?,
             self.guest_trigger_method(method, names)?,
             self.guest_schedule_method(method, names)?,
+            self.guest_schedule_cancelable_method(method, names)?,
             self.guest_internal_method(method, names)?,
         ])
     }
 
     fn allocate_guest_method_names(
         &self,
-        has_local_configs: bool,
+        impl_names: &mut ParameterNaming,
     ) -> anyhow::Result<Vec<GuestMethodNames>> {
-        let mut impl_names = ParameterNaming::new();
-        impl_names.reserve("get_phantom");
-        impl_names.reserve("new_phantom");
-        impl_names.reserve("__create");
-        if self.agent_type.mode == AgentMode::Durable {
-            impl_names.reserve("get");
-        }
-        if has_local_configs {
-            impl_names.reserve("get_with_config");
-            impl_names.reserve("get_phantom_with_config");
-            impl_names.reserve("new_phantom_with_config");
-        }
-
         let user_bases = self
             .agent_type
             .methods
@@ -950,133 +976,58 @@ impl RustBridgeGenerator {
             .iter()
             .map(|base| Self::ident_from_name(impl_names.fresh(base)))
             .collect::<Vec<_>>();
-        let trigger_names = user_bases
-            .iter()
-            .map(|base| {
-                Self::ident_from_name(impl_names.fresh(format!("__golem_bridge_trigger_{base}")))
-            })
-            .collect::<Vec<_>>();
-        let schedule_names = user_bases
-            .iter()
-            .map(|base| {
-                Self::ident_from_name(impl_names.fresh(format!("__golem_bridge_schedule_{base}")))
-            })
-            .collect::<Vec<_>>();
-        let internal_names = user_bases
-            .iter()
-            .map(|base| {
-                Self::ident_from_name(impl_names.fresh(format!("__golem_bridge_invoke_{base}")))
-            })
-            .collect::<Vec<_>>();
-
-        self.agent_type
-            .methods
+        user_bases
             .iter()
             .zip(await_names)
-            .zip(trigger_names)
-            .zip(schedule_names)
-            .zip(internal_names)
-            .map(
-                |((((method, await_name), trigger_name), schedule_name), internal_name)| {
-                    let param_names = self.input_param_ident_names_unique(&method.input_schema)?;
-                    let mut signature_names = ParameterNaming::new();
-                    signature_names.reserve_many(param_names.clone());
-                    let scheduled_time_param = Self::ident_from_name(
-                        signature_names.fresh(self.to_rust_ident("__golem_bridge_scheduled_time")),
-                    );
-                    Ok(GuestMethodNames {
-                        await_name,
-                        trigger_name,
-                        schedule_name,
-                        internal_name,
-                        scheduled_time_param,
-                        param_names,
-                    })
-                },
-            )
+            .zip(self.agent_type.methods.iter())
+            .map(|((base, await_name), method)| {
+                let trigger_name =
+                    Self::ident_from_name(impl_names.fresh(format!("trigger_{base}")));
+                let schedule_name =
+                    Self::ident_from_name(impl_names.fresh(format!("schedule_{base}")));
+                let schedule_cancelable_name =
+                    Self::ident_from_name(impl_names.fresh(format!("schedule_cancelable_{base}")));
+                let internal_name = Self::ident_from_name(
+                    impl_names.fresh(format!("__golem_bridge_invoke_{base}")),
+                );
+
+                let param_names = self.input_param_ident_names_unique(&method.input_schema)?;
+                let mut signature_names = ParameterNaming::new();
+                signature_names.reserve_many(param_names.clone());
+                let scheduled_time_param = Self::ident_from_name(
+                    signature_names.fresh(self.to_rust_ident("__golem_bridge_scheduled_time")),
+                );
+                Ok(GuestMethodNames {
+                    await_name,
+                    trigger_name,
+                    schedule_name,
+                    schedule_cancelable_name,
+                    internal_name,
+                    scheduled_time_param,
+                    param_names,
+                })
+            })
             .collect()
     }
 
     fn method_ident(&self, method: &AgentMethodSchema) -> Ident {
         let name = self.to_rust_ident(&method.name);
-        match self.mode {
-            RustBridgeMode::ExternalRest => Ident::new(&name, Span::call_site()),
-            RustBridgeMode::GuestWasmRpc => {
-                self.unique_internal_ident(&name, &self.guest_reserved_method_names())
-            }
-        }
+        Ident::new(&name, Span::call_site())
     }
 
     fn trigger_method_ident(&self, method: &AgentMethodSchema) -> Ident {
-        let name = match self.mode {
-            RustBridgeMode::ExternalRest => format!("trigger_{}", self.to_rust_ident(&method.name)),
-            RustBridgeMode::GuestWasmRpc => {
-                format!(
-                    "__golem_bridge_trigger_{}",
-                    self.to_rust_ident(&method.name)
-                )
-            }
-        };
-        match self.mode {
-            RustBridgeMode::ExternalRest => Ident::new(&name, Span::call_site()),
-            RustBridgeMode::GuestWasmRpc => {
-                self.unique_internal_ident(&name, &self.guest_user_method_ident_names())
-            }
-        }
+        let name = format!("trigger_{}", self.to_rust_ident(&method.name));
+        Ident::new(&name, Span::call_site())
     }
 
     fn schedule_method_ident(&self, method: &AgentMethodSchema) -> Ident {
-        let name = match self.mode {
-            RustBridgeMode::ExternalRest => {
-                format!("schedule_{}", self.to_rust_ident(&method.name))
-            }
-            RustBridgeMode::GuestWasmRpc => {
-                format!(
-                    "__golem_bridge_schedule_{}",
-                    self.to_rust_ident(&method.name)
-                )
-            }
-        };
-        match self.mode {
-            RustBridgeMode::ExternalRest => Ident::new(&name, Span::call_site()),
-            RustBridgeMode::GuestWasmRpc => {
-                self.unique_internal_ident(&name, &self.guest_user_method_ident_names())
-            }
-        }
+        let name = format!("schedule_{}", self.to_rust_ident(&method.name));
+        Ident::new(&name, Span::call_site())
     }
 
     fn internal_method_ident(&self, method: &AgentMethodSchema) -> Ident {
-        let name = match self.mode {
-            RustBridgeMode::ExternalRest => format!("__{}", self.to_rust_ident(&method.name)),
-            RustBridgeMode::GuestWasmRpc => {
-                format!("__golem_bridge_invoke_{}", self.to_rust_ident(&method.name))
-            }
-        };
-        match self.mode {
-            RustBridgeMode::ExternalRest => Ident::new(&name, Span::call_site()),
-            RustBridgeMode::GuestWasmRpc => {
-                self.unique_internal_ident(&name, &self.guest_user_method_ident_names())
-            }
-        }
-    }
-
-    fn guest_user_method_ident_names(&self) -> Vec<String> {
-        self.agent_type
-            .methods
-            .iter()
-            .map(|method| self.to_rust_ident(&method.name))
-            .collect()
-    }
-
-    fn guest_reserved_method_names(&self) -> Vec<String> {
-        vec![
-            "get".to_string(),
-            "get_phantom".to_string(),
-            "new_phantom".to_string(),
-            "get_with_config".to_string(),
-            "get_phantom_with_config".to_string(),
-            "new_phantom_with_config".to_string(),
-        ]
+        let name = format!("__{}", self.to_rust_ident(&method.name));
+        Ident::new(&name, Span::call_site())
     }
 
     fn guest_await_method(
@@ -1145,12 +1096,35 @@ impl RustBridgeGenerator {
             .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
 
         Ok(quote! {
-            pub fn #name(&self, #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
                 self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters);
                 Ok(())
+            }
+        })
+    }
+
+    fn guest_schedule_cancelable_method(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+    ) -> anyhow::Result<TokenStream> {
+        let name = &names.schedule_cancelable_name;
+        let scheduled_time_param = &names.scheduled_time_param;
+        let param_defs =
+            self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
+        let name_lit = method.name.as_str();
+        let params_schema_value = self
+            .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
+
+        Ok(quote! {
+            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, crate::__golem_bridge_runtime::ClientError> {
+                let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters))
             }
         })
     }
@@ -1212,24 +1186,6 @@ impl RustBridgeGenerator {
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let param_refs = self.input_param_refs(&method.input_schema)?;
 
-        if self.mode == RustBridgeMode::GuestWasmRpc {
-            let name_lit = method.name.as_str();
-            return match return_type {
-                Some(return_type) => Ok(quote! {
-                    pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
-                        let result = self.#internal_name(#(#param_refs),*).await?;
-                        result.ok_or_else(|| crate::__golem_bridge_runtime::ClientError::MissingResult { method: #name_lit.to_string() })
-                    }
-                }),
-                None => Ok(quote! {
-                    pub async fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
-                        let _result = self.#internal_name(#(#param_refs),*).await?;
-                        Ok(())
-                    }
-                }),
-            };
-        }
-
         match return_type {
             Some(return_type) => Ok(quote! {
                 pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
@@ -1253,20 +1209,6 @@ impl RustBridgeGenerator {
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let param_refs = self.input_param_refs(&method.input_schema)?;
 
-        if self.mode == RustBridgeMode::GuestWasmRpc {
-            let name_lit = method.name.as_str();
-            let params_schema_value = self.input_param_schema_value(&method.input_schema)?;
-            return Ok(quote! {
-                pub fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    self.wasm_rpc.invoke(#name_lit, method_parameters)
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
-                }
-            });
-        }
-
         Ok(quote! {
             pub async fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
@@ -1280,24 +1222,6 @@ impl RustBridgeGenerator {
         let internal_name = self.internal_method_ident(method);
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let param_refs = self.input_param_refs(&method.input_schema)?;
-
-        if self.mode == RustBridgeMode::GuestWasmRpc {
-            let name_lit = method.name.as_str();
-            let params_schema_value = self.input_param_schema_value(&method.input_schema)?;
-            let scheduled_time_param = self.unique_internal_ident(
-                "__golem_bridge_scheduled_time",
-                &self.input_param_ident_names(&method.input_schema)?,
-            );
-            return Ok(quote! {
-                pub fn #name(&self, #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters);
-                    Ok(())
-                }
-            });
-        }
 
         Ok(quote! {
             pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
@@ -1313,45 +1237,6 @@ impl RustBridgeGenerator {
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let params_value = self.input_param_value(&method.input_schema)?;
         let return_type = self.output_return_type(&method.output_schema)?;
-
-        if self.mode == RustBridgeMode::GuestWasmRpc {
-            let params_schema_value = self.input_param_schema_value(&method.input_schema)?;
-            return match return_type {
-                Some(return_type) => {
-                    let decode_body = self.output_decode_expr(&method.output_schema)?;
-                    Ok(quote! {
-                        async fn #name(&self, #(#param_defs),*) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
-                            let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                            let method_parameters = golem_rust::encode_schema_value(&method_parameters)
-                                .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                            let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
-                            let response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
-                                .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
-                            match response {
-                                Some(__value) => {
-                                    let __decoded: #return_type = (|| -> Result<#return_type, String> {
-                                        #decode_body
-                                    })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaDecodeFailed { message: __e })?;
-                                    Ok(Some(__decoded))
-                                }
-                                None => Ok(None),
-                            }
-                        }
-                    })
-                }
-                None => Ok(quote! {
-                    async fn #name(&self, #(#param_defs),*) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
-                        let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                        let method_parameters = golem_rust::encode_schema_value(&method_parameters)
-                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                        let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
-                        let _response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
-                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
-                        Ok(Some(()))
-                    }
-                }),
-            };
-        }
 
         match return_type {
             Some(return_type) => {
@@ -1457,16 +1342,6 @@ impl RustBridgeGenerator {
             .into_iter()
             .map(|name| naming.fresh(name))
             .collect())
-    }
-
-    fn unique_internal_ident(&self, base: &str, occupied: &[String]) -> Ident {
-        let mut candidate = self.to_rust_ident(base);
-        let mut suffix = 0usize;
-        while occupied.iter().any(|name| name == &candidate) {
-            suffix += 1;
-            candidate = self.to_rust_ident(&format!("{base}_{suffix}"));
-        }
-        Ident::new(&candidate, Span::call_site())
     }
 
     fn ident_from_name(name: impl AsRef<str>) -> Ident {
@@ -3239,10 +3114,15 @@ pub fn decode_text(
             "pub fn new_phantom(",
             "golem_rust::golem_agentic::golem::agent::host::make_agent_id",
             "golem_rust::golem_agentic::golem::agent::host::WasmRpc::new",
+            "pub async fn run(\n        &self,\n        value: i32,",
+            "pub fn trigger_run(\n        &self,\n        value: i32,",
+            "pub fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::wasip2::clocks::wall_clock::Datetime,",
+            "pub fn schedule_cancelable_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::wasip2::clocks::wall_clock::Datetime,",
             "async_invoke_and_await",
             "await_invoke_schema_value_result",
             ".invoke(",
             "schedule_invocation",
+            "schedule_cancelable_invocation",
             "MissingResult",
         ] {
             assert!(
@@ -3250,6 +3130,8 @@ pub fn decode_text(
                 "missing guest wasm-rpc API shape {guest_shape}:\n{lib_rs}"
             );
         }
+        assert!(!lib_rs.contains("pub fn __golem_bridge_trigger_run"));
+        assert!(!lib_rs.contains("pub fn __golem_bridge_schedule_run"));
         assert!(!lib_rs.contains("golem_client"));
         assert!(!lib_rs.contains("reqwest"));
         assert!(!lib_rs.contains("constructor_parameters"));
@@ -3564,6 +3446,77 @@ pub fn decode_text(
     }
 
     #[test]
+    fn guest_generation_keeps_get_agent_method_name_when_constructor_collides() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.methods.push(AgentMethodSchema {
+            name: "get".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        assert!(
+            lib_rs.contains("pub async fn get(&self")
+                || lib_rs.contains("pub async fn get(\n        &self"),
+            "macro-compatible guest bridge should keep the user method named get public as get; generated source:\n{lib_rs}"
+        );
+    }
+
+    #[test]
+    fn ephemeral_guest_generation_does_not_reserve_absent_get_with_config_helper() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["foo".to_string()],
+            value_type: SchemaType::string(),
+        });
+        agent_type.methods.push(AgentMethodSchema {
+            name: "get_with_config".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        assert!(
+            lib_rs.contains("pub async fn get_with_config(\n        &self"),
+            "ephemeral agents do not generate a get_with_config constructor, so the user method should keep that public name; generated source:\n{lib_rs}"
+        );
+    }
+
+    #[test]
     fn guest_generation_compiles_when_get_helper_deconflicted_name_matches_user_method() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =
@@ -3643,6 +3596,72 @@ pub fn decode_text(
             "generated guest crate with method named trigger_run next to run failed cargo check\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_schedule_cancelable_name_matches_macro_collision_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        for method_name in ["run", "cancelable_run"] {
+            agent_type.methods.push(AgentMethodSchema {
+                name: method_name.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            });
+        }
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        let method_start = lib_rs
+            .find("pub fn schedule_cancelable_run(")
+            .expect("generated guest client should expose schedule_cancelable_run");
+        let body_start = method_start
+            + lib_rs[method_start..]
+                .find('{')
+                .expect("generated method should have a body");
+        let mut depth = 0usize;
+        let mut method_end = None;
+        for (offset, ch) in lib_rs[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        method_end = Some(body_start + offset + ch.len_utf8());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let method_src = &lib_rs[method_start..method_end.expect("method body should close")];
+
+        assert!(
+            method_src.contains("CancellationToken"),
+            "schedule_cancelable_run should be the cancelable wrapper for run, not another method's plain schedule wrapper:\n{method_src}"
+        );
+        assert!(
+            method_src.contains("schedule_cancelable_invocation"),
+            "schedule_cancelable_run should call the cancelable scheduler:\n{method_src}"
+        );
+        assert!(
+            method_src.contains("\"run\""),
+            "schedule_cancelable_run should target the run method to match macro client name allocation:\n{method_src}"
         );
     }
 
