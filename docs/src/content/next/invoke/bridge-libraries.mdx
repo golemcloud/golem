@@ -11,15 +11,19 @@ To generate bridge libraries, add a `bridge` section to your `golem.yaml`:
 ```yaml
 bridge:
   ts:
-    agents:
-      - InboxAgent
-      - EscalationAgent
+    external:
+      agents:
+        - InboxAgent
+        - EscalationAgent
   rust:
-    agents: AuditAgent
+    external:
+      agents: AuditAgent
   scala:
-    agents: BillingAgent
+    external:
+      agents: BillingAgent
   moonbit:
-    agents: ReportAgent
+    external:
+      agents: ReportAgent
 ```
 
 This will generate a TypeScript package for `InboxAgent` and `EscalationAgent`, a Rust crate for `AuditAgent`, a Scala sbt project for `BillingAgent`, and a MoonBit module for `ReportAgent`.

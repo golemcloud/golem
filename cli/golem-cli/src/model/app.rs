@@ -909,6 +909,7 @@ impl Application {
                 .bridge_sdks
                 .value
                 .for_language(language)
+                .and_then(|sdk| sdk.external.as_ref())
                 .and_then(|sdk| sdk.output_dir.as_ref()),
             BridgeMode::Guest => self
                 .bridge_sdks
@@ -4172,10 +4173,11 @@ mod test {
 
             bridge:
               rust:
-                agents:
-                  - AlphaAgent
-                  - BetaAgent
-                outputDir: bridge-sdk/rust
+                external:
+                  agents:
+                    - AlphaAgent
+                    - BetaAgent
+                  outputDir: bridge-sdk/rust
         "# };
 
         let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
@@ -4221,8 +4223,9 @@ mod test {
 
             bridge:
               rust:
-                agents:
-                  - AlphaAgent
+                external:
+                  agents:
+                    - AlphaAgent
                 guest:
                   agents:
                     - AlphaAgent
@@ -4433,8 +4436,9 @@ mod test {
 
             bridge:
               ts:
-                agents: ExternalAgent
-                outputDir: bridge/ts
+                external:
+                  agents: ExternalAgent
+                  outputDir: bridge/ts
                 guest:
                   outputDir: bridge/ts-guest
         "# };

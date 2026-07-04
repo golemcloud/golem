@@ -16,12 +16,13 @@ Add a `bridge` section to `golem.yaml`:
 ```yaml
 bridge:
   rust:
-    agents: "*"                    # Generate for all agents
-    # Or list specific agents:
-    # agents:
-    #   - MyAgent
-    #   - my-app:billing
-    outputDir: ./bridge-sdk/rust   # Optional custom output directory
+    external:
+      agents: "*"                    # Generate for all agents
+      # Or list specific agents:
+      # agents:
+      #   - MyAgent
+      #   - my-app:billing
+      outputDir: ./bridge-sdk/rust   # Optional custom output directory
 ```
 
 The `agents` field accepts `"*"` (all agents), or a list of agent type names or component names (`namespace:name`).

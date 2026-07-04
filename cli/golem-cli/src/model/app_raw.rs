@@ -973,7 +973,10 @@ impl BridgeSdks {
     ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
         self.for_all_languages().filter_map(|(lang, targets)| {
             targets.and_then(|targets| {
-                (!targets.agents.is_empty()
+                (targets
+                    .external
+                    .as_ref()
+                    .is_some_and(|external| !external.agents.is_empty())
                     || targets
                         .guest
                         .as_ref()
@@ -989,14 +992,16 @@ impl BridgeSdks {
         let mut result = Vec::new();
         for (language, targets) in self.for_all_languages() {
             if let Some(targets) = targets {
-                if !targets.agents.is_empty() {
+                if let Some(external) = &targets.external
+                    && !external.agents.is_empty()
+                {
                     result.push((
                         language,
                         BridgeMode::External,
                         BridgeSdkModeTargetsRef {
-                            agents: &targets.agents,
+                            agents: &external.agents,
                             tools: None,
-                            output_dir: targets.output_dir.as_ref(),
+                            output_dir: external.output_dir.as_ref(),
                         },
                     ));
                 }
@@ -1022,12 +1027,19 @@ impl BridgeSdks {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<BridgeSdkExternalTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest: Option<BridgeSdkModeTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkExternalTargets {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub agents: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub guest: Option<BridgeSdkModeTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1795,15 +1807,16 @@ mod test {
 
     fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
         (
-            arb_token_list_model(),
-            arb_opt(arb_ident()),
+            arb_opt(arb_bridge_sdk_external_targets()),
             arb_opt(arb_bridge_sdk_mode_targets()),
         )
-            .prop_map(|(agents, output_dir, guest)| BridgeSdkLanguageTargets {
-                agents,
-                output_dir,
-                guest,
-            })
+            .prop_map(|(external, guest)| BridgeSdkLanguageTargets { external, guest })
+            .boxed()
+    }
+
+    fn arb_bridge_sdk_external_targets() -> BoxedStrategy<BridgeSdkExternalTargets> {
+        (arb_token_list_model(), arb_opt(arb_ident()))
+            .prop_map(|(agents, output_dir)| BridgeSdkExternalTargets { agents, output_dir })
             .boxed()
     }
 
@@ -2194,15 +2207,17 @@ mod test {
 
             bridge:
               rust:
-                agents: CounterAgent
-                outputDir: bridge/rust
+                external:
+                  agents: CounterAgent
+                  outputDir: bridge/rust
         "# };
 
         let app = Application::from_yaml_str(source).unwrap();
         let rust = app.bridge.unwrap().rust.unwrap();
+        let external = rust.external.unwrap();
 
-        assert_eq!(rust.agents.into_vec(), vec!["CounterAgent".to_string()]);
-        assert_eq!(rust.output_dir.as_deref(), Some("bridge/rust"));
+        assert_eq!(external.agents.into_vec(), vec!["CounterAgent".to_string()]);
+        assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
         assert!(rust.guest.is_none());
     }
 
@@ -2213,8 +2228,9 @@ mod test {
 
             bridge:
               rust:
-                agents: ExternalAgent
-                outputDir: bridge/rust
+                external:
+                  agents: ExternalAgent
+                  outputDir: bridge/rust
                 guest:
                   agents:
                     - GuestAgent
@@ -2223,10 +2239,14 @@ mod test {
 
         let app = Application::from_yaml_str(source).unwrap();
         let rust = app.bridge.unwrap().rust.unwrap();
+        let external = rust.external.unwrap();
         let guest = rust.guest.unwrap();
 
-        assert_eq!(rust.agents.into_vec(), vec!["ExternalAgent".to_string()]);
-        assert_eq!(rust.output_dir.as_deref(), Some("bridge/rust"));
+        assert_eq!(
+            external.agents.into_vec(),
+            vec!["ExternalAgent".to_string()]
+        );
+        assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
         assert_eq!(guest.agents.into_vec(), vec!["GuestAgent".to_string()]);
         assert_eq!(guest.output_dir.as_deref(), Some("bridge/rust-guest"));
     }

@@ -441,7 +441,8 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
 
             bridge:
               rust:
-                agents: "*"
+                external:
+                  agents: "*"
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -558,8 +559,9 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
 
             bridge:
               rust:
-                agents: "*"
-                outputDir: golem-temp/bridge-sdk/rust/guest
+                external:
+                  agents: "*"
+                  outputDir: golem-temp/bridge-sdk/rust/guest
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -3624,8 +3626,9 @@ async fn dependency_guest_bridge_external_bridge_does_not_block_prebuilt_guest_c
 
             bridge:
               rust:
-                agents: app:producer
-                outputDir: bridge/external
+                external:
+                  agents: app:producer
+                  outputDir: bridge/external
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -5907,8 +5910,9 @@ async fn guest_and_external_bridge_output_dir_overlap_is_rejected(_tracing: &Tra
 
             bridge:
               rust:
-                agents: BarAgent
-                outputDir: bridge
+                external:
+                  agents: BarAgent
+                  outputDir: bridge
                 guest:
                   agents: BarAgent
                   outputDir: bridge/bar-agent-client
@@ -6030,7 +6034,8 @@ async fn guest_bridge_output_dir_overlap_with_default_external_dir_is_rejected_b
 
             bridge:
               rust:
-                agents: BarAgent
+                external:
+                  agents: BarAgent
                 guest:
                   agents: BarAgent
                   outputDir: golem-temp/bridge-sdk/rust/bar-agent-client
@@ -6119,8 +6124,9 @@ async fn guest_and_external_bridge_same_output_dir_base_generates_sibling_sdks(_
 
             bridge:
               rust:
-                agents: BarAgent
-                outputDir: bridge
+                external:
+                  agents: BarAgent
+                  outputDir: bridge
                 guest:
                   agents: BarAgent
                   outputDir: bridge
@@ -6213,8 +6219,9 @@ async fn component_matcher_guest_and_external_same_output_dir_base_generates_sib
 
             bridge:
               rust:
-                agents: app:producer
-                outputDir: bridge
+                external:
+                  agents: app:producer
+                  outputDir: bridge
                 guest:
                   agents: app:producer
                   outputDir: bridge
@@ -6316,8 +6323,9 @@ async fn component_matcher_same_output_dir_base_with_guest_consumer_generates_si
 
             bridge:
               rust:
-                agents: app:producer
-                outputDir: bridge
+                external:
+                  agents: app:producer
+                  outputDir: bridge
                 guest:
                   agents: app:producer
                   outputDir: bridge
@@ -6615,8 +6623,9 @@ async fn unselected_external_bridge_output_dir_does_not_block_selected_guest_bri
 
             bridge:
               rust:
-                agents: app:consumer
-                outputDir: bridge/bar-agent-guest-client
+                external:
+                  agents: app:consumer
+                  outputDir: bridge/bar-agent-guest-client
                 guest:
                   agents: BarAgent
                   outputDir: bridge
@@ -6712,8 +6721,9 @@ async fn external_bridge_missing_agent_matcher_is_rejected_with_guest_build_plan
 
             bridge:
               rust:
-                agents: MissingAgent
-                outputDir: bridge/external
+                external:
+                  agents: MissingAgent
+                  outputDir: bridge/external
                 guest:
                   agents: BarAgent
                   outputDir: bridge/guest
@@ -7244,8 +7254,9 @@ async fn guest_and_rust_consumer_external_bridge_output_dir_overlap_is_rejected_
 
             bridge:
               rust:
-                agents: app:consumer
-                outputDir: bridge/bar-agent-client/bar-agent-guest-client
+                external:
+                  agents: app:consumer
+                  outputDir: bridge/bar-agent-client/bar-agent-guest-client
                 guest:
                   agents: BarAgent
                   outputDir: bridge/bar-agent-client
@@ -7367,8 +7378,9 @@ async fn guest_and_build_produced_external_bridge_output_dir_overlap_is_rejected
 
             bridge:
               rust:
-                agents: app:consumer
-                outputDir: bridge/bar-agent-client/bar-agent-guest-client
+                external:
+                  agents: app:consumer
+                  outputDir: bridge/bar-agent-client/bar-agent-guest-client
                 guest:
                   agents: BarAgent
                   outputDir: bridge/bar-agent-client

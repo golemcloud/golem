@@ -340,9 +340,11 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             # We also test that we can generate the bridge SDKs during the build process
             bridge:
               ts:
-                agents: "*"
+                external:
+                  agents: "*"
               rust:
-                agents: "*"
+                external:
+                  agents: "*"
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
@@ -1109,9 +1111,11 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             # We also test that we can generate the bridge SDKs during the build process
             bridge:
               ts:
-                agents: "*"
+                external:
+                  agents: "*"
               rust:
-                agents: "*"
+                external:
+                  agents: "*"
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
