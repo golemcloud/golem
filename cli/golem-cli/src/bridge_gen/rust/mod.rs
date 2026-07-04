@@ -631,7 +631,7 @@ impl RustBridgeGenerator {
         let guest_method_names = self.allocate_guest_method_names(&mut impl_names)?;
         let has_get_method = guest_method_names
             .iter()
-            .any(|names| names.await_name.to_string() == "get");
+            .any(|names| names.await_name == "get");
         let get_method_name = (self.agent_type.mode == AgentMode::Durable).then(|| {
             if has_get_method {
                 Self::ident_from_name(impl_names.fresh("get_"))

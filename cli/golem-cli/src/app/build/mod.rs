@@ -244,8 +244,8 @@ async fn build_components_with_dependency_ordering(
         if !made_progress {
             report_guest_bridge_dependency_ordering_cycle(
                 ctx,
-                &pending_components,
-                &available_guest_bridge_dependencies,
+                pending_components,
+                available_guest_bridge_dependencies,
             )?;
         }
     }
@@ -273,7 +273,6 @@ async fn generate_available_dependency_guest_bridges(
     let built_component_names = dependency_guest_requirements
         .iter()
         .map(|dependency| dependency.component_name().clone())
-        .into_iter()
         .filter(|component_name| built_components.contains(component_name))
         .collect::<BTreeSet<_>>();
     let built_component_names = built_component_names.into_iter().collect::<Vec<_>>();
