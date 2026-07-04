@@ -5523,7 +5523,7 @@ async fn custom_unknown_language_build_consumer_waits_for_custom_guest_bridge_ou
 }
 
 #[test]
-async fn rust_guest_bridge_choreography_keeps_builds_before_metadata(_tracing: &Tracing) {
+async fn rust_guest_bridge_choreography_allows_metadata_before_later_builds(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let component_wasm = crate::workspace_path().join("test-components/golem_it_agent_rpc.wasm");
     let component_wasm = component_wasm.to_str().unwrap();
@@ -5557,7 +5557,7 @@ async fn rust_guest_bridge_choreography_keeps_builds_before_metadata(_tracing: &
                 componentWasm: b.wasm
                 outputWasm: b-final.wasm
                 build:
-                  - command: test ! -f ../a/a-final.wasm
+                  - command: test -f ../a/a-final.wasm
                   - command: cp {component_wasm} b.wasm
 
             bridge:
