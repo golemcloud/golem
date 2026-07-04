@@ -19,16 +19,10 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use golem_common::schema::AgentTypeSchema;
-use golem_common::schema::tool::Tool;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-/// Returns the name of a tool: the name of the root node of its command tree.
-pub fn tool_name(tool: &Tool) -> Option<&str> {
-    tool.commands.nodes.first().map(|node| node.name.as_str())
-}
 
 pub struct ComponentMetadataRegistry {
     cache: Cache<ComponentName, (), ExtractedComponentMetadata, Arc<anyhow::Error>>,
@@ -151,7 +145,7 @@ impl ComponentMetadataRegistry {
         }
 
         for tool in &metadata.tools {
-            let Some(tool_name) = tool_name(tool) else {
+            let Some(tool_name) = tool.name() else {
                 continue;
             };
             if let Some(existing) = index.tool_name_sources.get(tool_name)
@@ -185,7 +179,7 @@ impl ComponentMetadataRegistry {
         }
 
         for tool in &metadata.tools {
-            if let Some(tool_name) = tool_name(tool) {
+            if let Some(tool_name) = tool.name() {
                 index
                     .tool_name_sources
                     .entry(tool_name.to_string())

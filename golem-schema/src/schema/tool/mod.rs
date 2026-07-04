@@ -71,6 +71,13 @@ pub struct Tool {
     pub schema: SchemaGraph,
 }
 
+impl Tool {
+    /// Returns the name of the tool: the name of the root node of its command tree.
+    pub fn name(&self) -> Option<&str> {
+        self.commands.nodes.first().map(|node| node.name.as_str())
+    }
+}
+
 /// Flattened command hierarchy. Always non-empty; the root command is at index 0.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommandTree {

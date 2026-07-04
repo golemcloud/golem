@@ -1,7 +1,6 @@
 use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
-use crate::app::component_metadata::tool_name;
 use crate::app::context::BuildContext;
 use crate::bridge_gen::moonbit::MoonBitBridgeGenerator;
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
@@ -622,11 +621,11 @@ async fn collect_tool_manifest_targets_for_entry(
         let mut tools = agent_metadata_cache.get(ctx, component_name).await?.tools;
 
         if !is_matching_all && !is_matching_component {
-            tools.retain(|tool| tool_name(tool).is_some_and(|name| matchers.contains(name)));
+            tools.retain(|tool| tool.name().is_some_and(|name| matchers.contains(name)));
         }
 
         for tool in tools {
-            let Some(name) = tool_name(&tool) else {
+            let Some(name) = tool.name() else {
                 continue;
             };
             matchers.remove(name);
@@ -708,7 +707,7 @@ async fn collect_dependency_guest_bridge_targets(
         }
 
         for tool in &metadata.tools {
-            let Some(tool_name) = tool_name(tool) else {
+            let Some(tool_name) = tool.name() else {
                 continue;
             };
             let Ok(tool_dependency_name) = crate::model::app::ToolName::try_from(tool_name) else {

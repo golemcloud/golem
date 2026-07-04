@@ -23,7 +23,6 @@ use crate::app::build::gen_bridge::{
     plan_repl_bridge_generation_lenient, validate_no_output_dir_collisions,
     validate_supported_bridge_targets, write_repl_metadata,
 };
-use crate::app::component_metadata::tool_name;
 use crate::app::context::BuildContext;
 use crate::bridge_gen::BridgeMode;
 use crate::error::NonSuccessfulExit;
@@ -484,7 +483,7 @@ fn component_guest_bridge_dependencies_provided_by_metadata(
             .map(|agent_type| ComponentDependency::Agent(agent_type.type_name.clone())),
     );
     dependencies.extend(metadata.tools.iter().filter_map(|tool| {
-        tool_name(&tool)
+        tool.name()
             .and_then(|name| crate::model::app::ToolName::try_from(name).ok())
             .map(ComponentDependency::Tool)
     }));
@@ -977,7 +976,7 @@ fn add_existing_component_manifest_bridge_output_dir_claims(
         }
         BridgeTargetNameKind::Tool => {
             for tool in metadata.tools {
-                let Some(name) = tool_name(&tool) else {
+                let Some(name) = tool.name() else {
                     continue;
                 };
                 claims.push(OutputDirClaim {

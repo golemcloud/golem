@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
-use crate::app::component_metadata::tool_name;
 use crate::bridge_gen::{
     BridgeMode, bridge_client_directory_name, bridge_client_directory_name_for_mode,
     tool_bridge_client_directory_name,
@@ -330,7 +329,7 @@ impl BridgeSdkTargetKind {
     pub fn display_name(&self) -> &str {
         match self {
             BridgeSdkTargetKind::Agent(agent_type) => agent_type.type_name.as_str(),
-            BridgeSdkTargetKind::Tool(tool) => tool_name(tool).unwrap_or_default(),
+            BridgeSdkTargetKind::Tool(tool) => tool.name().unwrap_or_default(),
         }
     }
 
