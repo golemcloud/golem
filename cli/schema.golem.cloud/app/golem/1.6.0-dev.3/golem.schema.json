@@ -1221,25 +1221,6 @@
         "outputDir": {
           "description": "Custom output directory for the generated SDK",
           "type": "string"
-        },
-        "guest": {
-          "description": "Guest bridge SDK configuration for use inside Golem components",
-          "$ref": "#/definitions/bridgeSdkModeTargets"
-        }
-      }
-    },
-    "bridgeSdkModeTargets": {
-      "description": "Bridge SDK mode targets",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "agents": {
-          "description": "List of agent type names, component names or \"*\" for including all agents",
-          "$ref": "#/definitions/lenientTokenList"
-        },
-        "outputDir": {
-          "description": "Custom output directory for the generated SDK",
-          "type": "string"
         }
       }
     },

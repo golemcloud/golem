@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "$id": "https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json",
+  "$id": "https://schema.golem.cloud/app/golem/1.6.0-dev.6/golem.schema.json",
   "title": "Golem Application Manifest",
   "description": "Golem Application Manifest.",
   "type": "object",
@@ -64,6 +64,9 @@
     },
     "mcp": {
       "$ref": "#/definitions/mcp"
+    },
+    "localServer": {
+      "$ref": "#/definitions/localServer"
     },
     "environments": {
       "type": "object",
@@ -159,6 +162,27 @@
         }
       }
     },
+    "componentDependencies": {
+      "description": "Provider-qualified guest bridge dependencies required by a component.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "description": "Agent guest bridge dependencies. Each entry identifies both provider component and agent type, either as 'component/name' or as { component, name }.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/componentDependencyReference"
+          }
+        },
+        "tools": {
+          "description": "Tool guest bridge dependencies. Each entry identifies both provider component and tool name, either as 'component/name' or as { component, name }.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/componentDependencyReference"
+          }
+        }
+      }
+    },
     "componentTemplate": {
       "description": "Component template definition",
       "type": "object",
@@ -174,6 +198,10 @@
         "outputWasm": {
           "type": "string",
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
+        },
+        "dependencies": {
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
@@ -273,6 +301,10 @@
         "outputWasm": {
           "type": "string",
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
+        },
+        "dependencies": {
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
@@ -409,6 +441,10 @@
           "type": "string",
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
+        "dependencies": {
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "$ref": "#/definitions/componentDependencies"
+        },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
         },
@@ -506,6 +542,10 @@
         "outputWasm": {
           "type": "string",
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
+        },
+        "dependencies": {
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
@@ -726,7 +766,11 @@
       "properties": {
         "domain": {
           "type": "string",
-          "description": "Domain"
+          "description": "Full concrete domain for the HTTP API deployment. Use this for custom domains and custom server environments."
+        },
+        "subdomain": {
+          "type": "string",
+          "description": "Single DNS label resolved through the deployment environment's built-in server. For local HTTP API deployments this resolves to <subdomain>.localhost:9006 by default, or <subdomain>.localhost:<customRequestPort> when localServer.customRequestPort is set to a stable nonzero port. For cloud HTTP API deployments this resolves to <subdomain>.apps.golem.cloud."
         },
         "webhookUrl": {
           "type": "string",
@@ -744,8 +788,17 @@
           }
         }
       },
-      "required": [
-        "domain"
+      "oneOf": [
+        {
+          "required": [
+            "domain"
+          ]
+        },
+        {
+          "required": [
+            "subdomain"
+          ]
+        }
       ]
     },
     "httpApiDeploymentAgentOptions": {
@@ -782,7 +835,12 @@
       "additionalProperties": false,
       "properties": {
         "domain": {
-          "type": "string"
+          "type": "string",
+          "description": "Full concrete domain for the MCP deployment. Use this for custom domains and custom server environments."
+        },
+        "subdomain": {
+          "type": "string",
+          "description": "Single DNS label resolved through the deployment environment's built-in server. For local MCP deployments this resolves to <subdomain>.localhost:9007 by default, or <subdomain>.localhost:<mcpPort> when localServer.mcpPort is set to a stable nonzero port. For cloud MCP deployments this resolves to <subdomain>.mcps.golem.cloud."
         },
         "agents": {
           "type": "object",
@@ -791,8 +849,17 @@
           }
         }
       },
-      "required": [
-        "domain"
+      "oneOf": [
+        {
+          "required": [
+            "domain"
+          ]
+        },
+        {
+          "required": [
+            "subdomain"
+          ]
+        }
       ]
     },
     "mcpDeploymentAgentOptions": {
@@ -801,6 +868,47 @@
       "properties": {
         "securityScheme": {
           "type": "string"
+        }
+      }
+    },
+    "localServer": {
+      "type": "object",
+      "description": "Defaults for `golem server run` when launched from this application.",
+      "additionalProperties": false,
+      "properties": {
+        "routerAddr": {
+          "type": "string",
+          "description": "Address to serve the main API on."
+        },
+        "routerPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port to serve the main API on. Do not set this to 0 in the manifest; port 0 is only allowed when passed directly as --router-port 0 to golem server run."
+        },
+        "customRequestPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port to serve custom requests on. Do not set this to 0 in the manifest; port 0 is only allowed when passed directly as --custom-request-port 0 to golem server run."
+        },
+        "mcpPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port to serve the MCP server on. Do not set this to 0 in the manifest; port 0 is only allowed when passed directly as --mcp-port 0 to golem server run."
+        },
+        "portsFile": {
+          "type": "string",
+          "description": "Path where discovered startup ports are written as JSON."
+        },
+        "dataDir": {
+          "type": "string",
+          "description": "Directory used for local server data."
+        },
+        "agentFilesystemRoot": {
+          "type": "string",
+          "description": "Root directory for deterministic agent filesystem directories."
         }
       }
     },
@@ -1179,11 +1287,34 @@
         "rust": {
           "description": "Rust SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
+        "scala": {
+          "description": "Scala SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
+        "moonbit": {
+          "description": "MoonBit SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
         }
       }
     },
     "bridgeSdkLanguageTargets": {
       "description": "Bridge SDK language targets",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "external": {
+          "description": "External bridge SDK configuration for use outside Golem components",
+          "$ref": "#/definitions/bridgeSdkExternalTargets"
+        },
+        "internal": {
+          "description": "Internal bridge SDK configuration for use inside Golem components",
+          "$ref": "#/definitions/bridgeSdkModeTargets"
+        }
+      }
+    },
+    "bridgeSdkExternalTargets": {
+      "description": "External bridge SDK mode targets",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -1194,6 +1325,25 @@
         "outputDir": {
           "description": "Custom output directory for the generated SDK",
           "type": "string"
+        }
+      }
+    },
+    "bridgeSdkModeTargets": {
+      "description": "Bridge SDK mode targets",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "description": "List of agent type names, component names or \"*\" for including all agents",
+          "$ref": "#/definitions/lenientTokenList"
+        },
+        "outputDir": {
+          "description": "Custom output directory for the generated SDK",
+          "type": "string"
+        },
+        "tools": {
+          "description": "List of tool names, component names or \"*\" for including all tools",
+          "$ref": "#/definitions/lenientTokenList"
         }
       }
     },
@@ -1307,7 +1457,9 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": ["propEq"],
+          "required": [
+            "propEq"
+          ],
           "additionalProperties": false
         },
         {
@@ -1317,7 +1469,9 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": ["propNeq"],
+          "required": [
+            "propNeq"
+          ],
           "additionalProperties": false
         },
         {
@@ -1327,7 +1481,9 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": ["propGt"],
+          "required": [
+            "propGt"
+          ],
           "additionalProperties": false
         },
         {
@@ -1337,7 +1493,9 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": ["propGte"],
+          "required": [
+            "propGte"
+          ],
           "additionalProperties": false
         },
         {
@@ -1347,7 +1505,9 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": ["propLt"],
+          "required": [
+            "propLt"
+          ],
           "additionalProperties": false
         },
         {
@@ -1357,7 +1517,9 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": ["propLte"],
+          "required": [
+            "propLte"
+          ],
           "additionalProperties": false
         },
         {
@@ -1375,13 +1537,17 @@
                       "type": "string"
                     }
                   },
-                  "required": ["property"],
+                  "required": [
+                    "property"
+                  ],
                   "additionalProperties": false
                 }
               ]
             }
           },
-          "required": ["propExists"],
+          "required": [
+            "propExists"
+          ],
           "additionalProperties": false
         },
         {
@@ -1391,7 +1557,9 @@
               "$ref": "#/definitions/propertySetCheck"
             }
           },
-          "required": ["propIn"],
+          "required": [
+            "propIn"
+          ],
           "additionalProperties": false
         },
         {
@@ -1407,11 +1575,16 @@
                   "type": "string"
                 }
               },
-              "required": ["property", "pattern"],
+              "required": [
+                "property",
+                "pattern"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["propMatches"],
+          "required": [
+            "propMatches"
+          ],
           "additionalProperties": false
         },
         {
@@ -1427,11 +1600,16 @@
                   "type": "string"
                 }
               },
-              "required": ["property", "prefix"],
+              "required": [
+                "property",
+                "prefix"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["propStartsWith"],
+          "required": [
+            "propStartsWith"
+          ],
           "additionalProperties": false
         },
         {
@@ -1447,11 +1625,16 @@
                   "type": "string"
                 }
               },
-              "required": ["property", "substring"],
+              "required": [
+                "property",
+                "substring"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["propContains"],
+          "required": [
+            "propContains"
+          ],
           "additionalProperties": false
         },
         {
@@ -1466,7 +1649,9 @@
               "maxItems": 2
             }
           },
-          "required": ["and"],
+          "required": [
+            "and"
+          ],
           "additionalProperties": false
         },
         {
@@ -1481,7 +1666,9 @@
               "maxItems": 2
             }
           },
-          "required": ["or"],
+          "required": [
+            "or"
+          ],
           "additionalProperties": false
         },
         {
@@ -1491,7 +1678,9 @@
               "$ref": "#/definitions/retryPredicate"
             }
           },
-          "required": ["not"],
+          "required": [
+            "not"
+          ],
           "additionalProperties": false
         }
       ]
@@ -1533,7 +1722,9 @@
               "$ref": "#/definitions/duration"
             }
           },
-          "required": ["periodic"],
+          "required": [
+            "periodic"
+          ],
           "additionalProperties": false
         },
         {
@@ -1549,11 +1740,16 @@
                   "type": "number"
                 }
               },
-              "required": ["baseDelay", "factor"],
+              "required": [
+                "baseDelay",
+                "factor"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["exponential"],
+          "required": [
+            "exponential"
+          ],
           "additionalProperties": false
         },
         {
@@ -1569,11 +1765,16 @@
                   "$ref": "#/definitions/duration"
                 }
               },
-              "required": ["first", "second"],
+              "required": [
+                "first",
+                "second"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["fibonacci"],
+          "required": [
+            "fibonacci"
+          ],
           "additionalProperties": false
         },
         {
@@ -1590,11 +1791,16 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": ["maxRetries", "inner"],
+              "required": [
+                "maxRetries",
+                "inner"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["countBox"],
+          "required": [
+            "countBox"
+          ],
           "additionalProperties": false
         },
         {
@@ -1610,11 +1816,16 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": ["limit", "inner"],
+              "required": [
+                "limit",
+                "inner"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["timeBox"],
+          "required": [
+            "timeBox"
+          ],
           "additionalProperties": false
         },
         {
@@ -1633,11 +1844,17 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": ["minDelay", "maxDelay", "inner"],
+              "required": [
+                "minDelay",
+                "maxDelay",
+                "inner"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["clamp"],
+          "required": [
+            "clamp"
+          ],
           "additionalProperties": false
         },
         {
@@ -1653,11 +1870,16 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": ["delay", "inner"],
+              "required": [
+                "delay",
+                "inner"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["addDelay"],
+          "required": [
+            "addDelay"
+          ],
           "additionalProperties": false
         },
         {
@@ -1673,11 +1895,16 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": ["factor", "inner"],
+              "required": [
+                "factor",
+                "inner"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["jitter"],
+          "required": [
+            "jitter"
+          ],
           "additionalProperties": false
         },
         {
@@ -1693,11 +1920,16 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": ["predicate", "inner"],
+              "required": [
+                "predicate",
+                "inner"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["filteredOn"],
+          "required": [
+            "filteredOn"
+          ],
           "additionalProperties": false
         },
         {
@@ -1712,7 +1944,9 @@
               "maxItems": 2
             }
           },
-          "required": ["andThen"],
+          "required": [
+            "andThen"
+          ],
           "additionalProperties": false
         },
         {
@@ -1727,7 +1961,9 @@
               "maxItems": 2
             }
           },
-          "required": ["union"],
+          "required": [
+            "union"
+          ],
           "additionalProperties": false
         },
         {
@@ -1742,7 +1978,9 @@
               "maxItems": 2
             }
           },
-          "required": ["intersect"],
+          "required": [
+            "intersect"
+          ],
           "additionalProperties": false
         }
       ]
@@ -1870,6 +2108,33 @@
         "day",
         "month",
         "year"
+      ]
+    },
+    "componentDependencyReference": {
+      "description": "A guest bridge dependency reference. Use the shortcut 'component/name' form, or an object with explicit component and name fields.",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^.+/.+$"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "component",
+            "name"
+          ],
+          "properties": {
+            "component": {
+              "type": "string",
+              "description": "Provider component name."
+            },
+            "name": {
+              "type": "string",
+              "description": "Agent type or tool name provided by the component."
+            }
+          }
+        }
       ]
     }
   }
