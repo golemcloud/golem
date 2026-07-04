@@ -96,6 +96,28 @@ impl<C: Serialize> Template<C> for app_raw::ComponentDependencies {
     }
 }
 
+impl<C: Serialize> Template<C> for app_raw::ComponentDependencyReference {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        match self {
+            app_raw::ComponentDependencyReference::Shortcut(shortcut) => Ok(
+                app_raw::ComponentDependencyReference::Shortcut(shortcut.render(env, ctx)?),
+            ),
+            app_raw::ComponentDependencyReference::Structured(structured) => Ok(
+                app_raw::ComponentDependencyReference::Structured(structured.render(env, ctx)?),
+            ),
+        }
+    }
+}
+
+impl<C: Serialize> Template<C> for app_raw::ComponentDependencyReferenceStruct {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(app_raw::ComponentDependencyReferenceStruct {
+            component: self.component.render(env, ctx)?,
+            name: self.name.render(env, ctx)?,
+        })
+    }
+}
+
 impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ExternalCommand {

@@ -199,7 +199,7 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -326,7 +326,7 @@ async fn dependency_and_explicit_guest_bridge_default_output_dedupe_with_matcher
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -429,7 +429,7 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -547,7 +547,7 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -748,7 +748,7 @@ async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skip
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
 
@@ -891,7 +891,7 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -984,7 +984,7 @@ async fn dependency_guest_bridge_generates_for_rust_manifest_dependency(_tracing
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -1037,7 +1037,7 @@ async fn build_step_only_with_typed_dependency_does_not_require_final_wasm_metad
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:provider/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -1085,7 +1085,7 @@ async fn selected_build_step_only_with_typed_dependency_does_not_require_final_w
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:provider/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -1210,7 +1210,7 @@ async fn dependency_guest_bridge_generates_for_rust_producer_used_by_rust_consum
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -1315,7 +1315,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -1339,6 +1339,317 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
         ])
         .await;
     assert!(outputs.success_or_dump());
+}
+
+#[test]
+#[timeout("300s")]
+async fn selected_dependency_guest_bridge_reextracts_rebuilt_provider_metadata(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "stale-metadata-repro";
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:producer",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:consumer",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let consumer_agent = ctx.cwd_path_join("app-consumer/src/counter_agent.rs");
+    let consumer_source = fs::read_to_string(&consumer_agent)
+        .unwrap()
+        .replace("pub trait CounterAgent", "pub trait ConsumerAgent")
+        .replace(
+            "impl CounterAgent for CounterImpl",
+            "impl ConsumerAgent for CounterImpl",
+        );
+    fs::write_str(&consumer_agent, consumer_source).unwrap();
+
+    write_stale_metadata_reproducer_manifest(&ctx, false);
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let producer_agent = ctx.cwd_path_join("app-producer/src/counter_agent.rs");
+    let producer_source = fs::read_to_string(&producer_agent)
+        .unwrap()
+        .replace("pub trait CounterAgent", "pub trait RenamedAgent")
+        .replace(
+            "impl CounterAgent for CounterImpl",
+            "impl RenamedAgent for CounterImpl",
+        );
+    fs::write_str(&producer_agent, producer_source).unwrap();
+
+    write_stale_metadata_reproducer_manifest(&ctx, true);
+    remove_extracted_component_metadata(&ctx, "app:producer");
+
+    let outputs = ctx
+        .cli([
+            cmd::BUILD,
+            "app:producer",
+            "app:consumer",
+            flag::STEP,
+            "build",
+            flag::STEP,
+            "gen-bridge",
+        ])
+        .await;
+    assert!(
+        outputs.success_or_dump(),
+        "producer metadata after failed rebuild: {}",
+        extracted_component_metadata_for(&ctx, "app:producer")
+            .unwrap_or_else(|| "<missing>".to_string())
+    );
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/renamed-agent-guest-client/Cargo.toml")
+            .exists()
+    );
+}
+
+fn write_stale_metadata_reproducer_manifest(ctx: &TestContext, consumer_depends_on_renamed: bool) {
+    let consumer_dependencies = if consumer_depends_on_renamed {
+        "    dependencies:\n      agents:\n        - app:producer/RenamedAgent\n"
+    } else {
+        ""
+    };
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: selected-dependency-stale-provider-metadata
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                dir: app-producer
+                templates: rust
+                buildMergeMode: replace
+                componentWasm: producer.wasm
+                outputWasm: producer-final.wasm
+                build:
+                  - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
+                  - command: cp target/wasm32-wasip2/debug/app_producer.wasm producer.wasm
+                  - command: cp target/wasm32-wasip2/debug/app_producer.wasm producer-final.wasm
+
+              app:consumer:
+                dir: app-consumer
+                templates: rust
+            {consumer_dependencies}    buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
+                  - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer.wasm
+                  - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer-final.wasm
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+}
+
+fn remove_extracted_component_metadata(ctx: &TestContext, component_name: &str) {
+    let dir = ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                .is_some_and(|file_name| file_name.starts_with(component_name))
+            {
+                fs::remove(path).unwrap();
+            }
+        }
+    }
+}
+
+fn extracted_component_metadata_for(ctx: &TestContext, component_name: &str) -> Option<String> {
+    let dir = ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|file_name| file_name.to_str())
+                .is_some_and(|file_name| file_name.starts_with(component_name))
+        })
+        .and_then(|path| fs::read_to_string(path).ok())
+}
+
+#[test]
+#[timeout("300s")]
+async fn selected_dependency_guest_bridge_reextracts_rebuilt_old_provider_when_agent_moves(
+    _tracing: &Tracing,
+) {
+    let mut ctx = TestContext::new();
+    let app_name = "moved-agent-provider-repro";
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:a",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:z",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:consumer",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    rename_rust_agent_type(&ctx, "app-a", "CounterAgent", "AlphaAgent");
+    rename_rust_agent_type(&ctx, "app-consumer", "CounterAgent", "ConsumerAgent");
+    write_moved_agent_reproducer_manifest(&ctx, "app:z");
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    rename_rust_agent_type(&ctx, "app-a", "AlphaAgent", "CounterAgent");
+    rename_rust_agent_type(&ctx, "app-z", "CounterAgent", "ZedAgent");
+    remove_extracted_component_metadata(&ctx, "app:z");
+    write_moved_agent_reproducer_manifest(&ctx, "app:a");
+
+    let outputs = ctx
+        .cli([
+            cmd::BUILD,
+            "app:a",
+            "app:z",
+            "app:consumer",
+            flag::STEP,
+            "build",
+            flag::STEP,
+            "gen-bridge",
+        ])
+        .await;
+    assert!(
+        outputs.success_or_dump(),
+        "app:z metadata after failed rebuild: {}",
+        extracted_component_metadata_for(&ctx, "app:z").unwrap_or_else(|| "<missing>".to_string())
+    );
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/counter-agent-guest-client/Cargo.toml")
+            .exists()
+    );
+}
+
+fn rename_rust_agent_type(ctx: &TestContext, component_dir: &str, from: &str, to: &str) {
+    let agent = ctx.cwd_path_join(format!("{component_dir}/src/counter_agent.rs"));
+    let source = fs::read_to_string(&agent)
+        .unwrap()
+        .replace(&format!("pub trait {from}"), &format!("pub trait {to}"))
+        .replace(
+            &format!("impl {from} for CounterImpl"),
+            &format!("impl {to} for CounterImpl"),
+        );
+    fs::write_str(&agent, source).unwrap();
+}
+
+fn write_moved_agent_reproducer_manifest(ctx: &TestContext, provider_component_name: &str) {
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: selected-dependency-moved-agent-provider
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:a:
+                dir: app-a
+                templates: rust
+                buildMergeMode: replace
+                componentWasm: a.wasm
+                outputWasm: a-final.wasm
+                build:
+                  - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
+                  - command: cp target/wasm32-wasip2/debug/app_a.wasm a.wasm
+                  - command: cp target/wasm32-wasip2/debug/app_a.wasm a-final.wasm
+
+              app:z:
+                dir: app-z
+                templates: rust
+                buildMergeMode: replace
+                componentWasm: z.wasm
+                outputWasm: z-final.wasm
+                build:
+                  - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
+                  - command: cp target/wasm32-wasip2/debug/app_z.wasm z.wasm
+                  - command: cp target/wasm32-wasip2/debug/app_z.wasm z-final.wasm
+
+              app:consumer:
+                dir: app-consumer
+                templates: rust
+                dependencies:
+                  agents:
+                    - {provider_component_name}/CounterAgent
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
+                  - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer.wasm
+                  - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer-final.wasm
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1427,7 +1738,7 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -1458,6 +1769,107 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
         ])
         .await;
     assert!(outputs.success_or_dump());
+}
+
+#[test]
+async fn selected_dependency_guest_bridge_does_not_build_unrelated_unknown_component_when_provider_is_selected(
+    _tracing: &Tracing,
+) {
+    let mut ctx = TestContext::new();
+    let app_name = "selected-provider-with-unrelated-unknown";
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:producer",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:consumer",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    rename_rust_agent_type(&ctx, "app-consumer", "CounterAgent", "ConsumerAgent");
+
+    fs::create_dir_all(ctx.cwd_path_join("unrelated")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: selected-dependency-rust-guest-bridge-selected-provider
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                dir: app-producer
+                templates: rust
+                buildMergeMode: replace
+                componentWasm: producer.wasm
+                outputWasm: producer-final.wasm
+                build:
+                  - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
+                  - command: cp target/wasm32-wasip2/debug/app_producer.wasm producer.wasm
+                  - command: cp target/wasm32-wasip2/debug/app_producer.wasm producer-final.wasm
+
+              app:consumer:
+                templates: rust
+                dir: app-consumer
+                dependencies:
+                  agents:
+                    - app:producer/CounterAgent
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/counter-agent-guest-client/Cargo.toml
+                  - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
+                  - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer.wasm
+                  - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer-final.wasm
+
+              app:unrelated:
+                dir: unrelated
+                componentWasm: unrelated.wasm
+                outputWasm: unrelated-final.wasm
+                build:
+                  - command: touch ../unrelated-built
+                  - command: "false"
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([
+            cmd::BUILD,
+            "app:producer",
+            "app:consumer",
+            flag::STEP,
+            "build",
+            flag::STEP,
+            "gen-bridge",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(!ctx.cwd_path_join("unrelated-built").exists());
 }
 
 #[test]
@@ -1504,7 +1916,7 @@ async fn selected_unresolved_dependency_does_not_build_unrelated_component_with_
                 dir: consumer
                 dependencies:
                   agents:
-                    - MissingAgent
+                    - app:missing/MissingAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -1537,7 +1949,7 @@ async fn selected_unresolved_dependency_does_not_build_unrelated_component_with_
 }
 
 #[test]
-async fn selected_dependency_guest_bridge_resolves_dependencies_of_fallback_provider(
+async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependencies(
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
@@ -1626,7 +2038,7 @@ async fn selected_dependency_guest_bridge_resolves_dependencies_of_fallback_prov
         formatdoc! {r#"
             manifestVersion: {MANIFEST_VERSION}
 
-            app: selected-dependency-fallback-provider-dependencies
+            app: selected-dependency-explicit-provider-dependencies
 
             environments:
               local:
@@ -1642,7 +2054,7 @@ async fn selected_dependency_guest_bridge_resolves_dependencies_of_fallback_prov
                 dir: middle
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:base/BarAgent
                 buildMergeMode: replace
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
@@ -1657,7 +2069,7 @@ async fn selected_dependency_guest_bridge_resolves_dependencies_of_fallback_prov
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:middle/FooAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -1760,7 +2172,7 @@ async fn dependency_guest_bridge_gen_bridge_step_includes_selected_dependencies(
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -1891,7 +2303,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
                 dir: middle
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:base/BarAgent
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
                 build:
@@ -1905,8 +2317,8 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
-                    - FooAgent
+                    - app:base/BarAgent
+                    - app:middle/FooAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2057,7 +2469,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
                 dir: middle
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:base/BarAgent
                 buildMergeMode: replace
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
@@ -2072,7 +2484,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:middle/FooAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2225,7 +2637,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
                 dir: middle
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:base/BarAgent
                 buildMergeMode: replace
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
@@ -2240,7 +2652,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:middle/FooAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2401,7 +2813,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
                 dir: rust-consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:rust-producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: rust-consumer.wasm
                 outputWasm: rust-consumer-final.wasm
@@ -2416,7 +2828,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
                 dir: ts-consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:ts-producer/FooAgent
                 buildMergeMode: replace
                 componentWasm: ts-consumer.wasm
                 outputWasm: ts-consumer-final.wasm
@@ -2547,7 +2959,7 @@ async fn selected_typed_dependency_guest_bridge_does_not_build_unselected_compon
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -2674,7 +3086,7 @@ async fn selected_typed_dependency_guest_bridge_discovers_prebuilt_provider_meta
                 dir: consumer
                 dependencies:
                   agents:
-                    - CounterAgent
+                    - app:provider/CounterAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -2811,7 +3223,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
                 dir: middle
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:seed/FooAgent
                 buildMergeMode: replace
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
@@ -2826,7 +3238,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:middle/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -2945,7 +3357,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
                 dir: middle
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:base/BarAgent
                 buildMergeMode: replace
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
@@ -2958,7 +3370,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:middle/FooAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -3049,7 +3461,7 @@ async fn selected_explicit_guest_bridge_ignores_matcher_outside_effective_depend
 }
 
 #[test]
-async fn selected_dependency_fallback_does_not_expand_explicit_guest_bridge_scope(
+async fn selected_dependency_guest_bridge_does_not_expand_explicit_guest_bridge_scope(
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
@@ -3142,7 +3554,7 @@ async fn selected_dependency_fallback_does_not_expand_explicit_guest_bridge_scop
         formatdoc! {r#"
             manifestVersion: {MANIFEST_VERSION}
 
-            app: selected-dependency-fallback-explicit-scope
+            app: selected-dependency-explicit-provider-scope
 
             environments:
               local:
@@ -3174,7 +3586,7 @@ async fn selected_dependency_fallback_does_not_expand_explicit_guest_bridge_scop
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:provider/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -3307,7 +3719,7 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:provider/FooAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -3427,7 +3839,7 @@ async fn dependency_guest_bridge_does_not_infer_rust_guest_target_from_cargo_fil
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -3783,7 +4195,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
                 dir: base
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:seed/BarAgent
                 buildMergeMode: replace
                 componentWasm: base.wasm
                 outputWasm: base-final.wasm
@@ -3798,7 +4210,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
                 dir: middle
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:base/FooAgent
                 buildMergeMode: replace
                 componentWasm: middle.wasm
                 outputWasm: middle-final.wasm
@@ -3811,7 +4223,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:base/FooAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -3954,7 +4366,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
                 dir: base
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:seed/BarAgent
                 buildMergeMode: replace
                 componentWasm: base.wasm
                 outputWasm: base-final.wasm
@@ -3969,7 +4381,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:base/FooAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4116,11 +4528,11 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
                 outputWasm: seed-final.wasm
 
               app:base:
-                templates: ts
+                templates: rust
                 dir: base
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:seed/BarAgent
                 buildMergeMode: replace
                 componentWasm: base.wasm
                 outputWasm: base-final.wasm
@@ -4135,7 +4547,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
                 dir: consumer
                 dependencies:
                   agents:
-                    - FooAgent
+                    - app:base/FooAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4227,7 +4639,7 @@ async fn custom_build_env_guest_bridge_path_waits_for_guest_bridge_sdks(_tracing
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -4322,7 +4734,7 @@ async fn dependency_guest_bridge_shell_command_literal_guest_bridge_path_waits_f
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
@@ -4509,7 +4921,7 @@ async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tr
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4629,7 +5041,7 @@ async fn rust_manifest_path_cargo_guest_bridge_dependency_waits_for_guest_bridge
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4737,7 +5149,7 @@ async fn rust_target_specific_cargo_path_guest_bridge_dependency_waits_for_guest
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4857,7 +5269,7 @@ async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridg
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4980,7 +5392,7 @@ async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5100,7 +5512,7 @@ async fn rust_workspace_multiline_dependency_use_waits_for_guest_bridge_sdks(_tr
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:producer/BarAgent
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -7699,7 +8111,7 @@ async fn build_check_does_not_require_typed_dependency_provider_metadata(_tracin
                 dir: consumer
                 dependencies:
                   agents:
-                    - BarAgent
+                    - app:provider/BarAgent
                 buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm

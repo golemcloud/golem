@@ -253,9 +253,23 @@ impl Application {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentDependencies {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub agents: Vec<String>,
+    pub agents: Vec<ComponentDependencyReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
+    pub tools: Vec<ComponentDependencyReference>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ComponentDependencyReference {
+    Shortcut(String),
+    Structured(ComponentDependencyReferenceStruct),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentDependencyReferenceStruct {
+    pub component: String,
+    pub name: String,
 }
 
 impl ComponentDependencies {

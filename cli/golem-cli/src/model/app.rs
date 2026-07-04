@@ -305,8 +305,23 @@ impl TryFrom<&str> for ToolName {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ComponentDependency {
-    Agent(AgentTypeName),
-    Tool(ToolName),
+    Agent {
+        component_name: ComponentName,
+        agent_type_name: AgentTypeName,
+    },
+    Tool {
+        component_name: ComponentName,
+        tool_name: ToolName,
+    },
+}
+
+impl ComponentDependency {
+    pub fn component_name(&self) -> &ComponentName {
+        match self {
+            ComponentDependency::Agent { component_name, .. }
+            | ComponentDependency::Tool { component_name, .. } => component_name,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1871,8 +1886,8 @@ pub struct ComponentLayerProperties {
 
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
-    pub dependency_agents: VecProperty<ComponentLayer, String>,
-    pub dependency_tools: VecProperty<ComponentLayer, String>,
+    pub dependency_agents: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
+    pub dependency_tools: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
@@ -2279,27 +2294,40 @@ impl ComponentProperties {
 
     fn validate_dependencies(
         validation: &mut ValidationBuilder,
-        agent_dependencies: &[String],
-        tool_dependencies: &[String],
+        agent_dependencies: &[app_raw::ComponentDependencyReference],
+        tool_dependencies: &[app_raw::ComponentDependencyReference],
     ) -> Vec<ComponentDependency> {
         let agents = agent_dependencies
             .iter()
-            .map(|dependency| ComponentDependency::Agent(AgentTypeName(dependency.clone())));
-        let tools = tool_dependencies.iter().map(|dependency| {
-            ComponentDependency::Tool(match ToolName::try_from(dependency.as_str()) {
-                Ok(tool_name) => tool_name,
-                Err(err) => {
-                    validation.add_error(format!(
-                        "Invalid tool dependency name: {}. {}",
-                        dependency.log_color_error_highlight(),
-                        err
-                    ));
-                    ToolName(dependency.clone())
-                }
+            .filter_map(|dependency| {
+                parse_component_dependency_reference(validation, "agent", dependency).map(
+                    |(component_name, name)| ComponentDependency::Agent {
+                        component_name,
+                        agent_type_name: AgentTypeName(name),
+                    },
+                )
             })
+            .collect::<Vec<_>>();
+        let tools = tool_dependencies.iter().filter_map(|dependency| {
+            parse_component_dependency_reference(validation, "tool", dependency).map(
+                |(component_name, name)| ComponentDependency::Tool {
+                    component_name,
+                    tool_name: match ToolName::try_from(name.as_str()) {
+                        Ok(tool_name) => tool_name,
+                        Err(err) => {
+                            validation.add_error(format!(
+                                "Invalid tool dependency name: {}. {}",
+                                name.log_color_error_highlight(),
+                                err
+                            ));
+                            ToolName(name)
+                        }
+                    },
+                },
+            )
         });
 
-        agents.chain(tools).collect()
+        agents.into_iter().chain(tools).collect()
     }
 
     fn validate_and_normalize_env(
@@ -2330,6 +2358,48 @@ impl ComponentProperties {
                 (upper_case_key, value.to_string())
             })
             .collect()
+    }
+}
+
+fn parse_component_dependency_reference(
+    validation: &mut ValidationBuilder,
+    kind: &str,
+    dependency: &app_raw::ComponentDependencyReference,
+) -> Option<(ComponentName, String)> {
+    let (component, name) = match dependency {
+        app_raw::ComponentDependencyReference::Shortcut(shortcut) => {
+            let Some((component, name)) = shortcut.split_once('/') else {
+                validation.add_error(format!(
+                    "Invalid {kind} dependency {}. Expected 'component/name' or an object with 'component' and 'name' fields",
+                    shortcut.log_color_error_highlight(),
+                ));
+                return None;
+            };
+            (component.to_string(), name.to_string())
+        }
+        app_raw::ComponentDependencyReference::Structured(structured) => {
+            (structured.component.clone(), structured.name.clone())
+        }
+    };
+
+    if name.is_empty() {
+        validation.add_error(format!(
+            "Invalid {kind} dependency for component {}. Dependency name must not be empty",
+            component.log_color_error_highlight(),
+        ));
+        return None;
+    }
+
+    match ComponentName::try_from(component.as_str()) {
+        Ok(component_name) => Some((component_name, name)),
+        Err(err) => {
+            validation.add_error(format!(
+                "Invalid {kind} dependency component {}. {}",
+                component.log_color_error_highlight(),
+                err,
+            ));
+            None
+        }
     }
 }
 
@@ -3666,10 +3736,31 @@ mod app_builder {
 
         fn validate_component_dependencies(
             &self,
-            _validation: &mut ValidationBuilder,
-            _component_name: &ComponentName,
-            _dependencies: &[ComponentDependency],
+            validation: &mut ValidationBuilder,
+            component_name: &ComponentName,
+            dependencies: &[ComponentDependency],
         ) {
+            for dependency in dependencies {
+                if dependency.component_name() == component_name {
+                    validation.add_error(format!(
+                        "Component {} cannot depend on its own guest bridge SDK",
+                        component_name.as_str().log_color_highlight(),
+                    ));
+                }
+                if !self
+                    .component_names_to_source_and_dir
+                    .contains_key(dependency.component_name())
+                {
+                    validation.add_error(format!(
+                        "Component {} depends on unknown component {}",
+                        component_name.as_str().log_color_highlight(),
+                        dependency
+                            .component_name()
+                            .as_str()
+                            .log_color_error_highlight(),
+                    ));
+                }
+            }
         }
 
         fn validate_http_api_deployments(
@@ -4344,13 +4435,17 @@ mod test {
                 server: local
 
             components:
+              app:provider:
+                componentWasm: provider.wasm
+
               app:main:
                 componentWasm: dummy-component.wasm
                 dependencies:
                   agents:
-                    - ShoppingCart
+                    - app:provider/ShoppingCart
                   tools:
-                    - grep
+                    - component: app:provider
+                      name: grep
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
@@ -4361,9 +4456,93 @@ mod test {
         assert_eq!(
             dependencies,
             &vec![
-                ComponentDependency::Agent(parse_agent_type_name("ShoppingCart")),
-                ComponentDependency::Tool(ToolName::try_from("grep").unwrap()),
+                ComponentDependency::Agent {
+                    component_name: parse_component_name("app:provider"),
+                    agent_type_name: parse_agent_type_name("ShoppingCart"),
+                },
+                ComponentDependency::Tool {
+                    component_name: parse_component_name("app:provider"),
+                    tool_name: ToolName::try_from("grep").unwrap(),
+                },
             ]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_malformed_shortcut() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("Expected 'component/name'"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_self_dependency() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:main/ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("cannot depend on its own guest bridge SDK"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_unknown_provider_component() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:missing/ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("depends on unknown component app:missing"),
+            "unexpected error: {}",
+            errors[0]
         );
     }
 
@@ -5360,6 +5539,41 @@ mod test {
         presets: &[&str],
     ) -> (Application, TempDir) {
         load_app(source, &selector(environment, presets))
+    }
+
+    fn load_app_errors(source: &str) -> Vec<String> {
+        let tmp_dir = tempfile::tempdir().unwrap();
+
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+
+        let raw_app = app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap();
+        let raw_apps = vec![raw_app];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        errors
     }
 
     fn with_resolved_agent<T>(

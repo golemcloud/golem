@@ -30,11 +30,19 @@ pub struct ComponentMetadataRegistry {
     enable_wasmtime_fs_cache: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct UniquenessIndex {
     agent_type_wrapper_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
     agent_type_name_sources: BTreeMap<AgentTypeName, BTreeSet<ComponentName>>,
     tool_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
+}
+
+impl UniquenessIndex {
+    fn remove_component(&mut self, component_name: &ComponentName) {
+        remove_component_from_index(&mut self.agent_type_wrapper_name_sources, component_name);
+        remove_component_from_index(&mut self.agent_type_name_sources, component_name);
+        remove_component_from_index(&mut self.tool_name_sources, component_name);
+    }
 }
 
 impl ComponentMetadataRegistry {
@@ -56,6 +64,9 @@ impl ComponentMetadataRegistry {
         component_name: &ComponentName,
         wasm_path: &Path,
     ) -> anyhow::Result<ExtractedComponentMetadata> {
+        self.cache.remove(component_name).await;
+        self.remove_uniqueness_entries(component_name).await;
+
         let wasm_path = wasm_path.to_path_buf();
         let enable_wasmtime_fs_cache = self.enable_wasmtime_fs_cache;
 
@@ -67,7 +78,8 @@ impl ComponentMetadataRegistry {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        self.validate_uniqueness(component_name, &metadata).await?;
+        self.update_uniqueness(component_name, &metadata, true)
+            .await?;
 
         Ok(metadata)
     }
@@ -82,6 +94,9 @@ impl ComponentMetadataRegistry {
             tools: metadata.tools,
         };
 
+        self.update_uniqueness(component_name, &normalized, true)
+            .await?;
+
         self.cache.remove(component_name).await;
 
         let metadata = self
@@ -89,8 +104,6 @@ impl ComponentMetadataRegistry {
             .get_or_insert_simple(component_name, async || Ok(normalized))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        self.validate_uniqueness(component_name, &metadata).await?;
 
         Ok(metadata)
     }
@@ -105,12 +118,25 @@ impl ComponentMetadataRegistry {
             .collect()
     }
 
-    async fn validate_uniqueness(
+    async fn remove_uniqueness_entries(&self, component_name: &ComponentName) {
+        self.uniqueness
+            .write()
+            .await
+            .remove_component(component_name);
+    }
+
+    async fn update_uniqueness(
         &self,
         component_name: &ComponentName,
         metadata: &ExtractedComponentMetadata,
+        replace_existing: bool,
     ) -> anyhow::Result<()> {
-        let mut index = self.uniqueness.write().await;
+        let mut index_guard = self.uniqueness.write().await;
+        let mut index = index_guard.clone();
+
+        if replace_existing {
+            index.remove_component(component_name);
+        }
 
         // Validate first, before mutating the index
         for agent_type in &metadata.agent_types {
@@ -163,7 +189,7 @@ impl ComponentMetadataRegistry {
             }
         }
 
-        // Only mutate after validation succeeds
+        // Only publish index changes after validation succeeds
         for agent_type in &metadata.agent_types {
             index
                 .agent_type_wrapper_name_sources
@@ -188,8 +214,20 @@ impl ComponentMetadataRegistry {
             }
         }
 
+        *index_guard = index;
+
         Ok(())
     }
+}
+
+fn remove_component_from_index<K: Ord>(
+    index: &mut BTreeMap<K, BTreeSet<ComponentName>>,
+    component_name: &ComponentName,
+) {
+    index.retain(|_, component_names| {
+        component_names.remove(component_name);
+        !component_names.is_empty()
+    });
 }
 
 async fn extract(
@@ -206,4 +244,152 @@ async fn extract(
         agent_types: AgentTypeSchema::normalized_vec(metadata.agent_types),
         tools: metadata.tools,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{AgentMode, Snapshotting};
+    use golem_common::schema::{AgentConstructorSchema, InputSchema, SchemaGraph};
+    use test_r::test;
+
+    #[test]
+    async fn add_cached_component_metadata_replaces_uniqueness_entries() {
+        let registry = ComponentMetadataRegistry::new(false);
+        let first_component = ComponentName("app:first".to_string());
+        let second_component = ComponentName("app:second".to_string());
+
+        registry
+            .add_cached_component_metadata(&first_component, metadata_with_agent_type("BarAgent"))
+            .await
+            .unwrap();
+        registry
+            .add_cached_component_metadata(&first_component, empty_metadata())
+            .await
+            .unwrap();
+        registry
+            .add_cached_component_metadata(&second_component, metadata_with_agent_type("BarAgent"))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn failed_add_cached_component_metadata_replace_keeps_previous_cached_metadata() {
+        let registry = ComponentMetadataRegistry::new(false);
+        let first_component = ComponentName("app:first".to_string());
+        let second_component = ComponentName("app:second".to_string());
+
+        registry
+            .add_cached_component_metadata(&first_component, metadata_with_agent_type("FooAgent"))
+            .await
+            .unwrap();
+        registry
+            .add_cached_component_metadata(&second_component, metadata_with_agent_type("BarAgent"))
+            .await
+            .unwrap();
+
+        assert!(
+            registry
+                .add_cached_component_metadata(
+                    &first_component,
+                    metadata_with_agent_type("BarAgent")
+                )
+                .await
+                .is_err()
+        );
+
+        assert!(
+            registry
+                .add_cached_component_metadata(
+                    &ComponentName("app:third".to_string()),
+                    metadata_with_agent_type("FooAgent"),
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    async fn get_or_extract_component_metadata_does_not_hide_required_extraction_failures_with_stale_cache()
+     {
+        let registry = ComponentMetadataRegistry::new(false);
+        let component = ComponentName("app:component".to_string());
+
+        registry
+            .add_cached_component_metadata(&component, metadata_with_agent_type("OldAgent"))
+            .await
+            .unwrap();
+
+        let result = registry
+            .get_or_extract_component_metadata(
+                &component,
+                std::path::Path::new("/definitely/missing/current-component.wasm"),
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "stale cached metadata was returned even though the current wasm could not be extracted: {result:?}"
+        );
+    }
+
+    #[test]
+    async fn failed_get_or_extract_component_metadata_replacement_drops_stale_uniqueness_entries() {
+        let registry = ComponentMetadataRegistry::new(false);
+        let stale_component = ComponentName("app:stale".to_string());
+        let replacement_component = ComponentName("app:replacement".to_string());
+
+        registry
+            .add_cached_component_metadata(&stale_component, metadata_with_agent_type("OldAgent"))
+            .await
+            .unwrap();
+
+        let result = registry
+            .get_or_extract_component_metadata(
+                &stale_component,
+                std::path::Path::new("/definitely/missing/current-component.wasm"),
+            )
+            .await;
+        assert!(result.is_err());
+
+        registry
+            .add_cached_component_metadata(
+                &replacement_component,
+                metadata_with_agent_type("OldAgent"),
+            )
+            .await
+            .unwrap();
+    }
+
+    fn empty_metadata() -> ExtractedComponentMetadata {
+        ExtractedComponentMetadata {
+            agent_types: vec![],
+            tools: vec![],
+        }
+    }
+
+    fn metadata_with_agent_type(type_name: &str) -> ExtractedComponentMetadata {
+        ExtractedComponentMetadata {
+            agent_types: vec![AgentTypeSchema {
+                type_name: AgentTypeName(type_name.to_string()),
+                description: String::new(),
+                source_language: String::new(),
+                schema: SchemaGraph::empty(),
+                constructor: AgentConstructorSchema {
+                    name: None,
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::parameters(vec![]),
+                },
+                methods: vec![],
+                dependencies: vec![],
+                mode: AgentMode::Ephemeral,
+                http_mount: None,
+                snapshotting: Snapshotting::Disabled(Empty {}),
+                config: vec![],
+            }],
+            tools: vec![],
+        }
+    }
 }
