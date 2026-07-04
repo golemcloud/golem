@@ -199,20 +199,38 @@ pub(crate) async fn write_repl_metadata(
     Ok(())
 }
 
-pub(crate) async fn plan_manifest_guest_bridge_generation_for_components_lenient(
+pub(crate) async fn plan_explicit_manifest_guest_bridge_generation_for_components_lenient(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+    agent_metadata_cache: &mut ComponentMetadataCache,
+) -> anyhow::Result<BridgeGenerationPlan> {
+    Ok(BridgeGenerationPlan {
+        targets: collect_manifest_targets_for_components_and_mode(
+            ctx,
+            component_names,
+            component_names,
+            Some(BridgeMode::Guest),
+            true,
+            true,
+            false,
+            agent_metadata_cache,
+        )
+        .await?,
+        repl_metadata_by_language: BTreeMap::new(),
+    })
+}
+
+pub(crate) async fn plan_dependency_guest_bridge_generation_for_components_lenient(
     ctx: &BuildContext<'_>,
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
     agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     Ok(BridgeGenerationPlan {
-        targets: collect_manifest_targets_for_components_and_mode(
+        targets: collect_dependency_guest_bridge_targets(
             ctx,
             source_component_names,
             selection_scope_component_names,
-            Some(BridgeMode::Guest),
-            true,
-            false,
             agent_metadata_cache,
         )
         .await?,
@@ -289,6 +307,7 @@ pub(crate) async fn collect_manifest_external_bridge_targets_for_components_leni
         component_names,
         Some(BridgeMode::External),
         true,
+        false,
         false,
         agent_metadata_cache,
     )
@@ -379,6 +398,7 @@ async fn collect_manifest_targets(
         bridge_mode_filter,
         false,
         false,
+        true,
         agent_metadata_cache,
     )
     .await
@@ -391,6 +411,7 @@ async fn collect_manifest_targets_for_components_and_mode(
     bridge_mode_filter: Option<BridgeMode>,
     ignore_unmatched_matchers: bool,
     skip_missing_sources: bool,
+    include_dependency_targets: bool,
     agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = vec![];
@@ -441,7 +462,9 @@ async fn collect_manifest_targets_for_components_and_mode(
         .await?;
     }
 
-    if bridge_mode_filter.is_none_or(|bridge_mode| bridge_mode == BridgeMode::Guest) {
+    if include_dependency_targets
+        && bridge_mode_filter.is_none_or(|bridge_mode| bridge_mode == BridgeMode::Guest)
+    {
         targets.extend(
             collect_dependency_guest_bridge_targets(
                 ctx,
@@ -671,20 +694,9 @@ async fn collect_dependency_guest_bridge_targets(
             );
 
             for target_language in target_languages {
-                let explicit_matchers = explicit_guest_bridge_matchers(ctx, target_language);
-                let explicitly_matches_all = explicit_matchers.contains("*");
-                if explicitly_matches_all
-                    || explicit_matchers.contains(component_name.as_str())
-                    || explicit_matchers.contains(agent_type.type_name.as_str())
-                {
-                    continue;
-                }
-
-                let output_dir = ctx.application().bridge_sdk_dir(
-                    &agent_type.type_name,
-                    target_language,
-                    BridgeMode::Guest,
-                );
+                let output_dir = ctx
+                    .application()
+                    .dependency_bridge_sdk_dir(&agent_type.type_name, target_language);
                 targets.push(BridgeSdkTarget {
                     component_name: component_name.clone(),
                     kind: BridgeSdkTargetKind::Agent(agent_type.clone()),
@@ -712,7 +724,7 @@ async fn collect_dependency_guest_bridge_targets(
             for target_language in target_languages {
                 let output_dir = ctx
                     .application()
-                    .tool_bridge_sdk_dir(tool_name, target_language);
+                    .dependency_tool_bridge_sdk_dir(tool_name, target_language);
                 targets.push(BridgeSdkTarget {
                     component_name: component_name.clone(),
                     kind: BridgeSdkTargetKind::Tool(tool.clone()),
@@ -752,18 +764,6 @@ fn dependency_guest_bridge_target_languages(
 
 fn supported_dependency_guest_bridge_target_language(language: GuestLanguage) -> bool {
     matches!(language, GuestLanguage::Rust)
-}
-
-fn explicit_guest_bridge_matchers(
-    ctx: &BuildContext<'_>,
-    target_language: GuestLanguage,
-) -> BTreeSet<String> {
-    ctx.application()
-        .bridge_sdks()
-        .for_language(target_language)
-        .and_then(|targets| targets.guest.as_ref())
-        .map(|guest| guest.agents.clone().into_set())
-        .unwrap_or_default()
 }
 
 async fn collect_custom_targets(

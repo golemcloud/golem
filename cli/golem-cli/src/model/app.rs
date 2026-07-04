@@ -941,6 +941,21 @@ impl Application {
         }
     }
 
+    pub fn dependency_bridge_sdk_dir(
+        &self,
+        agent_type_name: &AgentTypeName,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(BridgeMode::Guest.id())
+            .join(bridge_client_directory_name_for_mode(
+                agent_type_name,
+                BridgeMode::Guest,
+            ))
+    }
+
     pub fn tool_bridge_sdk_dir(&self, tool_name: &str, language: GuestLanguage) -> PathBuf {
         let output_dir = self
             .bridge_sdks
@@ -962,6 +977,18 @@ impl Application {
                 .join(BridgeMode::Guest.id())
                 .join(tool_bridge_client_directory_name(tool_name)),
         }
+    }
+
+    pub fn dependency_tool_bridge_sdk_dir(
+        &self,
+        tool_name: &str,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(BridgeMode::Guest.id())
+            .join(tool_bridge_client_directory_name(tool_name))
     }
 
     pub fn repl_root_dir(&self, language: GuestLanguage) -> PathBuf {

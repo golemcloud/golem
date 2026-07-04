@@ -20,8 +20,9 @@ use crate::app::build::componentize::{build_components, build_selected_component
 use crate::app::build::gen_bridge::{
     BridgeGenerationPlan, ComponentMetadataCache, gen_bridge, gen_bridge_sdk_targets,
     plan_custom_bridge_generation_lenient,
+    plan_dependency_guest_bridge_generation_for_components_lenient,
+    plan_explicit_manifest_guest_bridge_generation_for_components_lenient,
     plan_manifest_external_bridge_generation_for_components_lenient,
-    plan_manifest_guest_bridge_generation_for_components_lenient,
     plan_repl_bridge_generation_lenient, validate_no_output_dir_collisions,
     validate_supported_bridge_targets, write_repl_metadata,
 };
@@ -38,7 +39,7 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use itertools::Itertools;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 pub mod add_metadata;
 pub mod check;
@@ -78,25 +79,27 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
     let effective_component_names =
         selected_component_names_with_dependencies_for_build(ctx, &mut agent_metadata_cache)
             .await?;
-    let guest_source_component_names = effective_component_names
+    let explicit_bridge_component_names = ctx
+        .application_context()
+        .selected_component_names()
         .iter()
-        .filter(|component_name| {
-            component_guest_bridge_requirements(ctx, component_name).is_empty()
-        })
         .cloned()
         .collect::<Vec<_>>();
     let requests = if ctx.should_run_step(AppBuildStep::GenBridge) {
-        bridge_requests(ctx, &effective_component_names)
+        bridge_requests(ctx, &explicit_bridge_component_names)
     } else {
         Vec::new()
     };
+    let has_dependency_guest_request = ctx.should_run_step(AppBuildStep::GenBridge)
+        && selected_component_names_have_guest_bridge_dependencies(ctx, &effective_component_names);
     let mut validated_targets = Vec::<(BridgeRequestId, BridgeSdkTarget)>::new();
-    let claims = bridge_output_dir_claims(ctx, &effective_component_names);
+    let claims = bridge_output_dir_claims(ctx, &explicit_bridge_component_names);
     let mut pending_components = effective_component_names
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut built_components = BTreeSet::<ComponentName>::new();
+    let mut dependency_providers = DependencyProviderMap::default();
     let mut available_guest_bridge_dependencies = BTreeSet::<ComponentDependency>::new();
     let mut generated_guest_target_keys = BTreeSet::<BridgeSdkTargetKey>::new();
 
@@ -123,34 +126,41 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
 
             pending_components.remove(&component_name);
             built_components.insert(component_name.clone());
-            if !requests.contains(&BridgeRequestId::ManifestGuest)
-                && ctx.should_run_step(AppBuildStep::GenBridge)
-            {
-                let metadata = agent_metadata_cache.get(ctx, &component_name).await?;
-                available_guest_bridge_dependencies.extend(
-                    component_guest_bridge_dependencies_provided_by_metadata(metadata),
-                );
-            } else if !ctx.should_run_step(AppBuildStep::GenBridge) {
-                available_guest_bridge_dependencies.extend(
-                    effective_component_names.iter().flat_map(|component_name| {
-                        component_guest_bridge_requirements(ctx, component_name)
-                    }),
-                );
+            if has_dependency_guest_request {
+                let component = ctx.application().component(&component_name);
+                if component.agent_type_extraction_source_wasm().exists() {
+                    let metadata = agent_metadata_cache.get(ctx, &component_name).await?;
+                    dependency_providers.add_component_metadata(&component_name, &metadata);
+                    available_guest_bridge_dependencies.extend(
+                        component_guest_bridge_dependencies_provided_by_metadata(&metadata),
+                    );
+                }
             }
             made_progress = true;
         }
 
-        if requests.contains(&BridgeRequestId::ManifestGuest) {
-            let has_explicit_manifest_guest_request =
-                has_explicit_manifest_guest_bridge_request(ctx, &effective_component_names);
-            let has_dependency_guest_request =
-                !selected_guest_bridge_dependency_sources(ctx, &effective_component_names)
-                    .is_empty();
-            let built_component_names = built_components
-                .iter()
-                .filter(|_| has_explicit_manifest_guest_request || has_dependency_guest_request)
-                .cloned()
-                .collect::<Vec<_>>();
+        if has_dependency_guest_request {
+            let dependency_guest_requirements =
+                selected_guest_bridge_dependency_sources(ctx, &effective_component_names);
+            for component_name in &built_components {
+                if !ctx
+                    .application()
+                    .component(component_name)
+                    .agent_type_extraction_source_wasm()
+                    .exists()
+                {
+                    continue;
+                }
+                let metadata = agent_metadata_cache.get(ctx, component_name).await?;
+                dependency_providers.add_component_metadata(component_name, &metadata);
+            }
+
+            let built_component_names = dependency_providers
+                .providers_for_any(&dependency_guest_requirements)
+                .into_iter()
+                .filter(|component_name| built_components.contains(component_name))
+                .collect::<BTreeSet<_>>();
+            let built_component_names = built_component_names.into_iter().collect::<Vec<_>>();
             let source_component_names = built_component_names
                 .iter()
                 .filter(|component_name| {
@@ -161,7 +171,7 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            let plan = plan_manifest_guest_bridge_generation_for_components_lenient(
+            let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
                 ctx,
                 &source_component_names,
                 &effective_component_names,
@@ -171,7 +181,7 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
 
             let new_targets = validate_and_filter_new_bridge_targets(
                 ctx,
-                BridgeRequestId::ManifestGuest,
+                BridgeRequestId::DependencyGuest,
                 plan.targets,
                 &mut validated_targets,
                 &claims,
@@ -193,8 +203,9 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
                     continue;
                 }
                 let metadata = agent_metadata_cache.get(ctx, &component_name).await?;
+                dependency_providers.add_component_metadata(&component_name, &metadata);
                 available_guest_bridge_dependencies.extend(
-                    component_guest_bridge_dependencies_provided_by_metadata(metadata),
+                    component_guest_bridge_dependencies_provided_by_metadata(&metadata),
                 );
             }
             if available_guest_bridge_dependencies.len() != available_before {
@@ -211,15 +222,11 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
         }
     }
 
-    if requests.contains(&BridgeRequestId::ManifestGuest) {
-        let exact_targets = validated_targets
-            .iter()
-            .map(|(_, target)| target.clone())
-            .collect::<Vec<_>>();
-        validate_manifest_guest_matchers_resolved(ctx, &exact_targets)?;
-    }
-
-    for request_id in [BridgeRequestId::ManifestExternal, BridgeRequestId::Repl] {
+    for request_id in [
+        BridgeRequestId::ManifestGuest,
+        BridgeRequestId::ManifestExternal,
+        BridgeRequestId::Repl,
+    ] {
         if !requests.contains(&request_id) {
             continue;
         }
@@ -227,28 +234,41 @@ async fn build_app_with_bridge_scheduler(ctx: &BuildContext<'_>) -> anyhow::Resu
         let plan = plan_bridge_request(
             ctx,
             request_id,
-            &effective_component_names,
-            &guest_source_component_names,
+            &explicit_bridge_component_names,
             &mut agent_metadata_cache,
         )
         .await?;
 
+        let mut request_target_keys = BTreeSet::new();
+        let generated_target_keys = if request_id == BridgeRequestId::ManifestGuest {
+            &mut generated_guest_target_keys
+        } else {
+            &mut request_target_keys
+        };
         let targets = validate_and_filter_new_bridge_targets(
             ctx,
             request_id,
             plan.targets.clone(),
             &mut validated_targets,
             &claims,
-            &mut BTreeSet::new(),
+            generated_target_keys,
         )?;
 
-        let exact_targets = validated_targets
-            .iter()
-            .map(|(_, target)| target.clone())
-            .collect::<Vec<_>>();
+        let exact_targets = plan.targets.clone();
         match request_id {
+            BridgeRequestId::ManifestGuest => {
+                validate_manifest_guest_matchers_resolved(
+                    ctx,
+                    &explicit_bridge_component_names,
+                    &exact_targets,
+                )?;
+            }
             BridgeRequestId::ManifestExternal => {
-                validate_manifest_external_matchers_resolved(ctx, &exact_targets)?;
+                validate_manifest_external_matchers_resolved(
+                    ctx,
+                    &explicit_bridge_component_names,
+                    &exact_targets,
+                )?;
             }
             BridgeRequestId::Repl => {}
             _ => unreachable!(),
@@ -384,6 +404,38 @@ impl BridgeSdkTargetKey {
     }
 }
 
+#[derive(Default)]
+struct DependencyProviderMap {
+    providers_by_dependency: BTreeMap<ComponentDependency, BTreeSet<ComponentName>>,
+}
+
+impl DependencyProviderMap {
+    fn add_component_metadata(
+        &mut self,
+        component_name: &ComponentName,
+        metadata: &ExtractedComponentMetadata,
+    ) {
+        for dependency in component_guest_bridge_dependencies_provided_by_metadata(metadata) {
+            self.providers_by_dependency
+                .entry(dependency)
+                .or_default()
+                .insert(component_name.clone());
+        }
+    }
+
+    fn providers_for_any(
+        &self,
+        dependencies: &BTreeSet<ComponentDependency>,
+    ) -> BTreeSet<ComponentName> {
+        dependencies
+            .iter()
+            .filter_map(|dependency| self.providers_by_dependency.get(dependency))
+            .flatten()
+            .cloned()
+            .collect()
+    }
+}
+
 fn component_guest_bridge_requirements(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
@@ -398,16 +450,16 @@ fn component_guest_bridge_requirements(
 }
 
 fn component_guest_bridge_dependencies_provided_by_metadata(
-    metadata: ExtractedComponentMetadata,
+    metadata: &ExtractedComponentMetadata,
 ) -> BTreeSet<ComponentDependency> {
     let mut dependencies = BTreeSet::new();
     dependencies.extend(
         metadata
             .agent_types
-            .into_iter()
-            .map(|agent_type| ComponentDependency::Agent(agent_type.type_name)),
+            .iter()
+            .map(|agent_type| ComponentDependency::Agent(agent_type.type_name.clone())),
     );
-    dependencies.extend(metadata.tools.into_iter().filter_map(|tool| {
+    dependencies.extend(metadata.tools.iter().filter_map(|tool| {
         tool_name(&tool)
             .and_then(|name| crate::model::app::ToolName::try_from(name).ok())
             .map(ComponentDependency::Tool)
@@ -425,6 +477,15 @@ fn selected_guest_bridge_dependency_sources(
         .collect()
 }
 
+fn selected_component_names_have_guest_bridge_dependencies(
+    ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
+) -> bool {
+    selected_component_names
+        .iter()
+        .any(|component_name| !component_guest_bridge_requirements(ctx, component_name).is_empty())
+}
+
 fn selected_component_names_with_dependencies(ctx: &BuildContext<'_>) -> Vec<ComponentName> {
     let selected_component_names = ctx
         .application_context()
@@ -437,9 +498,17 @@ fn selected_component_names_with_dependencies(ctx: &BuildContext<'_>) -> Vec<Com
     selected.extend(selected_component_names);
 
     loop {
+        let provided = selected
+            .iter()
+            .filter_map(|component_name| stored_component_metadata_if_fresh(ctx, component_name))
+            .flat_map(|metadata| {
+                component_guest_bridge_dependencies_provided_by_metadata(&metadata)
+            })
+            .collect::<BTreeSet<_>>();
         let requirements = selected
             .iter()
             .flat_map(|component_name| component_guest_bridge_requirements(ctx, component_name))
+            .filter(|dependency| !provided.contains(dependency))
             .collect::<BTreeSet<_>>();
 
         if requirements.is_empty() {
@@ -461,6 +530,18 @@ fn selected_component_names_with_dependencies(ctx: &BuildContext<'_>) -> Vec<Com
         }
 
         if selected.len() == selected_count_before {
+            let selected_count_before_fallback = selected.len();
+            for component_name in ctx.application().component_names() {
+                if selected.contains(component_name) {
+                    continue;
+                }
+                if stored_component_metadata_if_fresh(ctx, component_name).is_none() {
+                    selected.insert(component_name.clone());
+                }
+            }
+            if selected.len() != selected_count_before_fallback {
+                continue;
+            }
             break;
         }
     }
@@ -483,9 +564,24 @@ async fn selected_component_names_with_dependencies_for_build(
     selected.extend(selected_component_names);
 
     loop {
+        let mut provided = BTreeSet::new();
+        for component_name in &selected {
+            if let Some(metadata) = component_metadata_for_guest_bridge_dependency_for_build(
+                ctx,
+                component_name,
+                agent_metadata_cache,
+            )
+            .await?
+            {
+                provided.extend(component_guest_bridge_dependencies_provided_by_metadata(
+                    &metadata,
+                ));
+            }
+        }
         let requirements = selected
             .iter()
             .flat_map(|component_name| component_guest_bridge_requirements(ctx, component_name))
+            .filter(|dependency| !provided.contains(dependency))
             .collect::<BTreeSet<_>>();
 
         if requirements.is_empty() {
@@ -510,6 +606,25 @@ async fn selected_component_names_with_dependencies_for_build(
         }
 
         if selected.len() == selected_count_before {
+            let selected_count_before_fallback = selected.len();
+            for component_name in ctx.application().component_names() {
+                if selected.contains(component_name) {
+                    continue;
+                }
+                if component_metadata_for_guest_bridge_dependency_for_build(
+                    ctx,
+                    component_name,
+                    agent_metadata_cache,
+                )
+                .await?
+                .is_none()
+                {
+                    selected.insert(component_name.clone());
+                }
+            }
+            if selected.len() != selected_count_before_fallback {
+                continue;
+            }
             break;
         }
     }
@@ -525,7 +640,7 @@ fn component_provides_any_stored_guest_bridge_dependency(
     let Some(metadata) = stored_component_metadata_if_fresh(ctx, component_name) else {
         return false;
     };
-    component_guest_bridge_dependencies_provided_by_metadata(metadata)
+    component_guest_bridge_dependencies_provided_by_metadata(&metadata)
         .iter()
         .any(|dependency| requirements.contains(dependency))
 }
@@ -536,6 +651,28 @@ async fn component_provides_any_guest_bridge_dependency_for_build(
     requirements: &BTreeSet<ComponentDependency>,
     agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<bool> {
+    let Some(metadata) = component_metadata_for_guest_bridge_dependency_for_build(
+        ctx,
+        component_name,
+        agent_metadata_cache,
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+
+    Ok(
+        component_guest_bridge_dependencies_provided_by_metadata(&metadata)
+            .iter()
+            .any(|dependency| requirements.contains(dependency)),
+    )
+}
+
+async fn component_metadata_for_guest_bridge_dependency_for_build(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+    agent_metadata_cache: &mut ComponentMetadataCache,
+) -> anyhow::Result<Option<ExtractedComponentMetadata>> {
     let component = ctx.application().component(component_name);
     let metadata = if let Some(metadata) = stored_component_metadata_if_fresh(ctx, component_name) {
         Some(metadata)
@@ -545,15 +682,7 @@ async fn component_provides_any_guest_bridge_dependency_for_build(
         None
     };
 
-    let Some(metadata) = metadata else {
-        return Ok(false);
-    };
-
-    Ok(
-        component_guest_bridge_dependencies_provided_by_metadata(metadata)
-            .iter()
-            .any(|dependency| requirements.contains(dependency)),
-    )
+    Ok(metadata)
 }
 
 fn stored_component_metadata_if_fresh(
@@ -576,6 +705,7 @@ fn stored_component_metadata_if_fresh(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum BridgeRequestId {
+    DependencyGuest,
     ManifestGuest,
     ManifestExternal,
     Custom,
@@ -586,14 +716,15 @@ async fn plan_bridge_request(
     ctx: &BuildContext<'_>,
     request_id: BridgeRequestId,
     selected_component_names: &[ComponentName],
-    guest_source_component_names: &[ComponentName],
     agent_metadata_cache: &mut ComponentMetadataCache,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     match request_id {
+        BridgeRequestId::DependencyGuest => {
+            unreachable!("dependency guest bridges are planned inside the scheduler loop")
+        }
         BridgeRequestId::ManifestGuest => {
-            plan_manifest_guest_bridge_generation_for_components_lenient(
+            plan_explicit_manifest_guest_bridge_generation_for_components_lenient(
                 ctx,
-                guest_source_component_names,
                 selected_component_names,
                 agent_metadata_cache,
             )
@@ -1011,6 +1142,23 @@ fn validate_exact_targets_against_claims(
                 continue;
             }
             let claim_base_dir = crate::fs::absolute_lexical_path(&claim.base_dir)?;
+            // External clients are direct `<base>/<name>-client` children;
+            // guest clients use distinct `<base>/<name>-guest-client` children.
+            if claim.request_id == BridgeRequestId::ManifestExternal
+                && matches!(
+                    *target_request_id,
+                    BridgeRequestId::DependencyGuest | BridgeRequestId::ManifestGuest
+                )
+                && target_output_dir.starts_with(&claim_base_dir)
+            {
+                continue;
+            }
+            if claim.request_id == BridgeRequestId::ManifestGuest
+                && *target_request_id == BridgeRequestId::DependencyGuest
+                && target_output_dir.starts_with(&claim_base_dir)
+            {
+                continue;
+            }
             if target_output_dir == claim_base_dir
                 || target_output_dir.starts_with(&claim_base_dir)
                 || claim_base_dir.starts_with(&target_output_dir)
@@ -1033,21 +1181,34 @@ fn validate_exact_targets_against_claims(
 
 fn validate_manifest_guest_matchers_resolved(
     ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
     exact_targets: &[BridgeSdkTarget],
 ) -> anyhow::Result<()> {
-    validate_manifest_matchers_resolved(ctx, BridgeMode::Guest, exact_targets)
+    validate_manifest_matchers_resolved(
+        ctx,
+        BridgeMode::Guest,
+        selected_component_names,
+        exact_targets,
+    )
 }
 
 fn validate_manifest_external_matchers_resolved(
     ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
     exact_targets: &[BridgeSdkTarget],
 ) -> anyhow::Result<()> {
-    validate_manifest_matchers_resolved(ctx, BridgeMode::External, exact_targets)
+    validate_manifest_matchers_resolved(
+        ctx,
+        BridgeMode::External,
+        selected_component_names,
+        exact_targets,
+    )
 }
 
 fn validate_manifest_matchers_resolved(
     ctx: &BuildContext<'_>,
     bridge_mode_filter: BridgeMode,
+    selected_component_names: &[ComponentName],
     exact_targets: &[BridgeSdkTarget],
 ) -> anyhow::Result<()> {
     for (target_language, bridge_mode, sdk_targets) in
@@ -1060,7 +1221,13 @@ fn validate_manifest_matchers_resolved(
         let mut agent_matchers = sdk_targets.agents.clone().into_set();
         if !agent_matchers.remove("*") {
             for component_name in ctx.application().component_names() {
-                agent_matchers.remove(component_name.as_str());
+                if component_matcher_is_not_expected_to_resolve(
+                    ctx,
+                    selected_component_names,
+                    component_name,
+                ) {
+                    agent_matchers.remove(component_name.as_str());
+                }
             }
 
             for target in exact_targets {
@@ -1092,7 +1259,13 @@ fn validate_manifest_matchers_resolved(
             .unwrap_or_default();
         if !tool_matchers.remove("*") {
             for component_name in ctx.application().component_names() {
-                tool_matchers.remove(component_name.as_str());
+                if component_matcher_is_not_expected_to_resolve(
+                    ctx,
+                    selected_component_names,
+                    component_name,
+                ) {
+                    tool_matchers.remove(component_name.as_str());
+                }
             }
 
             for target in exact_targets {
@@ -1122,6 +1295,23 @@ fn validate_manifest_matchers_resolved(
     Ok(())
 }
 
+fn component_matcher_is_not_expected_to_resolve(
+    ctx: &BuildContext<'_>,
+    selected_component_names: &[ComponentName],
+    component_name: &ComponentName,
+) -> bool {
+    let selected = selected_component_names
+        .iter()
+        .any(|selected_component_name| selected_component_name == component_name);
+    let wasm_exists = ctx
+        .application()
+        .component(component_name)
+        .agent_type_extraction_source_wasm()
+        .exists();
+
+    !selected || wasm_exists
+}
+
 fn bridge_sdk_target_name(language: GuestLanguage, bridge_mode: BridgeMode) -> String {
     match bridge_mode {
         BridgeMode::External => language.to_string(),
@@ -1145,11 +1335,7 @@ fn bridge_requests(
     if ctx.custom_bridge_sdk_target().is_some() {
         requests.push(BridgeRequestId::Custom);
     } else {
-        if has_explicit_manifest_guest_bridge_request(ctx, selected_component_names)
-            || selected_component_names.iter().any(|component_name| {
-                !component_guest_bridge_requirements(ctx, component_name).is_empty()
-            })
-        {
+        if has_explicit_manifest_guest_bridge_request(ctx, selected_component_names) {
             requests.push(BridgeRequestId::ManifestGuest);
         }
         if ctx
@@ -1210,9 +1396,14 @@ fn should_run_bridge_scheduler(ctx: &BuildContext<'_>) -> bool {
         return false;
     }
 
-    let effective_component_names = selected_component_names_with_dependencies(ctx);
+    let selected_component_names = ctx
+        .application_context()
+        .selected_component_names()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
 
-    bridge_requests(ctx, &effective_component_names).contains(&BridgeRequestId::ManifestGuest)
+    selected_component_names_have_guest_bridge_dependencies(ctx, &selected_component_names)
 }
 
 fn should_run_direct_gen_bridge(ctx: &BuildContext<'_>) -> bool {
