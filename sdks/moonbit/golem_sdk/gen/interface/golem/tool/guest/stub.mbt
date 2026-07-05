@@ -1,7 +1,6 @@
 ///|
 /// Enumerate the tools this component exposes.
 pub fn discover_tools() -> Result[Array[@common.Tool], @common.ToolError] {
-  ignore(@host.get_all_tools())
   Ok([])
 }
 

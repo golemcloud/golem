@@ -1422,8 +1422,10 @@ async fn selected_dependency_guest_bridge_reextracts_rebuilt_provider_metadata(_
             .unwrap_or_else(|| "<missing>".to_string())
     );
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/renamed-agent-guest-client/Cargo.toml")
-            .exists()
+        ctx.cwd_path_join(
+            "golem-temp/bridge-sdk/rust/internal/renamed-agent-guest-client/Cargo.toml"
+        )
+        .exists()
     );
 }
 
@@ -1582,8 +1584,10 @@ async fn selected_dependency_guest_bridge_reextracts_rebuilt_old_provider_when_a
         extracted_component_metadata_for(&ctx, "app:z").unwrap_or_else(|| "<missing>".to_string())
     );
     assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/guest/counter-agent-guest-client/Cargo.toml")
-            .exists()
+        ctx.cwd_path_join(
+            "golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client/Cargo.toml"
+        )
+        .exists()
     );
 }
 
@@ -1841,7 +1845,7 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_unknown_compo
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
-                  - command: test -f ../golem-temp/bridge-sdk/rust/guest/counter-agent-guest-client/Cargo.toml
+                  - command: test -f ../golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client/Cargo.toml
                   - command: env CARGO_TARGET_DIR=target cargo build --target wasm32-wasip2
                   - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer.wasm
                   - command: cp target/wasm32-wasip2/debug/app_consumer.wasm consumer-final.wasm

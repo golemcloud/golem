@@ -40,9 +40,6 @@ pub fn get_remote_client(
         mut method_names,
     } = get_remote_agent_methods_info(item_trait, agent_type_parameter_names);
 
-    let encode_constructor =
-        generate_constructor_data_value_params_encoding(constructor_data_value_param_idents);
-
     let get_method_ident = agent_is_durable.then(|| {
         if method_names.contains("get") {
             method_names.fresh_ident("get_")
@@ -67,17 +64,28 @@ pub fn get_remote_client(
         .cloned()
         .collect::<Vec<_>>();
     let phantom_id_param_ident = fresh_param_ident(&constructor_param_idents, "phantom_id");
+    let rpc_config_params_ident =
+        fresh_param_ident(&constructor_param_idents, "__golem_rpc_config_params");
+    let remote_agent_type_ident =
+        fresh_param_ident(&constructor_param_idents, "__golem_agent_type");
+    let phantom_uuid_ident = fresh_param_ident(&constructor_param_idents, "phantom_uuid");
+    let constructor_value_ident = fresh_param_ident(&constructor_param_idents, "constructor_value");
+    let agent_id_ident = fresh_param_ident(&constructor_param_idents, "agent_id");
+    let encode_constructor = generate_constructor_data_value_params_encoding(
+        constructor_data_value_param_idents,
+        &constructor_value_ident,
+    );
 
     let agent_config_params_as_rpc_param = {
         let add_rpc_params_entries = constructor_agent_config_param_idents.iter().map(|param_ident|
-            quote! { result.append(&mut ::golem_rust::agentic::IntoRpcConfigParam::into_rpc_param(#param_ident, &[])); }
+            quote! { #rpc_config_params_ident.append(&mut ::golem_rust::agentic::IntoRpcConfigParam::into_rpc_param(#param_ident, &[])); }
         );
 
         quote! {
             {
-                let mut result = Vec::new();
+                let mut #rpc_config_params_ident = Vec::new();
                 #(#add_rpc_params_entries)*
-                result
+                #rpc_config_params_ident
             }
         }
     };
@@ -94,17 +102,17 @@ pub fn get_remote_client(
          phantom_struct: proc_macro2::TokenStream,
          config: proc_macro2::TokenStream| {
             quote! {
-                let agent_type =
-                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
-                        .expect("Internal Error: Agent type not registered");
-
                 #encode_constructor
 
                 #prelude
 
-                let agent_id = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                let #remote_agent_type_ident =
+                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
+                        .expect("Internal Error: Agent type not registered");
+
+                let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                     #type_name,
-                    golem_rust::encode_schema_value(&constructor_value)
+                    golem_rust::encode_schema_value(&#constructor_value_ident)
                         .expect("Failed to encode constructor parameters for agent id"),
                     #phantom_wire,
                 )
@@ -112,16 +120,16 @@ pub fn get_remote_client(
 
                 let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
                     #type_name,
-                    golem_rust::encode_schema_value(&constructor_value)
+                    golem_rust::encode_schema_value(&#constructor_value_ident)
                         .expect("Failed to encode constructor parameters"),
                     #phantom_wire,
                     #config,
                 );
 
                 #remote_client_type_name {
-                    agent_id,
+                    agent_id: #agent_id_ident,
                     phantom_id: #phantom_struct,
-                    component_id: agent_type.implemented_by,
+                    component_id: #remote_agent_type_ident.implemented_by,
                     wasm_rpc,
                 }
             }
@@ -153,9 +161,9 @@ pub fn get_remote_client(
             .as_ref()
             .expect("agents with config allocate new_phantom_with_config");
         let body = build_constructor_body(
-            quote! { let phantom_uuid = golem_rust::Uuid::new_v4(); },
-            quote! { Some(phantom_uuid.into()) },
-            quote! { Some(phantom_uuid) },
+            quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
+            quote! { Some(#phantom_uuid_ident.into()) },
+            quote! { Some(#phantom_uuid_ident) },
             agent_config_params_as_rpc_param.clone(),
         );
         quote! {
@@ -206,9 +214,9 @@ pub fn get_remote_client(
     };
 
     let new_phantom_body = build_constructor_body(
-        quote! { let phantom_uuid = golem_rust::Uuid::new_v4(); },
-        quote! { Some(phantom_uuid.into()) },
-        quote! { Some(phantom_uuid) },
+        quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
+        quote! { Some(#phantom_uuid_ident.into()) },
+        quote! { Some(#phantom_uuid_ident) },
         quote! { Vec::new() },
     );
 
@@ -260,7 +268,7 @@ pub fn get_remote_client(
 #[cfg(test)]
 mod tests {
     use super::get_remote_client;
-    use quote::{format_ident, quote};
+    use quote::{ToTokens, format_ident, quote};
     use syn::parse_quote;
 
     fn render_client(agent_is_durable: bool) -> String {
@@ -593,6 +601,91 @@ mod tests {
         );
     }
 
+    #[test]
+    fn config_encoding_deconflicts_internal_temp_name_from_config_parameters() {
+        let item_trait = parse_quote! {
+            trait ExampleAgent {
+                fn new(#[agent_config] __golem_rpc_config_params: Config) -> Self;
+                fn run(&self);
+            }
+        };
+
+        let rendered = get_remote_client(
+            &item_trait,
+            &[],
+            &[],
+            &[quote! { __golem_rpc_config_params: Config }],
+            &[format_ident!("__golem_rpc_config_params")],
+            &[],
+            true,
+        )
+        .to_string();
+
+        assert!(
+            !rendered.contains("let mut __golem_rpc_config_params = Vec :: new () ; __golem_rpc_config_params . append (& mut :: golem_rust :: agentic :: IntoRpcConfigParam :: into_rpc_param (__golem_rpc_config_params ,"),
+            "generated config encoding must not shadow a config parameter whose legal Rust identifier matches the internal temporary name; generated client was:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn config_encoding_does_not_shadow_config_parameter_named_agent_id() {
+        let item_trait = parse_quote! {
+            trait ExampleAgent {
+                fn new(#[agent_config] agent_id: Config) -> Self;
+                fn run(&self);
+            }
+        };
+
+        let tokens = get_remote_client(
+            &item_trait,
+            &[],
+            &[],
+            &[quote! { agent_id: Config }],
+            &[format_ident!("agent_id")],
+            &[],
+            true,
+        );
+        let rendered = tokens.to_string();
+        let generated = syn::parse2::<syn::File>(tokens).unwrap();
+        let shadows_before_config_encoding = generated
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
+                    let syn::ImplItem::Fn(method) = item else {
+                        return None;
+                    };
+                    (method.sig.ident == "get_with_config").then(|| {
+                        let mut agent_id_is_shadowed = false;
+                        for stmt in &method.block.stmts {
+                            if stmt
+                                .to_token_stream()
+                                .to_string()
+                                .contains("IntoRpcConfigParam :: into_rpc_param (agent_id ,")
+                            {
+                                return agent_id_is_shadowed;
+                            }
+                            if let syn::Stmt::Local(local) = stmt {
+                                if let syn::Pat::Ident(pat_ident) = &local.pat {
+                                    if pat_ident.ident == "agent_id" {
+                                        agent_id_is_shadowed = true;
+                                    }
+                                }
+                            }
+                        }
+                        false
+                    })
+                }),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing generated get_with_config helper:\n{rendered}"));
+
+        assert!(
+            !shadows_before_config_encoding,
+            "generated config encoding must not bind a local named agent_id before passing the config parameter with the same name to IntoRpcConfigParam; generated client was:\n{rendered}"
+        );
+    }
+
     /// The wire `schema-value-tree` now carries an owned, affine `quota-token`
     /// handle, so the generated client must never store it. It stores the
     /// eagerly-computed `agent_id` string instead, rejects quota tokens in the
@@ -615,12 +708,13 @@ mod tests {
 
 fn generate_constructor_data_value_params_encoding(
     param_idents: &[proc_macro2::Ident],
+    constructor_value_ident: &proc_macro2::Ident,
 ) -> proc_macro2::TokenStream {
     let constructor_record =
         positional_record_schema_value(param_idents, "Failed to convert constructor parameter");
     quote! {
-        let constructor_value = #constructor_record;
-        golem_rust::agentic::__reject_quota_tokens_in_agent_constructor(&constructor_value)
+        let #constructor_value_ident = #constructor_record;
+        golem_rust::agentic::__reject_quota_tokens_in_agent_constructor(&#constructor_value_ident)
             .unwrap_or_else(|err| panic!("Invalid agent constructor parameters: {err}"));
     }
 }

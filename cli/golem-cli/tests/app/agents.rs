@@ -743,7 +743,7 @@ async fn test_rust_tool_guest_bridge_e2e() {
                 templates: rust
                 dependencies:
                   tools:
-                    - echo
+                    - tool-bridge:provider/echo
 
             bridge:
               rust:
