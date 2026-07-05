@@ -61,6 +61,12 @@ pub fn get_remote_client(
         .then(|| method_names.fresh_ident("get_phantom_with_config"));
     let phantom_id_accessor_ident = method_names.fresh_ident("phantom_id");
     let get_agent_id_accessor_ident = method_names.fresh_ident("get_agent_id");
+    let constructor_param_idents = constructor_data_value_param_idents
+        .iter()
+        .chain(constructor_agent_config_param_idents)
+        .cloned()
+        .collect::<Vec<_>>();
+    let phantom_id_param_ident = fresh_param_ident(&constructor_param_idents, "phantom_id");
 
     let agent_config_params_as_rpc_param = {
         let add_rpc_params_entries = constructor_agent_config_param_idents.iter().map(|param_ident|
@@ -167,12 +173,12 @@ pub fn get_remote_client(
             .expect("agents with config allocate get_phantom_with_config");
         let body = build_constructor_body(
             quote! {},
-            quote! { Some(phantom_id.into()) },
-            quote! { Some(phantom_id) },
+            quote! { Some(#phantom_id_param_ident.into()) },
+            quote! { Some(#phantom_id_param_ident) },
             agent_config_params_as_rpc_param.clone(),
         );
         quote! {
-            pub fn #get_phantom_with_config_method_ident(phantom_id: golem_rust::Uuid, #(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
+            pub fn #get_phantom_with_config_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
                 #body
             }
         }
@@ -208,8 +214,8 @@ pub fn get_remote_client(
 
     let get_phantom_body = build_constructor_body(
         quote! {},
-        quote! { Some(phantom_id.into()) },
-        quote! { Some(phantom_id) },
+        quote! { Some(#phantom_id_param_ident.into()) },
+        quote! { Some(#phantom_id_param_ident) },
         quote! { Vec::new() },
     );
 
@@ -232,7 +238,7 @@ pub fn get_remote_client(
 
             #optional_new_phantom_with_config_impl
 
-            pub fn #get_phantom_method_ident(phantom_id: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #remote_client_type_name {
+            pub fn #get_phantom_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #remote_client_type_name {
                 #get_phantom_body
             }
 
@@ -448,6 +454,143 @@ mod tests {
                 "{wrapper_name} should deconflict its generated scheduled_time parameter from user parameters; params were {params:?}:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn get_phantom_deconflicts_generated_phantom_id_parameter() {
+        let item_trait = parse_quote! {
+            trait ExampleAgent {
+                fn new(phantom_id: String) -> Self;
+                fn run(&self);
+            }
+        };
+
+        let tokens = get_remote_client(
+            &item_trait,
+            &[quote! { phantom_id: String }],
+            &[format_ident!("phantom_id")],
+            &[],
+            &[],
+            &[],
+            true,
+        );
+        let rendered = tokens.to_string();
+        let generated = syn::parse2::<syn::File>(tokens).unwrap();
+        let params = generated
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
+                    let syn::ImplItem::Fn(method) = item else {
+                        return None;
+                    };
+                    (method.sig.ident == "get_phantom").then(|| {
+                        method
+                            .sig
+                            .inputs
+                            .iter()
+                            .filter_map(|arg| match arg {
+                                syn::FnArg::Receiver(_) => None,
+                                syn::FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
+                                    syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+                                    _ => None,
+                                },
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                }),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing generated get_phantom helper:\n{rendered}"));
+        let unique_params = params.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            unique_params.len(),
+            params.len(),
+            "get_phantom should deconflict its generated phantom_id parameter from constructor parameters; params were {params:?}:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn constructor_body_does_not_shadow_constructor_parameters_before_encoding() {
+        let item_trait = parse_quote! {
+            trait ExampleAgent {
+                fn new(agent_type: String) -> Self;
+                fn run(&self);
+            }
+        };
+
+        let tokens = get_remote_client(
+            &item_trait,
+            &[quote! { agent_type: String }],
+            &[format_ident!("agent_type")],
+            &[],
+            &[],
+            &[],
+            true,
+        );
+        let rendered = tokens.to_string();
+        let generated = syn::parse2::<syn::File>(tokens).unwrap();
+        let bindings_before_constructor_value = generated
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
+                    let syn::ImplItem::Fn(method) = item else {
+                        return None;
+                    };
+                    (method.sig.ident == "get").then(|| {
+                        let mut bindings = Vec::new();
+                        for stmt in &method.block.stmts {
+                            let syn::Stmt::Local(local) = stmt else {
+                                continue;
+                            };
+                            let syn::Pat::Ident(pat_ident) = &local.pat else {
+                                continue;
+                            };
+                            if pat_ident.ident == "constructor_value" {
+                                break;
+                            }
+                            bindings.push(pat_ident.ident.to_string());
+                        }
+                        bindings
+                    })
+                }),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing generated get helper:\n{rendered}"));
+
+        assert!(
+            !bindings_before_constructor_value
+                .iter()
+                .any(|name| name == "agent_type"),
+            "generated constructor helper must not bind a local named agent_type before encoding the constructor parameter with the same name; early bindings were {bindings_before_constructor_value:?}:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn config_encoding_does_not_shadow_config_parameters() {
+        let item_trait = parse_quote! {
+            trait ExampleAgent {
+                fn new(#[agent_config] result: Config) -> Self;
+                fn run(&self);
+            }
+        };
+
+        let rendered = get_remote_client(
+            &item_trait,
+            &[],
+            &[],
+            &[quote! { result: Config }],
+            &[format_ident!("result")],
+            &[],
+            true,
+        )
+        .to_string();
+
+        assert!(
+            !rendered.contains("let mut result = Vec :: new () ; result . append (& mut :: golem_rust :: agentic :: IntoRpcConfigParam :: into_rpc_param (result ,"),
+            "generated config encoding must not shadow a config parameter named result before passing it to IntoRpcConfigParam; generated client was:\n{rendered}"
+        );
     }
 
     /// The wire `schema-value-tree` now carries an owned, affine `quota-token`
