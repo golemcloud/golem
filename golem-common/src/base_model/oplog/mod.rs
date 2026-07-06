@@ -727,5 +727,17 @@ oplog_entry! {
             queued_event_index: OplogIndex,
             card_id: CardId,
         }
+    },
+    /// Records that a permission card used by the agent has expired.
+    CardExpired {
+        hint: true
+        wit_raw_type: "card-expired-parameters"
+        wit_public_type: "card-expired-parameters"
+        raw {
+            card_id: CardId,
+        }
+        public {
+            card_id: CardId,
+        }
     }
 }

@@ -1078,6 +1078,17 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.card_id)
                 ));
             }
+            PublicOplogEntry::CardExpired(params) => {
+                logln(format_message_highlight("CARD EXPIRED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}card id:           {}",
+                    format_id(&params.card_id)
+                ));
+            }
             PublicOplogEntry::CardEventQueued(params) => {
                 logln(format_message_highlight("CARD EVENT QUEUED"));
                 logln(format!(

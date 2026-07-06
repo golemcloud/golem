@@ -4209,6 +4209,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
       discriminator:
         propertyName: type
         mapping:
@@ -4257,6 +4258,7 @@ components:
           CardInstalled: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
           CardInstallFailed: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
           CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
+          CardExpired: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -4365,6 +4367,18 @@ components:
             - CardEventQueued
             example: CardEventQueued
       - $ref: '#/components/schemas/r#CardEventQueuedParams'
+    PublicOplogEntry_r#CardExpiredParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardExpired
+            example: CardExpired
+      - $ref: '#/components/schemas/r#CardExpiredParams'
     PublicOplogEntry_r#CardInstallFailedParams:
       allOf:
       - type: object
@@ -6981,6 +6995,19 @@ components:
           format: date-time
         event:
           $ref: '#/components/schemas/PublicQueuedCardEvent'
+    r#CardExpiredParams:
+      type: object
+      title: r#CardExpiredParams
+      required:
+      - timestamp
+      - cardId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        cardId:
+          type: string
+          format: uuid
     r#CardInstallFailedParams:
       type: object
       title: r#CardInstallFailedParams

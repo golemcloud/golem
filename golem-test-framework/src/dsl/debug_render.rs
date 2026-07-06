@@ -476,6 +476,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             );
             let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
         }
+        PublicOplogEntry::CardExpired(params) => {
+            let _ = writeln!(result, "CARD EXPIRED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+        }
         PublicOplogEntry::CardEventQueued(params) => {
             let _ = writeln!(result, "CARD EVENT QUEUED");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);

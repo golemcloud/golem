@@ -50,6 +50,7 @@ pub enum ReplayEvent {
     ForkReplayed { new_phantom_id: Uuid },
     CardInstalled { card: StoredCard },
     CardRevoked { card_id: CardId },
+    CardExpired { card_id: CardId },
 }
 
 #[derive(Debug, Clone)]
@@ -428,6 +429,10 @@ impl ReplayState {
             self.record_replay_event(ReplayEvent::CardRevoked { card_id: *card_id })
                 .await;
         }
+        if let OplogEntry::CardExpired { card_id, .. } = &oplog_entry {
+            self.record_replay_event(ReplayEvent::CardExpired { card_id: *card_id })
+                .await;
+        }
         if let OplogEntry::CardInstalled { card, .. } = &oplog_entry {
             self.record_replay_event(ReplayEvent::CardInstalled { card: card.clone() })
                 .await;
@@ -717,6 +722,10 @@ impl ReplayState {
                 match entry {
                     OplogEntry::CardRevoked { card_id, .. } => {
                         self.record_replay_event(ReplayEvent::CardRevoked { card_id })
+                            .await;
+                    }
+                    OplogEntry::CardExpired { card_id, .. } => {
+                        self.record_replay_event(ReplayEvent::CardExpired { card_id })
                             .await;
                     }
                     OplogEntry::CardInstalled { card, .. } => {

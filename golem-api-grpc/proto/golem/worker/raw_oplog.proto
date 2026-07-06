@@ -63,6 +63,7 @@ message RawOplogEntry {
     RawCardEventQueuedParameters card_event_queued = 47;
     RawCardInstalledParameters card_installed = 48;
     RawCardInstallFailedParameters card_install_failed = 49;
+    RawCardExpiredParameters card_expired = 50;
   }
 }
 
@@ -322,16 +323,25 @@ message RawCardRevokedParameters {
   golem.common.UUID card_id = 3;
 }
 
-message RawQueuedCardEvent {
-  oneof event {
-    RawQueuedCardEventCard install = 1;
-    RawQueuedCardEventCard revoke = 2;
-  }
+message RawCardExpiredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID card_id = 2;
 }
 
-message RawQueuedCardEventCard {
-  golem.common.UUID card_id = 1;
-  bytes card = 2;
+message RawQueuedCardEvent {
+  message Install {
+    golem.common.UUID card_id = 1;
+    bytes card = 2;
+  }
+
+  message Revoke {
+    golem.common.UUID card_id = 1;
+  }
+
+  oneof event {
+    Install install = 1;
+    Revoke revoke = 2;
+  }
 }
 
 enum RawCardInstallFailure {
