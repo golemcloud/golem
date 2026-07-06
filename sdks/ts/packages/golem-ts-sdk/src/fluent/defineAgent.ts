@@ -138,6 +138,17 @@ export interface AgentImplementation<
   methods: { [K in keyof Methods]: HandlerFor<Methods[K]> } & ThisType<
     State & FluentAgentThis<Config>
   >;
+  /**
+   * Optional custom snapshot serializer — overrides the default (reflective or
+   * typed-`state`) serialization entirely. `this` is the agent instance. `save`
+   * returns the raw snapshot bytes; `load` restores from them. Use for state the
+   * default JSON path can't represent (mirrors the decorator SDK's
+   * `BaseAgent.save/loadSnapshot` and effect's `Snapshot.custom`).
+   */
+  snapshot?: {
+    save: () => Uint8Array | Promise<Uint8Array>;
+    load: (bytes: Uint8Array) => void | Promise<void>;
+  } & ThisType<State & FluentAgentThis<Config>>;
 }
 
 export interface AgentImpl {
@@ -159,17 +170,28 @@ export interface AgentDefinition<
 }
 
 /**
- * Snapshotting policy for an agent, mapped to the WIT `snapshotting` variant:
+ * When the executor should snapshot, mapped to the WIT `snapshotting` variant:
  * - `'disabled'` → `disabled`
  * - `'default'` → `enabled(default)`
  * - `{ periodicSeconds }` → `enabled(periodic(duration))`
  * - `{ everyNInvocations }` → `enabled(every-n-invocation(u16))`
  */
-export type SnapshottingSpec =
+export type SnapshotPolicy =
   | 'disabled'
   | 'default'
   | { periodicSeconds: number }
   | { everyNInvocations: number };
+
+/**
+ * Snapshotting configuration. Either a bare {@link SnapshotPolicy} (the SDK
+ * snapshots all of `this` by reflection — back-compat default), or `{ policy,
+ * state }` where `state` is a Standard Schema: only the schema-declared fields of
+ * `this` are serialized (typed + scoped), fixing over-broad snapshots. For fully
+ * custom serialization supply `snapshot: { save, load }` on `implement(...)`.
+ */
+export type SnapshottingSpec =
+  | SnapshotPolicy
+  | { policy?: SnapshotPolicy; state: StandardSchemaV1 };
 
 export interface AgentSpec<
   Id extends IdRecord,

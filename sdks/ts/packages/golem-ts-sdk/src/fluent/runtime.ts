@@ -59,11 +59,13 @@ import {
 import { decodeMultipart, encodeMultipart, MultipartPart } from '../internal/multipart';
 import { compileSchema } from './schema/adapter';
 import { FluentCodec } from './schema/codec';
+import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
   AgentImplementation,
   AgentMetadataSpec,
   IdRecord,
   MethodsRecord,
+  SnapshotPolicy,
   SnapshottingSpec,
 } from './defineAgent';
 import { MethodSpec } from './method';
@@ -96,6 +98,13 @@ export interface RegisteredAgent {
   idCodecs: NamedCodec[];
   methodCodecs: Map<string, MethodCodec>;
   configDeclarations: ConfigDeclaration[];
+  /**
+   * Typed snapshot-state schema from `snapshotting: { state }`. When set, the
+   * JSON snapshot is scoped to + validated by this schema (only the declared
+   * state fields of `this` are persisted); otherwise `this` is snapshotted by
+   * reflection.
+   */
+  snapshotStateSchema?: StandardSchemaV1;
 }
 
 function errorMessage(e: unknown): string {
@@ -155,7 +164,18 @@ export function registerAgentType(
   const agentType = assembleAgentType(name, idCodecs, methodCodecs, configDeclarations, metadata);
   AgentTypeRegistry.register(className, agentType);
 
-  return { name, className, agentType, idCodecs, methodCodecs, configDeclarations };
+  const snap = metadata.snapshotting;
+  const snapshotStateSchema =
+    snap !== undefined && typeof snap === 'object' && 'state' in snap ? snap.state : undefined;
+  return {
+    name,
+    className,
+    agentType,
+    idCodecs,
+    methodCodecs,
+    configDeclarations,
+    snapshotStateSchema,
+  };
 }
 
 /**
@@ -163,16 +183,23 @@ export function registerAgentType(
  * into one pool and encode each root into a shared `schema-graph` via
  * `GraphEncoder`. The decorator-SDK analog is `buildAgentType`.
  */
+/** Extract the WHEN-policy from a snapshotting spec (the `{ policy, state }` form defaults to `'default'`). */
+function snapshotPolicyOf(spec: SnapshottingSpec | undefined): SnapshotPolicy | undefined {
+  if (spec !== undefined && typeof spec === 'object' && 'state' in spec) return spec.policy ?? 'default';
+  return spec;
+}
+
 /** Map the fluent {@link SnapshottingSpec} to the WIT `snapshotting` variant. */
 function toWitSnapshotting(spec: SnapshottingSpec | undefined): Snapshotting {
-  if (spec === undefined || spec === 'disabled') return { tag: 'disabled' };
-  if (spec === 'default') return { tag: 'enabled', val: { tag: 'default' } };
-  if ('periodicSeconds' in spec) {
+  const policy = snapshotPolicyOf(spec);
+  if (policy === undefined || policy === 'disabled') return { tag: 'disabled' };
+  if (policy === 'default') return { tag: 'enabled', val: { tag: 'default' } };
+  if ('periodicSeconds' in policy) {
     // WIT `periodic` takes a `duration` (u64 nanoseconds).
-    const seconds = spec.periodicSeconds < 0 ? 0 : spec.periodicSeconds;
+    const seconds = policy.periodicSeconds < 0 ? 0 : policy.periodicSeconds;
     return { tag: 'enabled', val: { tag: 'periodic', val: BigInt(Math.round(seconds * 1e9)) } };
   }
-  return { tag: 'enabled', val: { tag: 'every-n-invocation', val: spec.everyNInvocations } };
+  return { tag: 'enabled', val: { tag: 'every-n-invocation', val: policy.everyNInvocations } };
 }
 
 /**
@@ -377,6 +404,11 @@ class FluentResolvedAgent {
     private readonly instance: Record<string, unknown>,
     private readonly methods: Record<string, (...args: unknown[]) => unknown>,
     private readonly agentId: ParsedAgentId,
+    /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
+    private readonly customSnapshot?: {
+      save: () => Uint8Array | Promise<Uint8Array>;
+      load: (bytes: Uint8Array) => void | Promise<void>;
+    },
   ) {}
 
   getAgentType(): AgentType {
@@ -449,43 +481,44 @@ class FluentResolvedAgent {
     }
   }
 
-  // Structural snapshot: JSON of plain state fields, plus a `db:<field>` part per
-  // `DatabaseSync` field — reusing the SDK's existing SQLite/multipart helpers.
+  // Snapshot serialization. Three modes:
+  //  - custom (`implement({ snapshot })`): user save/load own the bytes verbatim.
+  //  - typed  (`snapshotting: { state }`): JSON of ONLY the schema-validated state
+  //           fields of `this`, plus a `db:<field>` SQLite part per DatabaseSync.
+  //  - reflective (default): JSON of every plain field of `this` (skipping the
+  //           live `config` accessor + helpers), plus the same `db:` parts.
   // The principal/version envelope is added by the guest (`src/index.ts`).
   async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
-    const state: Record<string, unknown> = {};
+    if (this.customSnapshot) {
+      const data = await this.customSnapshot.save.call(this.instance);
+      return { data, mimeType: 'application/octet-stream' };
+    }
+
+    // Attached SQLite databases (reflective in both remaining modes).
     const databases: Array<{ name: string; bytes: Uint8Array }> = [];
     const seen = new Set<unknown>();
-
     for (const [k, val] of Object.entries(this.instance)) {
-      if (typeof val === 'function') continue;
-      if (val instanceof DatabaseSync) {
-        if (seen.has(val)) {
-          throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
-        }
-        seen.add(val);
-        if (!isAutocommitDatabaseSync(val)) {
-          throw `Cannot snapshot database "${k}": an open transaction exists. Commit or rollback before saving.`;
-        }
-        databases.push({ name: k, bytes: serializeDatabaseSync(val) });
-        continue;
+      if (!isInstance(val, DatabaseSync)) continue;
+      if (seen.has(val)) {
+        throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
       }
-      if (val instanceof StatementSync || val instanceof Session || val instanceof SQLTagStore) {
-        continue;
+      seen.add(val);
+      if (!isAutocommitDatabaseSync(val)) {
+        throw `Cannot snapshot database "${k}": an open transaction exists. Commit or rollback before saving.`;
       }
-      state[k] = val;
+      databases.push({ name: k, bytes: serializeDatabaseSync(val) });
     }
 
+    const state = this.reg.snapshotStateSchema
+      ? await validateSnapshotState(this.reg.snapshotStateSchema, this.instance)
+      : this.reflectiveState();
+
+    const stateJson = new TextEncoder().encode(JSON.stringify(state));
     if (databases.length === 0) {
-      return { data: new TextEncoder().encode(JSON.stringify(state)), mimeType: 'application/json' };
+      return { data: stateJson, mimeType: 'application/json' };
     }
-
     const parts: MultipartPart[] = [
-      {
-        name: 'state',
-        contentType: 'application/json',
-        body: new TextEncoder().encode(JSON.stringify(state)),
-      },
+      { name: 'state', contentType: 'application/json', body: stateJson },
       ...databases.map((db) => ({
         name: `db:${db.name}`,
         contentType: 'application/x-sqlite3',
@@ -496,23 +529,80 @@ class FluentResolvedAgent {
     return { data, mimeType: `multipart/mixed; boundary=${boundary}` };
   }
 
+  /** Reflective state: plain, non-helper, non-SQLite fields of `this` (the live `config` accessor is never snapshotted). */
+  private reflectiveState(): Record<string, unknown> {
+    const state: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(this.instance)) {
+      if (typeof val === 'function') continue;
+      if (k === 'config') continue;
+      if (
+        isInstance(val, DatabaseSync) ||
+        isInstance(val, StatementSync) ||
+        isInstance(val, Session) ||
+        isInstance(val, SQLTagStore)
+      ) {
+        continue;
+      }
+      state[k] = val;
+    }
+    return state;
+  }
+
   async loadSnapshot(bytes: Uint8Array, mimeType?: string): Promise<void> {
+    if (this.customSnapshot) {
+      await this.customSnapshot.load.call(this.instance, bytes);
+      return;
+    }
+    const applyState = async (json: string): Promise<void> => {
+      let parsed = JSON.parse(json) as Record<string, unknown>;
+      if (this.reg.snapshotStateSchema) {
+        parsed = await validateSnapshotState(this.reg.snapshotStateSchema, parsed);
+      } else {
+        delete parsed.config; // never let a stale snapshot clobber the live config accessor
+      }
+      Object.assign(this.instance, parsed);
+    };
+
     if (mimeType && mimeType.startsWith('multipart/mixed')) {
       const boundary = mimeType.match(/boundary=([^\s;]+)/)?.[1];
       if (!boundary) throw 'multipart/mixed snapshot missing boundary parameter';
       const parts = decodeMultipart(bytes, boundary);
       const statePart = parts.find((p) => p.name === 'state');
       if (!statePart) throw 'multipart snapshot missing "state" part';
-      Object.assign(this.instance, JSON.parse(new TextDecoder().decode(statePart.body)));
+      await applyState(new TextDecoder().decode(statePart.body));
       for (const p of parts) {
         if (!p.name.startsWith('db:')) continue;
         const field = this.instance[p.name.slice(3)];
-        if (field instanceof DatabaseSync) restoreDatabaseSync(field, p.body);
+        if (isInstance(field, DatabaseSync)) restoreDatabaseSync(field, p.body);
       }
       return;
     }
-    Object.assign(this.instance, JSON.parse(new TextDecoder().decode(bytes)));
+    await applyState(new TextDecoder().decode(bytes));
   }
+}
+
+/**
+ * Validate + scope a snapshot state object through the declared Standard Schema.
+ * Undeclared fields (`config`, `getId`, …) are stripped, so only the declared
+ * state is persisted/restored; a shape mismatch throws.
+ */
+/** `val instanceof Ctor`, tolerant of an undefined constructor (e.g. node:sqlite absent). */
+function isInstance(val: unknown, Ctor: unknown): boolean {
+  return typeof Ctor === 'function' && val instanceof (Ctor as new (...args: never[]) => unknown);
+}
+
+async function validateSnapshotState(
+  schema: StandardSchemaV1,
+  value: unknown,
+): Promise<Record<string, unknown>> {
+  let result = schema['~standard'].validate(value);
+  if (result instanceof Promise) result = await result;
+  if (result.issues) {
+    throw `snapshot state does not match its declared schema: ${result.issues
+      .map((i) => i.message)
+      .join('; ')}`;
+  }
+  return result.value as Record<string, unknown>;
 }
 
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
@@ -586,6 +676,7 @@ export function registerAgentInitiator(
           instance,
           impl.methods as Record<string, (...args: unknown[]) => unknown>,
           agentId,
+          impl.snapshot,
         ) as never,
       };
     },
