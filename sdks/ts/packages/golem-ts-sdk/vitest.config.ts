@@ -12,6 +12,10 @@ export default defineConfig({
       'golem:core/types@1.5.0': path.resolve(__dirname, 'types/golem_core_1_5_0_types.d.ts'),
       'golem:api/host@1.5.0': path.resolve(__dirname, 'types/golem_api_1_5_0_host.d.ts'),
       'golem:api/oplog@1.5.0': path.resolve(__dirname, 'types/golem_api_1_5_0_oplog.d.ts'),
+      'golem:durability/durability@1.5.0': path.resolve(
+        __dirname,
+        'types/golem_durability_1_5_0_durability.d.ts',
+      ),
       'golem:api/retry@1.5.0': path.resolve(__dirname, 'types/golem_api_1_5_0_retry.d.ts'),
       'golem:agent/common@1.5.0': path.resolve(__dirname, 'types/golem_agent_1_5_0_common.d.ts'),
       'golem:agent/host@1.5.0': path.resolve(__dirname, 'types/golem_agent_1_5_0_host.d.ts'),

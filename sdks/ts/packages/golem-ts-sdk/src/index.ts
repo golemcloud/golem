@@ -61,6 +61,7 @@ export * from './host/retry';
 export * from './host/result';
 export * from './host/transaction';
 export * from './host/checkpoint';
+export * from './host/durable';
 export { Config, Secret } from './agentConfig';
 export { Path, Duration, Quantity } from './richTypes';
 
