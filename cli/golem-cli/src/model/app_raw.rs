@@ -855,8 +855,7 @@ pub struct GitTagVersionSourceOverride {
     pub static_fallback: Option<String>,
 }
 
-const TAG_PATTERN_REQUIRED: &str =
-    "`tagPattern` is required for git tag mode; set it on the environment override or the application-wide `version`";
+const TAG_PATTERN_REQUIRED: &str = "`tagPattern` is required for git tag mode; set it on the environment override or the application-wide `version`";
 
 impl AppVersionSourceOverride {
     /// Resolve this override against the optional application-wide root.
@@ -869,12 +868,11 @@ impl AppVersionSourceOverride {
 
     fn merge_over(self, root: AppVersionSource) -> Result<AppVersionSource, String> {
         match (self, root) {
-            (
-                AppVersionSourceOverride::Git { git: over },
-                AppVersionSource::Git { git: root },
-            ) => Ok(AppVersionSource::Git {
-                git: over.merge_over(root)?,
-            }),
+            (AppVersionSourceOverride::Git { git: over }, AppVersionSource::Git { git: root }) => {
+                Ok(AppVersionSource::Git {
+                    git: over.merge_over(root)?,
+                })
+            }
             // The override selects a different top-level source: it replaces.
             (over, _) => over.into_source(),
         }

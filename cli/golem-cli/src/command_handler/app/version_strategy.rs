@@ -53,9 +53,7 @@ pub enum ResolvedGitMode {
 impl ResolvedAppVersionSource {
     pub fn from_source(source: AppVersionSource) -> Self {
         match source {
-            AppVersionSource::Git { git } => {
-                ResolvedAppVersionSource::Git(Self::resolve_git(git))
-            }
+            AppVersionSource::Git { git } => ResolvedAppVersionSource::Git(Self::resolve_git(git)),
             AppVersionSource::Static(value) => ResolvedAppVersionSource::Static(value),
             AppVersionSource::Env { env } => ResolvedAppVersionSource::Env(env),
         }
@@ -192,7 +190,9 @@ async fn compute_git_version(
             None if *hash_fallback => git.short_hash().await?,
             None => match &source.static_fallback {
                 Some(value) => {
-                    log_warn(format!("no git tag found; using fallback version '{value}'"));
+                    log_warn(format!(
+                        "no git tag found; using fallback version '{value}'"
+                    ));
                     value.clone()
                 }
                 None => return Err(AppVersionError::NoGitTag),
@@ -226,8 +226,7 @@ struct GitClient {
 
 impl GitClient {
     fn new(working_dir: &Path) -> Result<Self, AppVersionError> {
-        let program =
-            crate::process::which("git").map_err(|_| AppVersionError::GitNotInstalled)?;
+        let program = crate::process::which("git").map_err(|_| AppVersionError::GitNotInstalled)?;
         Ok(Self {
             program,
             working_dir: working_dir.to_path_buf(),
@@ -250,7 +249,9 @@ impl GitClient {
     }
 
     async fn has_head(&self) -> Result<bool, AppVersionError> {
-        let output = self.run(&["rev-parse", "--verify", "--quiet", "HEAD"]).await?;
+        let output = self
+            .run(&["rev-parse", "--verify", "--quiet", "HEAD"])
+            .await?;
         Ok(output.status.success())
     }
 
@@ -281,7 +282,9 @@ impl GitClient {
         }
         let output = self.run(&args).await?;
         if output.status.success() {
-            Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
+            Ok(Some(
+                String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            ))
         } else {
             // HEAD is guaranteed by the caller, so a non-zero exit means no matching tag.
             debug!(
@@ -399,9 +402,7 @@ mod tests {
     #[test]
     fn env_missing_is_an_error() {
         let result = block_on(compute_version(
-            &ResolvedAppVersionSource::Env(
-                "GOLEM_TEST_VERSION_STRATEGY_MISSING_VAR".to_string(),
-            ),
+            &ResolvedAppVersionSource::Env("GOLEM_TEST_VERSION_STRATEGY_MISSING_VAR".to_string()),
             Path::new("."),
         ));
         assert!(matches!(result, Err(AppVersionError::EnvVarMissing(_))));
@@ -422,7 +423,10 @@ mod tests {
     #[test]
     fn from_source_defaults_options() {
         let resolved = ResolvedAppVersionSource::from_source(root_tag("v*", Some("0.0.0")));
-        assert_eq!(resolved, resolved_tag("v*", true, false, false, Some("0.0.0")));
+        assert_eq!(
+            resolved,
+            resolved_tag("v*", true, false, false, Some("0.0.0"))
+        );
     }
 
     #[test]
@@ -460,7 +464,8 @@ mod tests {
         };
         assert_eq!(
             ResolvedAppVersionSource::from_source(
-                over.resolve_over(Some(root_tag("v*", Some("0.0.0")))).unwrap()
+                over.resolve_over(Some(root_tag("v*", Some("0.0.0"))))
+                    .unwrap()
             ),
             resolved_hash(false, None)
         );
@@ -512,10 +517,7 @@ mod tests {
         init_repo(dir.path());
         commit_file(dir.path(), "a.txt", "hello");
 
-        let result = block_on(compute_version(
-            &git_source(false, None),
-            dir.path(),
-        ));
+        let result = block_on(compute_version(&git_source(false, None), dir.path()));
         assert!(matches!(result, Err(AppVersionError::NoGitTag)));
     }
 
@@ -611,14 +613,8 @@ mod tests {
     #[test]
     fn not_a_git_repo_without_fallback_errors() {
         let dir = tempfile::tempdir().unwrap();
-        let result = block_on(compute_version(
-            &git_source(false, None),
-            dir.path(),
-        ));
-        assert!(matches!(
-            result,
-            Err(AppVersionError::NotAGitRepository(_))
-        ));
+        let result = block_on(compute_version(&git_source(false, None), dir.path()));
+        assert!(matches!(result, Err(AppVersionError::NotAGitRepository(_))));
     }
 
     #[test]
