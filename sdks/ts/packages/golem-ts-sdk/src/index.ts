@@ -25,33 +25,19 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
-import { getAgentValidationError } from './decorators/agent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 
-export { BaseAgent } from './baseAgent';
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
-export { description } from './decorators/description';
-export {
-  agent,
-  AgentDecoratorOptions,
-  SnapshottingOption,
-  clearAgentValidationError,
-} from './decorators/agent';
-export { prompt } from './decorators/prompt';
-export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
-export { readonly, ReadOnlyOptions, CachePolicyOption } from './decorators/readOnly';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
 export { Principal } from './principal';
-export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
@@ -62,15 +48,12 @@ export * from './host/result';
 export * from './host/saga';
 export * from './host/checkpoint';
 export * from './host/durable';
-export { Config, Secret } from './agentConfig';
-export { Path, Duration, Quantity } from './richTypes';
 
-// Experimental fluent / config-object authoring surface (issue #3449), built on
-// Standard Schema. Exported from the main entry so it is part of the bundle
-// baked into `agent_guest.wasm` (and thus shares the runtime registries).
-// Unstable; will eventually replace the `@agent()` decorator surface.
-// Re-export the full fluent surface (defineAgent/method, markers `s`, clientFor,
-// the typed host surfaces keyvalue/blobstore/websocket/rdbms, and the `http` helpers).
+// The TypeScript agent authoring surface: `defineAgent` / `method`, the schema
+// markers `s`, `clientFor`, the typed host surfaces (keyvalue / blobstore /
+// websocket / rdbms), and the `http` helpers. Built on Standard Schema and
+// exported from the main entry so it is baked into the bundle injected into
+// `agent_guest.wasm` (sharing the runtime registries).
 export * from './fluent';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
@@ -183,13 +166,8 @@ async function invokeTool(
 
 async function discoverAgentTypes(): Promise<AgentType[]> {
   try {
-    // Check if there were any validation errors during agent registration
-    const validationError = getAgentValidationError();
-    if (validationError) {
-      // Don't return any agent types if there was a validation error
-      throw createCustomError(validationError.message);
-    }
-
+    // The fluent surface validates eagerly (throws during `defineAgent(...)` at
+    // module load), so there is no deferred validation-error gate here.
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
     // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>

@@ -109,4 +109,7 @@ vi.mock('wasi:cli/environment@0.2.3', () => ({
   getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
 }));
 
-await import('./agentsInit');
+// Load the package barrel so its side-effecting imports register the schema
+// walkers (zod / valibot / arktype / effect) for tests that import fluent
+// submodules directly rather than the top-level entry.
+await import('../src');
