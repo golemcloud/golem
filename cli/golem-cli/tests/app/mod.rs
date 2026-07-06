@@ -27,11 +27,16 @@ use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::{Eof, Expect};
+use golem_cli::app::build::task_result_marker::{
+    ExtractComponentMetadataMarkerHash, TaskResultMarker,
+};
 use golem_cli::app::edit;
 use golem_cli::fs;
+use golem_cli::model::app::extracted_component_metadata_path;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::Security;
 use golem_client::api::HealthCheckClient;
+use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
@@ -712,6 +717,82 @@ impl TestContext {
     fn test_data_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         crate_path().join("test-data").join(path)
     }
+}
+
+/// Returns a minimal component file for app planner tests that seed extracted metadata separately.
+///
+/// These tests intentionally pair the placeholder bytes with goldenfile metadata for agent types
+/// that are not present in the component. A future content-based cache key or metadata-vs-wasm
+/// consistency check should update this helper and all callers together.
+fn placeholder_component_wasm(ctx: &TestContext) -> PathBuf {
+    let path = ctx.cwd_path_join("placeholder-component.wasm");
+    if !path.exists() {
+        std::fs::write(&path, wat::parse_str("(component)").unwrap()).unwrap();
+    }
+    path
+}
+
+fn extracted_component_metadata_relative_path(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+) -> PathBuf {
+    let temp_dir = ctx.cwd_path_join("golem-temp");
+    let component_name = ComponentName(component_name.to_string());
+    extracted_component_metadata_path(&temp_dir, &component_name, source_wasm_path)
+        .strip_prefix(ctx.cwd_path())
+        .unwrap()
+        .to_path_buf()
+}
+
+fn extracted_component_metadata_path_hash(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+) -> String {
+    extracted_component_metadata_relative_path(ctx, component_name, source_wasm_path)
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .strip_prefix(&format!("{component_name}-"))
+        .unwrap()
+        .to_string()
+}
+
+/// Seeds extracted metadata through the same path helper the app build uses.
+///
+/// Planner tests intentionally pair placeholder wasm bytes with goldenfile metadata for agent
+/// types that are not present in the component. A future content-based cache key or
+/// metadata-vs-wasm consistency check should update this helper and all callers together.
+fn seed_extracted_metadata(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+    json: &str,
+) -> PathBuf {
+    let path = ctx.cwd_path_join(extracted_component_metadata_relative_path(
+        ctx,
+        component_name,
+        source_wasm_path,
+    ));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write_str(&path, json).unwrap();
+    path
+}
+
+fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
+    let marker_dir = ctx.cwd_path_join("golem-temp/task-results");
+    fs::create_dir_all(&marker_dir).unwrap();
+    let component_name = ComponentName(component_name.to_string());
+    TaskResultMarker::new(
+        &marker_dir,
+        ExtractComponentMetadataMarkerHash {
+            component_name: &component_name,
+        },
+    )
+    .unwrap()
+    .success()
+    .unwrap();
 }
 
 fn check_component_metadata(

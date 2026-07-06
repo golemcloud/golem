@@ -1824,13 +1824,7 @@ impl<'a> Component<'a> {
 
     /// File for storing extracted component metadata (agent types and tools)
     pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
-        self.temp_dir
-            .join("extracted-component-metadata")
-            .join(format!(
-                "{}-{}.json",
-                self.component_name.as_str(),
-                blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
-            ))
+        extracted_component_metadata_path(self.temp_dir, self.component_name, source_wasm_path)
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -1873,6 +1867,18 @@ impl<'a> Component<'a> {
             files: Some(self.layer_properties().files.value().clone()),
         }
     }
+}
+
+pub fn extracted_component_metadata_path(
+    temp_dir: &Path,
+    component_name: &ComponentName,
+    source_wasm_path: &Path,
+) -> PathBuf {
+    temp_dir.join("extracted-component-metadata").join(format!(
+        "{}-{}.json",
+        component_name.as_str(),
+        blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+    ))
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

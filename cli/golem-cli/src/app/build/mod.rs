@@ -104,8 +104,8 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
 
     for request_id in [
         BridgeRequestId::Custom,
-        BridgeRequestId::ManifestGuest,
         BridgeRequestId::ManifestExternal,
+        BridgeRequestId::ManifestGuest,
         BridgeRequestId::Repl,
     ] {
         if !requests.contains(&request_id) {

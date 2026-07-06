@@ -886,6 +886,158 @@ async fn test_rust_tool_guest_bridge_e2e() {
     );
 }
 
+/// End-to-end test for the Rust guest agent bridge: a provider component
+/// defines a real `CounterAgent`, the app manifest lists it under
+/// `dependencies.agents`, and a consumer component calls it through the
+/// generated `counter-agent-guest-client` crate.
+///
+/// The build covers the full pipeline: provider component build -> bundled
+/// component metadata extraction (`discover-agent-types`) -> dependency agent
+/// bridge planning -> guest agent client generation -> consumer compilation and
+/// linking against the generated crate. The deployment and invocation also prove
+/// the generated guest client reaches the worker executor's Wasm RPC path.
+#[test]
+#[timeout("15 minutes")]
+async fn test_rust_agent_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "agent-bridge";
+
+    ctx.start_server().await;
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for component_name in ["agent-bridge:provider", "agent-bridge:consumer"] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                "rust",
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    // Replace the generated app manifest so the consumer depends on the
+    // provider through `dependencies.agents`. The consumer's Cargo.toml below
+    // points at the generated internal guest bridge crate, so `golem build`
+    // fails unless the bridge is generated before the consumer is compiled.
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: agent-bridge
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              agent-bridge:provider:
+                dir: "provider"
+                templates: rust
+              agent-bridge:consumer:
+                dir: "consumer"
+                templates: rust
+                dependencies:
+                  agents:
+                    - agent-bridge:provider/CounterAgent
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! { r#"
+            use counter_agent_guest_client::CounterAgent;
+            use golem_rust::{agent_definition, agent_implementation};
+
+            #[agent_definition]
+            pub trait CounterConsumerAgent {
+                fn new(name: String) -> Self;
+                async fn increment_provider(&self, provider_name: String) -> String;
+            }
+
+            struct CounterConsumerImpl;
+
+            #[agent_implementation]
+            impl CounterConsumerAgent for CounterConsumerImpl {
+                fn new(_name: String) -> Self {
+                    Self
+                }
+
+                async fn increment_provider(&self, provider_name: String) -> String {
+                    let client = match CounterAgent::get(provider_name) {
+                        Ok(client) => client,
+                        Err(error) => return format!("client-error:{error:?}"),
+                    };
+
+                    match client.increment().await {
+                        Ok(value) => format!("ok:{value}"),
+                        Err(error) => format!("invoke-error:{error:?}"),
+                    }
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let consumer_cargo_toml_path = ctx.cwd_path_join("consumer/Cargo.toml");
+    let consumer_cargo_toml = fs::read_to_string(&consumer_cargo_toml_path).unwrap();
+    assert!(consumer_cargo_toml.contains("[dependencies]"));
+    fs::write_str(
+        &consumer_cargo_toml_path,
+        consumer_cargo_toml.replace(
+            "[dependencies]",
+            indoc! { r#"
+                [dependencies]
+                counter-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client" }
+            "# }
+            .trim_end(),
+        ),
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let generated_client_dir =
+        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client");
+    assert!(generated_client_dir.join("Cargo.toml").exists());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let consumer_name = Uuid::new_v4().to_string();
+    let provider_name = Uuid::new_v4().to_string();
+    let agent_constructor = format!("CounterConsumerAgent(\"{consumer_name}\")");
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &agent_constructor,
+            "increment_provider",
+            &format!("\"{provider_name}\""),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let invocation_returned_provider_result = outputs.stdout_contains("ok:1");
+    if !invocation_returned_provider_result {
+        outputs.dump();
+    }
+    assert!(
+        invocation_returned_provider_result,
+        "expected the consumer to return ok:1 through the generated guest client"
+    );
+}
+
 #[test]
 async fn test_ts_counter() {
     let mut ctx = TestContext::new();
