@@ -25,6 +25,12 @@ import {
   AgentId as RawAgentId,
   GetAgents as RawGetAgents,
   AgentAnyFilter,
+  AgentPropertyFilter,
+  FilterComparator,
+  StringFilterComparator,
+  AgentStatus,
+  RevertAgentTarget,
+  OplogIndex,
 } from 'golem:api/host@1.5.0';
 import { ComponentId as RawComponentId } from 'golem:core/types@2.0.0';
 import { ParsedAgentId } from '../agentId';
@@ -174,6 +180,131 @@ export class GetAgents {
     return raw ? raw.map(wrapAgentMetadata) : undefined;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Filter DSL for `getAgents`
+// ---------------------------------------------------------------------------
+
+type FilterNode =
+  | { readonly kind: 'leaf'; readonly node: AgentPropertyFilter }
+  | { readonly kind: 'all'; readonly children: readonly FilterNode[] }
+  | { readonly kind: 'any'; readonly children: readonly FilterNode[] };
+
+/**
+ * Immutable filter for {@link getAgents}. Build leaves with the static
+ * constructors and compose them with `.and(...)` (intersection) / `.or(...)`
+ * (union); {@link toRaw} compiles to the WIT `agent-any-filter`.
+ *
+ * @example
+ * Filter.status('equal', 'idle').and(Filter.name('starts-with', 'worker-'))
+ */
+export class Filter {
+  private constructor(private readonly node: FilterNode) {}
+
+  /** Match by agent name. */
+  static name(comparator: StringFilterComparator, value: string): Filter {
+    return Filter.leaf({ tag: 'name', val: { comparator, value } });
+  }
+  /** Match by agent status. */
+  static status(comparator: FilterComparator, value: AgentStatus): Filter {
+    return Filter.leaf({ tag: 'status', val: { comparator, value } });
+  }
+  /** Match by component version. */
+  static version(comparator: FilterComparator, value: bigint): Filter {
+    return Filter.leaf({ tag: 'version', val: { comparator, value } });
+  }
+  /** Match by creation time (epoch nanos). */
+  static createdAt(comparator: FilterComparator, value: bigint): Filter {
+    return Filter.leaf({ tag: 'created-at', val: { comparator, value } });
+  }
+  /** Match by env-var key/value. */
+  static env(name: string, comparator: StringFilterComparator, value: string): Filter {
+    return Filter.leaf({ tag: 'env', val: { name, comparator, value } });
+  }
+  /** Match by config-var key/value. */
+  static config(name: string, comparator: StringFilterComparator, value: string): Filter {
+    return Filter.leaf({ tag: 'config', val: { name, comparator, value } });
+  }
+
+  private static leaf(node: AgentPropertyFilter): Filter {
+    return new Filter({ kind: 'leaf', node });
+  }
+
+  /** Intersection — both must match. */
+  and(other: Filter): Filter {
+    return new Filter({
+      kind: 'all',
+      children:
+        this.node.kind === 'all' ? [...this.node.children, other.node] : [this.node, other.node],
+    });
+  }
+  /** Union — either may match. */
+  or(other: Filter): Filter {
+    return new Filter({
+      kind: 'any',
+      children:
+        this.node.kind === 'any' ? [...this.node.children, other.node] : [this.node, other.node],
+    });
+  }
+
+  /** Compile to the WIT `agent-any-filter` (disjunctive normal form: OR of ANDs). */
+  toRaw(): AgentAnyFilter {
+    return { filters: toDnf(this.node).map((conj) => ({ filters: conj })) };
+  }
+}
+
+function toDnf(node: FilterNode): AgentPropertyFilter[][] {
+  switch (node.kind) {
+    case 'leaf':
+      return [[node.node]];
+    case 'any': {
+      const out: AgentPropertyFilter[][] = [];
+      for (const child of node.children) for (const conj of toDnf(child)) out.push(conj);
+      return out;
+    }
+    case 'all': {
+      let acc: AgentPropertyFilter[][] = [[]];
+      for (const child of node.children) {
+        const childDnf = toDnf(child);
+        const next: AgentPropertyFilter[][] = [];
+        for (const left of acc) for (const right of childDnf) next.push([...left, ...right]);
+        acc = next;
+      }
+      return acc;
+    }
+  }
+}
+
+/**
+ * Enumerate a component's agents, optionally filtered. Lazily pages through the
+ * host `get-agents` resource, yielding enriched {@link AgentMetadata}. Collect
+ * with `[...getAgents(id, filter)]` or iterate directly.
+ */
+export function* getAgents(
+  componentId: ComponentId,
+  filter?: Filter | AgentAnyFilter,
+  precise = false,
+): Generator<AgentMetadata> {
+  const raw = filter instanceof Filter ? filter.toRaw() : filter;
+  const pager = new GetAgents(componentId, raw, precise);
+  let page = pager.getNext();
+  while (page !== undefined) {
+    yield* page;
+    page = pager.getNext();
+  }
+}
+
+/** Builders for the `revert-agent` target (see {@link revertAgent}). */
+export const RevertTarget = {
+  /** Revert to a specific oplog index (kept as the last retained entry). */
+  toOplogIndex(index: OplogIndex): RevertAgentTarget {
+    return { tag: 'revert-to-oplog-index', val: index };
+  },
+  /** Revert the last N invocations. */
+  lastInvocations(n: number | bigint): RevertAgentTarget {
+    return { tag: 'revert-last-invocations', val: BigInt(n) };
+  },
+} as const;
 
 /**
  * Details about the fork result.
