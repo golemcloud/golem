@@ -73,6 +73,33 @@ object SourceDiscovery {
     ctorTypes: List[String]
   )
 
+  /** One `@arg(...)` annotation on a tool trait method. */
+  final case class ToolArgAnnotation(
+    name: String,
+    aliases: List[String],
+    scope: Option[String],
+    kind: Option[String]
+  )
+
+  /** One method of a discovered `@toolDefinition` trait. */
+  final case class ToolMethod(
+    name: String,
+    params: List[ConstructorParam],
+    returnTypeExpr: String,
+    commandName: Option[String],
+    commandAliases: List[String],
+    args: List[ToolArgAnnotation]
+  )
+
+  /** Discovered `@toolDefinition` trait. */
+  final case class ToolTrait(
+    path: String,
+    pkg: String,
+    name: String,
+    toolName: Option[String],
+    methods: List[ToolMethod]
+  )
+
   /** Discovered top-level object (for companion conflict detection). */
   final case class ExistingObject(path: String, pkg: String, name: String)
 
@@ -80,7 +107,8 @@ object SourceDiscovery {
     traits: Seq[AgentTrait],
     implementations: Seq[AgentImpl],
     objects: Seq[ExistingObject],
-    warnings: Seq[Warning]
+    warnings: Seq[Warning],
+    tools: Seq[ToolTrait] = Nil
   )
 
   /**
@@ -92,6 +120,7 @@ object SourceDiscovery {
     val traits   = List.newBuilder[AgentTrait]
     val impls    = List.newBuilder[AgentImpl]
     val objects  = List.newBuilder[ExistingObject]
+    val tools    = List.newBuilder[ToolTrait]
 
     val parsedTrees: Seq[(SourceInput, Tree)] = sources.flatMap { src =>
       parseSource(src.content) match {
@@ -112,14 +141,15 @@ object SourceDiscovery {
     }
 
     parsedTrees.foreach { case (src, tree) =>
-      collect(tree, "", src.path, warnings, traits, impls, objects, caseClassIndex)
+      collect(tree, "", src.path, warnings, traits, impls, objects, tools, caseClassIndex)
     }
 
     Result(
       traits = traits.result().distinct.sortBy(t => (t.pkg, t.name)),
       implementations = impls.result().distinct.sortBy(ai => (ai.pkg, ai.traitType, ai.implClass)),
       objects = objects.result().distinct.sortBy(o => (o.pkg, o.name)),
-      warnings = warnings.result()
+      warnings = warnings.result(),
+      tools = tools.result().distinct.sortBy(t => (t.pkg, t.name))
     )
   }
 
@@ -147,6 +177,9 @@ object SourceDiscovery {
 
   private def hasAgentImplementation(mods: List[Mod]): Boolean =
     hasAnnotation(mods, "agentImplementation")
+
+  private def hasToolDefinition(mods: List[Mod]): Boolean =
+    hasAnnotation(mods, "toolDefinition")
 
   /** Flatten all annotation arguments from an Init node. */
   private def flattenArgs(init: Init): List[Term] =
@@ -293,6 +326,132 @@ object SourceDiscovery {
       case _ => None
     }.toList
 
+  // ── Tool trait extraction ─────────────────────────────────────────────────
+
+  private def annotationInits(mods: List[Mod], annotName: String): List[Init] =
+    mods.collect {
+      case Mod.Annot(init) if {
+            val full = init.tpe.syntax
+            full == annotName || full.endsWith(s".$annotName")
+          } =>
+        init
+    }
+
+  /** Extract a string literal from a term (plain literal only). */
+  private def stringLit(term: Term): Option[String] =
+    term match {
+      case Lit.String(v) => Some(v)
+      case _             => None
+    }
+
+  /**
+   * Extract string entries from an `Array(...)`/`List(...)`/`Seq(...)` literal.
+   */
+  private def stringArrayTerm(term: Term): List[String] =
+    term match {
+      case apply: Term.Apply =>
+        apply.argClause.values.collect { case Lit.String(v) => v }
+      case _ => Nil
+    }
+
+  private def namedArg(args: List[Term], name: String): Option[Term] =
+    args.collectFirst { case Term.Assign(Term.Name(`name`), value) => value }
+
+  /**
+   * Extract the tool name from `@toolDefinition(name = "x")` /
+   * `@toolDefinition("x")`.
+   */
+  private def extractToolName(mods: List[Mod]): Option[String] =
+    annotationInits(mods, "toolDefinition").headOption.flatMap { init =>
+      val args = flattenArgs(init)
+      namedArg(args, "name")
+        .flatMap(stringLit)
+        .orElse(args.headOption.flatMap(stringLit))
+        .filter(_.nonEmpty)
+    }
+
+  /** Extract `@command(name, aliases)` from a method's modifiers. */
+  private def extractCommand(mods: List[Mod]): (Option[String], List[String]) =
+    annotationInits(mods, "command").headOption match {
+      case None       => (None, Nil)
+      case Some(init) =>
+        val args = flattenArgs(init)
+        val name = namedArg(args, "name")
+          .flatMap(stringLit)
+          .orElse(args.headOption.flatMap(stringLit))
+          .filter(_.nonEmpty)
+        val aliases = namedArg(args, "aliases")
+          .map(stringArrayTerm)
+          .orElse(args.lift(1).map(stringArrayTerm))
+          .getOrElse(Nil)
+        (name, aliases)
+    }
+
+  /**
+   * Extract the `@arg(...)` annotations of a method (surface name, aliases,
+   * scope, kind).
+   */
+  private def extractArgs(mods: List[Mod]): List[ToolArgAnnotation] =
+    annotationInits(mods, "arg").flatMap { init =>
+      val args = flattenArgs(init)
+      val name = namedArg(args, "name")
+        .flatMap(stringLit)
+        .orElse(args.headOption.flatMap(stringLit))
+      name.map { n =>
+        ToolArgAnnotation(
+          name = n,
+          aliases = namedArg(args, "aliases").map(stringArrayTerm).getOrElse(Nil),
+          scope = namedArg(args, "scope").flatMap(stringLit).filter(_.nonEmpty),
+          kind = namedArg(args, "kind").flatMap(stringLit).filter(_.nonEmpty)
+        )
+      }
+    }
+
+  /**
+   * Extract the declared methods of a tool trait with their tool annotations.
+   */
+  private def extractToolMethods(templ: Template): List[ToolMethod] = {
+    def method(
+      name: String,
+      mods: List[Mod],
+      paramss: List[Term.Param],
+      retTpe: Type
+    ): ToolMethod = {
+      val params                 = paramss.flatMap(p => p.decltpe.map(tpe => ConstructorParam(p.name.value, tpe.syntax)))
+      val (commandName, aliases) = extractCommand(mods)
+      ToolMethod(
+        name = name,
+        params = params,
+        returnTypeExpr = retTpe.syntax,
+        commandName = commandName,
+        commandAliases = aliases,
+        args = extractArgs(mods)
+      )
+    }
+
+    templ.stats.flatMap {
+      case d: Decl.Def =>
+        Some(
+          method(
+            d.name.value,
+            d.mods,
+            d.paramClauseGroups.flatMap(_.paramClauses).flatMap(_.values),
+            d.decltpe
+          )
+        )
+      case d: Defn.Def =>
+        d.decltpe.map { retTpe =>
+          method(
+            d.name.value,
+            d.mods,
+            d.paramClauseGroups.flatMap(_.paramClauses).flatMap(_.values),
+            retTpe
+          )
+        }
+      case _ => None
+    }.toList
+  }
+
   // ── AST walking ────────────────────────────────────────────────────────────
 
   private def appendPkg(prefix: String, name: String): String =
@@ -306,19 +465,29 @@ object SourceDiscovery {
     traits: scala.collection.mutable.Builder[AgentTrait, List[AgentTrait]],
     impls: scala.collection.mutable.Builder[AgentImpl, List[AgentImpl]],
     objects: scala.collection.mutable.Builder[ExistingObject, List[ExistingObject]],
+    tools: scala.collection.mutable.Builder[ToolTrait, List[ToolTrait]],
     caseClassIndex: Map[String, (String, Defn.Class)]
   ): Unit =
     tree match {
       case source: Source =>
-        source.stats.foreach(collect(_, pkg, sourcePath, warnings, traits, impls, objects, caseClassIndex))
+        source.stats.foreach(collect(_, pkg, sourcePath, warnings, traits, impls, objects, tools, caseClassIndex))
 
       case pkgNode: Pkg =>
         val nextPkg = appendPkg(pkg, pkgNode.ref.syntax)
-        pkgNode.stats.foreach(collect(_, nextPkg, sourcePath, warnings, traits, impls, objects, caseClassIndex))
+        pkgNode.stats.foreach(collect(_, nextPkg, sourcePath, warnings, traits, impls, objects, tools, caseClassIndex))
 
       case Pkg.Object(_, name, templ) =>
         val nextPkg = appendPkg(pkg, name.value)
-        templ.stats.foreach(collect(_, nextPkg, sourcePath, warnings, traits, impls, objects, caseClassIndex))
+        templ.stats.foreach(collect(_, nextPkg, sourcePath, warnings, traits, impls, objects, tools, caseClassIndex))
+
+      case t: Defn.Trait if hasToolDefinition(t.mods) =>
+        tools += ToolTrait(
+          path = sourcePath,
+          pkg = pkg,
+          name = t.name.value,
+          toolName = extractToolName(t.mods),
+          methods = extractToolMethods(t.templ)
+        )
 
       case t: Defn.Trait if hasAgentDefinition(t.mods) =>
         val typeName           = extractTypeName(t.mods)

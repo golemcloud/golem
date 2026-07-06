@@ -19,7 +19,7 @@ package golem.codegen.pipeline
 import golem.codegen.autoregister.AutoRegisterCodegen
 import golem.codegen.discovery.SourceDiscovery
 import golem.codegen.ir.AgentSurfaceIR
-import golem.codegen.rpc.RpcCodegen
+import golem.codegen.rpc.{RpcCodegen, ToolRpcCodegen}
 
 /**
  * Shared codegen pipeline consumed by both sbt and mill plugins.
@@ -81,11 +81,13 @@ object CodegenPipeline {
     val rpc =
       if (!rpcEnabled) RpcResult(Nil, Nil)
       else {
-        val agents = discoveredToIR(discovered)
-        val result = RpcCodegen.generate(agents, discovered.objects)
+        val agents     = discoveredToIR(discovered)
+        val result     = RpcCodegen.generate(agents, discovered.objects)
+        val toolResult = ToolRpcCodegen.generate(discovered.tools.toList, discovered.objects)
         RpcResult(
-          files = result.files.map(f => GeneratedFile(f.relativePath, f.content)),
-          warnings = result.warnings.map(_.message)
+          files = (result.files.map(f => GeneratedFile(f.relativePath, f.content)) ++
+            toolResult.files.map(f => GeneratedFile(f.relativePath, f.content))),
+          warnings = result.warnings.map(_.message) ++ toolResult.warnings.map(_.message)
         )
       }
 
