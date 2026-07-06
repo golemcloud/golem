@@ -724,12 +724,38 @@ impl TestContext {
 /// These tests intentionally pair the placeholder bytes with goldenfile metadata for agent types
 /// that are not present in the component. A future content-based cache key or metadata-vs-wasm
 /// consistency check should update this helper and all callers together.
+///
+/// The file's modification time is backdated so that metadata files seeded afterwards are
+/// strictly newer than any wasm copied from the placeholder (copies must preserve the
+/// timestamp: use [`copy_placeholder_wasm`] or `cp -p`). The extraction up-to-date check
+/// compares timestamps strictly, so equal timestamps (possible on filesystems with coarse
+/// timestamp granularity) would re-run extraction against the placeholder, which fails
+/// because it exports no agent guest interface.
 fn placeholder_component_wasm(ctx: &TestContext) -> PathBuf {
     let path = ctx.cwd_path_join("placeholder-component.wasm");
     if !path.exists() {
         std::fs::write(&path, wat::parse_str("(component)").unwrap()).unwrap();
+        backdate_mtime(&path);
     }
     path
+}
+
+/// Sets the file's modification time into the past, see [`placeholder_component_wasm`].
+fn backdate_mtime(path: &Path) {
+    let backdated = std::time::SystemTime::now() - Duration::from_secs(24 * 60 * 60);
+    std::fs::File::options()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .set_modified(backdated)
+        .unwrap();
+}
+
+/// Copies the placeholder component wasm keeping its backdated modification time,
+/// see [`placeholder_component_wasm`].
+fn copy_placeholder_wasm(src: impl AsRef<Path>, dst: impl AsRef<Path>) {
+    std::fs::copy(src.as_ref(), dst.as_ref()).unwrap();
+    backdate_mtime(dst.as_ref());
 }
 
 fn extracted_component_metadata_relative_path(
