@@ -4918,6 +4918,14 @@ struct PrivateDurableWorkerState {
     /// dropped unconsumed — mirroring the P2 `end_http_request` span lifecycle.
     pub(crate) open_p3_http_response_spans: HashMap<u32, SpanId>,
 
+    /// Body-transmission wiring of open p3 outgoing HTTP requests, keyed by the request resource
+    /// rep. Registered by the durable `request::new` (which interposes on the guest-facing
+    /// transmission future) and detached by the host call that consumes the request:
+    /// `client::send` records/replays the transmission result durably, while a guest-side
+    /// `consume-body`/`drop` forwards the deterministic value with no recording.
+    pub(crate) pending_p3_http_request_transmissions:
+        HashMap<u32, crate::durable_host::p3::http::PendingHttpRequestBodyTransmission>,
+
     /// WebSocket connection state indexed by websocket resource rep.
     open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
 
@@ -5175,6 +5183,7 @@ impl PrivateDurableWorkerState {
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
             open_p3_http_response_spans: HashMap::new(),
+            pending_p3_http_request_transmissions: HashMap::new(),
             open_websocket_connections: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
             pending_http_outgoing_body_stream: HashMap::new(),

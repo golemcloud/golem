@@ -36,6 +36,13 @@ pub trait HttpClient4 {
     /// Sends a GET request and drops the response without reading its body,
     /// returning only the status code.
     async fn get_and_drop_response(&self) -> String;
+
+    /// Sends a POST via raw wasip3 `wasi:http` whose declared `content-length`
+    /// is larger than the bytes actually written, and returns the request-body
+    /// transmission future's result (together with the send outcome). The
+    /// short body is a deterministic transmission error
+    /// (`HttpRequestBodySize`), which must replay identically.
+    async fn post_with_short_body_transmission_error(&self) -> String;
 }
 
 struct HttpClient4Impl;
@@ -122,6 +129,61 @@ impl HttpClient4 for HttpClient4Impl {
         drop(response);
         format!("{status}")
     }
+
+    async fn post_with_short_body_transmission_error(&self) -> String {
+        do_post_with_short_body_transmission_error().await
+    }
+}
+
+async fn do_post_with_short_body_transmission_error() -> String {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let headers =
+        types::Fields::from_list(&[("content-length".to_string(), b"1024".to_vec())]).unwrap();
+
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+
+    let (send_result, transmit_result, ()) = (
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            // Write fewer bytes than `content-length` declares, then close the
+            // body stream: the mismatch fails the transmission future
+            // deterministically with `HttpRequestBodySize`.
+            let remaining = body_tx.write_all(b"short".to_vec()).await;
+            assert!(remaining.is_empty());
+            let _ = trailers_tx.write(Ok(None)).await;
+            drop(body_tx);
+        },
+    )
+        .join()
+        .await;
+
+    // The send outcome is not asserted by the tests (whether the response head
+    // arrives before the aborted upload is a race), only the transmission
+    // result is; both are durable so both replay deterministically.
+    let send = match send_result {
+        Ok(response) => {
+            let status = response.get_status_code();
+            drop(response);
+            format!("Ok({status})")
+        }
+        Err(err) => format!("Err({err:?})"),
+    };
+    format!("send={send} transmit={transmit_result:?}")
 }
 
 async fn do_post_request() -> String {

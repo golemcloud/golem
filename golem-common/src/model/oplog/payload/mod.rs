@@ -509,6 +509,9 @@ oplog_payload! {
         },
         P3SocketsTcpAcquire {
             result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3HttpClientRequestBodyTransmission {
+            result: Result<(), SerializableHttpErrorCode>
         }
     }
 }
@@ -668,7 +671,8 @@ pub mod host_functions {
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
-        (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk)
+        (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
+        (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission)
     }
 }
 

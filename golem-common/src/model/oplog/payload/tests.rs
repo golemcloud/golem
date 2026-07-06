@@ -35,12 +35,13 @@ use crate::model::oplog::{
     HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
     HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
     HostResponseP3FileSystemStat, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientSendResult,
-    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
-    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
-    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
-    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
+    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
+    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsTcpAcquire,
+    HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
+    HostResponseP3SocketsTcpSend, HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
+    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
+    host_functions,
 };
 use http::Version;
 use iso8601_timestamp as iso_ts;
@@ -417,6 +418,34 @@ fn p3_http_client_consume_body_chunk_host_payload_pairs_roundtrip() {
         HostRequestNoInput {},
         HostResponseP3HttpClientConsumeBodyChunk {
             chunk: SerializableP3HttpBodyChunk::End,
+        },
+    );
+}
+
+#[test]
+fn p3_http_client_request_body_transmission_host_payload_pairs_roundtrip() {
+    // Successful upload: the transmission future resolved `Ok(())`.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientRequestBodyTransmission>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientRequestBodyTransmission { result: Ok(()) },
+    );
+
+    // Mid-body network failure (the G8 case): the transport `ErrorCode`
+    // observed by the live upload round-trips so replay delivers the same
+    // error to the guest instead of `Ok(())`.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientRequestBodyTransmission>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientRequestBodyTransmission {
+            result: Err(SerializableHttpErrorCode::ConnectionTerminated),
+        },
+    );
+
+    // Deterministic body-validation failure with a payload (content-length
+    // mismatch), exercising a payload-carrying error variant.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientRequestBodyTransmission>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientRequestBodyTransmission {
+            result: Err(SerializableHttpErrorCode::HttpRequestBodySize(Some(1024))),
         },
     );
 }

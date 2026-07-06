@@ -53,7 +53,7 @@ use wasmtime_wasi_http::p3::{WasiHttpCtxView, WasiHttpView};
 mod cli;
 mod clocks;
 mod filesystem;
-mod http;
+pub(crate) mod http;
 mod random;
 mod sockets;
 

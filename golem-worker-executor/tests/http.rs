@@ -532,6 +532,96 @@ async fn outgoing_http_response_dropped_without_consuming_body_replays(
     Ok(())
 }
 
+/// G8 regression: the request-body transmission result of a P3 `client::send`
+/// is recorded durably and replays to the guest unchanged. The guest posts a
+/// body shorter than its declared `content-length`, which deterministically
+/// fails the transmission future with `HttpRequestBodySize`; that error must
+/// be observed live (recorded), and the restarted worker must replay the
+/// invocation — including the recorded `body-transmission` entries — and see
+/// the same error again on a fresh live invocation.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_request_body_transmission_error_is_recorded_and_replayed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            // Respond immediately without reading the request body, so the
+            // response head can arrive while the (short) upload is still open.
+            let route = Router::new().route("/", post(|| async { "ok" }));
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_short_body_transmission_error",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert!(
+        result.contains("transmit=Err(ErrorCode::HttpRequestBodySize(Some(5)))"),
+        "the live transmission future must observe the content-length mismatch, got: {result}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart and invoke again: the first invocation — including the recorded
+    // `body-transmission` Start/End — replays fully before the second runs
+    // live. Replay fails with an unexpected-oplog-entry error if the
+    // transmission entries are not claimed at the same positions, and the
+    // replayed guest awaits the transmission future, so it must resolve from
+    // the recorded terminal for the replay to complete at all.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_short_body_transmission_error",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert!(
+        result2.contains("transmit=Err(ErrorCode::HttpRequestBodySize(Some(5)))"),
+        "the post-restart transmission future must observe the same recorded error, got: {result2}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn outgoing_http_contains_idempotency_key(

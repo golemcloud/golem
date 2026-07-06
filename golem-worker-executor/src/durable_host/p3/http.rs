@@ -31,7 +31,8 @@ use futures::future::{Either, select};
 use golem_common::model::RetryContext;
 use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{
-    P3HttpClientConsumeBody, P3HttpClientConsumeBodyChunk, P3HttpClientSend,
+    P3HttpClientConsumeBody, P3HttpClientConsumeBodyChunk, P3HttpClientRequestBodyTransmission,
+    P3HttpClientSend,
 };
 use golem_common::model::oplog::payload::types::{
     SerializableDnsErrorPayload, SerializableFieldSizePayload, SerializableHttpErrorCode,
@@ -43,7 +44,8 @@ use golem_common::model::oplog::payload::types::{
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestP3HttpClientSend,
     HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientSendResult, OplogIndex,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    OplogIndex,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::headers::TraceContextHeaders;
@@ -57,8 +59,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::{mpsc, oneshot};
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, FutureProducer, FutureReader, Resource,
-    StreamProducer, StreamReader, StreamResult,
+    Access, Accessor, AccessorTask, Destination, FutureConsumer, FutureProducer, FutureReader,
+    Resource, Source, StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::TrappableError;
@@ -123,6 +125,27 @@ where
     U: Send + 'static,
     P: DropPolicy,
 {
+    // Detach the request's body-transmission wiring (installed by the durable
+    // `request::new`) *before* anything else: the inner `WasiHttp::send` deletes
+    // the request from the resource table at the start of the call, and reps are
+    // reused after deletion, so leaving the entry keyed by this rep until the
+    // send resolves would let a concurrently created request clobber it. The
+    // wiring is held locally through the arms below; the durable recording of
+    // the transmission result starts after the send terminal is recorded (see
+    // `start_transmission_recording`). On the trap paths it is simply dropped —
+    // the invocation is torn down and the guest future is never polled again.
+    //
+    // `None` here means the request resource was not created through the durable
+    // `request::new` wrapper (e.g. a forwarded incoming request); such a request
+    // has no guest-held transmission future wired through us, so there is
+    // nothing to record — deterministically on both live and replay paths.
+    let pending_transmission = store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        ctx.state
+            .pending_p3_http_request_transmissions
+            .remove(&req.rep())
+    });
+
     // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
     // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
     // no-op during replay and run before any durability machinery so that a
@@ -200,6 +223,10 @@ where
                         // consume-body / drop paths consume the recorded
                         // `FinishSpan` at the same point it was written live.
                         register_response_span::<Ctx, U>(store, &response, span_id);
+                        // Spawns the demand-gated transmission recorder
+                        // at the same point as the live path, so a demanded
+                        // recording's `Start` is claimed where it was appended.
+                        start_transmission_recording::<Ctx, U>(store, pending_transmission);
                         return Ok(response);
                     }
                     Err(error) => {
@@ -208,6 +235,10 @@ where
                         finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span_id)
                             .await
                             .map_err(HttpError::trap)?;
+                        // Spawns the demand-gated transmission recorder
+                        // at the same point as the live path, so a demanded
+                        // recording's `Start` is claimed where it was appended.
+                        start_transmission_recording::<Ctx, U>(store, pending_transmission);
                         return Err(error);
                     }
                 }
@@ -271,6 +302,11 @@ where
             // durable consume-body terminal or an unconsumed drop), mirroring
             // the P2 `end_http_request` span lifecycle.
             register_response_span::<Ctx, U>(store, &response, span_id);
+            // Spawns the demand-gated transmission recorder at a
+            // deterministic point (right after the send `End`, mirrored by the
+            // replay arm above): if the guest reads the transmission future,
+            // the result is recorded here; otherwise no entries are written.
+            start_transmission_recording::<Ctx, U>(store, pending_transmission);
             Ok(response)
         }
         Err(error) => {
@@ -310,6 +346,13 @@ where
                 finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span_id)
                     .await
                     .map_err(HttpError::trap)?;
+                // Spawns the demand-gated transmission recorder at a
+                // deterministic point (right after the send `End` +
+                // `FinishSpan`, mirrored by the replay arm above). The inner
+                // send consumed the request even on failure, so a demanded
+                // transmission result — `Ok(())` from the dropped I/O wiring,
+                // or a deterministic body-validation error — still resolves.
+                start_transmission_recording::<Ctx, U>(store, pending_transmission);
                 Err(error)
             } else {
                 // Trap path: the invocation is torn down and retried from the
@@ -338,6 +381,393 @@ fn register_response_span<Ctx: WorkerCtx, U: Send>(
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         ctx.state.open_p3_http_response_spans.insert(rep, span_id);
     });
+}
+
+/// Resolution delivered to the guest-facing request-body transmission future
+/// (the `FutureReader<Result<(), ErrorCode>>` returned by the durable
+/// `request::new`) once the transmission outcome is known.
+pub(crate) enum HttpTransmissionResolution {
+    /// The transmission terminal: recorded (live), replayed, or — for a request
+    /// consumed without a `client::send` — the deterministic passthrough value.
+    Outcome(Result<(), ErrorCode>),
+    /// A durability failure: the transmission future traps with this message,
+    /// tagged with the failing call scope's trap context.
+    Trap {
+        message: String,
+        trap_context: DurableCallTrapContext,
+    },
+}
+
+/// Durable wiring of a p3 outgoing request's body transmission future,
+/// interposed by the durable `request::new` between the built-in
+/// `WasiHttp` future and the guest.
+///
+/// `raw_rx` carries the *raw* transmission result produced by the built-in
+/// machinery (the request-body I/O result of a live send, a deterministic
+/// body-validation error, the guest-supplied `consume-body` future's value, or
+/// `Ok(())` when the wiring is dropped — mirroring the built-in
+/// sender-dropped-means-success rule). `resolution_tx` resolves the guest-held
+/// future. `demand_rx` fires when the guest actually polls the transmission
+/// future ([`HttpTransmissionFutureProducer`] sends it on the first real
+/// read); the durable recording is gated on it so a guest that never observes
+/// the transmission result writes no oplog entries — see
+/// [`HttpRequestBodyTransmissionTask`].
+///
+/// Registered in `pending_p3_http_request_transmissions` keyed by the request
+/// resource rep, and detached by the host call that consumes the request:
+/// `client::send` records/replays the result durably
+/// ([`HttpRequestBodyTransmissionTask`]), while a guest-side
+/// `consume-body`/`drop` forwards the deterministic raw value with no
+/// recording ([`HttpRequestTransmissionPassthroughTask`]).
+pub(crate) struct PendingHttpRequestBodyTransmission {
+    raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
+    resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
+    demand_rx: oneshot::Receiver<()>,
+}
+
+/// Host-side consumer forwarding the built-in transmission future's value into
+/// the plain `raw_rx` channel of [`PendingHttpRequestBodyTransmission`]
+/// (mirroring the built-in `BodyResultConsumer`), so the durable tasks can
+/// await it without store access.
+struct HttpTransmissionResultForwarder(Option<oneshot::Sender<Result<(), ErrorCode>>>);
+
+impl<U> FutureConsumer<U> for HttpTransmissionResultForwarder
+where
+    U: 'static,
+{
+    type Item = Result<(), ErrorCode>;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        store: StoreContextMut<U>,
+        mut src: Source<'_, Self::Item>,
+        _finish: bool,
+    ) -> Poll<wasmtime::Result<()>> {
+        let mut result = None;
+        src.read(store, &mut result)?;
+        let result = result
+            .ok_or_else(|| wasmtime::Error::msg("transmission result value missing from source"))?;
+        let tx = self.0.take().ok_or_else(|| {
+            wasmtime::Error::msg("transmission result forwarder polled after completion")
+        })?;
+        let _ = tx.send(result);
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// Guest-facing request-body transmission `FutureReader` producer, mirroring
+/// [`HttpTrailersFutureProducer`]: awaits the resolution from the durable (or
+/// passthrough) task and delivers it to the guest.
+///
+/// The first *real* read (a poll that is not an immediate cancellation) sends
+/// a one-shot demand: the durable recording task gates its oplog entries on
+/// it, so entries exist iff the guest observed the transmission result — a
+/// deterministic function of guest behaviour, identical live and on replay.
+struct HttpTransmissionFutureProducer {
+    rx: oneshot::Receiver<HttpTransmissionResolution>,
+    demand_tx: Option<oneshot::Sender<()>>,
+}
+
+impl<U> FutureProducer<U> for HttpTransmissionFutureProducer
+where
+    U: 'static,
+{
+    type Item = Result<(), ErrorCode>;
+
+    fn poll_produce(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _store: StoreContextMut<U>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<Option<Self::Item>>> {
+        let this = self.get_mut();
+        if !finish && let Some(demand_tx) = this.demand_tx.take() {
+            // The send fails silently when the owning task is a
+            // non-recording passthrough (which drops `demand_rx`) or is gone.
+            let _ = demand_tx.send(());
+        }
+        match Pin::new(&mut this.rx).poll(cx) {
+            Poll::Pending if finish => Poll::Ready(Ok(None)),
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(HttpTransmissionResolution::Outcome(result))) => {
+                Poll::Ready(Ok(Some(result)))
+            }
+            // A durability failure occurred before the terminal was recorded: the
+            // transmission future must trap (carrying the failing call scope's
+            // trap context) rather than resolve to a normal error value that
+            // would mask it.
+            Poll::Ready(Ok(HttpTransmissionResolution::Trap {
+                message,
+                trap_context,
+            })) => Poll::Ready(Err(wasmtime::Error::from_anyhow(
+                mark_durable_call_trap_context(anyhow::Error::msg(message), trap_context),
+            ))),
+            // The channel closed without a resolution: the owning task was
+            // dropped before sending. The normal paths always send a resolution
+            // first, so this is a durability failure and must trap.
+            Poll::Ready(Err(_)) => Poll::Ready(Err(wasmtime::Error::msg(
+                "request-body transmission task dropped before resolving",
+            ))),
+        }
+    }
+}
+
+fn serialize_transmission_result(
+    result: &Result<(), ErrorCode>,
+) -> Result<(), SerializableHttpErrorCode> {
+    result.as_ref().map(|_| ()).map_err(serialize_error_code)
+}
+
+fn deserialize_transmission_result(
+    result: Result<(), SerializableHttpErrorCode>,
+) -> Result<(), ErrorCode> {
+    result.map_err(deserialize_error_code)
+}
+
+/// Starts the (demand-gated) durable recording of a sent request's body
+/// transmission result (G8): spawns [`HttpRequestBodyTransmissionTask`] for
+/// the request's transmission wiring. The spawn happens at this deterministic
+/// point — right after the send terminal and its span entries — so that when
+/// the guest demands the result, the task's `Start` append/claim lands at a
+/// stable position relative to the send's own entries. `None` means the
+/// request carried no durable transmission wiring (not created via the
+/// durable `request::new`); nothing is recorded then, identically on both
+/// paths.
+fn start_transmission_recording<Ctx, U>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    pending: Option<PendingHttpRequestBodyTransmission>,
+) where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    if let Some(pending) = pending {
+        store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(pending));
+    }
+}
+
+/// Fail the durable transmission task loudly on a durability-machinery error,
+/// mirroring [`fail_consume_body_task`]: the guest-facing transmission future
+/// is resolved with a [`HttpTransmissionResolution::Trap`] carrying the failing
+/// call scope's trap context, and the task itself returns `Err` (surfaced as a
+/// trap by the runtime).
+fn fail_transmission_task(
+    resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
+    error: wasmtime::Error,
+    trap_context: DurableCallTrapContext,
+) -> wasmtime::Result<()> {
+    let _ = resolution_tx.send(HttpTransmissionResolution::Trap {
+        message: "request-body transmission durable persistence failed".to_string(),
+        trap_context,
+    });
+    Err(error)
+}
+
+/// Durable recorder for a sent request's body transmission result.
+///
+/// The recording is **demand-gated**: the task first parks on `demand_rx` (a
+/// plain oneshot fired by the guest's first real poll of the transmission
+/// future) and touches no durable machinery until then. Oplog entries
+/// therefore exist iff the guest observed the transmission result — a
+/// deterministic function of guest behaviour, identical live and on replay
+/// (a demanding guest re-demands during replay, so the recorded `Start` is
+/// always claimed). This gating is what keeps a fire-and-forget send safe:
+/// `run_concurrent` does not drain spawned tasks (G25/T28), and a task left
+/// parked on replay-cursor machinery when the invocation's event loop exits
+/// would strand the fair cursor lock and deadlock the worker. Parked on the
+/// plain demand channel, an undemanded task is inert.
+///
+/// On demand — live: awaits the raw transmission result (the send's
+/// request-body I/O outcome, fed through [`HttpTransmissionResultForwarder`];
+/// a closed channel means the wiring was dropped, which the built-in
+/// machinery treats as success), records it as the `body-transmission`
+/// `Start`/`End`, and resolves the guest future with the recorded value.
+/// Replay: claims the recorded `Start` and resolves the guest future from the
+/// recorded `End`; an incomplete `Start` re-executes against the raw channel,
+/// which on replay carries [`consume_replayed_request`]'s drain-derived
+/// result (the documented best-effort fallback for a run that crashed before
+/// observing the real outcome).
+///
+/// A guest awaiting the demanded resolution keeps the invocation (and thus
+/// the store's event loop) alive until the `End` is recorded, so a demanded
+/// transmission's entries land before `AgentInvocationFinished`. A guest that
+/// demands, *cancels* the read, and immediately finishes the invocation can
+/// still leave this task parked on the replay cursor past `run_concurrent`
+/// exit — that residual exposure is shared with the other spawned durable
+/// tasks and is resolved by the T28 invocation-end drain.
+struct HttpRequestBodyTransmissionTask<Ctx> {
+    raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
+    resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
+    demand_rx: oneshot::Receiver<()>,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
+    fn new(pending: PendingHttpRequestBodyTransmission) -> Self {
+        Self {
+            raw_rx: pending.raw_rx,
+            resolution_tx: pending.resolution_tx,
+            demand_rx: pending.demand_rx,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpRequestBodyTransmissionTask<Ctx>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+        let Self {
+            raw_rx,
+            resolution_tx,
+            demand_rx,
+            ..
+        } = self;
+
+        // Gate all durable work on the guest's demand. A closed channel means
+        // the guest dropped the transmission future without ever reading it:
+        // nothing to record, nothing to resolve.
+        if demand_rx.await.is_err() {
+            return Ok(());
+        }
+
+        // `ReadRemote` + `LeaveIncompleteOnDrop`: the call only *observes* the
+        // upload outcome (the send itself is the write), so an incomplete
+        // `Start` (crash before the upload result was recorded) safely
+        // re-executes on replay instead of failing the worker.
+        let mut handle = match CallHandle::<
+            P3HttpClientRequestBodyTransmission,
+            LeaveIncompleteOnDrop,
+        >::start_access(
+            accessor,
+            durable_worker_ctx::<Ctx, U>,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadRemote,
+        )
+        .await
+        {
+            Ok(handle) => handle,
+            // No handle exists yet, so there is no call scope to tag the trap
+            // with; drop the resolution sender so a still-polling guest traps
+            // loudly on the closed channel.
+            Err(error) => {
+                drop(resolution_tx);
+                return Err(wasmtime::Error::from(error));
+            }
+        };
+
+        if !handle.is_live() {
+            let trap_context = handle.trap_context();
+            match handle
+                .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
+                .await
+            {
+                Ok(CallReplayOutcome::Replayed(response)) => {
+                    let _ = resolution_tx.send(HttpTransmissionResolution::Outcome(
+                        deserialize_transmission_result(response.result),
+                    ));
+                    return Ok(());
+                }
+                Ok(CallReplayOutcome::Incomplete(live_handle)) => {
+                    handle = live_handle;
+                }
+                Err(error) => {
+                    return fail_transmission_task(
+                        resolution_tx,
+                        wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                            anyhow::Error::from(error),
+                            trap_context,
+                        )),
+                        trap_context,
+                    );
+                }
+            }
+        }
+
+        // Live (or incomplete-replay re-execution): await the raw result and
+        // record it before resolving the guest future, so the guest never
+        // observes a transmission outcome that is not yet durable.
+        let raw = raw_rx.await.unwrap_or(Ok(()));
+        let trap_context = handle.trap_context();
+        match handle
+            .complete_access(
+                accessor,
+                durable_worker_ctx::<Ctx, U>,
+                HostResponseP3HttpClientRequestBodyTransmission {
+                    result: serialize_transmission_result(&raw),
+                },
+            )
+            .await
+        {
+            Ok(response) => {
+                let _ = resolution_tx.send(HttpTransmissionResolution::Outcome(
+                    deserialize_transmission_result(response.result),
+                ));
+                Ok(())
+            }
+            Err(error) => {
+                fail_transmission_task(resolution_tx, wasmtime::Error::from(error), trap_context)
+            }
+        }
+    }
+}
+
+/// Forwards the deterministic raw transmission result to the guest future for
+/// a request consumed *without* a `client::send`: a guest-side `consume-body`
+/// (the value comes from the guest-supplied future) or a request `drop`
+/// (`Ok(())`, matching the built-in sender-dropped rule). No durable entries
+/// are written — the value is a pure function of replayed guest behaviour.
+struct HttpRequestTransmissionPassthroughTask<Ctx> {
+    raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
+    resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx> HttpRequestTransmissionPassthroughTask<Ctx> {
+    fn new(pending: PendingHttpRequestBodyTransmission) -> Self {
+        Self {
+            raw_rx: pending.raw_rx,
+            resolution_tx: pending.resolution_tx,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpRequestTransmissionPassthroughTask<Ctx>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    async fn run(self, _accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+        let result = self.raw_rx.await.unwrap_or(Ok(()));
+        let _ = self
+            .resolution_tx
+            .send(HttpTransmissionResolution::Outcome(result));
+        Ok(())
+    }
+}
+
+/// Detaches the transmission wiring of a request consumed without a
+/// `client::send` (guest-side `consume-body` or `drop`) and spawns the
+/// non-durable passthrough forwarder for it. Must run in the same host call
+/// that deletes the request resource, before the delete, so a reused rep can
+/// never alias a stale entry.
+fn detach_request_transmission_passthrough<Ctx: WorkerCtx, U: Send + 'static>(
+    store: &mut Access<U, DurableP3<Ctx>>,
+    request_rep: u32,
+) {
+    let pending = {
+        let mut store_ctx = store.as_context_mut();
+        let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
+        ctx.state
+            .pending_p3_http_request_transmissions
+            .remove(&request_rep)
+    };
+    if let Some(pending) = pending {
+        store.spawn(HttpRequestTransmissionPassthroughTask::<Ctx>::new(pending));
+    }
 }
 
 /// Renders the request URI of a serialized outgoing p3 HTTP request the same
@@ -521,24 +951,24 @@ fn borrow_resource<T: 'static>(resource: &Resource<T>) -> Resource<T> {
 /// finishing its request-body upload.
 ///
 /// The drain's `ErrorCode` is not the `client::send` result — the recorded
-/// response head is the authoritative `client::send` outcome — but it *is* the
-/// guest-held request-body transmission result. Live `WasiHttp::send` wires the
+/// response head is the authoritative `client::send` outcome — but it feeds the
+/// guest-held request-body transmission chain. Live `WasiHttp::send` wires the
 /// transmission future to its request I/O result; on replay we wire it to the
-/// drain result via a `oneshot` channel so a deterministic outgoing-body
-/// failure (e.g. a guest trailers future that resolves to an `ErrorCode`, with
-/// no `content-length` validation wrapper to surface it) replays to the guest
-/// instead of an unconditional `Ok(())`.
+/// drain result via a `oneshot` channel, which flows into the `raw_rx` channel
+/// of the request's [`PendingHttpRequestBodyTransmission`] wiring.
 ///
-/// This drain-derived result is a best-effort *interim*: the transmission
-/// result is not recorded, and it is genuinely non-deterministic on live (it
-/// depends on whether/how far the network read the body, which the recorded
-/// `client::send` success/error does not capture). So replay can diverge from a
-/// particular live run in either direction — a live transport error that
-/// dropped the body unread resolves `Ok(())` whereas the replay drain surfaces
-/// a body-validation error, and a non-deterministic mid-body network error
-/// cannot be reproduced and replays as `Ok(())`. Recording the transmission
-/// result itself is the follow-up that closes this gap; item #8 stays blocked
-/// on it (see `request_body_transmission_result_depends_on_unrecorded_body_read`).
+/// The drain result is normally *not* what the guest sees: the guest-facing
+/// transmission future resolves from the **recorded** `body-transmission`
+/// terminal (see [`HttpRequestBodyTransmissionTask`]), so a live
+/// mid-body network failure replays exactly instead of as `Ok(())`. The
+/// drain-derived value is the documented best-effort fallback used only when
+/// the recorded terminal is missing (the original run crashed after the send
+/// `End` but before the upload result was observed): the incomplete
+/// `body-transmission` `Start` re-executes against the drain result — which
+/// still surfaces deterministic outgoing-body failures such as a
+/// `content-length` mismatch or a guest trailers future resolving to an
+/// `ErrorCode` (see
+/// `request_body_transmission_result_depends_on_unrecorded_body_read`).
 async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
     req: Resource<Request>,
@@ -1166,10 +1596,51 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
             "http::types::request",
             "new",
         );
-        let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
-        <WasiHttp as types::HostRequestWithStore<U>>::new(
-            store, headers, contents, trailers, options,
-        )
+        let (req, inner_transmission) = {
+            let http_store =
+                Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
+            <WasiHttp as types::HostRequestWithStore<U>>::new(
+                http_store, headers, contents, trailers, options,
+            )?
+        };
+
+        // Interpose on the request-body transmission future: the guest gets our
+        // own `FutureReader` and the built-in one is piped into a plain channel.
+        // The host call that later consumes the request decides how the guest
+        // future resolves: `client::send` records/replays the (otherwise
+        // non-deterministic) result durably, while a guest-side
+        // `consume-body`/`drop` forwards the deterministic raw value as-is.
+        let (raw_tx, raw_rx) = oneshot::channel();
+        inner_transmission.pipe(
+            store.as_context_mut(),
+            HttpTransmissionResultForwarder(Some(raw_tx)),
+        )?;
+        let (resolution_tx, resolution_rx) = oneshot::channel();
+        let (demand_tx, demand_rx) = oneshot::channel();
+        let transmission = FutureReader::new(
+            &mut store,
+            HttpTransmissionFutureProducer {
+                rx: resolution_rx,
+                demand_tx: Some(demand_tx),
+            },
+        )?;
+
+        // Register the wiring only after every fallible construction succeeded
+        // (a failure above traps and tears the store down, so no partial state
+        // survives).
+        {
+            let mut store_ctx = store.as_context_mut();
+            let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
+            ctx.state.pending_p3_http_request_transmissions.insert(
+                req.rep(),
+                PendingHttpRequestBodyTransmission {
+                    raw_rx,
+                    resolution_tx,
+                    demand_rx,
+                },
+            );
+        }
+        Ok((req, transmission))
     }
 
     fn consume_body(
@@ -1185,6 +1656,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
             "http::types::request",
             "consume-body",
         );
+        detach_request_transmission_passthrough::<Ctx, U>(&mut store, req.rep());
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostRequestWithStore<U>>::consume_body(store, req, fut)
     }
@@ -1195,6 +1667,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
             "http::types::request",
             "drop",
         );
+        detach_request_transmission_passthrough::<Ctx, U>(&mut store, req.rep());
         let store = Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
         <WasiHttp as types::HostRequestWithStore<U>>::drop(store, req)
     }
@@ -2670,6 +3143,180 @@ mod tests {
                 Err(ErrorCode::HttpProtocolError)
             ),
             "replay consume must propagate deterministic body errors to the request body transmission future, got {replay_transmission_result:?}"
+        );
+    }
+
+    /// The recorded `body-transmission` terminal must replay unchanged: the
+    /// serializable transmission result round-trips through the live p3
+    /// `ErrorCode` for every error variant (and the success case).
+    #[test]
+    fn transmission_result_conversion_roundtrips() {
+        let mut cases: Vec<Result<(), SerializableHttpErrorCode>> = vec![Ok(())];
+        cases.extend(all_serializable_error_codes().into_iter().map(Err));
+        for case in cases {
+            let roundtripped =
+                serialize_transmission_result(&deserialize_transmission_result(case.clone()));
+            assert_eq!(roundtripped, case);
+        }
+    }
+
+    /// The guest-facing transmission future must deliver the resolved outcome
+    /// (here: the recorded/replayed transmission error) and stay pending until
+    /// the owning task resolves it. Its first real poll must fire the one-shot
+    /// demand that gates the durable recording, exactly once.
+    #[test]
+    fn transmission_future_producer_delivers_outcome_and_demands_once() {
+        let engine = Engine::default();
+        let mut store = Store::new(&engine, TestHttpCtx::default());
+        let (tx, rx) = oneshot::channel();
+        let (demand_tx, mut demand_rx) = oneshot::channel();
+        let mut producer = HttpTransmissionFutureProducer {
+            rx,
+            demand_tx: Some(demand_tx),
+        };
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+
+        assert!(matches!(
+            Pin::new(&mut producer).poll_produce(&mut cx, store.as_context_mut(), false),
+            Poll::Pending
+        ));
+        assert!(
+            demand_rx.try_recv().is_ok(),
+            "the first real poll must fire the recording demand"
+        );
+
+        assert!(
+            tx.send(HttpTransmissionResolution::Outcome(Err(
+                ErrorCode::ConnectionTerminated
+            )))
+            .is_ok()
+        );
+        let produced = Pin::new(&mut producer).poll_produce(&mut cx, store.as_context_mut(), false);
+        assert!(
+            matches!(
+                produced,
+                Poll::Ready(Ok(Some(Err(ErrorCode::ConnectionTerminated))))
+            ),
+            "producer must deliver the resolved transmission outcome"
+        );
+        assert!(
+            producer.demand_tx.is_none(),
+            "the demand must fire exactly once"
+        );
+    }
+
+    /// A cancellation-only poll (`finish == true` while pending) must not fire
+    /// the recording demand: a guest that never really reads the transmission
+    /// future must leave no durable trace.
+    #[test]
+    fn transmission_future_producer_does_not_demand_on_cancellation() {
+        let engine = Engine::default();
+        let mut store = Store::new(&engine, TestHttpCtx::default());
+        let (_tx, rx) = oneshot::channel();
+        let (demand_tx, mut demand_rx) = oneshot::channel::<()>();
+        let mut producer = HttpTransmissionFutureProducer {
+            rx,
+            demand_tx: Some(demand_tx),
+        };
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+
+        let produced = Pin::new(&mut producer).poll_produce(&mut cx, store.as_context_mut(), true);
+        assert!(matches!(produced, Poll::Ready(Ok(None))));
+        assert!(
+            matches!(
+                demand_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "a cancellation-only poll must not fire the recording demand"
+        );
+        assert!(producer.demand_tx.is_some());
+    }
+
+    /// A durability failure (a `Trap` resolution, or the resolution channel
+    /// closing without a resolution) must trap the guest-facing transmission
+    /// future rather than resolve it to a normal value that would mask the
+    /// failure.
+    #[test]
+    fn transmission_future_producer_traps_on_durability_failure() {
+        let engine = Engine::default();
+        let mut store = Store::new(&engine, TestHttpCtx::default());
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+
+        let (trap_tx, trap_rx) = oneshot::channel();
+        let mut trap_producer = HttpTransmissionFutureProducer {
+            rx: trap_rx,
+            demand_tx: None,
+        };
+        assert!(
+            trap_tx
+                .send(HttpTransmissionResolution::Trap {
+                    message: "request-body transmission durable persistence failed".to_string(),
+                    trap_context: DurableCallTrapContext {
+                        retry_from: OplogIndex::INITIAL,
+                        in_atomic_region: false,
+                    },
+                })
+                .is_ok()
+        );
+        assert!(
+            matches!(
+                Pin::new(&mut trap_producer).poll_produce(&mut cx, store.as_context_mut(), false),
+                Poll::Ready(Err(_))
+            ),
+            "a Trap resolution must trap the transmission future"
+        );
+
+        let (closed_tx, closed_rx) = oneshot::channel::<HttpTransmissionResolution>();
+        drop(closed_tx);
+        let mut closed_producer = HttpTransmissionFutureProducer {
+            rx: closed_rx,
+            demand_tx: None,
+        };
+        assert!(
+            matches!(
+                Pin::new(&mut closed_producer).poll_produce(&mut cx, store.as_context_mut(), false),
+                Poll::Ready(Err(_))
+            ),
+            "a resolution channel closed without a resolution must trap the transmission future"
+        );
+    }
+
+    /// The interposition installed by the durable `request::new` pipes the
+    /// built-in transmission `FutureReader` into a plain channel via
+    /// [`HttpTransmissionResultForwarder`]; the piped value must arrive on the
+    /// raw channel so the durable/passthrough tasks can await it without store
+    /// access. The pipe transfer only runs while the store's event loop is
+    /// driven, so the receive happens inside `run_concurrent`.
+    #[test]
+    #[timeout("10s")]
+    async fn transmission_result_forwarder_forwards_piped_value() {
+        let mut config = wasmtime::Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, TestHttpCtx::default());
+
+        let (raw_tx, raw_rx) = oneshot::channel();
+        let raw = store
+            .run_concurrent(
+                async move |accessor| -> wasmtime::Result<Result<(), ErrorCode>> {
+                    accessor.with(|mut store| -> wasmtime::Result<()> {
+                        let reader = FutureReader::new(&mut store, async {
+                            Ok::<Result<(), ErrorCode>, wasmtime::Error>(Err(
+                                ErrorCode::ConnectionTerminated,
+                            ))
+                        })?;
+                        reader.pipe(&mut store, HttpTransmissionResultForwarder(Some(raw_tx)))
+                    })?;
+                    Ok(raw_rx.await.unwrap_or(Ok(())))
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            matches!(raw, Err(ErrorCode::ConnectionTerminated)),
+            "the piped transmission result must arrive on the raw channel, got {raw:?}"
         );
     }
 }
