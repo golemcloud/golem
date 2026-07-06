@@ -17,50 +17,35 @@ use crate::app::context::BuildContext;
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use golem_common::model::component::ComponentName;
 
-pub async fn build_components(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let component_names = ctx
-        .application_context()
-        .selected_component_names()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    build_selected_components(ctx, &component_names).await
-}
-
-pub async fn build_selected_components(
+pub async fn build_components(
     ctx: &BuildContext<'_>,
-    component_names: &[ComponentName],
+    component_name: &ComponentName,
 ) -> anyhow::Result<()> {
-    log_action("Building", "components");
+    let build_commands = ctx
+        .application()
+        .component(component_name)
+        .build_commands()
+        .clone();
+
+    if build_commands.is_empty() {
+        log_warn_action(
+            "Skipping",
+            format!(
+                "building {}, no build steps",
+                component_name.as_str().log_color_highlight(),
+            ),
+        );
+        return Ok(());
+    }
+
+    log_action(
+        "Building",
+        format!("{}", component_name.as_str().log_color_highlight()),
+    );
     let _indent = LogIndent::new();
 
-    for component_name in component_names {
-        let build_commands = ctx
-            .application()
-            .component(component_name)
-            .build_commands()
-            .clone();
-
-        if build_commands.is_empty() {
-            log_warn_action(
-                "Skipping",
-                format!(
-                    "building {}, no build steps",
-                    component_name.as_str().log_color_highlight(),
-                ),
-            );
-            continue;
-        }
-
-        log_action(
-            "Building",
-            format!("{}", component_name.as_str().log_color_highlight()),
-        );
-        let _indent = LogIndent::new();
-
-        for build_step in build_commands {
-            execute_build_command(ctx, component_name, &build_step).await?;
-        }
+    for build_step in build_commands {
+        execute_build_command(ctx, component_name, &build_step).await?;
     }
 
     Ok(())

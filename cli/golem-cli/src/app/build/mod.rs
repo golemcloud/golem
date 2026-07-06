@@ -15,7 +15,7 @@
 use self::check::check_build_tool_requirements;
 use self::extract_component_metadata::extract_and_store_component_metadata;
 use crate::app::build::add_metadata::add_metadata_to_components;
-use crate::app::build::componentize::build_selected_components;
+use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::{
     BridgeGenerationPlan, gen_bridge_sdk_targets, plan_custom_bridge_generation,
     plan_dependency_guest_bridge_generation_for_components_lenient,
@@ -27,7 +27,7 @@ use crate::app::build::gen_bridge::{
 use crate::app::context::BuildContext;
 use crate::bridge_gen::BridgeMode;
 use crate::error::NonSuccessfulExit;
-use crate::log::{LogColorize, log_error, logln};
+use crate::log::{LogColorize, LogIndent, log_action, log_error, logln};
 use crate::model::GuestLanguage;
 use crate::model::app::{
     AppBuildStep, BridgeSdkTarget, ComponentDependency, CustomBridgeSdkTarget,
@@ -186,6 +186,16 @@ async fn build_components_with_dependency_ordering(
     built_components: &mut BTreeSet<ComponentName>,
     available_guest_bridge_dependencies: &mut BTreeSet<ComponentDependency>,
 ) -> anyhow::Result<()> {
+    let _indent = if ctx.should_run_step(AppBuildStep::Build) {
+        log_action("Building", "components");
+        Some(LogIndent::new())
+    } else if ctx.should_run_step(AppBuildStep::AddMetadata) {
+        log_action("Adding", "metadata to components");
+        Some(LogIndent::new())
+    } else {
+        None
+    };
+
     while !pending_components.is_empty() {
         let mut made_progress = false;
 
@@ -215,12 +225,11 @@ async fn build_components_with_dependency_ordering(
             .collect::<Vec<_>>();
 
         for component_name in buildable_components {
-            let component_names = [component_name.clone()];
             if ctx.should_run_step(AppBuildStep::Build) {
-                build_selected_components(ctx, &component_names).await?;
+                build_components(ctx, &component_name).await?;
             }
             if ctx.should_run_step(AppBuildStep::AddMetadata) {
-                add_metadata_to_components(ctx, &component_names).await?;
+                add_metadata_to_components(ctx, &component_name).await?;
             }
 
             pending_components.remove(&component_name);

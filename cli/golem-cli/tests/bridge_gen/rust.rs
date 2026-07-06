@@ -19,7 +19,7 @@ use crate::bridge_gen::fixtures::{
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::Utf8Path;
 use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
-use golem_cli::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::{AgentTypeSchema, SchemaType};
@@ -116,7 +116,10 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
         AgentMode::Ephemeral,
     );
     agent_type.constructor.name = Some("EphemeralConfigAgent".to_string());
-    let package_dir = target_dir.join(bridge_client_directory_name(&agent_type.type_name));
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
     let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();
 
@@ -137,7 +140,10 @@ fn bridge_rust_external_consumer_can_configure_with_only_generated_dependency() 
         vec![],
         AgentMode::Durable,
     );
-    let package_dir = target_dir.join(bridge_client_directory_name(&agent_type.type_name));
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
     let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();
 
@@ -221,7 +227,10 @@ fn test_type_naming_ts_foo_agent_for_rust_bridge() {
 }
 
 fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
-    let package_dir = target_dir.join(bridge_client_directory_name(&agent_type.type_name));
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
     let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();
 

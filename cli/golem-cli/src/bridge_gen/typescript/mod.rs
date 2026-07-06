@@ -25,7 +25,7 @@ use crate::bridge_gen::typescript::javascript::escape_js_ident;
 use crate::bridge_gen::typescript::ts_writer::{
     FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter, indent,
 };
-use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
@@ -2296,7 +2296,7 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn library_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name)
+        bridge_client_directory_name(&self.agent_type.type_name, BridgeMode::External)
     }
 
     fn global_config_var_name(&self) -> String {

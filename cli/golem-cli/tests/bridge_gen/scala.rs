@@ -24,7 +24,7 @@ use golem_cli::bridge_gen::scala::scala::{
 use golem_cli::bridge_gen::scala::type_name::RemappedType;
 use golem_cli::bridge_gen::scala::{ScalaBridgeGenerator, ScalaTypeName};
 use golem_cli::bridge_gen::type_naming::{TypeName, TypeNaming};
-use golem_cli::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::{AgentTypeSchema, ResultSpec, SchemaType, TypeId};
 use tempfile::TempDir;
@@ -37,7 +37,8 @@ struct GeneratedPackage {
 
 impl GeneratedPackage {
     pub fn new(agent_type: AgentTypeSchema) -> Self {
-        let package_name = bridge_client_directory_name(&agent_type.type_name);
+        let package_name =
+            bridge_client_directory_name(&agent_type.type_name, BridgeMode::External);
         let dir = TempDir::new().unwrap();
         let target_dir = Utf8Path::from_path(dir.path()).unwrap();
         let package_dir = target_dir.join(&package_name);

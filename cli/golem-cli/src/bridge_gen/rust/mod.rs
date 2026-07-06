@@ -25,10 +25,7 @@
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::rust::rust::{is_valid_rust_ident, to_rust_ident};
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
-use crate::bridge_gen::{
-    BridgeGenerator, BridgeMode, bridge_client_directory_name,
-    bridge_client_directory_name_for_mode,
-};
+use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::{anyhow, bail};
@@ -2764,9 +2761,11 @@ impl RustBridgeGenerator {
         mode: RustBridgeMode,
     ) -> String {
         match mode {
-            RustBridgeMode::ExternalRest => bridge_client_directory_name(agent_type_name),
+            RustBridgeMode::ExternalRest => {
+                bridge_client_directory_name(agent_type_name, BridgeMode::External)
+            }
             RustBridgeMode::GuestWasmRpc => {
-                bridge_client_directory_name_for_mode(agent_type_name, BridgeMode::Guest)
+                bridge_client_directory_name(agent_type_name, BridgeMode::Guest)
             }
         }
     }

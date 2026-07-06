@@ -16,7 +16,7 @@ use crate::app::build::extract_component_metadata::extract_and_store_agent_types
 use crate::app::build::task_result_marker::GenerateBridgeReplMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
-use crate::bridge_gen::bridge_client_directory_name;
+use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
 use crate::command_handler::Handlers;
 use crate::command_handler::repl::load_repl_metadata;
 use crate::command_handler::repl::supervisor::{ReplCommandSpec, reload_channel, run_repl_session};
@@ -222,7 +222,7 @@ impl TypeScriptRepl {
                 format!(
                     "{}/{}",
                     relative_bridge_sdk_unix_path,
-                    bridge_client_directory_name(agent_type_name)
+                    bridge_client_directory_name(agent_type_name, BridgeMode::External)
                 )
             })
             .collect::<Vec<_>>();
@@ -230,7 +230,12 @@ impl TypeScriptRepl {
         let dependencies = repl_metadata
             .agents
             .keys()
-            .map(|agent_type_name| (bridge_client_directory_name(agent_type_name), "*"))
+            .map(|agent_type_name| {
+                (
+                    bridge_client_directory_name(agent_type_name, BridgeMode::External),
+                    "*",
+                )
+            })
             .collect::<BTreeMap<_, _>>();
 
         let package_json = json!({
@@ -295,7 +300,8 @@ impl TypeScriptRepl {
             .agents
             .iter()
             .map(|(agent_type_name, agent_metadata)| {
-                let client_package_name = bridge_client_directory_name(agent_type_name);
+                let client_package_name =
+                    bridge_client_directory_name(agent_type_name, BridgeMode::External);
                 let client_package_imported_name = client_package_name.to_lower_camel_case();
                 let mode = match agent_metadata.mode {
                     AgentMode::Durable => "durable",

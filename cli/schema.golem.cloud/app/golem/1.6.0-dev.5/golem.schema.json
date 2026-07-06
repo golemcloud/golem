@@ -163,22 +163,22 @@
       }
     },
     "componentDependencies": {
-      "description": "Guest bridge dependencies required by a component.",
+      "description": "Provider-qualified guest bridge dependencies required by a component.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "agents": {
-          "description": "Agent type names whose guest bridge SDKs are required before this component is built.",
+          "description": "Agent guest bridge dependencies. Each entry identifies both provider component and agent type, either as 'component/name' or as { component, name }.",
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/componentDependencyReference"
           }
         },
         "tools": {
-          "description": "Tool names whose guest bridge SDKs are required before this component is built.",
+          "description": "Tool guest bridge dependencies. Each entry identifies both provider component and tool name, either as 'component/name' or as { component, name }.",
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/componentDependencyReference"
           }
         }
       }
@@ -200,7 +200,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -303,7 +303,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -442,7 +442,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -544,7 +544,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Guest bridge dependencies required by this component. Agent entries are agent type names; tool entries are tool names.",
+          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -1309,7 +1309,7 @@
         },
         "internal": {
           "description": "Internal bridge SDK configuration for use inside Golem components",
-          "$ref": "#/definitions/bridgeSdkModeTargets"
+          "$ref": "#/definitions/bridgeSdkInternalTargets"
         }
       }
     },
@@ -1328,8 +1328,8 @@
         }
       }
     },
-    "bridgeSdkModeTargets": {
-      "description": "Bridge SDK mode targets",
+    "bridgeSdkInternalTargets": {
+      "description": "Internal bridge SDK targets",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -2108,6 +2108,33 @@
         "day",
         "month",
         "year"
+      ]
+    },
+    "componentDependencyReference": {
+      "description": "A guest bridge dependency reference. Use the shortcut 'component/name' form, or an object with explicit component and name fields.",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^.+/.+$"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "component",
+            "name"
+          ],
+          "properties": {
+            "component": {
+              "type": "string",
+              "description": "Provider component name."
+            },
+            "name": {
+              "type": "string",
+              "description": "Agent type or tool name provided by the component."
+            }
+          }
+        }
       ]
     }
   }

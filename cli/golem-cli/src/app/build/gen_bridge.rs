@@ -284,7 +284,10 @@ pub(crate) async fn collect_custom_targets_lenient(
                 .output_dir
                 .as_ref()
                 .map(|output_dir| {
-                    output_dir.join(bridge_client_directory_name(&agent_type.type_name))
+                    output_dir.join(bridge_client_directory_name(
+                        &agent_type.type_name,
+                        BridgeMode::External,
+                    ))
                 })
                 .unwrap_or_else(|| {
                     ctx.application().bridge_sdk_dir(
@@ -735,7 +738,10 @@ async fn collect_custom_targets(
                 .output_dir
                 .as_ref()
                 .map(|output_dir| {
-                    output_dir.join(bridge_client_directory_name(&agent_type.type_name))
+                    output_dir.join(bridge_client_directory_name(
+                        &agent_type.type_name,
+                        BridgeMode::External,
+                    ))
                 })
                 .unwrap_or_else(|| {
                     ctx.application().bridge_sdk_dir(

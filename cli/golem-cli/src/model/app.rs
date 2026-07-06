@@ -14,8 +14,7 @@
 
 use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use crate::bridge_gen::{
-    BridgeMode, bridge_client_directory_name, bridge_client_directory_name_for_mode,
-    tool_bridge_client_directory_name,
+    BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
 use crate::fs;
 use crate::log::LogColorize;
@@ -939,19 +938,14 @@ impl Application {
                 .bridge_sdks
                 .source
                 .join(output_dir)
-                .join(bridge_client_directory_name_for_mode(agent_type_name, mode)),
+                .join(bridge_client_directory_name(agent_type_name, mode)),
             None => match mode {
-                BridgeMode::External => self
-                    .temp_dir()
-                    .join("bridge-sdk")
-                    .join(language.id())
-                    .join(bridge_client_directory_name(agent_type_name)),
-                BridgeMode::Guest => self
-                    .temp_dir()
-                    .join("bridge-sdk")
-                    .join(language.id())
-                    .join(mode.id())
-                    .join(bridge_client_directory_name_for_mode(agent_type_name, mode)),
+                BridgeMode::External => {
+                    self.temp_dir().join("bridge-sdk").join(language.id()).join(
+                        bridge_client_directory_name(agent_type_name, BridgeMode::External),
+                    )
+                }
+                BridgeMode::Guest => self.dependency_bridge_sdk_dir(agent_type_name, language),
             },
         }
     }
@@ -965,10 +959,17 @@ impl Application {
             .join("bridge-sdk")
             .join(language.id())
             .join(BridgeMode::Guest.id())
-            .join(bridge_client_directory_name_for_mode(
+            .join(bridge_client_directory_name(
                 agent_type_name,
                 BridgeMode::Guest,
             ))
+    }
+
+    fn dependency_tool_bridge_sdk_dir_base(&self, language: GuestLanguage) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(BridgeMode::Guest.id())
     }
 
     pub fn tool_bridge_sdk_dir(&self, tool_name: &str, language: GuestLanguage) -> PathBuf {
@@ -985,12 +986,7 @@ impl Application {
                 .source
                 .join(output_dir)
                 .join(tool_bridge_client_directory_name(tool_name)),
-            None => self
-                .temp_dir()
-                .join("bridge-sdk")
-                .join(language.id())
-                .join(BridgeMode::Guest.id())
-                .join(tool_bridge_client_directory_name(tool_name)),
+            None => self.dependency_tool_bridge_sdk_dir(tool_name, language),
         }
     }
 
@@ -999,10 +995,7 @@ impl Application {
         tool_name: &str,
         language: GuestLanguage,
     ) -> PathBuf {
-        self.temp_dir()
-            .join("bridge-sdk")
-            .join(language.id())
-            .join(BridgeMode::Guest.id())
+        self.dependency_tool_bridge_sdk_dir_base(language)
             .join(tool_bridge_client_directory_name(tool_name))
     }
 
@@ -3914,9 +3907,7 @@ mod app_builder {
 
 #[cfg(test)]
 mod test {
-    use crate::bridge_gen::{
-        BridgeMode, bridge_client_directory_name, bridge_client_directory_name_for_mode,
-    };
+    use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
     use crate::fs;
     use crate::model::app::{
         Application, ApplicationPreload, ComponentDependency, ComponentPresetSelector, ToolName,
@@ -4290,7 +4281,10 @@ mod test {
             app_tmp_dir
                 .path()
                 .join("bridge-sdk/rust")
-                .join(bridge_client_directory_name(&alpha_agent))
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::External
+                ))
         );
         assert_eq!(
             app.bridge_sdk_dir(
@@ -4301,7 +4295,10 @@ mod test {
             app_tmp_dir
                 .path()
                 .join("bridge-sdk/rust")
-                .join(bridge_client_directory_name(&beta_agent))
+                .join(bridge_client_directory_name(
+                    &beta_agent,
+                    BridgeMode::External
+                ))
         );
     }
 
@@ -4340,7 +4337,10 @@ mod test {
             app.temp_dir()
                 .join("bridge-sdk")
                 .join("rust")
-                .join(bridge_client_directory_name(&alpha_agent))
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::External
+                ))
         );
         assert_eq!(
             app.bridge_sdk_dir(
@@ -4352,7 +4352,7 @@ mod test {
                 .join("bridge-sdk")
                 .join("rust")
                 .join("internal")
-                .join(bridge_client_directory_name_for_mode(
+                .join(bridge_client_directory_name(
                     &alpha_agent,
                     BridgeMode::Guest
                 ))
@@ -4389,9 +4389,13 @@ mod test {
                 crate::model::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
-            app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
-                bridge_client_directory_name_for_mode(&alpha_agent, BridgeMode::Guest)
-            )
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust-guest")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::Guest
+                ))
         );
     }
 

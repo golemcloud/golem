@@ -1002,7 +1002,7 @@ impl BridgeSdks {
 
     pub fn for_all_used_modes(
         &self,
-    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkModeTargetsRef<'_>)> {
+    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkInternalTargetsRef<'_>)> {
         let mut result = Vec::new();
         for (language, targets) in self.for_all_languages() {
             if let Some(targets) = targets {
@@ -1012,7 +1012,7 @@ impl BridgeSdks {
                     result.push((
                         language,
                         BridgeMode::External,
-                        BridgeSdkModeTargetsRef {
+                        BridgeSdkInternalTargetsRef {
                             agents: &external.agents,
                             tools: None,
                             output_dir: external.output_dir.as_ref(),
@@ -1025,7 +1025,7 @@ impl BridgeSdks {
                     result.push((
                         language,
                         BridgeMode::Guest,
-                        BridgeSdkModeTargetsRef {
+                        BridgeSdkInternalTargetsRef {
                             agents: &guest.agents,
                             tools: Some(&guest.tools),
                             output_dir: guest.output_dir.as_ref(),
@@ -1044,7 +1044,7 @@ pub struct BridgeSdkLanguageTargets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<BridgeSdkExternalTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub internal: Option<BridgeSdkModeTargets>,
+    pub internal: Option<BridgeSdkInternalTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1058,7 +1058,7 @@ pub struct BridgeSdkExternalTargets {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BridgeSdkModeTargets {
+pub struct BridgeSdkInternalTargets {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub agents: LenientTokenList,
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
@@ -1068,7 +1068,7 @@ pub struct BridgeSdkModeTargets {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct BridgeSdkModeTargetsRef<'a> {
+pub struct BridgeSdkInternalTargetsRef<'a> {
     pub agents: &'a LenientTokenList,
     pub tools: Option<&'a LenientTokenList>,
     pub output_dir: Option<&'a String>,
@@ -1822,7 +1822,7 @@ mod test {
     fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
         (
             arb_opt(arb_bridge_sdk_external_targets()),
-            arb_opt(arb_bridge_sdk_mode_targets()),
+            arb_opt(arb_bridge_sdk_internal_targets()),
         )
             .prop_map(|(external, internal)| BridgeSdkLanguageTargets { external, internal })
             .boxed()
@@ -1834,13 +1834,13 @@ mod test {
             .boxed()
     }
 
-    fn arb_bridge_sdk_mode_targets() -> BoxedStrategy<BridgeSdkModeTargets> {
+    fn arb_bridge_sdk_internal_targets() -> BoxedStrategy<BridgeSdkInternalTargets> {
         (
             arb_token_list_model(),
             arb_token_list_model(),
             arb_opt(arb_ident()),
         )
-            .prop_map(|(agents, tools, output_dir)| BridgeSdkModeTargets {
+            .prop_map(|(agents, tools, output_dir)| BridgeSdkInternalTargets {
                 agents,
                 tools,
                 output_dir,

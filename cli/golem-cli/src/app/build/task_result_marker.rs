@@ -24,7 +24,6 @@ use anyhow::{Context, anyhow, bail};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use wit_parser::PackageName;
@@ -317,39 +316,12 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
     }
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct GenerateBridgeSdkMarkerHash<'a> {
-    #[serde(serialize_with = "serialize_display")]
     pub component_name: &'a ComponentName,
     pub target_name: &'a str,
     pub kind: &'static str,
-    #[serde(serialize_with = "serialize_guest_language_id")]
     pub language: &'a GuestLanguage,
-    #[serde(serialize_with = "serialize_bridge_mode_id")]
     pub bridge_mode: BridgeMode,
-}
-
-fn serialize_display<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
-where
-    T: std::fmt::Display,
-    S: Serializer,
-{
-    serializer.serialize_str(&value.to_string())
-}
-
-fn serialize_guest_language_id<S>(value: &GuestLanguage, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_str(value.id())
-}
-
-fn serialize_bridge_mode_id<S>(value: &BridgeMode, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_str(value.id())
 }
 
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
@@ -362,7 +334,14 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(serde_json::to_string(self)?))
+        Ok(HashFromString(format!(
+            "componentName={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}",
+            self.component_name,
+            self.target_name,
+            self.kind,
+            self.language.id(),
+            self.bridge_mode.id(),
+        )))
     }
 }
 
@@ -596,8 +575,8 @@ mod tests {
         };
 
         assert_ne!(external_source, guest_source);
-        assert!(external_source.contains(r#""bridgeMode":"external""#));
-        assert!(guest_source.contains(r#""bridgeMode":"internal""#));
+        assert!(external_source.contains("bridgeMode=external"));
+        assert!(guest_source.contains("bridgeMode=internal"));
     }
 
     #[test]
