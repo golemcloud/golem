@@ -4912,11 +4912,15 @@ struct PrivateDurableWorkerState {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
 
-    /// `outgoing-http-request` invocation spans of open p3 HTTP responses, keyed by the p3
-    /// response resource rep. The span is started by the durable `client::send` and finished when
-    /// the response body completes (the durable consume-body terminal) or the response resource is
-    /// dropped unconsumed — mirroring the P2 `end_http_request` span lifecycle.
-    pub(crate) open_p3_http_response_spans: HashMap<u32, SpanId>,
+    /// State of open p3 HTTP responses created by the durable `client::send`, keyed by the p3
+    /// response resource rep. Carries the `outgoing-http-request` invocation span (started by
+    /// `client::send`, finished when the response body completes or the response resource is
+    /// dropped unconsumed — mirroring the P2 `end_http_request` span lifecycle), the request
+    /// method/URI for retry properties of body-transfer failures, and — for responses replayed
+    /// from recorded headers — the information needed to re-issue the recorded request when the
+    /// durable consume-body scope turns out to be incomplete after a restart.
+    pub(crate) open_p3_http_responses:
+        HashMap<u32, crate::durable_host::p3::http::OpenP3HttpResponseState>,
 
     /// Body-transmission wiring of open p3 outgoing HTTP requests, keyed by the request resource
     /// rep. Registered by the durable `request::new` (which interposes on the guest-facing
@@ -5182,7 +5186,7 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
-            open_p3_http_response_spans: HashMap::new(),
+            open_p3_http_responses: HashMap::new(),
             pending_p3_http_request_transmissions: HashMap::new(),
             open_websocket_connections: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),

@@ -4290,6 +4290,102 @@ async fn oplog_replay_after_streaming_http_read(
     Ok(())
 }
 
+/// A transient mid-body failure of a streaming HTTP response must route
+/// through worker-level retry and re-issue the recorded request instead of
+/// surfacing a truncated body to the guest.
+///
+/// The server aborts the chunked response body mid-stream on the first
+/// attempt and serves the complete body on subsequent attempts. The durable
+/// consume-body task classifies the body error as transient, the worker goes
+/// to `Retrying`, and the retry's replay finds the consume-body scope
+/// incomplete, jumps it to live, and re-issues the recorded request (same
+/// idempotency key) — the guest observes only the complete second body.
+#[test]
+#[tracing::instrument]
+async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let attempts = Arc::new(AtomicU8::new(0));
+    let attempts_clone = attempts.clone();
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/streaming-chunks",
+                get(move || {
+                    let attempts = attempts_clone.clone();
+                    async move {
+                        let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let stream = stream::iter(0..20).map(move |i| {
+                            if attempt == 0 && i == 5 {
+                                Err::<Bytes, BoxError>("injected mid-body failure".into())
+                            } else {
+                                Ok(Bytes::from(format!("chunk-{i}\n")))
+                            }
+                        });
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "text/plain")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("StreamingClient");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "streaming_http_read", data_value!())
+        .await?
+        .into_typed::<String>()?;
+
+    // The complete second body, with no chunks leaking in from the aborted
+    // first attempt (its partial delivery is discarded by the retry's replay).
+    let expected: String = (0..20).map(|i| format!("chunk-{i}\n")).collect();
+    assert_eq!(
+        result, expected,
+        "expected exactly the complete re-issued response body"
+    );
+    assert_eq!(
+        attempts.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the request must have been re-issued exactly once after the mid-body failure"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    http_server.abort();
+    drop(executor);
+    Ok(())
+}
+
 /// Reproducer for the FutureTrailers non-durable bug (oplog mismatch).
 ///
 /// This test exercises the exact bug mechanism identified in Step 13 of the investigation:

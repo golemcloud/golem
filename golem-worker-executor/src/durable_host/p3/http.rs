@@ -58,6 +58,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::{mpsc, oneshot};
+use tracing::debug;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureConsumer, FutureProducer, FutureReader,
     Resource, Source, StreamProducer, StreamReader, StreamResult,
@@ -176,6 +177,8 @@ where
     // stable across live execution and replay.
     let mut send_span: Option<SpanId> = None;
     let send_span_out = &mut send_span;
+    let mut serialized_request: Option<SerializableP3HttpClientSend> = None;
+    let serialized_request_out = &mut serialized_request;
     let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with(
         store,
         durable_worker_ctx::<Ctx, U>,
@@ -194,6 +197,7 @@ where
             )
             .await?;
             *send_span_out = Some(span_id);
+            *serialized_request_out = Some(request.clone());
             Ok(HostRequestP3HttpClientSend { request })
         },
     )
@@ -201,6 +205,8 @@ where
     .map_err(HttpError::trap)?;
 
     let span_id = send_span.expect("p3 HTTP send request builder did not run");
+    let serialized_request = serialized_request.expect("p3 HTTP send request builder did not run");
+    let send_start_index = handle.start_index();
 
     if !handle.is_live() {
         match handle
@@ -215,14 +221,48 @@ where
                 // response — otherwise the request leaks and a guest
                 // streaming a body or awaiting its transmission future hangs.
                 consume_replayed_request::<Ctx, U>(store, req).await?;
+                let recorded_status = match &response.result {
+                    SerializableP3HttpClientSendResult::Success(headers) => headers.status,
+                    SerializableP3HttpClientSendResult::HttpError(_) => 0,
+                };
                 let result = replay_send_response::<Ctx, U>(store, response.result);
                 match result {
                     Ok(response) => {
+                        // The replayed response carries an empty placeholder body:
+                        // the recorded chunks are delivered by the durable
+                        // consume-body scope on replay. If that scope turns out to
+                        // be incomplete (the original run was interrupted
+                        // mid-body-stream), its live re-execution must re-issue the
+                        // recorded request to obtain a real body — capture
+                        // everything needed for that here. The Golem-managed
+                        // headers are re-derived from recorded state (same span,
+                        // same `Start` index), so the re-issued request carries the
+                        // same trace context and idempotency key as the original.
+                        let injected_headers = golem_outgoing_http_headers::<Ctx, U>(
+                            store,
+                            &span_id,
+                            send_start_index,
+                            &serialized_request.headers,
+                        )
+                        .map_err(HttpError::trap)?;
                         // The span stays open until the response body
                         // completes; hand it to the replayed response so the
                         // consume-body / drop paths consume the recorded
                         // `FinishSpan` at the same point it was written live.
-                        register_response_span::<Ctx, U>(store, &response, span_id);
+                        register_open_response::<Ctx, U>(
+                            store,
+                            &response,
+                            OpenP3HttpResponseState {
+                                span_id,
+                                method: serialized_request.method.to_string(),
+                                uri: outgoing_http_request_uri(&serialized_request),
+                                rebuild: Some(P3HttpSendRebuild {
+                                    request: serialized_request,
+                                    injected_headers,
+                                    recorded_status,
+                                }),
+                            },
+                        );
                         // Spawns the demand-gated transmission recorder
                         // at the same point as the live path, so a demanded
                         // recording's `Start` is claimed where it was appended.
@@ -300,8 +340,18 @@ where
                 .map_err(HttpError::trap)?;
             // The span stays open until the response body completes (the
             // durable consume-body terminal or an unconsumed drop), mirroring
-            // the P2 `end_http_request` span lifecycle.
-            register_response_span::<Ctx, U>(store, &response, span_id);
+            // the P2 `end_http_request` span lifecycle. No rebuild info is
+            // attached: the response carries the real network body.
+            register_open_response::<Ctx, U>(
+                store,
+                &response,
+                OpenP3HttpResponseState {
+                    span_id,
+                    method: retry_method.clone(),
+                    uri: retry_uri.clone(),
+                    rebuild: None,
+                },
+            );
             // Spawns the demand-gated transmission recorder at a
             // deterministic point (right after the send `End`, mirrored by the
             // replay arm above): if the guest reads the transmission future,
@@ -366,21 +416,311 @@ where
     }
 }
 
-/// Associates the `outgoing-http-request` span with the response resource
-/// created by (a live or replayed) `client::send`. The span is finished when
-/// the response body completes: the durable consume-body task takes ownership
-/// of it in `consume_body`, or the response `drop` finishes it via a deferred
-/// [`DropEvent::FinishSpan`] when the body was never consumed.
-fn register_response_span<Ctx: WorkerCtx, U: Send>(
+/// Host-side state of an open p3 HTTP response created by the durable
+/// `client::send`, keyed by the response resource rep in
+/// `open_p3_http_responses`. Taken over by the durable consume-body task in
+/// `consume_body`, or cleaned up by the response `drop` when the body was
+/// never consumed.
+pub(crate) struct OpenP3HttpResponseState {
+    /// The `outgoing-http-request` invocation span of the send that produced
+    /// this response. Finished when the response body completes (the durable
+    /// consume-body terminal) or via a deferred [`DropEvent::FinishSpan`] when
+    /// the response is dropped unconsumed.
+    pub(crate) span_id: SpanId,
+    /// Request method, for retry properties of body-transfer failures.
+    pub(crate) method: String,
+    /// Request URI, for retry properties of body-transfer failures.
+    pub(crate) uri: String,
+    /// Present iff the response was replayed from recorded headers (its body is
+    /// an empty placeholder): how to re-issue the recorded request when the
+    /// durable consume-body scope turns out to be incomplete and must
+    /// re-execute live.
+    pub(crate) rebuild: Option<P3HttpSendRebuild>,
+}
+
+/// Everything needed to re-issue a recorded p3 `client::send` after a restart
+/// (the P3 counterpart of P2's `rebuild_request_after_replay`): the request
+/// head + options recorded in the send's `Start` payload (reconstructed
+/// deterministically from the guest-rebuilt request resource during replay)
+/// and the Golem-managed headers (`traceparent`/`tracestate`,
+/// `idempotency-key`) re-derived from recorded state — the replayed span and
+/// the send's own `Start` index — so the re-issued request is byte-identical
+/// to the original in every Golem-controlled aspect.
+///
+/// The request *body* is not recorded in the oplog, so only body-less requests
+/// can be re-issued; see [`recorded_head_declares_body`].
+pub(crate) struct P3HttpSendRebuild {
+    request: SerializableP3HttpClientSend,
+    injected_headers: Vec<(String, String)>,
+    /// The recorded response status, used only to log divergence of the fresh
+    /// response's status; the recorded head stays authoritative for the guest.
+    recorded_status: u16,
+}
+
+/// Associates the open-response state (span, retry properties, optional
+/// rebuild info) with the response resource created by (a live or replayed)
+/// `client::send`.
+fn register_open_response<Ctx: WorkerCtx, U: Send>(
     store: &Accessor<U, DurableP3<Ctx>>,
     response: &Resource<Response>,
-    span_id: SpanId,
+    state: OpenP3HttpResponseState,
 ) {
     let rep = response.rep();
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.state.open_p3_http_response_spans.insert(rep, span_id);
+        ctx.state.open_p3_http_responses.insert(rep, state);
     });
+}
+
+/// Whether the recorded request head declares a request body: a positive (or
+/// unparseable) `content-length`, or any `transfer-encoding`. The oplog does
+/// not record request body bytes, so such a request cannot be faithfully
+/// re-issued after a restart. This is best-effort detection from the head
+/// only — a streamed upload without `content-length` is indistinguishable
+/// from no body and slips through.
+fn recorded_head_declares_body(request: &SerializableP3HttpClientSend) -> bool {
+    let content_length_declared = request.headers.get("content-length").is_some_and(|values| {
+        values.iter().any(|value| {
+            std::str::from_utf8(value)
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                != Some(0)
+        })
+    });
+    let transfer_encoding_declared = request
+        .headers
+        .get("transfer-encoding")
+        .is_some_and(|values| !values.is_empty());
+    content_length_declared || transfer_encoding_declared
+}
+
+/// Aborts the spawned I/O task of a re-issued request when dropped, bounding
+/// its lifetime to the consume-body task that reads the rebuilt body
+/// (mirroring the abort-on-drop handle the built-in `WasiHttp::send` attaches
+/// to live response bodies).
+struct AbortOnDropIoTask(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDropIoTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Result of attempting to re-issue a recorded send for an incomplete
+/// consume-body scope.
+enum RebuildOutcome {
+    /// The request was re-issued: stream the fresh response body. The recorded
+    /// response head stays authoritative for the guest — the rebuild only
+    /// supplies a replacement body stream.
+    Rebuilt {
+        body: UnsyncBoxBody<Bytes, ErrorCode>,
+        io_guard: AbortOnDropIoTask,
+    },
+    /// The re-issue failed on conversion or on the network: surfaced as a
+    /// body-transfer error and classified for worker-level retry like any live
+    /// body failure.
+    Failed(ErrorCode),
+    /// The recorded head declares a request body, which is not recorded in the
+    /// oplog and cannot be reconstructed: fail the body transfer loud with a
+    /// permanent error (never retry-routed — a retry would hit the same
+    /// refusal forever).
+    Refused(String),
+}
+
+/// Reconstructs the p3 request resource-equivalent from the recorded head:
+/// method, scheme, authority, path, the guest-set headers plus the re-derived
+/// Golem-managed headers (replacing same-name guest values, as the live
+/// injection does), the recorded per-request timeout options, and an empty
+/// body.
+fn build_rebuilt_request(
+    rebuild: &P3HttpSendRebuild,
+) -> Result<wasmtime_wasi_http::p3::Request, String> {
+    let method = deserialize_http_method(&rebuild.request.method)?;
+    let scheme = rebuild
+        .request
+        .scheme
+        .as_ref()
+        .map(deserialize_uri_scheme)
+        .transpose()?;
+    let authority = rebuild
+        .request
+        .authority
+        .as_deref()
+        .map(|authority| {
+            http::uri::Authority::try_from(authority)
+                .map_err(|err| format!("invalid recorded request authority {authority}: {err}"))
+        })
+        .transpose()?;
+    let path_with_query = rebuild
+        .request
+        .path_with_query
+        .as_deref()
+        .map(|path| {
+            http::uri::PathAndQuery::try_from(path)
+                .map_err(|err| format!("invalid recorded request path {path}: {err}"))
+        })
+        .transpose()?;
+
+    let mut headers = HeaderMap::new();
+    for (name, values) in &rebuild.request.headers {
+        let name = HeaderName::try_from(name.as_str())
+            .map_err(|err| format!("invalid recorded request header name {name}: {err}"))?;
+        for value in values {
+            let value = HeaderValue::try_from(value.clone())
+                .map_err(|err| format!("invalid recorded request header value: {err}"))?;
+            headers.append(name.clone(), value);
+        }
+    }
+    for (name, value) in &rebuild.injected_headers {
+        let name = HeaderName::try_from(name.as_str())
+            .map_err(|err| format!("invalid injected header name {name}: {err}"))?;
+        let value = HeaderValue::try_from(value.as_str())
+            .map_err(|err| format!("invalid injected header value for {name}: {err}"))?;
+        headers.remove(&name);
+        headers.append(name, value);
+    }
+
+    let options = rebuild.request.options.as_ref().map(|options| {
+        std::sync::Arc::new(wasmtime_wasi_http::p3::RequestOptions {
+            connect_timeout: options
+                .connect_timeout_nanos
+                .map(std::time::Duration::from_nanos),
+            first_byte_timeout: options
+                .first_byte_timeout_nanos
+                .map(std::time::Duration::from_nanos),
+            between_bytes_timeout: options
+                .between_bytes_timeout_nanos
+                .map(std::time::Duration::from_nanos),
+        })
+    });
+
+    let (request, _transmission) = wasmtime_wasi_http::p3::Request::new(
+        method,
+        scheme,
+        authority,
+        path_with_query,
+        FieldMap::new_immutable(headers),
+        options,
+        Empty::<Bytes>::new()
+            .map_err(|never| match never {})
+            .boxed_unsync(),
+    );
+    Ok(request)
+}
+
+fn deserialize_http_method(method: &SerializableHttpMethod) -> Result<http::Method, String> {
+    match method {
+        SerializableHttpMethod::Get => Ok(http::Method::GET),
+        SerializableHttpMethod::Post => Ok(http::Method::POST),
+        SerializableHttpMethod::Put => Ok(http::Method::PUT),
+        SerializableHttpMethod::Delete => Ok(http::Method::DELETE),
+        SerializableHttpMethod::Head => Ok(http::Method::HEAD),
+        SerializableHttpMethod::Connect => Ok(http::Method::CONNECT),
+        SerializableHttpMethod::Options => Ok(http::Method::OPTIONS),
+        SerializableHttpMethod::Trace => Ok(http::Method::TRACE),
+        SerializableHttpMethod::Patch => Ok(http::Method::PATCH),
+        SerializableHttpMethod::Other(other) => http::Method::from_bytes(other.as_bytes())
+            .map_err(|err| format!("invalid recorded HTTP method {other}: {err}")),
+    }
+}
+
+fn deserialize_uri_scheme(scheme: &SerializableP3HttpScheme) -> Result<http::uri::Scheme, String> {
+    match scheme {
+        SerializableP3HttpScheme::Http => Ok(http::uri::Scheme::HTTP),
+        SerializableP3HttpScheme::Https => Ok(http::uri::Scheme::HTTPS),
+        SerializableP3HttpScheme::Other(other) => other
+            .parse()
+            .map_err(|err| format!("invalid recorded request scheme {other}: {err}")),
+    }
+}
+
+/// Re-issues a recorded send whose durable consume-body scope must re-execute
+/// live after a restart — the P3 counterpart of P2's
+/// `rebuild_request_after_replay`.
+///
+/// The re-issue is *recovery* of the already-recorded send, not a new
+/// guest-visible call: it writes no oplog entries, does not count against HTTP
+/// call limits, and starts no new span. It reuses the built-in request
+/// conversion (host-header injection, default scheme) and the same connection
+/// pool as the original live send. The fresh response head is discarded — the
+/// recorded head, already delivered to the guest, stays authoritative; only
+/// the body stream is taken.
+async fn reissue_recorded_request<Ctx: WorkerCtx, U: 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    rebuild: P3HttpSendRebuild,
+) -> RebuildOutcome {
+    if recorded_head_declares_body(&rebuild.request) {
+        return RebuildOutcome::Refused(
+            "cannot rebuild the in-flight p3 HTTP send after a restart: the request had a body, \
+             which is not recorded in the oplog"
+                .to_string(),
+        );
+    }
+
+    let request = match build_rebuilt_request(&rebuild) {
+        Ok(request) => request,
+        Err(message) => return RebuildOutcome::Failed(ErrorCode::InternalError(Some(message))),
+    };
+
+    let converted = accessor.with(|mut access| {
+        let pool = {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            ctx.wasi_http.connection_pool.clone()
+        };
+        let converted = request.into_http_with_getter(
+            access.as_context_mut(),
+            async { Ok(()) },
+            wasi_http_view::<Ctx, U>,
+        );
+        (pool, converted)
+    });
+    let (pool, converted) = converted;
+    let (http_request, options) = match converted {
+        Ok(converted) => converted,
+        Err(error) => {
+            return match error.downcast_ref() {
+                Some(code) => RebuildOutcome::Failed(code.clone()),
+                None => RebuildOutcome::Failed(ErrorCode::InternalError(Some(format!(
+                    "failed to convert the rebuilt p3 HTTP request: {error:?}"
+                )))),
+            };
+        }
+    };
+    let options = options.as_deref().copied();
+
+    let sent = match pool {
+        Some(pool) => pool.pooled_send_request_p3(http_request, options).await,
+        None => match wasmtime_wasi_http::p3::default_send_request(http_request, options).await {
+            Ok((response, io)) => Ok((
+                response.map(http_body_util::BodyExt::boxed_unsync),
+                Box::new(io) as Box<dyn std::future::Future<Output = Result<(), ErrorCode>> + Send>,
+            )),
+            Err(error) => Err(error),
+        },
+    };
+    match sent {
+        Ok((response, io)) => {
+            if response.status().as_u16() != rebuild.recorded_status {
+                debug!(
+                    recorded_status = rebuild.recorded_status,
+                    fresh_status = %response.status(),
+                    "re-issued p3 HTTP request returned a different status than the recorded \
+                     response; the recorded head stays authoritative"
+                );
+            }
+            let body = response.into_body();
+            let io = Box::into_pin(io);
+            let io_task = tokio::task::spawn(async move {
+                let result = io.await;
+                debug!(?result, "re-issued p3 HTTP request I/O future finished");
+            });
+            RebuildOutcome::Rebuilt {
+                body,
+                io_guard: AbortOnDropIoTask(io_task),
+            }
+        }
+        Err(code) => RebuildOutcome::Failed(code),
+    }
 }
 
 /// Resolution delivered to the guest-facing request-body transmission future
@@ -2197,12 +2537,13 @@ struct HttpConsumeBodyTask<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     demand_rx: mpsc::UnboundedReceiver<HttpBodyDemand>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
-    /// The `outgoing-http-request` span of the send that produced this
-    /// response, taken over from the response resource in `consume_body`.
-    /// Finished (durably) right after the parent terminal, mirroring the P2
-    /// `end_http_request` span lifecycle. `None` for responses that did not
-    /// come from `client::send`.
-    response_span: Option<SpanId>,
+    /// Open-response state of the send that produced this response (its
+    /// `outgoing-http-request` span, retry properties, and — for a replayed
+    /// response — the send rebuild info), taken over from the response
+    /// resource in `consume_body`. The span is finished (durably) right after
+    /// the parent terminal, mirroring the P2 `end_http_request` span
+    /// lifecycle. `None` for responses that did not come from `client::send`.
+    response_state: Option<OpenP3HttpResponseState>,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -2211,13 +2552,13 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::UnboundedReceiver<HttpBodyDemand>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
-        response_span: Option<SpanId>,
+        response_state: Option<OpenP3HttpResponseState>,
     ) -> Self {
         Self {
             body,
             demand_rx,
             trailers_tx,
-            response_span,
+            response_state,
             _phantom: PhantomData,
         }
     }
@@ -2233,9 +2574,26 @@ where
             mut body,
             mut demand_rx,
             trailers_tx,
-            response_span,
+            response_state,
             ..
         } = self;
+
+        let (response_span, retry_properties, mut rebuild) = match response_state {
+            Some(state) => (
+                Some(state.span_id),
+                Some(RetryContext::http(&state.method, &state.uri)),
+                state.rebuild,
+            ),
+            None => (None, None, None),
+        };
+        // Keeps the re-issued request's I/O task alive while its body is read;
+        // dropped (aborting the task) when this task finishes. Never read —
+        // it exists only for its drop timing.
+        let mut _rebuild_io_guard: Option<AbortOnDropIoTask> = None;
+        // Set when the rebuild was refused (request body not reconstructable):
+        // the resulting terminal error must not be routed through worker-level
+        // retry, because a retry would replay into the same refusal forever.
+        let mut rebuild_refused = false;
 
         // Open the parent batched scope. Children nest under its begin index.
         let mut parent = match CallHandle::<P3HttpClientConsumeBody, Cancellable>::start_access(
@@ -2263,7 +2621,7 @@ where
         loop {
             let demand = demand_rx.recv().await;
 
-            let child =
+            let mut child =
                 match CallHandle::<P3HttpClientConsumeBodyChunk, NotCancellable>::start_access(
                     accessor,
                     durable_worker_ctx::<Ctx, U>,
@@ -2360,9 +2718,86 @@ where
                     .unwrap_or(true);
                 let frame = if producer_gone {
                     HttpBodyFrame::End(None)
+                } else if let Some(pending_rebuild) = rebuild.take() {
+                    // First live read of a replayed response's placeholder body:
+                    // the durable consume-body scope turned out to be incomplete
+                    // (the original run was interrupted mid-body-stream, so the
+                    // scope claim jumped to live), and the placeholder carries no
+                    // data. Re-issue the recorded request now and stream the
+                    // fresh body instead. This only fires on a real guest demand:
+                    // a dropped stream or a cleanly replaying scope never
+                    // re-issues.
+                    match reissue_recorded_request::<Ctx, U>(accessor, pending_rebuild).await {
+                        RebuildOutcome::Rebuilt {
+                            body: fresh_body,
+                            io_guard,
+                        } => {
+                            body = fresh_body;
+                            _rebuild_io_guard = Some(io_guard);
+                            read_http_body_frame(&mut body).await
+                        }
+                        RebuildOutcome::Failed(code) => HttpBodyFrame::Error(code),
+                        RebuildOutcome::Refused(message) => {
+                            rebuild_refused = true;
+                            HttpBodyFrame::Error(ErrorCode::InternalError(Some(message)))
+                        }
+                    }
                 } else {
                     read_http_body_frame(&mut body).await
                 };
+
+                // Worker-level retry classification for live body-transfer
+                // errors, mirroring the P2 body-stream read path: a transient
+                // error raises a retry trap here — before anything about this
+                // frame is persisted or delivered, so the guest never observes
+                // a truncated stream — leaving the parent `Start` incomplete.
+                // The retry's replay then jumps the scope and re-issues the
+                // recorded request (see `reissue_recorded_request`), re-reading
+                // the body from a fresh response. Permanent errors — and
+                // transient ones whose retry budget is exhausted — fall through
+                // and are recorded as the terminal, which is also what a
+                // recorded terminal replays as. A refused rebuild is never
+                // retry-routed: its replay would hit the same refusal again.
+                if let HttpBodyFrame::Error(error_code) = &frame
+                    && !rebuild_refused
+                    && let Some(retry_properties) = retry_properties.clone()
+                {
+                    let for_retry: Result<(), &ErrorCode> = Err(error_code);
+                    let trap_context = parent.trap_context();
+                    if let Err(error) = parent
+                        .try_trigger_retry_access(
+                            accessor,
+                            durable_worker_ctx::<Ctx, U>,
+                            &for_retry,
+                            |code| {
+                                classify_serializable_http_error_code(&serialize_error_code(code))
+                            },
+                            retry_properties,
+                        )
+                        .await
+                    {
+                        // The retry trap tears the invocation down;
+                        // `try_trigger_retry_access` already abandoned the
+                        // parent handle. The child `Start` is persisted but the
+                        // jumped scope discards it on replay; abandon the handle
+                        // so its drop does not record a `Cancelled`. The span is
+                        // deliberately not finished (no `FinishSpan` after an
+                        // incomplete `Start`) — the retry's replay reconstructs
+                        // it.
+                        child.abandon_for_trap();
+                        if let Some(reply_tx) = demand {
+                            let _ = reply_tx.send(HttpBodyChunkReply::Failed {
+                                message: error.to_string(),
+                                trap_context,
+                            });
+                        }
+                        return fail_consume_body_task(
+                            trailers_tx,
+                            wasmtime::Error::from_anyhow(error),
+                            Some(trap_context),
+                        );
+                    }
+                }
 
                 let chunk = match &frame {
                     HttpBodyFrame::Data(bytes) => SerializableP3HttpBodyChunk::Data(bytes.to_vec()),
@@ -2490,17 +2925,6 @@ where
         // exists only for the crash/drop contract (task dropped without
         // finishing), handled by the call handle's drop machinery.
         //
-        // A transient body-transfer error terminal (`Err` in `terminal`) is
-        // deliberately *not* routed through worker-level retry here, unlike the
-        // P2 `future_trailers::get` path: the send's `End` is already recorded,
-        // so a retry would replay the response from its recorded headers (with
-        // an empty body — the request is not re-issued) and then re-execute
-        // this scope live against that empty body, silently delivering wrong
-        // data to the guest. Routing body errors through retry requires the
-        // mid-flight send rebuild (re-issuing the recorded request on replay)
-        // and must land together with it; until then the error is recorded and
-        // surfaced to the guest exactly as a replayed terminal would be.
-        //
         // Capture the parent scope's trap context first (it is a pure function of
         // the scope and survives the handle being consumed below) so every
         // finalize failure can tag the guest-facing trailers trap for correct
@@ -2619,15 +3043,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         StreamReader<u8>,
         FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
     )> {
-        // Take ownership of the response's `outgoing-http-request` span (if
-        // this response came from `client::send`): the durable consume-body
-        // task finishes it when the body reaches its terminal. Removing the
-        // mapping here also keeps the later `drop` of the response resource
-        // from finishing it a second time.
-        let response_span = {
+        // Take ownership of the response's open-response state (if this
+        // response came from `client::send`): the durable consume-body task
+        // finishes its span when the body reaches its terminal and uses its
+        // rebuild info when an incomplete scope must re-execute live. Removing
+        // the mapping here also keeps the later `drop` of the response
+        // resource from finishing the span a second time.
+        let response_state = {
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
-            ctx.state.open_p3_http_response_spans.remove(&res.rep())
+            ctx.state.open_p3_http_responses.remove(&res.rep())
         };
 
         // Delegate to the built-in implementation to wire `fut` into the body's
@@ -2652,9 +3077,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                 }
                 Err(stream) => {
                     // Guest-constructed response body (not from `send`): fall back
-                    // to the non-durable passthrough. No span was registered for
-                    // such responses (`response_span` is `None` here).
-                    debug_assert!(response_span.is_none());
+                    // to the non-durable passthrough. No state was registered for
+                    // such responses (`response_state` is `None` here).
+                    debug_assert!(response_state.is_none());
                     return Ok((stream, upstream_trailers));
                 }
             };
@@ -2687,7 +3112,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             body,
             demand_rx,
             trailers_tx,
-            response_span,
+            response_state,
         ));
         Ok((stream, trailers))
     }
@@ -2707,10 +3132,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         {
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
-            if let Some(span_id) = ctx.state.open_p3_http_response_spans.remove(&res.rep())
+            if let Some(state) = ctx.state.open_p3_http_responses.remove(&res.rep())
                 && let Some(sink) = ctx.state.dropped_call_event_sender()
             {
-                let _ = sink.send(DropEvent::FinishSpan { span_id });
+                let _ = sink.send(DropEvent::FinishSpan {
+                    span_id: state.span_id,
+                });
             }
         }
 
@@ -2940,6 +3367,113 @@ mod tests {
             let roundtripped = serialize_error_code(&deserialize_error_code(serializable.clone()));
             assert_eq!(roundtripped, serializable);
         }
+    }
+
+    fn rebuild_head(
+        method: SerializableHttpMethod,
+        headers: HashMap<String, Vec<Vec<u8>>>,
+    ) -> SerializableP3HttpClientSend {
+        SerializableP3HttpClientSend {
+            method,
+            scheme: Some(SerializableP3HttpScheme::Http),
+            authority: Some("localhost:1234".to_string()),
+            path_with_query: Some("/stream?x=1".to_string()),
+            headers,
+            options: None,
+        }
+    }
+
+    /// The rebuild body gate: only a head that positively declares a request
+    /// body (`content-length` > 0 or unparseable, or any `transfer-encoding`)
+    /// refuses the re-issue; absent or zero `content-length` allows it.
+    #[test]
+    fn recorded_head_body_detection() {
+        let no_body = rebuild_head(SerializableHttpMethod::Get, HashMap::new());
+        assert!(!recorded_head_declares_body(&no_body));
+
+        let zero_length = rebuild_head(
+            SerializableHttpMethod::Get,
+            HashMap::from([("content-length".to_string(), vec![b"0".to_vec()])]),
+        );
+        assert!(!recorded_head_declares_body(&zero_length));
+
+        let with_length = rebuild_head(
+            SerializableHttpMethod::Post,
+            HashMap::from([("content-length".to_string(), vec![b"42".to_vec()])]),
+        );
+        assert!(recorded_head_declares_body(&with_length));
+
+        let unparseable_length = rebuild_head(
+            SerializableHttpMethod::Post,
+            HashMap::from([("content-length".to_string(), vec![b"not-a-number".to_vec()])]),
+        );
+        assert!(recorded_head_declares_body(&unparseable_length));
+
+        let chunked = rebuild_head(
+            SerializableHttpMethod::Post,
+            HashMap::from([("transfer-encoding".to_string(), vec![b"chunked".to_vec()])]),
+        );
+        assert!(recorded_head_declares_body(&chunked));
+    }
+
+    /// The rebuilt request must carry the recorded head exactly — method,
+    /// scheme, authority, path, guest headers — plus the re-derived
+    /// Golem-managed headers replacing same-name guest values (as the live
+    /// injection does), the recorded per-request timeout options, and an empty
+    /// body.
+    #[test]
+    fn rebuilt_request_matches_recorded_head() {
+        let mut head = rebuild_head(
+            SerializableHttpMethod::Get,
+            HashMap::from([
+                ("x-test".to_string(), vec![b"guest".to_vec()]),
+                ("idempotency-key".to_string(), vec![b"stale".to_vec()]),
+            ]),
+        );
+        head.options = Some(SerializableP3HttpRequestOptions {
+            connect_timeout_nanos: Some(1_000_000_000),
+            first_byte_timeout_nanos: None,
+            between_bytes_timeout_nanos: Some(2_000_000_000),
+        });
+        let rebuild = P3HttpSendRebuild {
+            request: head,
+            injected_headers: vec![
+                ("idempotency-key".to_string(), "derived-key".to_string()),
+                ("traceparent".to_string(), "00-abc-def-01".to_string()),
+            ],
+            recorded_status: 200,
+        };
+
+        let request = build_rebuilt_request(&rebuild).expect("rebuild request should build");
+
+        assert_eq!(request.method, http::Method::GET);
+        assert_eq!(request.scheme, Some(http::uri::Scheme::HTTP));
+        assert_eq!(
+            request.authority.as_ref().map(|a| a.as_str()),
+            Some("localhost:1234")
+        );
+        assert_eq!(
+            request.path_with_query.as_ref().map(|p| p.as_str()),
+            Some("/stream?x=1")
+        );
+
+        let headers = &request.headers;
+        assert_eq!(headers.get("x-test").unwrap(), "guest");
+        // The injected value replaces the guest-set one.
+        let idempotency_values: Vec<_> = headers.get_all("idempotency-key").iter().collect();
+        assert_eq!(idempotency_values, vec!["derived-key"]);
+        assert_eq!(headers.get("traceparent").unwrap(), "00-abc-def-01");
+
+        let options = request.options.expect("recorded options should be carried");
+        assert_eq!(
+            options.connect_timeout,
+            Some(std::time::Duration::from_secs(1))
+        );
+        assert_eq!(options.first_byte_timeout, None);
+        assert_eq!(
+            options.between_bytes_timeout,
+            Some(std::time::Duration::from_secs(2))
+        );
     }
 
     /// Response/trailer headers must replay with the same names, values, and
