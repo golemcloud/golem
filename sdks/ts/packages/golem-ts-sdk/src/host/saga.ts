@@ -17,67 +17,67 @@ import { type OplogIndex, getOplogIndex, setOplogIndex, trap } from './hostapi';
 import { Result } from './result';
 
 /**
- * Represents an atomic operation of the transaction which has a rollback action.
+ * A compensable step of a saga: an action with a matching rollback (compensation).
  *
- * Implement this interface and use it within a `transaction` block.
- * Operations can also be constructed from closures using `operation`.
+ * Implement this interface and use it within a saga block (`fallibleSaga` /
+ * `infallibleSaga`). Steps can also be constructed from closures via `compensable`.
  */
-export interface Operation<In, Out, Err> {
+export interface Compensable<In, Out, Err> {
   /**
    * The action to execute.
-   * @param input - The input to the operation.
-   * @returns A promise resolving to the result of the operation.
+   * @param input - The input to the step.
+   * @returns A promise resolving to the result of the step.
    */
   execute(input: In): Promise<Result<Out, Err>>;
 
   /**
    * Compensation to perform in case of failure.
    * Compensations should not throw errors.
-   * @param input - The input to the operation.
-   * @param result - The result of the operation.
+   * @param input - The input to the step.
+   * @param result - The result of the step.
    * @returns A promise resolving to the result of the compensation.
    */
   compensate(input: In, result: Out): Promise<Result<void, Err>>;
 }
 
 /**
- * Creates an Operation from the provided execute and compensate functions.
- * @param execute - The function to execute the operation.
- * @param compensate - The function to compensate the operation in case of failure.
- * @returns The created Operation.
+ * Creates a {@link Compensable} step from the provided execute and compensate functions.
+ * @param execute - The function to execute the step.
+ * @param compensate - The function to compensate the step in case of failure.
+ * @returns The created compensable step.
  */
-export function operation<In, Out, Err>(
+export function compensable<In, Out, Err>(
   execute: (input: In) => Promise<Result<Out, Err>>,
   compensate: (input: In, result: Out) => Promise<Result<void, Err>>,
-): Operation<In, Out, Err> {
-  return new OperationImpl(execute, compensate);
+): Compensable<In, Out, Err> {
+  return new CompensableImpl(execute, compensate);
 }
 
-class OperationImpl<In, Out, Err> implements Operation<In, Out, Err> {
+class CompensableImpl<In, Out, Err> implements Compensable<In, Out, Err> {
   constructor(
     public readonly execute: (input: In) => Promise<Result<Out, Err>>,
     public readonly compensate: (input: In, result: Out) => Promise<Result<void, Err>>,
   ) {}
 }
 
-class InfallibleTransaction {
+class InfallibleSaga {
   private compensations: (() => Promise<void>)[] = [];
 
   constructor(private readonly beginOplogIndex: OplogIndex) {}
 
   /**
-   * Executes an operation within the infallible transaction.
-   * @param operation - The operation to execute.
-   * @param input - The input to the operation.
-   * @returns A promise resolving to the result of the operation.
+   * Executes a compensable step within the infallible saga.
+   * @param step - The step to execute.
+   * @param input - The input to the step.
+   * @returns A promise resolving to the result of the step.
    */
-  async execute<In, Out, Err>(operation: Operation<In, Out, Err>, input: In): Promise<Out> {
-    const result = await operation.execute(input);
+  async execute<In, Out, Err>(step: Compensable<In, Out, Err>, input: In): Promise<Out> {
+    const result = await step.execute(input);
     if (result.isOk()) {
       this.compensations.push(
-        // Compensations cannot fail in infallible transactions.
+        // Compensations cannot fail in an infallible saga.
         async () => {
-          const compensationResult = await operation.compensate(input, result.val);
+          const compensationResult = await step.compensate(input, result.val);
           if (compensationResult.isErr()) {
             throw new Error('Compensation action failed');
           }
@@ -99,23 +99,23 @@ class InfallibleTransaction {
   }
 }
 
-class FallibleTransaction<Err> {
+class FallibleSaga<Err> {
   private compensations: (() => Promise<Result<void, Err>>)[] = [];
 
   /**
-   * Executes an operation within the fallible transaction.
-   * @param operation - The operation to execute.
-   * @param input - The input to the operation.
-   * @returns A promise resolving to the result of the operation.
+   * Executes a compensable step within the fallible saga.
+   * @param step - The step to execute.
+   * @param input - The input to the step.
+   * @returns A promise resolving to the result of the step.
    */
   async execute<In, Out, OpErr extends Err>(
-    operation: Operation<In, Out, OpErr>,
+    step: Compensable<In, Out, OpErr>,
     input: In,
   ): Promise<Result<Out, Err>> {
-    const result = await operation.execute(input);
+    const result = await step.execute(input);
     if (result.isOk()) {
       this.compensations.push(async () => {
-        return await operation.compensate(input, result.val);
+        return await step.compensate(input, result.val);
       });
       return result;
     } else {
@@ -124,11 +124,11 @@ class FallibleTransaction<Err> {
   }
 
   /**
-   * Handles the failure of the fallible transaction.
+   * Handles the failure of the fallible saga.
    * @param error - The error that caused the failure.
-   * @returns A promise resolving to the transaction failure result.
+   * @returns A promise resolving to the saga failure result.
    */
-  async onFailure(error: Err): Promise<TransactionFailure<Err>> {
+  async onFailure(error: Err): Promise<SagaFailure<Err>> {
     for (let i = this.compensations.length - 1; i >= 0; i--) {
       const compensationResult = await this.compensations[i]();
       if (compensationResult.isErr()) {
@@ -146,9 +146,9 @@ class FallibleTransaction<Err> {
   }
 }
 
-export type TransactionResult<Out, Err> = Result<Out, TransactionFailure<Err>>;
+export type SagaResult<Out, Err> = Result<Out, SagaFailure<Err>>;
 
-export type TransactionFailure<Err> =
+export type SagaFailure<Err> =
   | {
       type: 'FailedAndRolledBackCompletely';
       error: Err;
@@ -160,30 +160,28 @@ export type TransactionFailure<Err> =
     };
 
 /**
- * Executes an infallible transaction.
+ * Executes an infallible saga.
  *
- * InfallibleTransaction is a sequence of operations that are executed in a way that if any of the
- * operations or the underlying Golem executor fails, the whole transaction is going to
- * be retried.
+ * An infallible saga is a sequence of compensable steps executed such that if any of the
+ * steps or the underlying Golem executor fails, the whole saga is retried.
  *
- * In addition to that, **user level failures** (represented by the `Result::Err` value
- * of an operation) lead to performing the compensation actions of each already performed operation
- * in reverse order.
+ * In addition, **user level failures** (represented by the `Result::Err` value of a step)
+ * lead to performing the compensation actions of each already performed step in reverse order.
  *
  * Fatal errors (panic) and external executor failures currently cannot perform the
  * rollback actions.
  *
- * @param f - The async function that defines the transaction.
- * @returns A promise resolving to the result of the transaction.
+ * @param f - The async function that defines the saga.
+ * @returns A promise resolving to the result of the saga.
  */
-export async function infallibleTransaction<Out>(
-  f: (tx: InfallibleTransaction) => Promise<Out>,
+export async function infallibleSaga<Out>(
+  f: (saga: InfallibleSaga) => Promise<Out>,
 ): Promise<Out> {
   const guard = markAtomicOperation();
   const beginOplogIndex = getOplogIndex();
-  const tx = new InfallibleTransaction(beginOplogIndex);
+  const saga = new InfallibleSaga(beginOplogIndex);
   try {
-    const result = await f(tx);
+    const result = await f(saga);
     guard.drop();
     return result;
   } catch (e) {
@@ -191,44 +189,44 @@ export async function infallibleTransaction<Out>(
     // a `try/catch`. The atomic region is intentionally left open; the
     // existing replay-time fallback in `mark_begin_operation` deletes the
     // partial inner side effects and re-executes the block.
-    trap(`infallibleTransaction failed: ${formatErrorForTrap(e)}`);
+    trap(`infallibleSaga failed: ${formatErrorForTrap(e)}`);
     throw e;
   }
 }
 
 /**
- * Executes a fallible transaction.
+ * Executes a fallible saga.
  *
- * FallibleTransaction is a sequence of operations that are executed in a way that if any of the
- * operations fails, all the already performed operation's compensation actions get executed in
+ * A fallible saga is a sequence of compensable steps executed such that if any of the
+ * steps fails, all the already performed steps' compensation actions get executed in
  * reverse order.
  *
  * In case of fatal errors (panic) and external executor failures, it does not perform the
- * compensation actions and the whole transaction gets retried.
+ * compensation actions and the whole saga gets retried.
  *
- * @param f - The async function that defines the transaction.
- * @returns A promise resolving to the result of the transaction.
+ * @param f - The async function that defines the saga.
+ * @returns A promise resolving to the result of the saga.
  */
-export async function fallibleTransaction<Out, Err>(
-  f: (tx: FallibleTransaction<Err>) => Promise<Result<Out, Err>>,
-): Promise<TransactionResult<Out, Err>> {
+export async function fallibleSaga<Out, Err>(
+  f: (saga: FallibleSaga<Err>) => Promise<Result<Out, Err>>,
+): Promise<SagaResult<Out, Err>> {
   const guard = markAtomicOperation();
-  const tx = new FallibleTransaction<Err>();
+  const saga = new FallibleSaga<Err>();
   try {
-    const result = await f(tx);
-    let out: TransactionResult<Out, Err>;
+    const result = await f(saga);
+    let out: SagaResult<Out, Err>;
     if (result.isOk()) {
       out = Result.ok(result.val);
     } else {
-      out = Result.err(await tx.onFailure(result.val));
+      out = Result.err(await saga.onFailure(result.val));
     }
     guard.drop();
     return out;
   } catch (e) {
     // Force an uncatchable trap. Note: this only fires for *thrown* errors,
     // which are unexpected. Expected failures are returned via Result.err
-    // and processed by `tx.onFailure` above without trapping.
-    trap(`fallibleTransaction failed: ${formatErrorForTrap(e)}`);
+    // and processed by `saga.onFailure` above without trapping.
+    trap(`fallibleSaga failed: ${formatErrorForTrap(e)}`);
     throw e;
   }
 }
@@ -245,26 +243,26 @@ function formatErrorForTrap(err: unknown): string {
 }
 
 /**
- * Extracts the error types from an array of operations.
+ * Extracts the error types from an array of compensable steps.
  *
- * @template T - An array of `Operation` objects.
- * @returns A union type representing the possible error types that can occur in the operations.
+ * @template T - An array of `Compensable` steps.
+ * @returns A union type representing the possible error types that can occur in the steps.
  *
  * @example
  * ```typescript
- * const operationOne: Operation<bigint, bigint, string> = operation(
+ * const stepOne: Compensable<bigint, bigint, string> = compensable(
  *   // ...
  * );
  *
- * const operationTwo: Operation<bigint, string, { code: string; message: string }> = operation(
+ * const stepTwo: Compensable<bigint, string, { code: string; message: string }> = compensable(
  *   // ...
  * );
  *
- * type Errors = OperationErrors<[typeof operationOne, typeof operationTwo]>;
+ * type Errors = CompensableErrors<[typeof stepOne, typeof stepTwo]>;
  * // Errors = string | { code: string; message: string }
  * ```
  *
  */
-export type OperationErrors<T extends Operation<unknown, unknown, unknown>[]> = {
-  [K in keyof T]: T[K] extends Operation<unknown, unknown, infer Err> ? Err : never;
+export type CompensableErrors<T extends Compensable<unknown, unknown, unknown>[]> = {
+  [K in keyof T]: T[K] extends Compensable<unknown, unknown, infer Err> ? Err : never;
 }[number];

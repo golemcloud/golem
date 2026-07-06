@@ -59,7 +59,7 @@ export * from './host/guard';
 export * from './host/quota';
 export * from './host/retry';
 export * from './host/result';
-export * from './host/transaction';
+export * from './host/saga';
 export * from './host/checkpoint';
 export * from './host/durable';
 export { Config, Secret } from './agentConfig';
