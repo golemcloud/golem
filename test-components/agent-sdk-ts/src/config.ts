@@ -257,14 +257,10 @@ export const NestedRequiredGroupConfigAgentImpl = NestedRequiredGroupConfigAgent
   },
 });
 
-// NOTE (fluent port): the decorator `RpcLocalConfigAgent` used
-// `LocalConfigAgent.getWithConfig(name, { foo, nested: { a } })` to invoke the
-// remote agent WITH per-call config overrides. The fluent RPC client
-// (`clientFor(def)(id)`) has NO config-override parameter — `WasmRpc` is always
-// constructed with an empty `agentConfig` list — so the sender's config is NOT
-// propagated to the callee here. This is a faithful-port GAP: the call is made
-// without overrides, so `agent_config/rpc.rs` (which asserts propagation) will
-// not pass. See the report.
+// `RpcLocalConfigAgent` invokes `LocalConfigAgent` with per-call config
+// overrides via the config-on-RPC form `clientFor(def)(id, phantomId?, config)`:
+// the non-secret override leaves present in `config` are encoded into the target
+// `WasmRpc`'s `agentConfig` list (see `agent_config/rpc.rs`).
 const localConfigClient = clientFor(LocalConfigAgent);
 
 export const RpcLocalConfigAgent = defineAgent({
@@ -283,9 +279,15 @@ export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
   init: ({ id }) => ({ name: id.name }),
   methods: {
     async echoLocalConfig() {
-      // Config overrides cannot be forwarded through the fluent RPC client;
-      // the remote agent uses its own manifest config (GAP — see file header).
-      const client = localConfigClient({ _name: this.name });
+      const config = this.config;
+      // Mirror the decorator agent's `getWithConfig(name, { foo, nested: { a } })`:
+      // override `foo`, and `nested.a` only when it is actually set (omitting an
+      // undefined leaf leaves the callee's manifest value in place).
+      const overrides: Record<string, unknown> = { foo: config.foo };
+      if (config.nested_a !== undefined) {
+        overrides.nested = { a: config.nested_a };
+      }
+      const client = localConfigClient({ _name: this.name }, undefined, overrides);
       return await client.echoLocalConfig();
     },
   },

@@ -8,19 +8,6 @@ import {
     createWebhook,
 } from '@golemcloud/golem-ts-sdk';
 
-// ---------------------------------------------------------------------------
-// NOTE (fluent port): the decorator-era `PrincipalAgent` (echo-principal /
-// echo-principal-mid / echo-principal-last / authed-principal) is NOT ported.
-// It relied on TWO decorator-only capabilities the fluent (Standard Schema)
-// surface cannot express:
-//   1. auto-injecting the caller `Principal` into a method parameter bound at
-//      HTTP-dispatch time (there is no `Principal` input schema / marker), and
-//   2. returning a WIT `Principal` value (no `Principal` return schema).
-// `this.getPrincipal()` exposes the principal, but it cannot be declared as a
-// method input or serialized as a schema-typed return value. See the report.
-// The `custom_api/agent_http_principal_ts.rs` tests exercise this agent.
-// ---------------------------------------------------------------------------
-
 // Response schemas for comprehensive HTTP method testing
 const ResourceUpdate = z.object({
   name: z.string().optional(),
@@ -255,6 +242,67 @@ export const CorsAgentImpl = CorsAgent.implement({
     },
     preflight({ body }) {
       return { received: body.name };
+    },
+  },
+});
+
+// PrincipalAgent — echoes the caller `Principal` back as a WIT `principal`
+// variant value (`s.principal()`). The original decorator agent auto-injected
+// the per-call caller principal into a `Principal` method parameter; the fluent
+// surface has no auto-injected-input glue, so this agent instead obtains the
+// per-call principal via `this.getPrincipal()` and is declared as a phantom
+// agent (a fresh instance per HTTP request), so `getPrincipal()` reflects the
+// authenticated principal of *that* request (anonymous for the unauthenticated
+// routes, the OIDC principal for the authenticated `/authed-principal` route).
+// Exercised by `custom_api/agent_http_principal_ts.rs`.
+export const PrincipalAgent = defineAgent({
+  name: 'PrincipalAgent',
+  id: { agentName: z.string() },
+  http: http.mount('/principal-agent/{agentName}', { phantomAgent: true }),
+  methods: {
+    // only Principal
+    echoPrincipal: method({
+      input: {},
+      returns: z.object({ value: s.principal() }),
+      http: http.get('/echo-principal'),
+    }),
+
+    // Principal in between (foo / bar bound from the path)
+    echoPrincipal2: method({
+      input: { foo: z.string(), bar: z.number() },
+      returns: z.object({ value: s.principal(), foo: z.string(), bar: z.number() }),
+      http: http.get('/echo-principal-mid/{foo}/{bar}'),
+    }),
+
+    // Principal at the end (foo / bar bound from the path)
+    echoPrincipal3: method({
+      input: { foo: z.string(), bar: z.number() },
+      returns: z.object({ value: s.principal(), foo: z.string(), bar: z.number() }),
+      http: http.get('/echo-principal-last/{foo}/{bar}'),
+    }),
+
+    authedPrincipal: method({
+      input: {},
+      returns: z.object({ value: s.principal() }),
+      http: http.get('/authed-principal', { auth: true }),
+    }),
+  },
+});
+
+export const PrincipalAgentImpl = PrincipalAgent.implement({
+  init: ({ id }) => ({ agentName: id.agentName }),
+  methods: {
+    echoPrincipal() {
+      return { value: this.getPrincipal() };
+    },
+    echoPrincipal2({ foo, bar }) {
+      return { value: this.getPrincipal(), foo, bar };
+    },
+    echoPrincipal3({ foo, bar }) {
+      return { value: this.getPrincipal(), foo, bar };
+    },
+    authedPrincipal() {
+      return { value: this.getPrincipal() };
     },
   },
 });

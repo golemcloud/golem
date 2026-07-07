@@ -10,14 +10,6 @@ import {
 import type { PromiseId } from 'golem:api/host@1.5.0';
 import * as process from 'node:process';
 
-// NOTE (fluent port): the decorator agents `TsCancelTester` and
-// `TsCancelCallerAgent` are NOT ported. They relied on ABORTABLE RPC
-// (`counter.slowIncBy.abortable(signal, ...)` / `blocker.doBlock.abortable(signal)`),
-// which the fluent RPC client (`clientFor`) does not expose — its remote methods
-// support only `(...)`, `.trigger(...)`, and `.schedule(...)`, with no
-// `AbortSignal` / cancellation-token path. The cancellation tests in
-// golem-worker-executor/tests/rpc.rs exercise these two agents. See the report.
-
 const EnvVar = z.object({ key: z.string(), value: z.string() });
 
 // A `PromiseId` is a nested host record carrying bigints; declare it as an
@@ -199,6 +191,103 @@ export const TsBlockingAgentImpl = TsBlockingAgent.implement({
         },
         getCompletedCount() {
             return this.completedCount;
+        },
+    },
+});
+
+const tsCounterClient = clientFor(TsCounter);
+const tsBlockingClient = clientFor(TsBlockingAgent);
+
+export const TsCancelTester = defineAgent({
+    name: 'TsCancelTester',
+    id: { name: z.string() },
+    methods: {
+        testAbortBeforeAwait: method({ input: { counterName: z.string() }, returns: z.string() }),
+        testAbortAfterComplete: method({ input: { counterName: z.string() }, returns: z.number() }),
+    },
+});
+
+export const TsCancelTesterImpl = TsCancelTester.implement({
+    init: ({ id }) => ({ name: id.name }),
+    methods: {
+        /**
+         * Starts an abortable RPC call to TsCounter.slowIncBy, aborts after a
+         * short delay, and returns "aborted" if the AbortError is caught.
+         */
+        async testAbortBeforeAwait({ counterName }) {
+            const counter = tsCounterClient({ name: counterName });
+            const controller = new AbortController();
+
+            // Abort after 100ms — slowIncBy takes 5000ms so it is still pending.
+            setTimeout(() => controller.abort('cancelled by test'), 100);
+
+            try {
+                await counter.slowIncBy.abortable(controller.signal, { value: 1, delayMs: 5000 });
+                return 'unexpected:completed';
+            } catch (e: any) {
+                if (e === 'cancelled by test' || e?.name === 'AbortError') {
+                    return 'aborted';
+                }
+                return `unexpected:error:${String(e)}`;
+            }
+        },
+
+        /**
+         * Starts an abortable RPC call, awaits completion, then aborts (a no-op).
+         * Returns the counter value.
+         */
+        async testAbortAfterComplete({ counterName }) {
+            const counter = tsCounterClient({ name: counterName });
+            const controller = new AbortController();
+
+            // Completes quickly.
+            await counter.incBy.abortable(controller.signal, { value: 5 });
+
+            // Abort after completion — a no-op.
+            controller.abort('late abort');
+
+            return await counter.getValue();
+        },
+    },
+});
+
+export const TsCancelCallerAgent = defineAgent({
+    name: 'TsCancelCallerAgent',
+    id: { name: z.string() },
+    methods: {
+        callAndAbort: method({
+            input: { targetName: z.string(), delayMs: z.number() },
+            returns: z.string(),
+        }),
+        getLastOutcome: method({ input: {}, returns: z.string() }),
+    },
+});
+
+export const TsCancelCallerAgentImpl = TsCancelCallerAgent.implement({
+    init: ({ id }) => ({ name: id.name, lastOutcome: 'none' }),
+    methods: {
+        async callAndAbort({ targetName, delayMs }) {
+            const blocker = tsBlockingClient({ name: targetName });
+            const controller = new AbortController();
+
+            const timer = setTimeout(() => controller.abort('cancelled by test'), delayMs);
+
+            try {
+                await blocker.doBlock.abortable(controller.signal);
+                this.lastOutcome = 'unexpected:completed';
+            } catch (e: any) {
+                if (e === 'cancelled by test' || e?.name === 'AbortError') {
+                    this.lastOutcome = 'aborted';
+                } else {
+                    this.lastOutcome = `unexpected:error:${String(e)}`;
+                }
+            } finally {
+                clearTimeout(timer);
+            }
+            return this.lastOutcome;
+        },
+        getLastOutcome() {
+            return this.lastOutcome;
         },
     },
 });

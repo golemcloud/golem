@@ -21,13 +21,11 @@
 // by the Rust executor tests in golem-worker-executor/tests/readonly.rs and by
 // the HTTP integration tests in integration-tests/tests/custom_api/readonly_http.rs.
 //
-// NOTE (fluent port): the decorator `@readonly()` supported four cache-policy
-// variants (default `until-write`, principal-aware via a `Principal` parameter,
-// `ttl`, and `no-cache`). The fluent `method({ readOnly: true })` surface only
-// exposes a single boolean, which the runtime maps to `no-cache` /
-// `usesPrincipal: false`. So the `until-write`, `ttl`, and principal-aware
-// variants DEGRADE to `no-cache` here, and the `getCountFor` principal parameter
-// is dropped (there is no `Principal` input schema). See the report.
+// The fluent `method({ readOnly })` surface expresses every decorator-era
+// cache-policy variant: `readOnly: true` (the base default, `until-write`),
+// `readOnly: { cache: 'no-cache' }`, `readOnly: { cache: { ttlNanos } }`, and
+// per-principal caching via `readOnly: { usesPrincipal: true }` (which replaces
+// the decorator's principal-parameter-derived flag).
 
 import { z } from 'zod';
 import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
@@ -45,7 +43,7 @@ export const TsReadonlyAgent = defineAgent({
       http: http.post('/increment'),
     }),
 
-    // Decorator: default cache policy = 'until-write' (degrades to no-cache).
+    // Default cache policy = 'until-write', principal-unaware.
     getCount: method({
       input: {},
       returns: z.number(),
@@ -53,21 +51,19 @@ export const TsReadonlyAgent = defineAgent({
       http: http.get('/count'),
     }),
 
-    // Decorator: principal-aware (usesPrincipal auto-derived from a Principal
-    // parameter). The fluent surface has no Principal input schema, so the
-    // parameter is dropped and the method degrades to a plain no-cache read-only.
+    // Principal-aware: the cache key includes the caller principal.
     getCountFor: method({
       input: {},
       returns: z.number(),
-      readOnly: true,
+      readOnly: { usesPrincipal: true },
       http: http.get('/count-for'),
     }),
 
-    // Decorator: TTL cache policy (degrades to no-cache).
+    // TTL cache policy (2s).
     readOnlyWithTtl: method({
       input: {},
       returns: z.number(),
-      readOnly: true,
+      readOnly: { cache: { ttlNanos: 2_000_000_000n } },
       http: http.get('/ttl-count'),
     }),
 
@@ -75,7 +71,7 @@ export const TsReadonlyAgent = defineAgent({
     pureCompute: method({
       input: { x: z.number(), y: z.number() },
       returns: z.number(),
-      readOnly: true,
+      readOnly: { cache: 'no-cache' },
     }),
   },
 });
