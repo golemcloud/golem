@@ -293,6 +293,9 @@ export function defineAgent<
     name: spec.name,
     id: spec.id,
     methods: spec.methods,
+    // Expose the config schema on the def so `clientFor` can encode config
+    // overrides for RPC (config-on-RPC); undefined when the agent has no config.
+    config: spec.config,
     implement(impl) {
       registerAgentInitiator(
         registered,
