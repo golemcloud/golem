@@ -28,6 +28,13 @@ final class toolDefinition(
 ) extends StaticAnnotation
 
 /**
+ * Marks a class as the implementation of a [[toolDefinition]] trait. Build-tool
+ * auto-registration scans this annotation and emits a call to
+ * `ToolImplementation.registerClass` for the implemented tool trait.
+ */
+final class toolImplementation() extends StaticAnnotation
+
+/**
  * Overrides a tool method's command name and declares command aliases. On a
  * subtree method the `name` also renames the grafted child root.
  */
