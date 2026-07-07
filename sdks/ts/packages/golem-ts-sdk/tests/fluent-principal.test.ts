@@ -111,3 +111,18 @@ describe('fluent s.principal() marker', () => {
     expect(decoded.accountId.uuid).toEqual({ highBits: 7n, lowBits: 9n });
   });
 });
+
+describe('fluent s.principal() in agent-type assembly', () => {
+  it('assembles an agent-type with s.principal() nested in a return object', async () => {
+    const { defineAgent } = await import('../src/fluent/defineAgent');
+    const { method } = await import('../src/fluent/method');
+    const { z } = await import('zod');
+    expect(() =>
+      defineAgent({
+        name: 'PrincipalReproAgent',
+        id: { name: z.string() },
+        methods: { echo: method({ input: {}, returns: z.object({ value: s.principal() }) }) },
+      }),
+    ).not.toThrow();
+  });
+});
