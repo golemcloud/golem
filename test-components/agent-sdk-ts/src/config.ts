@@ -1,224 +1,292 @@
-import { agent, awaitPromise, BaseAgent, Config, createPromise, PromiseId, Secret } from "@golemcloud/golem-ts-sdk";
+import { z } from 'zod';
+import {
+  defineAgent,
+  method,
+  s,
+  clientFor,
+  awaitPromise,
+  createPromise,
+} from '@golemcloud/golem-ts-sdk';
+import type { PromiseId } from 'golem:api/host@1.5.0';
 
-type AliasedNestedConfig = {
-  c?: number;
-};
+// A `PromiseId` is a nested host record carrying bigints; declare it as an
+// explicit Standard Schema so it can be returned / accepted by a method.
+const PromiseIdSchema = z.object({
+  agentId: z.object({
+    componentId: z.object({
+      uuid: z.object({ highBits: s.u64(), lowBits: s.u64() }),
+    }),
+    agentId: z.string(),
+  }),
+  oplogIdx: s.u64(),
+});
 
-type ConfigAgentConfig = {
-  foo: number;
-  bar: string;
-  secret: Secret<string>;
-  nested: {
-    nestedSecret: Secret<number>;
-    a: boolean;
-    b: number[];
-  };
-  aliasedNested: AliasedNestedConfig;
-};
+export const ConfigAgent = defineAgent({
+  name: 'ConfigAgent',
+  id: { _name: z.string() },
+  config: {
+    foo: z.number(),
+    bar: z.string(),
+    secret: s.secret(z.string()),
+    nested: z.object({
+      nestedSecret: s.secret(z.number()),
+      a: z.boolean(),
+      b: z.array(z.number()),
+    }),
+    aliasedNested: z.object({
+      c: z.number().optional(),
+    }),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+  },
+});
 
-@agent()
-export class ConfigAgent extends BaseAgent {
-  constructor(_name: string, readonly config: Config<ConfigAgentConfig>) {
-    super();
-  }
-
-  echoLocalConfig(): string {
-    const config = this.config.value;
-    return JSON.stringify({
-      foo: config.foo,
-      bar: config.bar,
-      secret: config.secret.get(),
-      nested: {
-        nestedSecret: config.nested.nestedSecret.get(),
-        a: config.nested.a,
-        b: config.nested.b,
-      },
-      aliasedNested: {
-        c: config.aliasedNested.c
-      }
-    })
-  }
-}
-
-type LocalConfigAgentConfig = {
-  foo: number;
-  bar: string;
-  nested: {
-    a: boolean;
-    b: number[];
-  };
-  aliasedNested: AliasedNestedConfig;
-};
-
-@agent()
-export class LocalConfigAgent extends BaseAgent {
-  constructor(_name: string, readonly config: Config<LocalConfigAgentConfig>) {
-    super();
-  }
-
-  echoLocalConfig(): string {
-    const config = this.config.value;
-    return JSON.stringify({
-      foo: config.foo,
-      bar: config.bar,
-      nested: {
-        a: config.nested.a,
-        b: config.nested.b,
-      },
-      aliasedNested: {
-        c: config.aliasedNested.c
-      }
-    })
-  }
-}
-
-type ComplexSecret = {
-  foo: string,
-  bar: number
-};
-
-type SharedConfigAgentConfig = {
-  secret: Secret<string>,
-  complexSecret: Secret<ComplexSecret>
-};
-
-@agent()
-export class SharedConfigAgent extends BaseAgent {
-  constructor(_name: string, readonly config: Config<SharedConfigAgentConfig>) {
-    super();
-  }
-
-  echoLocalConfig(): string {
-    const config = this.config.value;
-    return JSON.stringify({
-      secret: config.secret.get(),
-      complexSecret: config.complexSecret.get()
-    })
-  }
-
-  createReplayGate(): PromiseId {
-    return createPromise();
-  }
-
-  async revealSecretThenAwaitReplayGate(promiseId: PromiseId): Promise<string> {
-    const config = this.config.value;
-    const secret = config.secret.get();
-    await awaitPromise(promiseId);
-    return secret;
-  }
-}
-
-type LocalCasingSharedConfigAgentConfig = {
-  secretPath: Secret<string>,
-};
-
-@agent()
-export class LocalCasingSharedConfigAgent extends BaseAgent {
-  constructor(_name: string, readonly config: Config<LocalCasingSharedConfigAgentConfig>) {
-    super();
-  }
-
-  echoLocalConfig(): string {
-    const config = this.config.value;
-    return JSON.stringify({
-      secretPath: config.secretPath.get(),
-    })
-  }
-}
-
-type OptionalGroupConfigAgentConfig = {
-  required: string;
-  optionalGroup?: {
-    a: number;
-    b?: string;
-  };
-};
-
-@agent()
-export class OptionalGroupConfigAgent extends BaseAgent {
-  constructor(_name: string, readonly config: Config<OptionalGroupConfigAgentConfig>) {
-    super();
-  }
-
-  echoLocalConfig(): string {
-    const config = this.config.value;
-    return JSON.stringify({
-      required: config.required,
-      optionalGroup: config.optionalGroup
-        ? { a: config.optionalGroup.a, b: config.optionalGroup.b }
-        : undefined,
-    });
-  }
-}
-
-type AllOptionalGroupConfigAgentConfig = {
-  allOptionalGroup?: {
-    x?: number;
-    y?: string;
-  };
-};
-
-@agent()
-export class AllOptionalGroupConfigAgent extends BaseAgent {
-  constructor(_name: string, readonly config: Config<AllOptionalGroupConfigAgentConfig>) {
-    super();
-  }
-
-  echoLocalConfig(): string {
-    const config = this.config.value;
-    return JSON.stringify({
-      allOptionalGroup: config.allOptionalGroup ?? null,
-    });
-  }
-}
-
-type NestedRequiredGroupConfigAgentConfig = {
-  outer?: {
-    required: string;
-    inner: {
-      a: number;
-    };
-  };
-};
-
-@agent()
-export class NestedRequiredGroupConfigAgent extends BaseAgent {
-  constructor(_name: string, readonly config: Config<NestedRequiredGroupConfigAgentConfig>) {
-    super();
-  }
-
-  echoLocalConfig(): string {
-    const config = this.config.value;
-    return JSON.stringify({
-      outer: config.outer
-        ? { required: config.outer.required, inner: { a: config.outer.inner.a } }
-        : undefined,
-    });
-  }
-}
-
-type RpcLocalConfigAgentConfig = {
-  foo: number;
-  nested_a?: boolean,
-};
-
-@agent()
-export class RpcLocalConfigAgent extends BaseAgent {
-  constructor(readonly name: string, readonly config: Config<RpcLocalConfigAgentConfig>) {
-    super();
-  }
-
-  async echoLocalConfig(): Promise<string> {
-    const config = this.config.value;
-    let client = LocalConfigAgent.getWithConfig(
-      this.name,
-      {
+export const ConfigAgentImpl = ConfigAgent.implement({
+  init: () => ({}),
+  methods: {
+    echoLocalConfig() {
+      const config = this.config;
+      return JSON.stringify({
         foo: config.foo,
+        bar: config.bar,
+        secret: config.secret.get(),
         nested: {
-          a: config.nested_a
-        }
-      }
-    )
-    return await client.echoLocalConfig()
-  }
-}
+          nestedSecret: config.nested.nestedSecret.get(),
+          a: config.nested.a,
+          b: config.nested.b,
+        },
+        aliasedNested: {
+          c: config.aliasedNested.c,
+        },
+      });
+    },
+  },
+});
+
+export const LocalConfigAgent = defineAgent({
+  name: 'LocalConfigAgent',
+  id: { _name: z.string() },
+  config: {
+    foo: z.number(),
+    bar: z.string(),
+    nested: z.object({
+      a: z.boolean(),
+      b: z.array(z.number()),
+    }),
+    aliasedNested: z.object({
+      c: z.number().optional(),
+    }),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const LocalConfigAgentImpl = LocalConfigAgent.implement({
+  init: () => ({}),
+  methods: {
+    echoLocalConfig() {
+      const config = this.config;
+      return JSON.stringify({
+        foo: config.foo,
+        bar: config.bar,
+        nested: {
+          a: config.nested.a,
+          b: config.nested.b,
+        },
+        aliasedNested: {
+          c: config.aliasedNested.c,
+        },
+      });
+    },
+  },
+});
+
+export const SharedConfigAgent = defineAgent({
+  name: 'SharedConfigAgent',
+  id: { _name: z.string() },
+  config: {
+    secret: s.secret(z.string()),
+    complexSecret: s.secret(z.object({ foo: z.string(), bar: z.number() })),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+    createReplayGate: method({ input: {}, returns: PromiseIdSchema }),
+    revealSecretThenAwaitReplayGate: method({
+      input: { promiseId: PromiseIdSchema },
+      returns: z.string(),
+    }),
+  },
+});
+
+export const SharedConfigAgentImpl = SharedConfigAgent.implement({
+  init: () => ({}),
+  methods: {
+    echoLocalConfig() {
+      const config = this.config;
+      return JSON.stringify({
+        secret: config.secret.get(),
+        complexSecret: config.complexSecret.get(),
+      });
+    },
+    createReplayGate() {
+      return createPromise();
+    },
+    async revealSecretThenAwaitReplayGate({ promiseId }) {
+      const config = this.config;
+      const secret = config.secret.get();
+      await awaitPromise(promiseId as unknown as PromiseId);
+      return secret;
+    },
+  },
+});
+
+export const LocalCasingSharedConfigAgent = defineAgent({
+  name: 'LocalCasingSharedConfigAgent',
+  id: { _name: z.string() },
+  config: {
+    secretPath: s.secret(z.string()),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const LocalCasingSharedConfigAgentImpl = LocalCasingSharedConfigAgent.implement({
+  init: () => ({}),
+  methods: {
+    echoLocalConfig() {
+      const config = this.config;
+      return JSON.stringify({
+        secretPath: config.secretPath.get(),
+      });
+    },
+  },
+});
+
+export const OptionalGroupConfigAgent = defineAgent({
+  name: 'OptionalGroupConfigAgent',
+  id: { _name: z.string() },
+  config: {
+    required: z.string(),
+    optionalGroup: z
+      .object({
+        a: z.number(),
+        b: z.string().optional(),
+      })
+      .optional(),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const OptionalGroupConfigAgentImpl = OptionalGroupConfigAgent.implement({
+  init: () => ({}),
+  methods: {
+    echoLocalConfig() {
+      const config = this.config;
+      return JSON.stringify({
+        required: config.required,
+        optionalGroup: config.optionalGroup
+          ? { a: config.optionalGroup.a, b: config.optionalGroup.b }
+          : undefined,
+      });
+    },
+  },
+});
+
+export const AllOptionalGroupConfigAgent = defineAgent({
+  name: 'AllOptionalGroupConfigAgent',
+  id: { _name: z.string() },
+  config: {
+    allOptionalGroup: z
+      .object({
+        x: z.number().optional(),
+        y: z.string().optional(),
+      })
+      .optional(),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const AllOptionalGroupConfigAgentImpl = AllOptionalGroupConfigAgent.implement({
+  init: () => ({}),
+  methods: {
+    echoLocalConfig() {
+      const config = this.config;
+      return JSON.stringify({
+        allOptionalGroup: config.allOptionalGroup ?? null,
+      });
+    },
+  },
+});
+
+export const NestedRequiredGroupConfigAgent = defineAgent({
+  name: 'NestedRequiredGroupConfigAgent',
+  id: { _name: z.string() },
+  config: {
+    outer: z
+      .object({
+        required: z.string(),
+        inner: z.object({
+          a: z.number(),
+        }),
+      })
+      .optional(),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const NestedRequiredGroupConfigAgentImpl = NestedRequiredGroupConfigAgent.implement({
+  init: () => ({}),
+  methods: {
+    echoLocalConfig() {
+      const config = this.config;
+      return JSON.stringify({
+        outer: config.outer
+          ? { required: config.outer.required, inner: { a: config.outer.inner.a } }
+          : undefined,
+      });
+    },
+  },
+});
+
+// NOTE (fluent port): the decorator `RpcLocalConfigAgent` used
+// `LocalConfigAgent.getWithConfig(name, { foo, nested: { a } })` to invoke the
+// remote agent WITH per-call config overrides. The fluent RPC client
+// (`clientFor(def)(id)`) has NO config-override parameter — `WasmRpc` is always
+// constructed with an empty `agentConfig` list — so the sender's config is NOT
+// propagated to the callee here. This is a faithful-port GAP: the call is made
+// without overrides, so `agent_config/rpc.rs` (which asserts propagation) will
+// not pass. See the report.
+const localConfigClient = clientFor(LocalConfigAgent);
+
+export const RpcLocalConfigAgent = defineAgent({
+  name: 'RpcLocalConfigAgent',
+  id: { name: z.string() },
+  config: {
+    foo: z.number(),
+    nested_a: z.boolean().optional(),
+  },
+  methods: {
+    echoLocalConfig: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
+  init: ({ id }) => ({ name: id.name }),
+  methods: {
+    async echoLocalConfig() {
+      // Config overrides cannot be forwarded through the fluent RPC client;
+      // the remote agent uses its own manifest config (GAP — see file header).
+      const client = localConfigClient({ _name: this.name });
+      return await client.echoLocalConfig();
+    },
+  },
+});

@@ -17,8 +17,6 @@
     "noImplicitOverride": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
     "useDefineForClassFields": false,
     "paths": {
       "common/*": [

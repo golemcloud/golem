@@ -1,115 +1,127 @@
-import {
-    BaseAgent,
-    agent
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 
-@agent()
-class EchoAgent extends BaseAgent {
-    private name: string;
+export const EchoAgent = defineAgent({
+    name: 'EchoAgent',
+    id: { name: z.string() },
+    methods: {
+        echo: method({ input: {}, returns: z.string() }),
+        returnInput: method({ input: { input: z.string() }, returns: z.string() }),
+        changeAndGet: method({ input: {}, returns: z.string() }),
+    },
+});
 
-    constructor(name: string) {
-        super()
-        this.name = name;
-    }
+export const EchoAgentImpl = EchoAgent.implement({
+    init: ({ id }) => ({ name: id.name }),
+    methods: {
+        async echo() {
+            return this.name;
+        },
+        async returnInput({ input }) {
+            return input;
+        },
+        /// A method that appends a '!' to the returned string every time it's called.
+        async changeAndGet() {
+            this.name = this.name + '!';
+            return this.name;
+        },
+    },
+});
 
-    async echo(): Promise<string> {
-        return this.name
-    }
+export const EphemeralEchoAgent = defineAgent({
+    name: 'EphemeralEchoAgent',
+    id: { name: z.string() },
+    mode: 'ephemeral',
+    methods: {
+        echo: method({ input: {}, returns: z.string() }),
+        changeAndGet: method({ input: {}, returns: z.string() }),
+    },
+});
 
-    async returnInput(input: string): Promise<string> {
-        return input;
-    }
+export const EphemeralEchoAgentImpl = EphemeralEchoAgent.implement({
+    init: ({ id }) => ({ name: id.name }),
+    methods: {
+        async echo() {
+            return this.name;
+        },
+        /// A method that appends a '!' to the returned string every time it's called.
+        async changeAndGet() {
+            this.name = this.name + '!';
+            return this.name;
+        },
+    },
+});
 
-    /// A method that appends a '!' to the returned string every time it's called.
-    async changeAndGet(): Promise<string> {
-        this.name = this.name + "!";
-        return this.name;
-    }
-}
+export const SnapshotCounterAgent = defineAgent({
+    name: 'SnapshotCounterAgent',
+    id: { id: z.string() },
+    snapshotting: { everyNInvocations: 1 },
+    methods: {
+        increment: method({ input: {}, returns: z.number() }),
+        get: method({ input: {}, returns: z.number() }),
+    },
+});
 
-@agent({ mode: 'ephemeral' })
-class EphemeralEchoAgent extends BaseAgent {
-  private name: string;
+export const SnapshotCounterAgentImpl = SnapshotCounterAgent.implement({
+    init: () => ({ count: 0 }),
+    methods: {
+        async increment() {
+            this.count += 1;
+            return this.count;
+        },
+        async get() {
+            return this.count;
+        },
+    },
+});
 
-  constructor(name: string) {
-      super()
-      this.name = name;
-  }
+export const SqliteSnapshotAgent = defineAgent({
+    name: 'SqliteSnapshotAgent',
+    id: { id: z.string() },
+    snapshotting: { everyNInvocations: 1 },
+    methods: {
+        addItem: method({ input: { value: z.string() }, returns: z.number() }),
+        addLog: method({ input: { message: z.string() }, returns: z.number() }),
+        setLabel: method({ input: { label: z.string() }, returns: z.void() }),
+        getState: method({ input: {}, returns: z.string() }),
+    },
+});
 
-  async echo(): Promise<string> {
-      return this.name
-  }
-
-  /// A method that appends a '!' to the returned string every time it's called.
-  async changeAndGet(): Promise<string> {
-      this.name = this.name + "!";
-      return this.name;
-  }
-}
-
-@agent({ snapshotting: { every: 1 } })
-class SnapshotCounterAgent extends BaseAgent {
-    private count: number;
-
-    constructor(id: string) {
-        super();
-        this.count = 0;
-    }
-
-    async increment(): Promise<number> {
-        this.count += 1;
-        return this.count;
-    }
-
-    async get(): Promise<number> {
-        return this.count;
-    }
-}
-
-@agent({ snapshotting: { every: 1 } })
-class SqliteSnapshotAgent extends BaseAgent {
-    private memDb: DatabaseSync;
-    private fileDb: DatabaseSync;
-    private label: string;
-
-    constructor(id: string) {
-        super();
-        this.label = 'initial';
-        this.memDb = new DatabaseSync(':memory:');
-        this.memDb.exec('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)');
+export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
+    init: () => {
+        const memDb = new DatabaseSync(':memory:');
+        memDb.exec('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)');
         try { mkdirSync('/tmp'); } catch (_) {}
-        this.fileDb = new DatabaseSync('/tmp/sqlite-snapshot-test.db');
-        this.fileDb.exec('CREATE TABLE log (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT)');
-    }
-
-    async addItem(value: string): Promise<number> {
-        const stmt = this.memDb.prepare('INSERT INTO items (value) VALUES (?)');
-        stmt.run(value);
-        const row = this.memDb.prepare('SELECT last_insert_rowid() as id').get() as { id: number };
-        return row.id;
-    }
-
-    async addLog(message: string): Promise<number> {
-        const stmt = this.fileDb.prepare('INSERT INTO log (message) VALUES (?)');
-        stmt.run(message);
-        const row = this.fileDb.prepare('SELECT last_insert_rowid() as id').get() as { id: number };
-        return row.id;
-    }
-
-    async setLabel(label: string): Promise<void> {
-        this.label = label;
-    }
-
-    async getState(): Promise<string> {
-        const items = this.memDb.prepare('SELECT value FROM items ORDER BY id').all() as Array<{ value: string }>;
-        const logs = this.fileDb.prepare('SELECT message FROM log ORDER BY id').all() as Array<{ message: string }>;
-        return JSON.stringify({
-            label: this.label,
-            items: items.map(r => r.value),
-            logs: logs.map(r => r.message),
-        });
-    }
-}
-
+        const fileDb = new DatabaseSync('/tmp/sqlite-snapshot-test.db');
+        fileDb.exec('CREATE TABLE log (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT)');
+        return { label: 'initial', memDb, fileDb };
+    },
+    methods: {
+        async addItem({ value }) {
+            const stmt = this.memDb.prepare('INSERT INTO items (value) VALUES (?)');
+            stmt.run(value);
+            const row = this.memDb.prepare('SELECT last_insert_rowid() as id').get() as { id: number };
+            return row.id;
+        },
+        async addLog({ message }) {
+            const stmt = this.fileDb.prepare('INSERT INTO log (message) VALUES (?)');
+            stmt.run(message);
+            const row = this.fileDb.prepare('SELECT last_insert_rowid() as id').get() as { id: number };
+            return row.id;
+        },
+        async setLabel({ label }) {
+            this.label = label;
+        },
+        async getState() {
+            const items = this.memDb.prepare('SELECT value FROM items ORDER BY id').all() as Array<{ value: string }>;
+            const logs = this.fileDb.prepare('SELECT message FROM log ORDER BY id').all() as Array<{ message: string }>;
+            return JSON.stringify({
+                label: this.label,
+                items: items.map((r) => r.value),
+                logs: logs.map((r) => r.message),
+            });
+        },
+    },
+});

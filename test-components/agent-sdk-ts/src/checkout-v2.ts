@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { BaseAgent, agent, atomically } from '@golemcloud/golem-ts-sdk';
-
 // ---------------------------------------------------------------------------
 // CheckoutAgentV2 — verbatim port of the user's `craft/golem` test agent.
 //
@@ -38,6 +36,9 @@ import { BaseAgent, agent, atomically } from '@golemcloud/golem-ts-sdk';
 //     single `Order` record so the Rust test side can use the
 //     `data_value!` macro without derives.
 // ---------------------------------------------------------------------------
+
+import { z } from 'zod';
+import { defineAgent, method, atomically } from '@golemcloud/golem-ts-sdk';
 
 // 10s per-request deadline — analogous to Temporal's startToCloseTimeout
 // and identical to the user's V2 source.
@@ -74,55 +75,61 @@ async function post(api: string, path: string, body: unknown): Promise<any> {
   });
 }
 
-@agent()
-class CheckoutAgentV2 extends BaseAgent {
-  private readonly orderId: string;
+export const CheckoutAgentV2 = defineAgent({
+  name: 'CheckoutAgentV2',
+  id: { orderId: z.string() },
+  methods: {
+    checkout: method({
+      input: {
+        host: z.string(),
+        port: z.number(),
+        customerEmail: z.string(),
+        amount: z.number(),
+        address: z.string(),
+        sku: z.string(),
+        qty: z.number(),
+      },
+      returns: z.boolean(),
+    }),
+  },
+});
 
-  constructor(orderId: string) {
-    super();
-    this.orderId = orderId;
-  }
+export const CheckoutAgentV2Impl = CheckoutAgentV2.implement({
+  init: ({ id }) => ({ orderId: id.orderId }),
+  methods: {
+    /// Mirrors the user's CheckoutAgentV2.checkout exactly — four sequential
+    /// POSTs with 10s AbortController timeouts, JSON bodies, and `throw on
+    /// !ok`. Returns `true` on success so the test can use a simple
+    /// `Value::Bool` assertion.
+    async checkout({ host, port, customerEmail, amount, address, sku, qty }) {
+      const api = `http://${host}:${port}`;
+      const orderId = this.orderId;
 
-  /// Mirrors the user's CheckoutAgentV2.checkout exactly — four sequential
-  /// POSTs with 10s AbortController timeouts, JSON bodies, and `throw on
-  /// !ok`. Returns `true` on success so the test can use a simple
-  /// `Value::Bool` assertion.
-  async checkout(
-    host: string,
-    port: number,
-    customerEmail: string,
-    amount: number,
-    address: string,
-    sku: string,
-    qty: number,
-  ): Promise<boolean> {
-    const api = `http://${host}:${port}`;
-    const orderId = this.orderId;
+      const inv = await post(api, '/inventory/reserve', {
+        orderId,
+        items: [{ sku, qty }],
+      });
 
-    const inv = await post(api, '/inventory/reserve', {
-      orderId,
-      items: [{ sku, qty }],
-    });
+      await post(api, '/payment/charge', {
+        orderId,
+        amount,
+        currency: 'USD',
+      });
 
-    await post(api, '/payment/charge', {
-      orderId,
-      amount,
-      currency: 'USD',
-    });
+      const ship = await post(api, '/shipment/create', {
+        orderId,
+        reservationId: inv.reservationId,
+        address,
+      });
 
-    const ship = await post(api, '/shipment/create', {
-      orderId,
-      reservationId: inv.reservationId,
-      address,
-    });
+      await post(api, '/email/send', {
+        orderId,
+        to: customerEmail,
+        subject: `Your order ${orderId} is on its way`,
+        body: `Tracking: ${ship.trackingNumber}`,
+      });
 
-    await post(api, '/email/send', {
-      orderId,
-      to: customerEmail,
-      subject: `Your order ${orderId} is on its way`,
-      body: `Tracking: ${ship.trackingNumber}`,
-    });
-
-    return true;
-  }
-}
+      return true;
+    },
+  },
+});
