@@ -122,7 +122,9 @@ function enumCasesOf(raw: unknown): string[] {
   if (raw && typeof raw === 'object') {
     // v4 `entries` / v3 nativeEnum `values`: { KEY: value }. Numeric enums also
     // carry reverse mappings (value→key); keep only the string-valued forward keys.
-    return Object.values(raw as Record<string, unknown>).filter((x) => typeof x === 'string') as string[];
+    return Object.values(raw as Record<string, unknown>).filter(
+      (x) => typeof x === 'string',
+    ) as string[];
   }
   return [];
 }
@@ -175,26 +177,52 @@ const TRANSPARENT = new Set(['default', 'readonly', 'catch', 'effects', 'nonopti
 /** Wrappers that make the value optional. */
 const OPTIONAL = new Set(['optional', 'nullable']);
 
-function leaf(root: SchemaType, toValue: FluentCodec['toValue'], fromValue: FluentCodec['fromValue']): FluentCodec {
+function leaf(
+  root: SchemaType,
+  toValue: FluentCodec['toValue'],
+  fromValue: FluentCodec['fromValue'],
+): FluentCodec {
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
 const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
-  const { kind, inner, element, shape, items, options, discriminator, keyType, valueType, enumCases, literalValues } =
-    normalize(schema);
+  const {
+    kind,
+    inner,
+    element,
+    shape,
+    items,
+    options,
+    discriminator,
+    keyType,
+    valueType,
+    enumCases,
+    literalValues,
+  } = normalize(schema);
 
   if (OPTIONAL.has(kind)) {
     const innerCodec = recurse(inner);
     const root: SchemaType = t.option(innerCodec.graph.root);
-    return {
+    const optionCodec: FluentCodec = {
       graph: { defs: innerCodec.graph.defs, root },
       toValue: (value) =>
-        value === undefined || value === null ? v.option(undefined) : v.option(innerCodec.toValue(value)),
+        value === undefined || value === null
+          ? v.option(undefined)
+          : v.option(innerCodec.toValue(value)),
       fromValue: (sv) => {
         const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
         return opt === undefined ? undefined : innerCodec.fromValue(opt);
       },
     };
+    // An OPTIONAL object group (`z.object({...}).optional()`): still round-trips
+    // as `option<record>` at the whole-group level, but ALSO expose the inner
+    // object's per-field codecs so the config surface can descend it into
+    // per-leaf declarations, and flag it optional so descended leaves are
+    // declared as `option<leaf>` (safe unset reads) with required-child presence.
+    if (innerCodec.fields !== undefined) {
+      return { ...optionCodec, fields: innerCodec.fields, optionalGroup: true };
+    }
+    return optionCodec;
   }
 
   if (TRANSPARENT.has(kind)) {
@@ -255,7 +283,9 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       return {
         graph: { defs, root: t.record(fields) },
         toValue: (value) =>
-          v.record(fieldCodecs.map((f) => f.codec.toValue((value as Record<string, unknown>)[f.name]))),
+          v.record(
+            fieldCodecs.map((f) => f.codec.toValue((value as Record<string, unknown>)[f.name])),
+          ),
         fromValue: (sv) => {
           const recFields = (sv as Extract<SchemaValue, { tag: 'record' }>).fields;
           const out: Record<string, unknown> = {};
@@ -275,7 +305,9 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
         graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
         toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
         fromValue: (sv) =>
-          (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) => itemCodecs[i].fromValue(e)),
+          (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) =>
+            itemCodecs[i].fromValue(e),
+          ),
       };
     }
     case 'enum': {
@@ -302,15 +334,33 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       const lit = lits[0];
       switch (typeof lit) {
         case 'string':
-          return leaf(t.string(), () => v.string(lit as string), () => lit);
+          return leaf(
+            t.string(),
+            () => v.string(lit as string),
+            () => lit,
+          );
         case 'number':
-          return leaf(t.f64(), () => v.f64(lit as number), () => lit);
+          return leaf(
+            t.f64(),
+            () => v.f64(lit as number),
+            () => lit,
+          );
         case 'boolean':
-          return leaf(t.bool(), () => v.bool(lit as boolean), () => lit);
+          return leaf(
+            t.bool(),
+            () => v.bool(lit as boolean),
+            () => lit,
+          );
         case 'bigint':
-          return leaf(t.u64(), () => v.u64(lit as bigint), () => lit);
+          return leaf(
+            t.u64(),
+            () => v.u64(lit as bigint),
+            () => lit,
+          );
         default:
-          throw new Error(`Zod literal of type '${typeof lit}' is not supported by the fluent SDK walker.`);
+          throw new Error(
+            `Zod literal of type '${typeof lit}' is not supported by the fluent SDK walker.`,
+          );
       }
     }
     case 'record': {
@@ -364,7 +414,9 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       const disc = discriminator!;
       const optCodecs = opts.map((o) => recurse(o));
       const defs = mergeGraphDefs(optCodecs.map((c) => c.graph));
-      const cases: VariantCaseType[] = optCodecs.map((c, i) => variantCase(`case${i}`, c.graph.root));
+      const cases: VariantCaseType[] = optCodecs.map((c, i) =>
+        variantCase(`case${i}`, c.graph.root),
+      );
       // Map each branch's discriminator literal value → case index, for encode.
       const discToIndex = new Map<unknown, number>();
       opts.forEach((o, i) => {
@@ -377,7 +429,9 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
         toValue: (value) => {
           const i = discToIndex.get((value as Record<string, unknown>)[disc]);
           if (i === undefined) {
-            throw new Error(`No discriminated-union branch for ${disc}=${String((value as never)[disc])}`);
+            throw new Error(
+              `No discriminated-union branch for ${disc}=${String((value as never)[disc])}`,
+            );
           }
           return v.variant(i, optCodecs[i].toValue(value));
         },

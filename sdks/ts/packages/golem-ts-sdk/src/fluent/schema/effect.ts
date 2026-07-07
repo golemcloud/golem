@@ -50,7 +50,8 @@ const VOID_LIKE = new Set(['UndefinedKeyword', 'VoidKeyword']);
  */
 function isNullOrUndefinedAst(node: Ast): boolean {
   if (!node) return false;
-  if (node._tag === 'UndefinedKeyword' || node._tag === 'VoidKeyword' || node._tag === 'Null') return true;
+  if (node._tag === 'UndefinedKeyword' || node._tag === 'VoidKeyword' || node._tag === 'Null')
+    return true;
   return node._tag === 'Literal' && node.literal === null;
 }
 
@@ -74,7 +75,11 @@ function unwrap(ast: Ast): Ast {
   }
 }
 
-function leaf(root: SchemaType, toValue: FluentCodec['toValue'], fromValue: FluentCodec['fromValue']): FluentCodec {
+function leaf(
+  root: SchemaType,
+  toValue: FluentCodec['toValue'],
+  fromValue: FluentCodec['fromValue'],
+): FluentCodec {
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
@@ -112,15 +117,33 @@ function walkAst(rawAst: Ast): FluentCodec {
       const lit = ast.literal;
       switch (typeof lit) {
         case 'string':
-          return leaf(t.string(), () => v.string(lit as string), () => lit);
+          return leaf(
+            t.string(),
+            () => v.string(lit as string),
+            () => lit,
+          );
         case 'number':
-          return leaf(t.f64(), () => v.f64(lit as number), () => lit);
+          return leaf(
+            t.f64(),
+            () => v.f64(lit as number),
+            () => lit,
+          );
         case 'boolean':
-          return leaf(t.bool(), () => v.bool(lit as boolean), () => lit);
+          return leaf(
+            t.bool(),
+            () => v.bool(lit as boolean),
+            () => lit,
+          );
         case 'bigint':
-          return leaf(t.u64(), () => v.u64(lit as bigint), () => lit);
+          return leaf(
+            t.u64(),
+            () => v.u64(lit as bigint),
+            () => lit,
+          );
         default:
-          throw new Error(`Effect literal of type '${typeof lit}' is not supported by the fluent SDK walker.`);
+          throw new Error(
+            `Effect literal of type '${typeof lit}' is not supported by the fluent SDK walker.`,
+          );
       }
     }
     case 'Enums': {
@@ -172,7 +195,9 @@ function walkTupleType(ast: Ast): FluentCodec {
       graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
       toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
       fromValue: (sv) =>
-        (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) => itemCodecs[i].fromValue(e)),
+        (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) =>
+          itemCodecs[i].fromValue(e),
+        ),
     };
   }
 
@@ -210,7 +235,9 @@ function walkTypeLiteral(ast: Ast): FluentCodec {
   }
 
   if (indexSigs.length > 0) {
-    throw new Error('Effect index signatures combined with properties are not supported by the fluent SDK walker.');
+    throw new Error(
+      'Effect index signatures combined with properties are not supported by the fluent SDK walker.',
+    );
   }
 
   // Plain struct → WIT record (declaration order = property-signature order).
@@ -255,15 +282,23 @@ function realMemberOf(ast: Ast): Ast {
 /** Build an `option<inner>` codec wrapping the codec for `innerAst`. */
 function optionCodec(innerAst: Ast): FluentCodec {
   const innerCodec = walkAst(innerAst);
-  return {
+  const wrapped: FluentCodec = {
     graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
     toValue: (value) =>
-      value === undefined || value === null ? v.option(undefined) : v.option(innerCodec.toValue(value)),
+      value === undefined || value === null
+        ? v.option(undefined)
+        : v.option(innerCodec.toValue(value)),
     fromValue: (sv) => {
       const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
       return opt === undefined ? undefined : innerCodec.fromValue(opt);
     },
   };
+  // An OPTIONAL object group: expose the inner object's per-field codecs (so the
+  // config surface can descend it) and flag it optional. See zod.ts.
+  if (innerCodec.fields !== undefined) {
+    return { ...wrapped, fields: innerCodec.fields, optionalGroup: true };
+  }
+  return wrapped;
 }
 
 /** `Union`: string-literal enum, NullOr/UndefinedOr option, or tagged variant. */
@@ -337,14 +372,17 @@ function walkTaggedVariant(members: Ast[]): FluentCodec {
   const tagToIdx = new Map(cases.map((c, i) => [c.tag, i] as const));
   const graphs: SchemaGraph[] = cases.filter((c) => c.payload).map((c) => c.payload!.graph);
   const defs = mergeGraphDefs(graphs);
-  const variantCases: VariantCaseType[] = cases.map((c) => variantCase(c.tag, c.payload?.graph.root));
+  const variantCases: VariantCaseType[] = cases.map((c) =>
+    variantCase(c.tag, c.payload?.graph.root),
+  );
 
   return {
     graph: { defs, root: t.variant(variantCases) },
     toValue: (value) => {
       const obj = value as Record<string, unknown> & { _tag: string };
       const i = tagToIdx.get(obj._tag);
-      if (i === undefined) throw new Error(`Effect tagged union: unknown _tag '${String(obj._tag)}'`);
+      if (i === undefined)
+        throw new Error(`Effect tagged union: unknown _tag '${String(obj._tag)}'`);
       const c = cases[i];
       if (!c.payload) return v.variant(i, undefined);
       const { _tag, ...rest } = obj;

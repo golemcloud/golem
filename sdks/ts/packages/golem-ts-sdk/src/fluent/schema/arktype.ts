@@ -52,7 +52,11 @@ function nodeOf(schemaOrNode: any): Node {
   return n;
 }
 
-function leaf(root: SchemaType, toValue: FluentCodec['toValue'], fromValue: FluentCodec['fromValue']): FluentCodec {
+function leaf(
+  root: SchemaType,
+  toValue: FluentCodec['toValue'],
+  fromValue: FluentCodec['fromValue'],
+): FluentCodec {
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
@@ -64,15 +68,33 @@ function unitValueOf(node: Node): unknown {
 function primitiveLiteral(lit: unknown): FluentCodec {
   switch (typeof lit) {
     case 'string':
-      return leaf(t.string(), () => v.string(lit as string), () => lit);
+      return leaf(
+        t.string(),
+        () => v.string(lit as string),
+        () => lit,
+      );
     case 'number':
-      return leaf(t.f64(), () => v.f64(lit as number), () => lit);
+      return leaf(
+        t.f64(),
+        () => v.f64(lit as number),
+        () => lit,
+      );
     case 'boolean':
-      return leaf(t.bool(), () => v.bool(lit as boolean), () => lit);
+      return leaf(
+        t.bool(),
+        () => v.bool(lit as boolean),
+        () => lit,
+      );
     case 'bigint':
-      return leaf(t.u64(), () => v.u64(lit as bigint), () => lit);
+      return leaf(
+        t.u64(),
+        () => v.u64(lit as bigint),
+        () => lit,
+      );
     default:
-      throw new Error(`ArkType literal of type '${typeof lit}' is not supported by the fluent SDK walker.`);
+      throw new Error(
+        `ArkType literal of type '${typeof lit}' is not supported by the fluent SDK walker.`,
+      );
   }
 }
 
@@ -172,16 +194,7 @@ function walkUnion(node: Node): FluentCodec {
   const emptyBranches = branches.filter((b) => b.kind === 'unit' && isEmptyBranch(b));
   const realBranches = branches.filter((b) => !(b.kind === 'unit' && isEmptyBranch(b)));
   if (emptyBranches.length >= 1 && realBranches.length === 1) {
-    const innerCodec = walkNode(realBranches[0]);
-    return {
-      graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
-      toValue: (value) =>
-        value === undefined || value === null ? v.option(undefined) : v.option(innerCodec.toValue(value)),
-      fromValue: (sv) => {
-        const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
-        return opt === undefined ? undefined : innerCodec.fromValue(opt);
-      },
-    };
+    return optionCodec(walkNode(realBranches[0]));
   }
 
   // String-literal enum: every branch is a string `unit`.
@@ -217,7 +230,9 @@ function walkUnion(node: Node): FluentCodec {
 function walkIntersection(node: Node): FluentCodec {
   const structure: Node | undefined = node.inner?.structure;
   if (!structure) {
-    throw new Error('ArkType intersection without a `structure` child is not supported by the fluent SDK walker.');
+    throw new Error(
+      'ArkType intersection without a `structure` child is not supported by the fluent SDK walker.',
+    );
   }
   return walkStructure(structure);
 }
@@ -260,7 +275,9 @@ function walkStructure(node: Node): FluentCodec {
   }
 
   if (index.length > 0) {
-    throw new Error('ArkType index signatures combined with properties are not supported by the fluent SDK walker.');
+    throw new Error(
+      'ArkType index signatures combined with properties are not supported by the fluent SDK walker.',
+    );
   }
 
   // Object → WIT record. ArkType does not preserve declaration order: required
@@ -268,7 +285,11 @@ function walkStructure(node: Node): FluentCodec {
   // order and encode/decode in lockstep, so the round-trip is self-consistent.
   type FieldCodec = { name: string; codec: FluentCodec; optional: boolean };
   const fieldCodecs: FieldCodec[] = [
-    ...required.map((r) => ({ name: r.key as string, codec: walkNode(nodeOf(r.value)), optional: false })),
+    ...required.map((r) => ({
+      name: r.key as string,
+      codec: walkNode(nodeOf(r.value)),
+      optional: false,
+    })),
     ...optional.map((o) => ({
       name: o.key as string,
       codec: optionCodec(walkNode(nodeOf(o.value))),
@@ -297,15 +318,23 @@ function walkStructure(node: Node): FluentCodec {
 
 /** Wrap a codec in `option<inner>` for ArkType optional object properties. */
 function optionCodec(innerCodec: FluentCodec): FluentCodec {
-  return {
+  const wrapped: FluentCodec = {
     graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
     toValue: (value) =>
-      value === undefined || value === null ? v.option(undefined) : v.option(innerCodec.toValue(value)),
+      value === undefined || value === null
+        ? v.option(undefined)
+        : v.option(innerCodec.toValue(value)),
     fromValue: (sv) => {
       const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
       return opt === undefined ? undefined : innerCodec.fromValue(opt);
     },
   };
+  // An OPTIONAL object group: expose the inner object's per-field codecs (so the
+  // config surface can descend it) and flag it optional. See zod.ts.
+  if (innerCodec.fields !== undefined) {
+    return { ...wrapped, fields: innerCodec.fields, optionalGroup: true };
+  }
+  return wrapped;
 }
 
 /** `sequence` node: variadic (`.variadic`) → list, fixed prefix (`.prefix`) → tuple. */
@@ -329,11 +358,15 @@ function walkSequence(node: Node): FluentCodec {
       graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
       toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
       fromValue: (sv) =>
-        (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) => itemCodecs[i].fromValue(e)),
+        (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) =>
+          itemCodecs[i].fromValue(e),
+        ),
     };
   }
 
-  throw new Error('ArkType sequence with neither a variadic element nor a fixed prefix is not supported.');
+  throw new Error(
+    'ArkType sequence with neither a variadic element nor a fixed prefix is not supported.',
+  );
 }
 
 const arktypeWalker: SchemaWalker = (schema): FluentCodec => {

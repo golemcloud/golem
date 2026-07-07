@@ -69,7 +69,14 @@ import type {
   SnapshottingSpec,
 } from './defineAgent';
 import { MethodSpec, ReadOnlyOption } from './method';
-import { buildConfigAccessor, compileConfig, ConfigDeclaration, ConfigSpec } from './config';
+import {
+  buildConfigAccessor,
+  collectConfigLeaves,
+  compileConfigTree,
+  ConfigDeclaration,
+  ConfigGroupNode,
+  ConfigSpec,
+} from './config';
 import { compileEndpoint, compileMount, pathVariableNames } from './http';
 import {
   HttpEndpointDetails,
@@ -126,6 +133,8 @@ export interface RegisteredAgent {
   idCodecs: NamedCodec[];
   methodCodecs: Map<string, MethodCodec>;
   configDeclarations: ConfigDeclaration[];
+  /** Presence tree driving the runtime config accessor (optional-group aware). */
+  configTree: ConfigGroupNode;
   /**
    * Typed snapshot-state schema from `snapshotting: { state }`. When set, the
    * JSON snapshot is scoped to + validated by this schema (only the declared
@@ -191,7 +200,8 @@ export function registerAgentType(
     });
   }
 
-  const configDeclarations = compileConfig(metadata.config);
+  const configTree = compileConfigTree(metadata.config);
+  const configDeclarations = collectConfigLeaves(configTree);
 
   const agentType = assembleAgentType(name, idCodecs, methodCodecs, configDeclarations, metadata);
   AgentTypeRegistry.register(className, agentType);
@@ -206,6 +216,7 @@ export function registerAgentType(
     idCodecs,
     methodCodecs,
     configDeclarations,
+    configTree,
     snapshotStateSchema,
   };
 }
@@ -711,7 +722,7 @@ export function registerAgentInitiator(
       // Fresh-reading config accessor; shared by `init` (via context) and the
       // handler `this`. Each getter re-fetches on access (config may change
       // between invocations).
-      const config = buildConfigAccessor(reg.configDeclarations);
+      const config = buildConfigAccessor(reg.configTree);
 
       // `init` may be synchronous or async (return a Promise); awaiting a plain
       // value is a no-op, so both forms work. The guest `initialize`/load-snapshot

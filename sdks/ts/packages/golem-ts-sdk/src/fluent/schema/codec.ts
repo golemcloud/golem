@@ -38,6 +38,17 @@ export interface FluentCodec {
    */
   readonly fields?: ReadonlyArray<{ readonly name: string; readonly codec: FluentCodec }>;
   /**
+   * For an OPTIONAL object group (`z.object({...}).optional()`): the codec's own
+   * `graph` round-trips as `option<record>`, but {@link fields} is ALSO exposed
+   * (mirrored from the inner object) so the config surface can DESCEND the group
+   * into per-leaf declarations. This flag tells the config surface that the
+   * descended group is optional — its leaves are declared to the host as
+   * `option<leaf>` (so an unset leaf reads as option-none instead of trapping)
+   * and its runtime presence is decided by its REQUIRED children. Absent for a
+   * plain (non-optional) object group.
+   */
+  readonly optionalGroup?: boolean;
+  /**
    * For SECRET markers (`s.secret(inner)`): the inner (revealed-value) codec —
    * the one that decodes the plaintext after `golem:secrets/reveal`. The
    * marker's own `graph` is `secret<inner>` and its own `fromValue` yields the
