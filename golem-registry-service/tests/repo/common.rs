@@ -23,7 +23,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
-use golem_common::model::card::{CardId, CardManagedBy};
+use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -858,6 +858,7 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             component_name,
             revision_0.clone(),
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -872,6 +873,7 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             component_name,
             revision_0.clone(),
+            Vec::new(),
         )
         .await;
     let_assert!(Err(ComponentRepoError::ComponentViolatesUniqueness) = recreate);
@@ -917,7 +919,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let created_revision_1 = deps
         .component_repo
-        .update(revision_1.clone())
+        .update(revision_1.clone(), Vec::new())
         .await
         .unwrap();
     let_assert!(created_revision_1 = created_revision_1);
@@ -925,7 +927,10 @@ pub async fn test_component_stage(deps: &Deps) {
     assert!(created_revision_1.environment_id == env.revision.environment_id);
     assert!(created_revision_1.name == component_name);
 
-    let recreated_revision_1 = deps.component_repo.update(revision_1.clone()).await;
+    let recreated_revision_1 = deps
+        .component_repo
+        .update(revision_1.clone(), Vec::new())
+        .await;
     let_assert!(Err(ComponentRepoError::ConcurrentModification) = recreated_revision_1);
 
     let components = deps
@@ -951,6 +956,7 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             other_component_name,
             other_component_revision_0.clone(),
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -996,6 +1002,7 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             component_name,
             revision_after_delete.clone(),
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -1325,6 +1332,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
                 },
+                Vec::new(),
             )
             .await
             .unwrap();
@@ -1361,9 +1369,9 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
         Vec::new(),
         None,
         true,
-        Some(CardManagedBy::AccountRoot {
+        Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot {
             account_id: golem_common::model::account::AccountId(account_id),
-        }),
+        })),
     )
 }
 
@@ -1466,6 +1474,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 object_store_key: "".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
             },
+            Vec::new(),
         )
         .await
         .unwrap();

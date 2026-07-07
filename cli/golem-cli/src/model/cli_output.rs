@@ -258,6 +258,7 @@ mod tests {
     };
     use crate::model::masking::MaskingConfig;
     use crate::model::text::diff::DeployPlanView;
+    use golem_common::model::card::{CardId, PolymorphicCard};
     use proptest::prelude::*;
     use quote::ToTokens;
     use serde_json::{Value, json};
@@ -265,6 +266,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use syn::{Expr, ImplItem, Item, ItemImpl, Lit, Type};
     use test_r::test;
+    use uuid::uuid;
     use walkdir::WalkDir;
 
     type OutputDocumentStrategy = BoxedStrategy<Value>;
@@ -1077,6 +1079,17 @@ mod tests {
                         oplog_processor_component_revision: None,
                     }],
                     files: vec![],
+                    initial_permissions: PolymorphicCard {
+                        card_id: CardId(uuid!("a741846a-2562-4065-8a06-fd9dbee52198")),
+                        parent_ids: vec![CardId(uuid!("cd6d7717-4df1-4e9a-ac26-5bf524c1a732"))],
+                        lower_negative: Vec::new(),
+                        lower_positive: Vec::new(),
+                        upper_negative: Vec::new(),
+                        upper_positive: Vec::new(),
+                        system_card: false,
+                        created_at: fixed_datetime(),
+                        expires_at: None,
+                    },
                 },
             )]),
         }
@@ -1232,6 +1245,12 @@ mod tests {
             )]),
             files_by_path: BTreeMap::new(),
             plugins_by_grant_id: BTreeMap::new(),
+            initial_permissions: golem_common::model::diff::AgentTypeInitialPermission {
+                lower_positive: Vec::new(),
+                lower_negative: Vec::new(),
+                upper_positive: Vec::new(),
+                upper_negative: Vec::new(),
+            },
         }
     }
 
@@ -4224,13 +4243,15 @@ mod tests {
             proptest::collection::vec(arb_typed_agent_config_entry(), 0..3),
             proptest::collection::vec(arb_installed_plugin(), 0..2),
             proptest::collection::vec(arb_initial_agent_file(), 0..2),
+            arb_polymorphic_card(),
         )
-            .prop_map(|(env, config, plugins, files)| {
+            .prop_map(|(env, config, plugins, files, initial_permission)| {
                 golem_common::model::component_metadata::AgentTypeProvisionConfig {
                     env,
                     config,
                     plugins,
                     files,
+                    initial_permissions: initial_permission,
                 }
             })
             .boxed()
@@ -4335,6 +4356,32 @@ mod tests {
         .boxed()
     }
 
+    fn arb_polymorphic_card() -> BoxedStrategy<golem_common::model::card::PolymorphicCard> {
+        (
+            arb_uuid(),
+            proptest::collection::vec(arb_uuid(), 1..3),
+            proptest::bool::ANY,
+            arb_datetime(),
+            proptest::option::of(arb_datetime()),
+        )
+            .prop_map(
+                |(uuid, parent_uuids, system_card, created_at, expires_at)| {
+                    golem_common::model::card::PolymorphicCard {
+                        card_id: CardId(uuid),
+                        parent_ids: parent_uuids.into_iter().map(CardId).collect(),
+                        lower_negative: Vec::new(),
+                        lower_positive: Vec::new(),
+                        upper_negative: Vec::new(),
+                        upper_positive: Vec::new(),
+                        system_card,
+                        created_at,
+                        expires_at,
+                    }
+                },
+            )
+            .boxed()
+    }
+
     fn arb_deploy_plan_result() -> OutputDocumentStrategy {
         any::<bool>()
             .prop_map(|include_environment_setup| {
@@ -4401,6 +4448,12 @@ mod tests {
                                     ),
                                 )]),
                                 plugins_by_grant_id: BTreeMap::new(),
+                                initial_permissions: golem_common::model::diff::AgentTypeInitialPermission {
+                                    lower_negative: Vec::new(),
+                                    lower_positive: Vec::new(),
+                                    upper_negative: Vec::new(),
+                                    upper_positive: Vec::new()
+                                }
                             },
                         ),
                     )]),
@@ -4427,6 +4480,12 @@ mod tests {
                                     ),
                                 )]),
                                 plugins_by_grant_id: BTreeMap::new(),
+                                initial_permissions: golem_common::model::diff::AgentTypeInitialPermission {
+                                    lower_negative: Vec::new(),
+                                    lower_positive: Vec::new(),
+                                    upper_negative: Vec::new(),
+                                    upper_positive: Vec::new()
+                                }
                             },
                         ),
                     )]),

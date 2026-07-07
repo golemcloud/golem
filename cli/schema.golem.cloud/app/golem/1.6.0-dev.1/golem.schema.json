@@ -128,6 +128,37 @@
         }
       }
     },
+    "initialCard": {
+      "description": "Initial permission card grants installed into newly created agents of this type.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lowerBound": {
+          "$ref": "#/definitions/initialCardBound"
+        },
+        "upperBound": {
+          "$ref": "#/definitions/initialCardBound"
+        }
+      }
+    },
+    "initialCardBound": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "positive": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "negative": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "componentTemplate": {
       "description": "Component template definition",
       "type": "object",
@@ -172,6 +203,9 @@
           }
         },
         "config": {},
+        "initialCard": {
+          "$ref": "#/definitions/initialCard"
+        },
         "envMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -268,6 +302,9 @@
           }
         },
         "config": {},
+        "initialCard": {
+          "$ref": "#/definitions/initialCard"
+        },
         "envMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -321,6 +358,9 @@
       "additionalProperties": false,
       "properties": {
         "config": {},
+        "initialCard": {
+          "$ref": "#/definitions/initialCard"
+        },
         "envMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -416,6 +456,9 @@
       "additionalProperties": false,
       "properties": {
         "config": {},
+        "initialCard": {
+          "$ref": "#/definitions/initialCard"
+        },
         "envMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -505,6 +548,9 @@
           "$ref": "#/definitions/lenientTokenList"
         },
         "config": {},
+        "initialCard": {
+          "$ref": "#/definitions/initialCard"
+        },
         "envMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -558,6 +604,9 @@
       "additionalProperties": false,
       "properties": {
         "config": {},
+        "initialCard": {
+          "$ref": "#/definitions/initialCard"
+        },
         "envMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -608,6 +657,9 @@
       "additionalProperties": false,
       "properties": {
         "config": {},
+        "initialCard": {
+          "$ref": "#/definitions/initialCard"
+        },
         "envMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },

@@ -32,6 +32,7 @@ message AgentTypeProvisionConfig {
   repeated golem.worker.TypedAgentConfigEntry config = 2;
   repeated golem.component.PluginInstallation plugins = 3;
   repeated golem.component.InitialAgentFile files = 4;
+  bytes initial_permissions = 5;
 }
 
 message HttpMountDetails {

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use chrono::Utc;
 use golem_common::SafeDisplay;
-use golem_common::model::OwnedAgentId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -24,66 +24,58 @@ use tokio::sync::RwLock;
 
 #[async_trait]
 pub trait CardService: Send + Sync {
-    async fn register_agent(&self, agent_id: OwnedAgentId);
-
-    async fn register_agent_cards(&self, agent_id: OwnedAgentId, card_ids: &[CardId]);
-
-    async fn remove_revoked_agent_cards(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]);
-
-    async fn unregister_agent(&self, agent_id: &OwnedAgentId);
-
-    async fn record_revoked_cards(&self, card_ids: &[CardId])
-    -> HashMap<OwnedAgentId, Vec<CardId>>;
+    async fn record_revoked_cards(&self, card_ids: &[CardId]);
 
     async fn check_cards(
         &self,
         card_ids: Vec<CardId>,
-    ) -> Result<HashSet<CardId>, WorkerExecutorError>;
+    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError>;
 
-    async fn get_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<Vec<StoredCard>, WorkerExecutorError>;
+    /// Drops cached live card state so the next `check_cards` re-validates
+    /// against the registry. Called during registry invalidation cursor-expiry
+    /// recovery, when card revocations may have been missed.
+    async fn invalidate_all(&self) {}
 }
 
 pub struct CardServiceDefault {
     registry_service: Arc<dyn RegistryService>,
-    negative_index: RwLock<HashSet<CardId>>,
-    active_agents: RwLock<HashSet<OwnedAgentId>>,
-    reverse_index: RwLock<HashMap<CardId, HashSet<OwnedAgentId>>>,
+    state: RwLock<CardServiceState>,
+}
+
+#[derive(Default)]
+struct CardServiceState {
+    cards: HashMap<CardId, CardData>,
+    /// Bumped by `invalidate_all`. A `check_cards` lookup captures this before
+    /// its registry fetch and refuses to write results back if it changed in
+    /// the meantime, so an in-flight lookup cannot repopulate a just-flushed
+    /// live cache with stale data.
+    generation: u64,
+}
+
+#[derive(Default)]
+struct CardData {
+    state: CardState,
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Debug)]
+pub enum CardState {
+    #[default]
+    Unknown,
+    Live(Box<StoredCard>),
+    Revoked,
 }
 
 pub struct NoopCardService;
 
 #[async_trait]
 impl CardService for NoopCardService {
-    async fn register_agent(&self, _agent_id: OwnedAgentId) {}
-
-    async fn register_agent_cards(&self, _agent_id: OwnedAgentId, _card_ids: &[CardId]) {}
-
-    async fn remove_revoked_agent_cards(&self, _agent_id: &OwnedAgentId, _card_ids: &[CardId]) {}
-
-    async fn unregister_agent(&self, _agent_id: &OwnedAgentId) {}
-
-    async fn record_revoked_cards(
-        &self,
-        _card_ids: &[CardId],
-    ) -> HashMap<OwnedAgentId, Vec<CardId>> {
-        HashMap::new()
-    }
+    async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
     async fn check_cards(
         &self,
         _card_ids: Vec<CardId>,
-    ) -> Result<HashSet<CardId>, WorkerExecutorError> {
-        Ok(HashSet::new())
-    }
-
-    async fn get_cards(
-        &self,
-        _card_ids: Vec<CardId>,
-    ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
-        Ok(Vec::new())
+    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+        Ok(HashMap::new())
     }
 }
 
@@ -91,163 +83,178 @@ impl CardServiceDefault {
     pub fn new(registry_service: Arc<dyn RegistryService>) -> Self {
         Self {
             registry_service,
-            negative_index: RwLock::new(HashSet::new()),
-            active_agents: RwLock::new(HashSet::new()),
-            reverse_index: RwLock::new(HashMap::new()),
+            state: RwLock::new(CardServiceState::default()),
         }
     }
 
-    async fn cache_revoked_cards(&self, card_ids: &[CardId]) {
-        let mut negative_index = self.negative_index.write().await;
-        negative_index.extend(card_ids.iter().copied());
-    }
-
-    async fn remove_agent_from_reverse_index(&self, agent_id: &OwnedAgentId) {
-        let mut reverse_index = self.reverse_index.write().await;
-        reverse_index.retain(|_, agents| {
-            agents.remove(agent_id);
-            !agents.is_empty()
-        });
-    }
-
-    async fn remove_agent_cards_from_reverse_index(
-        &self,
-        agent_id: &OwnedAgentId,
-        card_ids: &[CardId],
-    ) {
-        let mut reverse_index = self.reverse_index.write().await;
+    fn record_revoked_cards_in_state(state: &mut CardServiceState, card_ids: &[CardId]) {
         for card_id in card_ids {
-            let remove_card = if let Some(agents) = reverse_index.get_mut(card_id) {
-                agents.remove(agent_id);
-                agents.is_empty()
-            } else {
-                false
-            };
-            if remove_card {
-                reverse_index.remove(card_id);
+            state.cards.entry(*card_id).or_default().state = CardState::Revoked;
+        }
+    }
+
+    fn record_live_cards_in_state(state: &mut CardServiceState, cards: Vec<StoredCard>) {
+        for card in cards {
+            let data = state.cards.entry(card.card_id()).or_default();
+            if data.state != CardState::Revoked {
+                data.state = if Self::card_is_expired(&card) {
+                    CardState::Revoked
+                } else {
+                    CardState::Live(Box::new(card))
+                };
             }
         }
+    }
+
+    fn card_is_expired(card: &StoredCard) -> bool {
+        card.expires_at()
+            .is_some_and(|expires_at| expires_at <= Utc::now())
+    }
+
+    fn cached_card_states(
+        state: &CardServiceState,
+        card_ids: &[CardId],
+    ) -> (HashMap<CardId, CardState>, Vec<CardId>) {
+        let mut cached_states = HashMap::new();
+        let mut seen_unknown = HashSet::new();
+
+        for card_id in card_ids {
+            match state.cards.get(card_id).map(|data| &data.state) {
+                Some(CardState::Revoked) => {
+                    cached_states.insert(*card_id, CardState::Revoked);
+                }
+                Some(CardState::Live(card)) => {
+                    if Self::card_is_expired(card) {
+                        cached_states.insert(*card_id, CardState::Revoked);
+                    } else {
+                        cached_states.insert(*card_id, CardState::Live(card.clone()));
+                    }
+                }
+                Some(CardState::Unknown) | None => {
+                    if seen_unknown.insert(*card_id) {
+                        cached_states.insert(*card_id, CardState::Unknown);
+                    }
+                }
+            }
+        }
+
+        let unknown = seen_unknown.into_iter().collect();
+        (cached_states, unknown)
+    }
+
+    fn record_fetched_cards(
+        state: &mut CardServiceState,
+        requested_card_ids: &[CardId],
+        fetched_cards: Vec<StoredCard>,
+    ) -> Vec<CardId> {
+        let fetched_card_ids = fetched_cards
+            .iter()
+            .filter(|card| !Self::card_is_expired(card))
+            .map(StoredCard::card_id)
+            .collect::<HashSet<_>>();
+        let missing = requested_card_ids
+            .iter()
+            .copied()
+            .filter(|card_id| !fetched_card_ids.contains(card_id))
+            .collect::<Vec<_>>();
+
+        Self::record_revoked_cards_in_state(state, &missing);
+        Self::record_live_cards_in_state(state, fetched_cards);
+
+        missing
+    }
+
+    fn card_state(state: &CardServiceState, card_id: CardId) -> Option<CardState> {
+        state.cards.get(&card_id).map(|data| match &data.state {
+            CardState::Live(card) if Self::card_is_expired(card) => CardState::Revoked,
+            state => state.clone(),
+        })
     }
 }
 
 #[async_trait]
 impl CardService for CardServiceDefault {
-    async fn register_agent(&self, agent_id: OwnedAgentId) {
-        self.active_agents.write().await.insert(agent_id);
-    }
-
-    async fn register_agent_cards(&self, agent_id: OwnedAgentId, card_ids: &[CardId]) {
-        if !self.active_agents.read().await.contains(&agent_id) {
-            return;
-        }
-
-        self.remove_agent_from_reverse_index(&agent_id).await;
-
-        if card_ids.is_empty() {
-            return;
-        }
-
-        let mut reverse_index = self.reverse_index.write().await;
-        for card_id in card_ids {
-            reverse_index
-                .entry(*card_id)
-                .or_default()
-                .insert(agent_id.clone());
-        }
-    }
-
-    async fn remove_revoked_agent_cards(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]) {
-        self.cache_revoked_cards(card_ids).await;
-        self.remove_agent_cards_from_reverse_index(agent_id, card_ids)
-            .await;
-    }
-
-    async fn unregister_agent(&self, agent_id: &OwnedAgentId) {
-        self.active_agents.write().await.remove(agent_id);
-
-        self.remove_agent_from_reverse_index(agent_id).await;
-    }
-
-    async fn record_revoked_cards(
-        &self,
-        card_ids: &[CardId],
-    ) -> HashMap<OwnedAgentId, Vec<CardId>> {
-        self.cache_revoked_cards(card_ids).await;
-
-        {
-            let reverse_index = self.reverse_index.read().await;
-            let mut affected_agent_cards = HashMap::<OwnedAgentId, Vec<CardId>>::new();
-            for card_id in card_ids {
-                if let Some(agents) = reverse_index.get(card_id) {
-                    for agent_id in agents {
-                        affected_agent_cards
-                            .entry(agent_id.clone())
-                            .or_default()
-                            .push(*card_id);
-                    }
-                }
-            }
-            affected_agent_cards
-        }
+    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
+        let mut state = self.state.write().await;
+        Self::record_revoked_cards_in_state(&mut state, card_ids);
     }
 
     async fn check_cards(
         &self,
         card_ids: Vec<CardId>,
-    ) -> Result<HashSet<CardId>, WorkerExecutorError> {
-        let revoked_cards = self.negative_index.read().await.clone();
-        let mut result = HashSet::with_capacity(card_ids.len());
-        let mut needs_registry_lookup = Vec::new();
-        let mut seen_lookup = HashSet::new();
+    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+        // Optimistic re-validation: capture the cache generation before fetching
+        // from the registry. If an `invalidate_all` races with the fetch, retry
+        // with a fresh snapshot so cached hits and freshly fetched cards are all
+        // reported from a single consistent post-invalidation cache state. The
+        // bound guards against pathological repeated invalidation; on exhaustion
+        // the fetch is served without repopulating the cache, so the next call
+        // still re-validates.
+        const MAX_ATTEMPTS: usize = 8;
 
-        for card_id in card_ids {
-            if revoked_cards.contains(&card_id) {
-                result.insert(card_id);
-            } else if seen_lookup.insert(card_id) {
-                needs_registry_lookup.push(card_id);
+        for attempt in 0..MAX_ATTEMPTS {
+            let (result, unknown, generation) = {
+                let state = self.state.read().await;
+                let (result, unknown) = Self::cached_card_states(&state, &card_ids);
+                (result, unknown, state.generation)
+            };
+
+            if unknown.is_empty() {
+                return Ok(result);
+            }
+
+            let live_cards = self
+                .registry_service
+                .batch_get_cards(unknown.clone())
+                .await
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed checking card liveness: {}",
+                        err.to_safe_string()
+                    ))
+                })?;
+
+            let mut state = self.state.write().await;
+            if state.generation == generation {
+                Self::record_fetched_cards(&mut state, &unknown, live_cards);
+                let (result, _) = Self::cached_card_states(&state, &card_ids);
+                return Ok(result);
+            }
+
+            if attempt == MAX_ATTEMPTS - 1 {
+                // Exhausted retries under repeated invalidation. Every value
+                // fetched this attempt predates the detected invalidation, so it
+                // cannot be trusted as fresh liveness. Report only what the
+                // current cache knows (post-invalidation live entries and
+                // monotonic revocations) plus registry-confirmed removals as
+                // revoked. Anything else is omitted and re-validated on the next
+                // call, so a card is never reported live on stale evidence.
+                let fetched_live_ids = live_cards
+                    .iter()
+                    .filter(|card| !Self::card_is_expired(card))
+                    .map(StoredCard::card_id)
+                    .collect::<HashSet<_>>();
+                let mut result = HashMap::new();
+                for card_id in &card_ids {
+                    if let Some(card_state) = Self::card_state(&state, *card_id) {
+                        result.insert(*card_id, card_state);
+                    } else if unknown.contains(card_id) && !fetched_live_ids.contains(card_id) {
+                        result.insert(*card_id, CardState::Revoked);
+                    }
+                }
+                return Ok(result);
             }
         }
 
-        if needs_registry_lookup.is_empty() {
-            return Ok(result);
-        }
-
-        let existing = self
-            .registry_service
-            .batch_get_existing_cards(needs_registry_lookup.clone())
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed checking card existence: {}",
-                    err.to_safe_string()
-                ))
-            })?;
-        let existing = existing.into_iter().collect::<HashSet<_>>();
-        let missing = needs_registry_lookup
-            .iter()
-            .copied()
-            .filter(|card_id| !existing.contains(card_id))
-            .collect::<Vec<_>>();
-        self.cache_revoked_cards(&missing).await;
-
-        result.extend(missing);
-
-        Ok(result)
+        unreachable!("check_cards returns on the final attempt")
     }
 
-    async fn get_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
-        self.registry_service
-            .batch_get_cards(card_ids)
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed loading cards: {}",
-                    err.to_safe_string()
-                ))
-            })
+    async fn invalidate_all(&self) {
+        let mut state = self.state.write().await;
+        state
+            .cards
+            .retain(|_, data| data.state == CardState::Revoked);
+        state.generation = state.generation.wrapping_add(1);
     }
 }
 
@@ -255,10 +262,12 @@ impl CardService for CardServiceDefault {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use chrono::Utc;
     use golem_common::model::AgentId;
     use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::auth::TokenSecret;
+    use golem_common::model::card::Card;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::domain_registration::Domain;
@@ -273,9 +282,137 @@ mod tests {
     use golem_service_base::model::component::Component;
     use golem_service_base::model::environment::EnvironmentState;
     use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+    use std::collections::BTreeSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
-    struct TestRegistryService;
+    struct BlockedCardLookup {
+        requested: Vec<CardId>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    struct BlockingRegistryService {
+        existing_cards: Arc<RwLock<HashSet<CardId>>>,
+        stored_cards: Arc<RwLock<HashMap<CardId, StoredCard>>>,
+        lookup_started: tokio::sync::mpsc::UnboundedSender<BlockedCardLookup>,
+    }
+
+    enum ExistingCards {
+        All,
+        Fixed(HashSet<CardId>),
+        Cards(HashMap<CardId, StoredCard>),
+        Shared(Arc<RwLock<HashSet<CardId>>>),
+        DelayedFirstShared {
+            delayed_call_index: usize,
+            existing_cards: Arc<RwLock<HashSet<CardId>>>,
+            first_lookup_started: Arc<tokio::sync::Notify>,
+            release_first_lookup: Arc<tokio::sync::Notify>,
+        },
+    }
+
+    struct TestRegistryService {
+        existing_cards: ExistingCards,
+        lookup_count: Arc<AtomicUsize>,
+    }
+
+    impl TestRegistryService {
+        fn all_existing() -> Self {
+            Self {
+                existing_cards: ExistingCards::All,
+                lookup_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn with_existing(existing_cards: HashSet<CardId>, lookup_count: Arc<AtomicUsize>) -> Self {
+            Self {
+                existing_cards: ExistingCards::Fixed(existing_cards),
+                lookup_count,
+            }
+        }
+
+        fn with_cards(cards: Vec<StoredCard>, lookup_count: Arc<AtomicUsize>) -> Self {
+            Self {
+                existing_cards: ExistingCards::Cards(
+                    cards
+                        .into_iter()
+                        .map(|card| (card.card_id(), card))
+                        .collect(),
+                ),
+                lookup_count,
+            }
+        }
+
+        fn with_shared_existing(
+            existing_cards: Arc<RwLock<HashSet<CardId>>>,
+            lookup_count: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                existing_cards: ExistingCards::Shared(existing_cards),
+                lookup_count,
+            }
+        }
+
+        fn with_delayed_first_shared_existing(
+            existing_cards: Arc<RwLock<HashSet<CardId>>>,
+            lookup_count: Arc<AtomicUsize>,
+            first_lookup_started: Arc<tokio::sync::Notify>,
+            release_first_lookup: Arc<tokio::sync::Notify>,
+        ) -> Self {
+            Self::with_delayed_shared_existing(
+                existing_cards,
+                lookup_count,
+                first_lookup_started,
+                release_first_lookup,
+                0,
+            )
+        }
+
+        fn with_delayed_shared_existing(
+            existing_cards: Arc<RwLock<HashSet<CardId>>>,
+            lookup_count: Arc<AtomicUsize>,
+            first_lookup_started: Arc<tokio::sync::Notify>,
+            release_first_lookup: Arc<tokio::sync::Notify>,
+            delayed_call_index: usize,
+        ) -> Self {
+            Self {
+                existing_cards: ExistingCards::DelayedFirstShared {
+                    delayed_call_index,
+                    existing_cards,
+                    first_lookup_started,
+                    release_first_lookup,
+                },
+                lookup_count,
+            }
+        }
+
+        async fn keep_existing(&self, card_ids: Vec<CardId>) -> Vec<CardId> {
+            match &self.existing_cards {
+                ExistingCards::All => card_ids,
+                ExistingCards::Fixed(existing_cards) => card_ids
+                    .into_iter()
+                    .filter(|card_id| existing_cards.contains(card_id))
+                    .collect(),
+                ExistingCards::Cards(cards) => card_ids
+                    .into_iter()
+                    .filter(|card_id| cards.contains_key(card_id))
+                    .collect(),
+                ExistingCards::Shared(existing_cards) => {
+                    let existing_cards = existing_cards.read().await;
+                    card_ids
+                        .into_iter()
+                        .filter(|card_id| existing_cards.contains(card_id))
+                        .collect()
+                }
+                ExistingCards::DelayedFirstShared { existing_cards, .. } => {
+                    let existing_cards = existing_cards.read().await;
+                    card_ids
+                        .into_iter()
+                        .filter(|card_id| existing_cards.contains(card_id))
+                        .collect()
+                }
+            }
+        }
+    }
 
     #[async_trait]
     impl RegistryService for TestRegistryService {
@@ -313,7 +450,267 @@ mod tests {
             &self,
             card_ids: Vec<CardId>,
         ) -> Result<Vec<CardId>, RegistryServiceError> {
-            Ok(card_ids)
+            self.lookup_count.fetch_add(1, Ordering::SeqCst);
+            Ok(self.keep_existing(card_ids).await)
+        }
+
+        async fn batch_get_cards(
+            &self,
+            card_ids: Vec<CardId>,
+        ) -> Result<Vec<StoredCard>, RegistryServiceError> {
+            let call_index = self.lookup_count.fetch_add(1, Ordering::SeqCst);
+            if let ExistingCards::DelayedFirstShared {
+                delayed_call_index,
+                existing_cards,
+                first_lookup_started,
+                release_first_lookup,
+            } = &self.existing_cards
+                && call_index == *delayed_call_index
+            {
+                let existing_cards = existing_cards.read().await;
+                let snapshot = card_ids
+                    .into_iter()
+                    .filter(|card_id| existing_cards.contains(card_id))
+                    .collect::<Vec<_>>();
+                drop(existing_cards);
+
+                first_lookup_started.notify_one();
+                release_first_lookup.notified().await;
+
+                return Ok(snapshot.into_iter().map(stored_card).collect());
+            }
+
+            if let ExistingCards::Cards(cards) = &self.existing_cards {
+                return Ok(card_ids
+                    .into_iter()
+                    .filter_map(|card_id| cards.get(&card_id).cloned())
+                    .collect());
+            }
+
+            Ok(self
+                .keep_existing(card_ids)
+                .await
+                .into_iter()
+                .map(stored_card)
+                .collect())
+        }
+
+        async fn download_component(
+            &self,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<Vec<u8>, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_component_metadata(
+            &self,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<Component, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_deployed_component_metadata(
+            &self,
+            _component_id: ComponentId,
+        ) -> Result<Component, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_all_deployed_component_revisions(
+            &self,
+            _component_id: ComponentId,
+        ) -> Result<Vec<Component>, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn resolve_component(
+            &self,
+            _resolving_account_id: golem_common::model::account::AccountId,
+            _resolving_application_id: ApplicationId,
+            _resolving_environment_id: EnvironmentId,
+            _component_slug: &str,
+        ) -> Result<Component, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_all_agent_types(
+            &self,
+            _environment_id: EnvironmentId,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_agent_type(
+            &self,
+            _environment_id: EnvironmentId,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+            _name: &AgentTypeName,
+        ) -> Result<RegisteredAgentType, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn resolve_agent_type_by_names(
+            &self,
+            _app_name: &ApplicationName,
+            _environment_name: &EnvironmentName,
+            _agent_type_name: &AgentTypeName,
+            _deployment_revision: Option<DeploymentRevision>,
+            _owner_account_email: Option<&str>,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<ResolvedAgentType, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_active_routes_for_domain(
+            &self,
+            _domain: &Domain,
+        ) -> Result<CompiledRoutes, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_active_compiled_mcps_for_domain(
+            &self,
+            _domain: &Domain,
+        ) -> Result<CompiledMcp, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_current_environment_state(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<EnvironmentState, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_agent_secret_revision(
+            &self,
+            _environment_id: EnvironmentId,
+            _agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
+            _path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
+            _revision: golem_common::model::agent_secret::AgentSecretRevision,
+        ) -> Result<
+            Option<golem_service_base::model::agent_secret::AgentSecret>,
+            RegistryServiceError,
+        > {
+            unimplemented!()
+        }
+
+        async fn get_resource_definition_by_id(
+            &self,
+            _resource_definition_id: ResourceDefinitionId,
+        ) -> Result<ResourceDefinition, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_resource_definition_by_name(
+            &self,
+            _environment_id: EnvironmentId,
+            _resource_name: ResourceName,
+        ) -> Result<ResourceDefinition, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn subscribe_registry_invalidations(
+            &self,
+            _last_seen_event_id: Option<u64>,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<
+                                golem_common::model::agent::RegistryInvalidationEvent,
+                                RegistryServiceError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            RegistryServiceError,
+        > {
+            unimplemented!()
+        }
+
+        async fn run_registry_invalidation_event_subscriber(
+            &self,
+            _service_name: &'static str,
+            _shutdown_token: Option<tokio_util::sync::CancellationToken>,
+            _handler: Arc<dyn RegistryInvalidationHandler>,
+        ) {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl RegistryService for BlockingRegistryService {
+        async fn authenticate_token(
+            &self,
+            _token: &TokenSecret,
+        ) -> Result<AuthCtx, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_resource_limits(
+            &self,
+            _account_id: golem_common::model::account::AccountId,
+        ) -> Result<ResourceLimits, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn update_worker_connection_limit(
+            &self,
+            _account_id: golem_common::model::account::AccountId,
+            _agent_id: &AgentId,
+            _added: bool,
+        ) -> Result<(), RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn batch_update_resource_usage(
+            &self,
+            _updates: HashMap<golem_common::model::account::AccountId, ResourceUsageUpdate>,
+        ) -> Result<AccountResourceLimits, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn batch_get_existing_cards(
+            &self,
+            _card_ids: Vec<CardId>,
+        ) -> Result<Vec<CardId>, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn batch_get_cards(
+            &self,
+            card_ids: Vec<CardId>,
+        ) -> Result<Vec<StoredCard>, RegistryServiceError> {
+            let snapshot = {
+                let existing_cards = self.existing_cards.read().await;
+                let stored_cards = self.stored_cards.read().await;
+                card_ids
+                    .iter()
+                    .copied()
+                    .filter(|card_id| existing_cards.contains(card_id))
+                    .map(|card_id| {
+                        stored_cards
+                            .get(&card_id)
+                            .cloned()
+                            .unwrap_or_else(|| stored_card(card_id))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let release = Arc::new(tokio::sync::Notify::new());
+            self.lookup_started
+                .send(BlockedCardLookup {
+                    requested: card_ids,
+                    release: release.clone(),
+                })
+                .unwrap();
+            release.notified().await;
+            Ok(snapshot)
         }
 
         async fn download_component(
@@ -466,15 +863,44 @@ mod tests {
     }
 
     fn service() -> CardServiceDefault {
-        CardServiceDefault::new(Arc::new(TestRegistryService))
+        CardServiceDefault::new(Arc::new(TestRegistryService::all_existing()))
     }
 
-    fn agent(name: &str) -> OwnedAgentId {
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: name.to_string(),
-        };
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id)
+    fn stored_card(card_id: CardId) -> StoredCard {
+        StoredCard::Concrete(Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        })
+    }
+
+    fn assert_live(states: &HashMap<CardId, CardState>, card_id: CardId) {
+        assert!(
+            matches!(states.get(&card_id), Some(CardState::Live(card)) if card.card_id() == card_id)
+        );
+    }
+
+    fn assert_revoked(states: &HashMap<CardId, CardState>, card_id: CardId) {
+        assert_eq!(states.get(&card_id), Some(&CardState::Revoked));
+    }
+
+    async fn expect_blocked_lookup(
+        lookup_started: &mut tokio::sync::mpsc::UnboundedReceiver<BlockedCardLookup>,
+        expected: &[CardId],
+    ) -> Arc<tokio::sync::Notify> {
+        let lookup = lookup_started.recv().await.unwrap();
+        assert_eq!(
+            lookup.requested.into_iter().collect::<BTreeSet<_>>(),
+            expected.iter().copied().collect::<BTreeSet<_>>()
+        );
+        lookup.release
     }
 
     #[test]
@@ -482,84 +908,14 @@ mod tests {
         let service = NoopCardService;
         let revoked = CardId::new();
 
-        assert!(
-            !service
+        assert!(!matches!(
+            service
                 .check_cards(vec![revoked])
                 .await
                 .unwrap()
-                .contains(&revoked)
-        );
-    }
-
-    #[test]
-    async fn revoked_card_finds_registered_agent() {
-        let service = service();
-        let agent = agent("agent-1");
-        let card_id = CardId::new();
-
-        service.register_agent(agent.clone()).await;
-        service
-            .register_agent_cards(agent.clone(), &[card_id])
-            .await;
-        let affected_agents = service.record_revoked_cards(&[card_id]).await;
-
-        assert_eq!(affected_agents.get(&agent), Some(&vec![card_id]));
-    }
-
-    #[test]
-    async fn unrelated_revoked_card_does_not_affect_agent() {
-        let service = service();
-        let agent = agent("agent-1");
-        let live_card_id = CardId::new();
-        let revoked_card_id = CardId::new();
-
-        service.register_agent(agent.clone()).await;
-        service
-            .register_agent_cards(agent.clone(), &[live_card_id])
-            .await;
-        let affected_agents = service.record_revoked_cards(&[revoked_card_id]).await;
-
-        assert!(affected_agents.is_empty());
-    }
-
-    #[test]
-    async fn registering_agent_cards_replaces_previous_cards() {
-        let service = service();
-        let agent = agent("agent-1");
-        let old_card_id = CardId::new();
-        let new_card_id = CardId::new();
-
-        service.register_agent(agent.clone()).await;
-        service
-            .register_agent_cards(agent.clone(), &[old_card_id])
-            .await;
-        service
-            .register_agent_cards(agent.clone(), &[new_card_id])
-            .await;
-
-        assert!(
-            service
-                .record_revoked_cards(&[old_card_id])
-                .await
-                .is_empty()
-        );
-        let affected_agents = service.record_revoked_cards(&[new_card_id]).await;
-        assert_eq!(affected_agents.get(&agent), Some(&vec![new_card_id]));
-    }
-
-    #[test]
-    async fn unregister_agent_removes_reverse_index() {
-        let service = service();
-        let agent = agent("agent-1");
-        let card_id = CardId::new();
-
-        service.register_agent(agent.clone()).await;
-        service
-            .register_agent_cards(agent.clone(), &[card_id])
-            .await;
-        service.unregister_agent(&agent).await;
-
-        assert!(service.record_revoked_cards(&[card_id]).await.is_empty());
+                .get(&revoked),
+            Some(CardState::Revoked)
+        ));
     }
 
     #[test]
@@ -569,42 +925,464 @@ mod tests {
 
         service.record_revoked_cards(&[card_id]).await;
 
-        assert!(
-            service
-                .check_cards(vec![card_id])
+        assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+    }
+
+    #[test]
+    async fn known_live_card_skips_repeated_registry_lookup() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn checked_card_is_cached_as_known_live_without_interested_agents() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn check_cards_returns_live_card_data() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn expired_card_is_not_reported_live() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let expired_card = StoredCard::Concrete(Card {
+            expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            ..match stored_card(card_id) {
+                StoredCard::Concrete(card) => card,
+                StoredCard::Polymorphic(_) => unreachable!(),
+            }
+        });
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_cards(
+            vec![expired_card],
+            lookup_count.clone(),
+        )));
+
+        let states = service.check_cards(vec![card_id]).await.unwrap();
+
+        assert_revoked(&states, card_id);
+    }
+
+    #[test]
+    async fn check_cards_reuses_cached_live_card_data() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn revocation_without_interested_agents_invalidates_known_live_card() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        service.record_revoked_cards(&[card_id]).await;
+
+        assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn revocation_invalidates_known_live_card() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        service.record_revoked_cards(&[card_id]).await;
+
+        assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn invalidate_all_drops_live_cache_and_rediscovers_revocation() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([card_id])));
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_shared_existing(
+            existing_cards.clone(),
+            lookup_count.clone(),
+        )));
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+
+        // The card is revoked at the registry during a cursor gap.
+        existing_cards.write().await.remove(&card_id);
+
+        service.invalidate_all().await;
+
+        // The flushed live cache forces a re-fetch, which rediscovers the revocation.
+        assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    async fn invalidate_all_keeps_revoked_entries_without_refetch() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        service.record_revoked_cards(&[card_id]).await;
+        service.invalidate_all().await;
+
+        assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    async fn invalidate_all_is_not_undone_by_in_flight_live_lookup() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([card_id])));
+        let first_lookup_started = Arc::new(tokio::sync::Notify::new());
+        let release_first_lookup = Arc::new(tokio::sync::Notify::new());
+        let service = Arc::new(CardServiceDefault::new(Arc::new(
+            TestRegistryService::with_delayed_first_shared_existing(
+                existing_cards.clone(),
+                lookup_count.clone(),
+                first_lookup_started.clone(),
+                release_first_lookup.clone(),
+            ),
+        )));
+
+        let in_flight_lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![card_id]).await.unwrap() }
+        });
+        first_lookup_started.notified().await;
+
+        service.invalidate_all().await;
+        existing_cards.write().await.remove(&card_id);
+
+        release_first_lookup.notify_one();
+        let _ = in_flight_lookup.await.unwrap();
+
+        let states = service.check_cards(vec![card_id]).await.unwrap();
+        assert_eq!(
+            lookup_count.load(Ordering::SeqCst),
+            2,
+            "check_cards after invalidate_all must re-fetch even if a stale live lookup completed after invalidation"
+        );
+        assert_revoked(&states, card_id);
+    }
+
+    #[test]
+    async fn check_cards_honors_revocation_recorded_during_invalidated_mixed_fetch() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let cached_card_id = CardId::new();
+        let fetched_card_id = CardId::new();
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([
+            cached_card_id,
+            fetched_card_id,
+        ])));
+        let first_lookup_started = Arc::new(tokio::sync::Notify::new());
+        let release_first_lookup = Arc::new(tokio::sync::Notify::new());
+        let service = Arc::new(CardServiceDefault::new(Arc::new(
+            TestRegistryService::with_delayed_shared_existing(
+                existing_cards.clone(),
+                lookup_count.clone(),
+                first_lookup_started.clone(),
+                release_first_lookup.clone(),
+                1,
+            ),
+        )));
+
+        assert_live(
+            &service.check_cards(vec![cached_card_id]).await.unwrap(),
+            cached_card_id,
+        );
+
+        let in_flight_lookup = tokio::spawn({
+            let service = service.clone();
+            async move {
+                service
+                    .check_cards(vec![cached_card_id, fetched_card_id])
+                    .await
+                    .unwrap()
+            }
+        });
+        first_lookup_started.notified().await;
+
+        service.invalidate_all().await;
+        service.record_revoked_cards(&[cached_card_id]).await;
+
+        release_first_lookup.notify_one();
+        let states = in_flight_lookup.await.unwrap();
+
+        assert_revoked(&states, cached_card_id);
+    }
+
+    #[test]
+    async fn exhausted_generation_retries_do_not_return_invalidated_cached_live_hit() {
+        let cached_card_id = CardId::new();
+        let fetched_card_id = CardId::new();
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([
+            cached_card_id,
+            fetched_card_id,
+        ])));
+        let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards: existing_cards.clone(),
+            stored_cards: Arc::new(RwLock::new(HashMap::new())),
+            lookup_started,
+        })));
+
+        let precache = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+        });
+        expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
+            .await
+            .notify_one();
+        assert_live(&precache.await.unwrap(), cached_card_id);
+
+        let mixed_lookup = tokio::spawn({
+            let service = service.clone();
+            async move {
+                service
+                    .check_cards(vec![cached_card_id, fetched_card_id])
+                    .await
+                    .unwrap()
+            }
+        });
+
+        for _ in 0..7 {
+            let blocked_mixed_lookup =
+                expect_blocked_lookup(&mut lookup_started_rx, &[fetched_card_id]).await;
+
+            service.invalidate_all().await;
+
+            let repopulate_cached_card = tokio::spawn({
+                let service = service.clone();
+                async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+            });
+            expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
                 .await
-                .unwrap()
-                .contains(&card_id)
+                .notify_one();
+            assert_live(&repopulate_cached_card.await.unwrap(), cached_card_id);
+
+            blocked_mixed_lookup.notify_one();
+        }
+
+        let final_blocked_mixed_lookup =
+            expect_blocked_lookup(&mut lookup_started_rx, &[fetched_card_id]).await;
+        service.invalidate_all().await;
+        existing_cards.write().await.remove(&cached_card_id);
+        final_blocked_mixed_lookup.notify_one();
+
+        let states = mixed_lookup.await.unwrap();
+        assert!(
+            !matches!(states.get(&cached_card_id), Some(CardState::Live(_))),
+            "invalidated cached live hit was returned without being revalidated: {states:?}"
         );
     }
 
     #[test]
-    async fn card_is_removed_from_reverse_index_only_after_wallet_removal() {
-        let service = service();
-        let first_agent = agent("agent-1");
-        let second_agent = agent("agent-2");
+    async fn exhausted_generation_retries_do_not_return_final_fetch_live_from_before_invalidation()
+    {
         let card_id = CardId::new();
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([card_id])));
+        let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards: existing_cards.clone(),
+            stored_cards: Arc::new(RwLock::new(HashMap::new())),
+            lookup_started,
+        })));
 
-        service.register_agent(first_agent.clone()).await;
-        service.register_agent(second_agent.clone()).await;
-        service
-            .register_agent_cards(first_agent.clone(), &[card_id])
-            .await;
-        service
-            .register_agent_cards(second_agent.clone(), &[card_id])
-            .await;
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![card_id]).await.unwrap() }
+        });
 
-        let affected_agents = service.record_revoked_cards(&[card_id]).await;
-        assert_eq!(affected_agents.len(), 2);
-        assert_eq!(affected_agents.get(&first_agent), Some(&vec![card_id]));
-        assert_eq!(affected_agents.get(&second_agent), Some(&vec![card_id]));
+        for _ in 0..7 {
+            let blocked_lookup = expect_blocked_lookup(&mut lookup_started_rx, &[card_id]).await;
+            service.invalidate_all().await;
+            blocked_lookup.notify_one();
+        }
 
-        service
-            .remove_revoked_agent_cards(&first_agent, &[card_id])
-            .await;
+        let final_blocked_lookup = expect_blocked_lookup(&mut lookup_started_rx, &[card_id]).await;
+        existing_cards.write().await.remove(&card_id);
+        service.invalidate_all().await;
+        final_blocked_lookup.notify_one();
 
-        let affected_agents = service.record_revoked_cards(&[card_id]).await;
-        assert_eq!(affected_agents.len(), 1);
-        assert_eq!(affected_agents.get(&second_agent), Some(&vec![card_id]));
+        let states = lookup.await.unwrap();
+        assert!(
+            !matches!(states.get(&card_id), Some(CardState::Live(_))),
+            "final fetch taken before invalidate_all was returned as live after invalidation: {states:?}"
+        );
+    }
+
+    #[test]
+    async fn exhausted_generation_retries_report_expired_fetched_card_as_revoked() {
+        let card_id = CardId::new();
+        let expired_card = StoredCard::Concrete(Card {
+            expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            ..match stored_card(card_id) {
+                StoredCard::Concrete(card) => card,
+                StoredCard::Polymorphic(_) => unreachable!(),
+            }
+        });
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([card_id])));
+        let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards,
+            stored_cards: Arc::new(RwLock::new(HashMap::from([(card_id, expired_card)]))),
+            lookup_started,
+        })));
+
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![card_id]).await.unwrap() }
+        });
+
+        for _ in 0..8 {
+            let blocked_lookup = expect_blocked_lookup(&mut lookup_started_rx, &[card_id]).await;
+            service.invalidate_all().await;
+            blocked_lookup.notify_one();
+        }
+
+        let states = lookup.await.unwrap();
+        assert_revoked(&states, card_id);
+    }
+
+    #[test]
+    async fn exhausted_generation_retries_do_not_return_expired_cached_live_card() {
+        let cached_card_id = CardId::new();
+        let fetched_card_id = CardId::new();
+        let expires_at = Utc::now() + chrono::Duration::milliseconds(300);
+        let cached_card = StoredCard::Concrete(Card {
+            expires_at: Some(expires_at),
+            ..match stored_card(cached_card_id) {
+                StoredCard::Concrete(card) => card,
+                StoredCard::Polymorphic(_) => unreachable!(),
+            }
+        });
+        let existing_cards = Arc::new(RwLock::new(HashSet::from([
+            cached_card_id,
+            fetched_card_id,
+        ])));
+        let stored_cards = Arc::new(RwLock::new(HashMap::from([(
+            cached_card_id,
+            cached_card.clone(),
+        )])));
+        let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards: existing_cards.clone(),
+            stored_cards: stored_cards.clone(),
+            lookup_started,
+        })));
+
+        let precache = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+        });
+        expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
+            .await
+            .notify_one();
+        assert_live(&precache.await.unwrap(), cached_card_id);
+
+        let mixed_lookup = tokio::spawn({
+            let service = service.clone();
+            async move {
+                service
+                    .check_cards(vec![cached_card_id, fetched_card_id])
+                    .await
+                    .unwrap()
+            }
+        });
+
+        for _ in 0..7 {
+            let blocked_mixed_lookup =
+                expect_blocked_lookup(&mut lookup_started_rx, &[fetched_card_id]).await;
+
+            service.invalidate_all().await;
+
+            let repopulate_cached_card = tokio::spawn({
+                let service = service.clone();
+                async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+            });
+            expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
+                .await
+                .notify_one();
+            assert_live(&repopulate_cached_card.await.unwrap(), cached_card_id);
+
+            blocked_mixed_lookup.notify_one();
+        }
+
+        let final_blocked_mixed_lookup =
+            expect_blocked_lookup(&mut lookup_started_rx, &[fetched_card_id]).await;
+        service.invalidate_all().await;
+
+        let repopulate_cached_card = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![cached_card_id]).await.unwrap() }
+        });
+        expect_blocked_lookup(&mut lookup_started_rx, &[cached_card_id])
+            .await
+            .notify_one();
+        assert_live(&repopulate_cached_card.await.unwrap(), cached_card_id);
+
+        let sleep_for = expires_at
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .unwrap_or_default()
+            + std::time::Duration::from_millis(25);
+        tokio::time::sleep(sleep_for).await;
+        final_blocked_mixed_lookup.notify_one();
+
+        let states = mixed_lookup.await.unwrap();
+        assert!(
+            !matches!(states.get(&cached_card_id), Some(CardState::Live(_))),
+            "expired cached live card was returned as live from the exhausted generation retry fallback: {states:?}"
+        );
     }
 }

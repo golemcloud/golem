@@ -242,43 +242,25 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     name: string;
   };
-  export type QueuedCardEventCard = {
+  export type QueuedCardEventInstall = {
     cardId: CardId;
-    card?: Uint8Array;
   };
-  export type PublicQueuedCardEventCard = {
+  export type QueuedCardEventRevoke = {
     cardId: CardId;
   };
   export type QueuedCardEvent = 
   {
     tag: 'install'
-    val: QueuedCardEventCard
+    val: QueuedCardEventInstall
   } |
   {
     tag: 'revoke'
-    val: QueuedCardEventCard
+    val: QueuedCardEventRevoke
   };
-  export type PublicQueuedCardEvent = 
-  {
-    tag: 'install'
-    val: PublicQueuedCardEventCard
-  } |
-  {
-    tag: 'revoke'
-    val: PublicQueuedCardEventCard
-  };
-  export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
   /**
    * Parameters for a card-event-queued oplog entry.
    */
   export type CardEventQueuedParameters = {
-    timestamp: Datetime;
-    event: PublicQueuedCardEvent;
-  };
-  /**
-   * Raw parameters for a card-event-queued oplog entry.
-   */
-  export type RawCardEventQueuedParameters = {
     timestamp: Datetime;
     event: QueuedCardEvent;
   };
@@ -298,6 +280,7 @@ declare module 'golem:api/oplog@1.5.0' {
     queuedEventIndex?: OplogIndex;
     card: Uint8Array;
   };
+  export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
   /**
    * Parameters for a card-install-failed oplog entry.
    */
@@ -313,6 +296,13 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CardRevokedParameters = {
     timestamp: Datetime;
     queuedEventIndex: OplogIndex;
+    cardId: CardId;
+  };
+  /**
+   * Parameters for a card-expired oplog entry.
+   */
+  export type CardExpiredParameters = {
+    timestamp: Datetime;
     cardId: CardId;
   };
   export type EndAtomicRegionParameters = {
@@ -1003,7 +993,7 @@ declare module 'golem:api/oplog@1.5.0' {
   /** Durable queue entry for pending permission-card work */
   {
     tag: 'card-event-queued'
-    val: RawCardEventQueuedParameters
+    val: CardEventQueuedParameters
   } |
   /** Records successful installation of a permission card into the agent wallet */
   {
@@ -1019,6 +1009,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'card-revoked'
     val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
   };
   export type PublicOplogEntry = 
   /** The initial agent oplog entry */
@@ -1266,6 +1261,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'card-revoked'
     val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }
