@@ -64,8 +64,6 @@
   "description": "",
   "devDependencies": {
     "@eslint/js": "^9.33.0",
-    "@golemcloud/golem-ts-typegen": "workspace:*",
-    "@golemcloud/golem-ts-types-core": "workspace:*",
     "arktype": "^2.1.0",
     "effect": "^3.10.0",
     "valibot": "^1.0.0",

@@ -152,7 +152,7 @@ fn package_json_merge_many_entries_into_empty_sections_produces_valid_json() {
         )],
         &[
             (
-                "@golemcloud/golem-ts-typegen".to_string(),
+                "@golemcloud/golem-ts-bridge".to_string(),
                 "0.1.0-dev.1".to_string(),
             ),
             ("@rollup/plugin-alias".to_string(), "^5.1.1".to_string()),
@@ -220,7 +220,7 @@ fn package_json_merge_many_entries_into_empty_root_object_produces_valid_json() 
         )],
         &[
             (
-                "@golemcloud/golem-ts-typegen".to_string(),
+                "@golemcloud/golem-ts-bridge".to_string(),
                 "0.1.0-dev.1".to_string(),
             ),
             ("@rollup/plugin-alias".to_string(), "^5.1.1".to_string()),
@@ -277,8 +277,8 @@ fn package_json_merge_handles_empty_dev_dependencies_object_shapes() {
             &[],
             &[
                 (
-                    "@golemcloud/golem-ts-typegen".to_string(),
-                    "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-typegen"
+                    "@golemcloud/golem-ts-bridge".to_string(),
+                    "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-bridge"
                         .to_string(),
                 ),
                 ("typescript".to_string(), "^5.9.2".to_string()),
@@ -290,9 +290,9 @@ fn package_json_merge_handles_empty_dev_dependencies_object_shapes() {
             .unwrap_or_else(|err| panic!("Failed to parse merged JSON: {err}\n{merged}"));
 
         assert_eq!(
-            parsed["devDependencies"]["@golemcloud/golem-ts-typegen"],
+            parsed["devDependencies"]["@golemcloud/golem-ts-bridge"],
             serde_json::Value::String(
-                "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-typegen"
+                "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-bridge"
                     .to_string()
             )
         );
@@ -302,8 +302,8 @@ fn package_json_merge_handles_empty_dev_dependencies_object_shapes() {
         );
 
         assert!(merged.contains("\n  \"devDependencies\": {"));
-        assert!(merged.contains("\n    \"@golemcloud/golem-ts-typegen\""));
-        assert!(!merged.contains("\n\"@golemcloud/golem-ts-typegen\""));
+        assert!(merged.contains("\n    \"@golemcloud/golem-ts-bridge\""));
+        assert!(!merged.contains("\n\"@golemcloud/golem-ts-bridge\""));
         assert!(merged.contains("\"typescript\": \"^5.9.2\"\n  }"));
         assert!(!merged.contains("\"typescript\": \"^5.9.2\"}"));
     }

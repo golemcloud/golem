@@ -17,19 +17,11 @@ npx pnpm install         # Install dependencies
 npx pnpm run build       # Build all packages
 ```
 
-Build order is important: `golem-ts-types-core` → `golem-ts-typegen` → `golem-ts-sdk`
-
 ## Testing
 
 ```shell
 npx pnpm run test                           # Run all tests
 cd packages/golem-ts-sdk && pnpm run test   # Run tests for specific package
-```
-
-When making changes to `golem-ts-typegen` or `golem-ts-types-core`, rebuild before testing `golem-ts-sdk`:
-
-```shell
-pnpm install && pnpm run build
 ```
 
 ## Code Style

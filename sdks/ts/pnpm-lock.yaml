@@ -135,12 +135,6 @@ importers:
       '@eslint/js':
         specifier: ^9.33.0
         version: 9.39.4
-      '@golemcloud/golem-ts-typegen':
-        specifier: workspace:*
-        version: link:../golem-ts-typegen
-      '@golemcloud/golem-ts-types-core':
-        specifier: workspace:*
-        version: link:../golem-ts-types-core
       '@rollup/plugin-commonjs':
         specifier: ^28.0.6
         version: 28.0.9(rollup@4.60.2)
@@ -210,108 +204,6 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
-
-  packages/golem-ts-typegen:
-    devDependencies:
-      '@eslint/js':
-        specifier: ^9.33.0
-        version: 9.39.4
-      '@golemcloud/golem-ts-types-core':
-        specifier: workspace:*
-        version: link:../golem-ts-types-core
-      '@rollup/plugin-commonjs':
-        specifier: ^28.0.6
-        version: 28.0.9(rollup@4.60.2)
-      '@rollup/plugin-node-resolve':
-        specifier: ^16.0.1
-        version: 16.0.3(rollup@4.60.2)
-      '@types/node':
-        specifier: ^24.3.0
-        version: 24.12.2
-      '@typescript-eslint/eslint-plugin':
-        specifier: ^8.39.0
-        version: 8.59.1(@typescript-eslint/parser@8.59.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)
-      '@typescript-eslint/parser':
-        specifier: ^8.39.0
-        version: 8.59.1(eslint@9.39.4)(typescript@5.9.3)
-      commander:
-        specifier: ^14.0.0
-        version: 14.0.3
-      eslint:
-        specifier: ^9.33.0
-        version: 9.39.4
-      fast-check:
-        specifier: ^4.2.0
-        version: 4.7.0
-      log-symbols:
-        specifier: ^7.0.1
-        version: 7.0.1
-      picocolors:
-        specifier: ^1.1.1
-        version: 1.1.1
-      reflect-metadata:
-        specifier: ^0.1.14
-        version: 0.1.14
-      rollup:
-        specifier: ^4.46.2
-        version: 4.60.2
-      rollup-plugin-dts:
-        specifier: ^6.2.1
-        version: 6.4.1(rollup@4.60.2)(typescript@5.9.3)
-      rollup-plugin-typescript2:
-        specifier: ^0.36.0
-        version: 0.36.0(rollup@4.60.2)(typescript@5.9.3)
-      ts-morph:
-        specifier: ^26.0.0
-        version: 26.0.0
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-      typescript-eslint:
-        specifier: ^8.39.0
-        version: 8.59.1(eslint@9.39.4)(typescript@5.9.3)
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.4(@types/node@24.12.2)(terser@5.46.2)
-
-  packages/golem-ts-types-core:
-    devDependencies:
-      '@eslint/js':
-        specifier: ^9.33.0
-        version: 9.39.4
-      '@typescript-eslint/eslint-plugin':
-        specifier: ^8.39.0
-        version: 8.59.1(@typescript-eslint/parser@8.59.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)
-      '@typescript-eslint/parser':
-        specifier: ^8.39.0
-        version: 8.59.1(eslint@9.39.4)(typescript@5.9.3)
-      eslint:
-        specifier: ^9.33.0
-        version: 9.39.4
-      fast-check:
-        specifier: ^4.2.0
-        version: 4.7.0
-      reflect-metadata:
-        specifier: ^0.1.14
-        version: 0.1.14
-      rollup:
-        specifier: ^4.46.2
-        version: 4.60.2
-      rollup-plugin-dts:
-        specifier: ^6.2.1
-        version: 6.4.1(rollup@4.60.2)(typescript@5.9.3)
-      rollup-plugin-typescript2:
-        specifier: ^0.36.0
-        version: 0.36.0(rollup@4.60.2)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-      typescript-eslint:
-        specifier: ^8.39.0
-        version: 8.59.1(eslint@9.39.4)(typescript@5.9.3)
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.4(@types/node@24.12.2)(terser@5.46.2)
 
 packages:
 
@@ -938,10 +830,6 @@ packages:
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==, tarball: https://registry.npmjs.org/color-name/-/color-name-1.1.4.tgz}
 
-  commander@14.0.3:
-    resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==, tarball: https://registry.npmjs.org/commander/-/commander-14.0.3.tgz}
-    engines: {node: '>=20'}
-
   commander@2.20.3:
     resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==, tarball: https://registry.npmjs.org/commander/-/commander-2.20.3.tgz}
 
@@ -1190,10 +1078,6 @@ packages:
   is-reference@1.2.1:
     resolution: {integrity: sha512-U82MsXXiFIrjCK4otLT+o2NA2Cd2g5MLoOVXUZjIOhLurrRxpEXzI8O0KZHr3IjLvlAH1kTPYSuqer5T9ZVBKQ==, tarball: https://registry.npmjs.org/is-reference/-/is-reference-1.2.1.tgz}
 
-  is-unicode-supported@2.1.0:
-    resolution: {integrity: sha512-mE00Gnza5EEB3Ds0HfMyllZzbBrmLOX3vfWoj9A9PEnTfratQ/BcaJOuMhnkhjXvb2+FkY3VuHqtAGpTPmglFQ==, tarball: https://registry.npmjs.org/is-unicode-supported/-/is-unicode-supported-2.1.0.tgz}
-    engines: {node: '>=18'}
-
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==, tarball: https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz}
 
@@ -1236,10 +1120,6 @@ packages:
 
   lodash.merge@4.6.2:
     resolution: {integrity: sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==, tarball: https://registry.npmjs.org/lodash.merge/-/lodash.merge-4.6.2.tgz}
-
-  log-symbols@7.0.1:
-    resolution: {integrity: sha512-ja1E3yCr9i/0hmBVaM0bfwDjnGy8I/s6PP4DFp+yP+a+mrHO4Rm7DtmnqROTUkHIkqffC84YY7AeqX6oFk0WFg==, tarball: https://registry.npmjs.org/log-symbols/-/log-symbols-7.0.1.tgz}
-    engines: {node: '>=18'}
 
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==, tarball: https://registry.npmjs.org/loupe/-/loupe-3.2.1.tgz}
@@ -1644,10 +1524,6 @@ packages:
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==, tarball: https://registry.npmjs.org/yocto-queue/-/yocto-queue-0.1.0.tgz}
     engines: {node: '>=10'}
-
-  yoctocolors@2.1.2:
-    resolution: {integrity: sha512-CzhO+pFNo8ajLM2d2IW/R93ipy99LWjtwblvC1RsoSUMZgyLbYFr221TnSNT7GjGdYui6P459mw9JH/g/zW2ug==, tarball: https://registry.npmjs.org/yoctocolors/-/yoctocolors-2.1.2.tgz}
-    engines: {node: '>=18'}
 
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==, tarball: https://registry.npmjs.org/zod/-/zod-4.4.3.tgz}
@@ -2203,8 +2079,6 @@ snapshots:
 
   color-name@1.1.4: {}
 
-  commander@14.0.3: {}
-
   commander@2.20.3: {}
 
   commondir@1.0.1: {}
@@ -2466,8 +2340,6 @@ snapshots:
     dependencies:
       '@types/estree': 1.0.8
 
-  is-unicode-supported@2.1.0: {}
-
   isexe@2.0.0: {}
 
   js-tokens@4.0.0:
@@ -2509,11 +2381,6 @@ snapshots:
       p-locate: 5.0.0
 
   lodash.merge@4.6.2: {}
-
-  log-symbols@7.0.1:
-    dependencies:
-      is-unicode-supported: 2.1.0
-      yoctocolors: 2.1.2
 
   loupe@3.2.1: {}
 
@@ -2886,7 +2753,5 @@ snapshots:
   word-wrap@1.2.5: {}
 
   yocto-queue@0.1.0: {}
-
-  yoctocolors@2.1.2: {}
 
   zod@4.4.3: {}

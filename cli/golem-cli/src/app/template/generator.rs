@@ -471,10 +471,6 @@ fn transform(
                     sdk_overrides.ts_package_dep("golem-ts-sdk")?,
                 );
                 replacements.insert(
-                    "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-                    sdk_overrides.ts_package_dep("golem-ts-typegen")?,
-                );
-                replacements.insert(
                     "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",
                     versions::ts_dep::ROLLUP_PLUGIN_ALIAS.to_string(),
                 );
