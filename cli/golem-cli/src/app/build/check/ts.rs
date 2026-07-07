@@ -253,9 +253,10 @@ fn typescript_sdk_requirements(
         Req::dev_dependency("tslib", pinned(ts_dep::TSLIB), Required),
         Req::dev_dependency("typescript", pinned(ts_dep::TYPESCRIPT), Required),
         // Optional (only checked if present): the known Standard Schema libraries apply
-        // only where used (append valibot/arktype/effect here, each with its own
-        // `versions::ts_dep::<LIB>` constant).
+        // only where used.
         Req::dependency("zod", pinned(ts_dep::ZOD), Optional),
+        Req::dependency("valibot", pinned(ts_dep::VALIBOT), Optional),
+        Req::dependency("arktype", pinned(ts_dep::ARKTYPE), Optional),
     ])
 }
 

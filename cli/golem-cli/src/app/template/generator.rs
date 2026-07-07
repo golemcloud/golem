@@ -507,6 +507,14 @@ fn transform(
                     versions::ts_dep::TYPESCRIPT.to_string(),
                 );
                 replacements.insert("GOLEM_TS_ZOD_VERSION", versions::ts_dep::ZOD.to_string());
+                replacements.insert(
+                    "GOLEM_TS_VALIBOT_VERSION",
+                    versions::ts_dep::VALIBOT.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ARKTYPE_VERSION",
+                    versions::ts_dep::ARKTYPE.to_string(),
+                );
             }
         }
     }

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "valibot": "GOLEM_TS_VALIBOT_VERSION"
+  }
+}
