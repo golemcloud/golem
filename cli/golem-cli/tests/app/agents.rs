@@ -858,6 +858,26 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
 // Early in the code-first release, some of these cases failed at the Golem execution stage
 // (post type extraction). This test ensures such issues are caught automatically
 // and act as a regression-test.
+//
+// TODO(recursive-agent-types): this test currently fails at `golem deploy` with a
+// Rust stack overflow ("fatal runtime error: stack overflow") in golem-cli, NOT in
+// the SDK or the fixture. The fixture's `Tree` type (test-data/ts-code-first-snippets/
+// model.ts) is recursive (`Tree = z.lazy(() => z.object({ label, children:
+// z.array(Tree) }))`). The fluent SDK now supports recursive schemas end-to-end: it
+// emits a correct flat WIT agent-type (schema-graph `defs` + `ref` nodes), and
+// `golem build` extracts it cleanly (verified in isolation with a minimal recursive
+// `Tree` agent). The overflow is in golem-cli's DEPLOY-time processing of a recursive
+// agent-type schema — reproduced isolated, localized to the component metadata step
+// (`command_handler/component/mod.rs::diffable_local_component`, around
+// "Adding metadata to components" / "Calculating hash for component binary"). The
+// root cause is a ref-resolving / hash / serialize walk over the agent-type schema
+// that lacks cycle detection on `ref` nodes (golem-cli / golem-common, shared
+// wire-sensitive code) — a latent gap the fluent SDK's runtime schema-graph now
+// exposes (the decorator/typegen path represented recursion differently).
+// Fix: add cycle detection to that deploy-time schema walk. After it's fixed, the
+// goldenfile must also be regenerated (fluent's schema output differs structurally
+// from the decorator-era golden): `UPDATE_GOLDENFILES=1` /
+// `cargo make cli-integration-tests-update-golden-files`.
 #[test]
 async fn test_ts_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
