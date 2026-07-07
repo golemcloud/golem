@@ -118,7 +118,6 @@ mod tests {
 
         for language in [
             GuestLanguage::TypeScript,
-            GuestLanguage::TypeScriptFluent,
             GuestLanguage::Rust,
             GuestLanguage::MoonBit,
         ] {

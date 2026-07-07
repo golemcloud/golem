@@ -76,10 +76,6 @@ use url::Url;
 pub enum GuestLanguage {
     #[value(alias = "ts")]
     TypeScript,
-    /// Experimental fluent (Standard Schema) TypeScript SDK (issue #3449).
-    /// Temporary; will eventually replace `TypeScript`.
-    #[value(name = "ts-fluent", alias = "typescript-fluent")]
-    TypeScriptFluent,
     Rust,
     Scala,
     MoonBit,
@@ -90,9 +86,6 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
-            "ts-fluent" | "typescript-fluent" | "typescriptfluent" => {
-                Some(GuestLanguage::TypeScriptFluent)
-            }
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
@@ -103,7 +96,6 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" => Some(GuestLanguage::TypeScript),
-            "ts-fluent" => Some(GuestLanguage::TypeScriptFluent),
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
@@ -114,7 +106,6 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "rust",
             GuestLanguage::TypeScript => "ts",
-            GuestLanguage::TypeScriptFluent => "ts-fluent",
             GuestLanguage::Scala => "scala",
             GuestLanguage::MoonBit => "moonbit",
         }
@@ -124,7 +115,6 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust
             | GuestLanguage::TypeScript
-            | GuestLanguage::TypeScriptFluent
             | GuestLanguage::Scala
             | GuestLanguage::MoonBit => true,
         }
@@ -134,7 +124,6 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
-            GuestLanguage::TypeScriptFluent => "TypeScript (Fluent)",
             GuestLanguage::Scala => "Scala",
             GuestLanguage::MoonBit => "MoonBit",
         }

@@ -160,7 +160,6 @@ pub(crate) fn plan_dependency_fixes(
     let overrides = sdk_overrides()?;
 
     if selected_languages.contains(&GuestLanguage::TypeScript)
-        || selected_languages.contains(&GuestLanguage::TypeScriptFluent)
     {
         let package_step = ts::plan_package_json_fix_step(ctx, overrides, &mut plan.warnings)?;
         if let Some(step) = package_step {
@@ -169,7 +168,6 @@ pub(crate) fn plan_dependency_fixes(
     }
 
     if selected_languages.contains(&GuestLanguage::TypeScript)
-        || selected_languages.contains(&GuestLanguage::TypeScriptFluent)
     {
         let tsconfig_steps = ts::plan_tsconfig_fix_steps(ctx)?;
         plan.steps.extend(tsconfig_steps);

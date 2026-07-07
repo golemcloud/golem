@@ -252,15 +252,9 @@ fn typescript_sdk_requirements(
         Req::dev_dependency("rollup", pinned(ts_dep::ROLLUP), Required),
         Req::dev_dependency("tslib", pinned(ts_dep::TSLIB), Required),
         Req::dev_dependency("typescript", pinned(ts_dep::TYPESCRIPT), Required),
-        // Optional (only checked if present): one list serves both `ts` and `ts-fluent`
-        // — the typegen tool and the known schema libraries apply only where used.
-        Req::dev_dependency(
-            "@golemcloud/golem-ts-typegen",
-            sdk_package("golem-ts-typegen")?,
-            Optional,
-        ),
-        // Known Standard Schema libraries (append valibot/arktype/effect here, each with
-        // its own `versions::ts_dep::<LIB>` constant).
+        // Optional (only checked if present): the known Standard Schema libraries apply
+        // only where used (append valibot/arktype/effect here, each with its own
+        // `versions::ts_dep::<LIB>` constant).
         Req::dependency("zod", pinned(ts_dep::ZOD), Optional),
     ])
 }
@@ -346,7 +340,7 @@ mod test {
     }
 
     #[test]
-    fn tsconfig_requirements_are_per_sdk() {
+    fn ts_tsconfig_requires_bundler_resolution_without_decorators() {
         use crate::app::build::check::requirements::typescript_tsconfig_requirements;
         use crate::model::GuestLanguage;
 
@@ -357,16 +351,10 @@ mod test {
                 .collect()
         };
 
-        // The fluent SDK only needs bundler resolution — no decorator options.
-        let fluent = setting_keys(GuestLanguage::TypeScriptFluent);
-        assert!(fluent.contains(&"moduleResolution"));
-        assert!(!fluent.contains(&"experimentalDecorators"));
-        assert!(!fluent.contains(&"emitDecoratorMetadata"));
-
-        // The decorator SDK needs bundler resolution + decorator support.
-        let decorator = setting_keys(GuestLanguage::TypeScript);
-        assert!(decorator.contains(&"moduleResolution"));
-        assert!(decorator.contains(&"experimentalDecorators"));
-        assert!(decorator.contains(&"emitDecoratorMetadata"));
+        // The TS SDK only needs bundler resolution — no decorator options.
+        let ts = setting_keys(GuestLanguage::TypeScript);
+        assert!(ts.contains(&"moduleResolution"));
+        assert!(!ts.contains(&"experimentalDecorators"));
+        assert!(!ts.contains(&"emitDecoratorMetadata"));
     }
 }

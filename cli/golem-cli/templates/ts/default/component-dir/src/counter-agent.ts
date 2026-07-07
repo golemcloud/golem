@@ -1,28 +1,36 @@
-import {
-    BaseAgent,
-    agent,
-    prompt,
-    description,
-    endpoint
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-@agent({
-  mount: "/counters/{name}"
-})
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+// A minimal durable counter agent in the fluent (Standard Schema) SDK:
+// `defineAgent(...)` declares the contract, `.implement(...)` supplies handlers
+// whose `this` is bound to the state returned by `init`.
+export const Counter = defineAgent({
+  name: 'Counter',
+  id: { name: z.string() },
+  methods: {
+    value: method({ input: {}, returns: z.number() }),
+    increment: method({ input: {}, returns: z.number() }),
+    add: method({ input: { by: z.number() }, returns: z.number() }),
+    reset: method({ input: {}, returns: z.void() }),
+  },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @prompt("Increase the count by one")
-    @description("Increases the count by one and returns the new value")
-    @endpoint({ post: "/increment" })
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-}
+export const CounterImpl = Counter.implement({
+  init: () => ({ count: 0 }),
+  methods: {
+    value() {
+      return this.count;
+    },
+    increment() {
+      this.count += 1;
+      return this.count;
+    },
+    add({ by }) {
+      this.count += by;
+      return this.count;
+    },
+    reset() {
+      this.count = 0;
+    },
+  },
+});

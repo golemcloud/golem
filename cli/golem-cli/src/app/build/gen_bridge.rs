@@ -230,7 +230,7 @@ async fn gen_bridge_sdk_target(
                         &output_dir,
                         false,
                     )?),
-                    GuestLanguage::TypeScript | GuestLanguage::TypeScriptFluent => Box::new(
+                    GuestLanguage::TypeScript => Box::new(
                         TypeScriptBridgeGenerator::new(target.agent_type, &output_dir, false)?,
                     ),
                     GuestLanguage::Scala => Box::new(ScalaBridgeGenerator::new(
