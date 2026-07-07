@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
+use crate::bridge_gen::BridgeMode;
 use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app_raw::{
@@ -317,8 +318,10 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
 
 pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub component_name: &'a ComponentName,
-    pub agent_type_name: &'a AgentTypeName,
+    pub target_name: &'a str,
+    pub kind: &'static str,
     pub language: &'a GuestLanguage,
+    pub bridge_mode: BridgeMode,
 }
 
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
@@ -332,19 +335,23 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
         Ok(HashFromString(format!(
-            "{}-{}-{}",
-            self.component_name, self.agent_type_name, self.language
+            "componentName={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}",
+            self.component_name,
+            self.target_name,
+            self.kind,
+            self.language.id(),
+            self.bridge_mode.id(),
         )))
     }
 }
 
-pub struct ExtractAgentTypeMarkerHash<'a> {
+pub struct ExtractComponentMetadataMarkerHash<'a> {
     pub component_name: &'a ComponentName,
 }
 
-impl TaskResultMarkerHashSource for ExtractAgentTypeMarkerHash<'_> {
+impl TaskResultMarkerHashSource for ExtractComponentMetadataMarkerHash<'_> {
     fn kind() -> &'static str {
-        "ExtractAgentTypeMarkerHash"
+        "ExtractComponentMetadataMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
@@ -525,5 +532,83 @@ impl TaskResultMarker {
                 Err(source_err)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge_gen::BridgeMode;
+    use test_r::test;
+
+    #[test]
+    fn bridge_sdk_marker_hash_source_includes_bridge_mode() {
+        let component_name = ComponentName("app:producer".to_string());
+        let agent_type_name = AgentTypeName("AlphaAgent".to_string());
+        let language = GuestLanguage::Rust;
+
+        let external_source = GenerateBridgeSdkMarkerHash {
+            component_name: &component_name,
+            target_name: agent_type_name.as_str(),
+            kind: "agent",
+            language: &language,
+            bridge_mode: BridgeMode::External,
+        }
+        .source()
+        .unwrap();
+        let guest_source = GenerateBridgeSdkMarkerHash {
+            component_name: &component_name,
+            target_name: agent_type_name.as_str(),
+            kind: "agent",
+            language: &language,
+            bridge_mode: BridgeMode::Guest,
+        }
+        .source()
+        .unwrap();
+
+        let TaskResultMarkerHashSourceKind::HashFromString(external_source) = external_source
+        else {
+            panic!("expected external bridge marker to hash from string");
+        };
+        let TaskResultMarkerHashSourceKind::HashFromString(guest_source) = guest_source else {
+            panic!("expected guest bridge marker to hash from string");
+        };
+
+        assert_ne!(external_source, guest_source);
+        assert!(external_source.contains("bridgeMode=external"));
+        assert!(guest_source.contains("bridgeMode=internal"));
+    }
+
+    #[test]
+    fn bridge_sdk_marker_hashes_do_not_collide_for_distinct_hyphenated_targets() {
+        let marker_dir = tempfile::tempdir().unwrap();
+        let language = GuestLanguage::Rust;
+        let bridge_mode = BridgeMode::External;
+
+        let left_marker = TaskResultMarker::new(
+            marker_dir.path(),
+            GenerateBridgeSdkMarkerHash {
+                component_name: &ComponentName::try_from("app:producer-a").unwrap(),
+                target_name: "b",
+                kind: "agent",
+                language: &language,
+                bridge_mode,
+            },
+        )
+        .unwrap();
+        let right_marker = TaskResultMarker::new(
+            marker_dir.path(),
+            GenerateBridgeSdkMarkerHash {
+                component_name: &ComponentName::try_from("app:producer").unwrap(),
+                target_name: "a-b",
+                kind: "agent",
+                language: &language,
+                bridge_mode,
+            },
+        )
+        .unwrap();
+
+        assert_ne!(left_marker.hash_hex, right_marker.hash_hex);
+        assert_ne!(left_marker.marker_file_path, right_marker.marker_file_path);
     }
 }

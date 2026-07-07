@@ -3732,6 +3732,7 @@ dependencies = [
  "wasm-metadata 0.248.0",
  "wasm-rquickjs",
  "wasmtime-wasi",
+ "wat",
  "wax",
  "which",
  "windows-sys 0.61.2",

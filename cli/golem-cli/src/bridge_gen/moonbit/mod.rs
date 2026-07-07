@@ -40,7 +40,7 @@ use crate::bridge_gen::moonbit::moonbit::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
-use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::fs;
 use crate::versions::moonbit_dep;
 use anyhow::{Context, bail};
@@ -244,7 +244,7 @@ impl MoonBitBridgeGenerator {
     /// The generated `moon` module name. The runtime package is
     /// `<module>/runtime` and the generated client package is `<module>/client`.
     fn module_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name)
+        bridge_client_directory_name(&self.agent_type.type_name, BridgeMode::External)
     }
 
     // --- Project files ------------------------------------------------------

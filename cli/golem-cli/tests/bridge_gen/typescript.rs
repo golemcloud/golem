@@ -19,7 +19,7 @@ use crate::bridge_gen::fixtures::{
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_cli::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptTypeName};
-use golem_cli::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::{AgentTypeSchema, SchemaType};
@@ -127,7 +127,7 @@ fn test_type_naming_rust_foo_agent_for_ts_bridge() {
 }
 
 fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
-    let package_name = bridge_client_directory_name(&agent_type.type_name);
+    let package_name = bridge_client_directory_name(&agent_type.type_name, BridgeMode::External);
     let package_dir = target_dir.join(package_name);
     let mut generator = TypeScriptBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();
