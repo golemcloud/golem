@@ -172,9 +172,7 @@ export interface Bucket {
    * Build a schema-typed view of this bucket. Values are JSON-encoded via the
    * supplied Standard Schema on writes and re-validated on reads.
    */
-  forSchema<S extends StandardSchemaV1>(
-    schema: S,
-  ): SchemaBucket<StandardSchemaV1.InferOutput<S>>;
+  forSchema<S extends StandardSchemaV1>(schema: S): SchemaBucket<StandardSchemaV1.InferOutput<S>>;
 }
 
 // ---------------------------------------------------------------------------

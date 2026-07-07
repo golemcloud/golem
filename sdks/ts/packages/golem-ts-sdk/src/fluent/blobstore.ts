@@ -227,7 +227,12 @@ const toObjectMetadata = (m: Types.ObjectMetadata): ObjectMetadata => ({
   size: m.size,
 });
 
-const readRange = (handle: ContainerNS.Container, name: string, start: bigint, end: bigint): Uint8Array =>
+const readRange = (
+  handle: ContainerNS.Container,
+  name: string,
+  start: bigint,
+  end: bigint,
+): Uint8Array =>
   wrap('container.getData', () => {
     const iv = handle.getData(name, start, end);
     return consumeIncoming(iv);
@@ -237,7 +242,10 @@ const readRange = (handle: ContainerNS.Container, name: string, start: bigint, e
 // SchemaContainer factory
 // ---------------------------------------------------------------------------
 
-const makeSchemaContainer = <T>(container: Container, schema: StandardSchemaV1): SchemaContainer<T> => ({
+const makeSchemaContainer = <T>(
+  container: Container,
+  schema: StandardSchemaV1,
+): SchemaContainer<T> => ({
   async getData(name) {
     const bytes = await container.getData(name);
     return decodeValue<T>(schema, bytes);

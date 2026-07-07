@@ -23,7 +23,11 @@ describe('fluent s.result → WIT result<ok, err>', () => {
   const codec = () => compileSchema(s.result(z.number(), NotFound));
 
   it('lowers to a result type node with ok / err sub-types', () => {
-    const body = codec().graph.root.body as { tag: string; ok: { body: { tag: string } }; err: { body: { tag: string } } };
+    const body = codec().graph.root.body as {
+      tag: string;
+      ok: { body: { tag: string } };
+      err: { body: { tag: string } };
+    };
     expect(body.tag).toBe('result');
     expect(body.ok.body.tag).toBe('f64');
     expect(body.err.body.tag).toBe('record');

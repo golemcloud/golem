@@ -172,7 +172,10 @@ export type EndpointKind = 'bodyless' | 'bodyful';
  * stripped); `WebhookVars` the union of `{var}` names in the optional
  * `webhookSuffix`. Both are phantom — see the block comment above.
  */
-export interface HttpMountSpec<MountVars extends string = string, WebhookVars extends string = never> {
+export interface HttpMountSpec<
+  MountVars extends string = string,
+  WebhookVars extends string = never,
+> {
   readonly [mountVarsBrand]?: MountVars;
   readonly [mountWebhookVarsBrand]?: WebhookVars;
   /** Mount path prefix; a `{var}` template string or segment builders. */
@@ -355,7 +358,11 @@ export interface CustomFactory {
 }
 
 /** Shorthand for a custom (non-standard) verb. Always bodyful. */
-export const custom = ((verb: string, path: PathInput, opts: EndpointSugarOpts = {}): HttpEndpointSpec =>
+export const custom = ((
+  verb: string,
+  path: PathInput,
+  opts: EndpointSugarOpts = {},
+): HttpEndpointSpec =>
   ({ method: { custom: verb }, path, ...opts }) as HttpEndpointSpec) as unknown as CustomFactory;
 
 /** Options accepted by {@link mount}. */
@@ -443,7 +450,10 @@ export function compileMount(spec: HttpMountSpec): HttpMountDetails {
  * parsing, so a template like `/add?by={by}` yields both path segments and
  * query bindings — matching the decorator endpoint behaviour.
  */
-function resolveEndpointPath(path: PathInput, entityName: string): {
+function resolveEndpointPath(
+  path: PathInput,
+  entityName: string,
+): {
   pathSuffix: PathSegment[];
   inlineQuery: ReturnType<typeof parseQuery>;
 } {
@@ -472,7 +482,10 @@ export function compileEndpoint(spec: HttpEndpointSpec): HttpEndpointDetails {
     : [];
 
   const headerVars = spec.headers
-    ? Object.entries(spec.headers).map(([headerName, variableName]) => ({ headerName, variableName }))
+    ? Object.entries(spec.headers).map(([headerName, variableName]) => ({
+        headerName,
+        variableName,
+      }))
     : [];
 
   return {

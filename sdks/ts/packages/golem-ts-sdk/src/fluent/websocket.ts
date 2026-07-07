@@ -82,8 +82,7 @@ export class WebsocketError extends Error {
     super(`WebsocketError(${operation}${tag ? `/${tag}` : ''}): ${detail}`);
     this.tag = tag;
     this.operation = operation;
-    this.closeInfo =
-      tag === 'closed' ? (tagged?.val as WsClient.CloseInfo | undefined) : undefined;
+    this.closeInfo = tag === 'closed' ? (tagged?.val as WsClient.CloseInfo | undefined) : undefined;
   }
 }
 

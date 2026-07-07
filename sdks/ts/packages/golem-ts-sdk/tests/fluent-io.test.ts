@@ -480,9 +480,9 @@ describe.skip('blobstore', () => {
     const Doc = z.object({ n: z.number() });
     const c = await blobstore.createContainer('bad');
     const docs = c.forSchema(Doc);
-    await expect(
-      docs.writeData('d', { n: 'nope' } as unknown as { n: number }),
-    ).rejects.toThrow(blobstore.BlobstoreError);
+    await expect(docs.writeData('d', { n: 'nope' } as unknown as { n: number })).rejects.toThrow(
+      blobstore.BlobstoreError,
+    );
   });
 });
 

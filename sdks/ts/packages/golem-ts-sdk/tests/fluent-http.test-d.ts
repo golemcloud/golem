@@ -430,7 +430,11 @@ void method({ input: { id: z.string() }, returns: z.string(), http: http.get('/i
 
 // Positive — get with the param bound from an inline query variable
 // (mirrors the demo `http.get('/hello?who={who}')`).
-void method({ input: { who: z.string() }, returns: z.string(), http: http.get('/hello?who={who}') });
+void method({
+  input: { who: z.string() },
+  returns: z.string(),
+  http: http.get('/hello?who={who}'),
+});
 
 // Positive — get with the param bound from a header.
 void method({
@@ -486,4 +490,8 @@ void method({ input: { payload: z.string() }, returns: z.string(), http: http.tr
 void method({ input: { payload: z.string() }, returns: z.string(), http: http.connect('/op') });
 
 // Positive — http.custom is always bodyful, so unbound params are allowed.
-void method({ input: { payload: z.string() }, returns: z.string(), http: http.custom('PURGE', '/op') });
+void method({
+  input: { payload: z.string() },
+  returns: z.string(),
+  http: http.custom('PURGE', '/op'),
+});

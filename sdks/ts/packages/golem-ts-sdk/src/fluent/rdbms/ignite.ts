@@ -121,7 +121,12 @@ export interface IgniteConnection {
 }
 
 const makeTransaction = (
-  tx: { query: QueryTarget['query']; execute: QueryTarget['execute']; commit(): void; rollback(): void },
+  tx: {
+    query: QueryTarget['query'];
+    execute: QueryTarget['execute'];
+    commit(): void;
+    rollback(): void;
+  },
   mode: TemporalDecodeMode,
 ): IgniteTransaction => {
   const api = makeQueryApi(tx, mode);

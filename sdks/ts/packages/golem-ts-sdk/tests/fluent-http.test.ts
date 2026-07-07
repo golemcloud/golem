@@ -154,7 +154,11 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
         methods: {
           // `as string` widens the path away from a literal so the compile-time
           // binding gate short-circuits; this test targets the RUNTIME check.
-          look: method({ input: {}, returns: z.string(), http: http.get('/look/{ghost}' as string) }),
+          look: method({
+            input: {},
+            returns: z.string(),
+            http: http.get('/look/{ghost}' as string),
+          }),
         },
       }),
     ).toThrow(/path variable "ghost"/);

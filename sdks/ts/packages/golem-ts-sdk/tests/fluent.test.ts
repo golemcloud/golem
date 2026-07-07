@@ -45,12 +45,17 @@ describe('fluent Zod walker', () => {
     expect(opt.toValue(3)).toEqual({ tag: 'option', value: { tag: 'f64', value: 3 } });
     expect(opt.fromValue({ tag: 'option', value: undefined })).toBeUndefined();
     // `.default()` is transparent at the wire level.
-    expect(compileSchema(z.number().int().default(1)).graph.root.body).toMatchObject({ tag: 'f64' });
+    expect(compileSchema(z.number().int().default(1)).graph.root.body).toMatchObject({
+      tag: 'f64',
+    });
   });
 
   it('maps arrays element-wise', () => {
     const arr = compileSchema(z.array(z.string()));
-    expect(arr.graph.root.body).toMatchObject({ tag: 'list', element: { body: { tag: 'string' } } });
+    expect(arr.graph.root.body).toMatchObject({
+      tag: 'list',
+      element: { body: { tag: 'string' } },
+    });
     expect(arr.fromValue(arr.toValue(['a', 'b']))).toEqual(['a', 'b']);
   });
 
@@ -120,11 +125,9 @@ describe('fluent Zod walker', () => {
     const u = compileSchema(z.union([z.string(), z.number(), z.boolean()]));
     expect(u.graph.root.body).toMatchObject({ tag: 'variant' });
     // Auto-named cases, structurally compatible with a discriminated union.
-    expect((u.graph.root.body as { tag: 'variant'; cases: { name: string }[] }).cases.map((c) => c.name)).toEqual([
-      'case0',
-      'case1',
-      'case2',
-    ]);
+    expect(
+      (u.graph.root.body as { tag: 'variant'; cases: { name: string }[] }).cases.map((c) => c.name),
+    ).toEqual(['case0', 'case1', 'case2']);
     // Encode by structural disambiguation; decode by caseIndex.
     for (const [val, idx] of [['hi', 0] as const, [5, 1] as const, [true, 2] as const]) {
       expect(u.toValue(val)).toMatchObject({ tag: 'variant', caseIndex: idx });
@@ -155,7 +158,11 @@ describe('fluent Zod walker', () => {
 
 describe('fluent schema markers', () => {
   it('pins integer numerics to their WIT width and round-trips', () => {
-    const small: { name: 'u8' | 'u16' | 'u32' | 's8' | 's16' | 's32'; make: () => unknown; sample: number }[] = [
+    const small: {
+      name: 'u8' | 'u16' | 'u32' | 's8' | 's16' | 's32';
+      make: () => unknown;
+      sample: number;
+    }[] = [
       { name: 'u8', make: () => s.u8(), sample: 200 },
       { name: 'u16', make: () => s.u16(), sample: 40000 },
       { name: 'u32', make: () => s.u32(), sample: 4000000000 },
@@ -223,9 +230,9 @@ describe('fluent schema markers', () => {
   it('wraps an inner schema in a secret capability node', () => {
     const codec = compileSchema(s.secret(z.string()));
     expect(codec.graph.root.body.tag).toBe('secret');
-    expect((codec.graph.root.body as { tag: 'secret'; inner: { body: { tag: string } } }).inner.body.tag).toBe(
-      'string',
-    );
+    expect(
+      (codec.graph.root.body as { tag: 'secret'; inner: { body: { tag: string } } }).inner.body.tag,
+    ).toBe('string');
   });
 
   it('maps quotaToken to a quota-token capability node', () => {
@@ -247,7 +254,11 @@ describe('fluent schema markers', () => {
     const codec = compileSchema(s.unstructuredBinary());
     expect(codec.graph.root.body.tag).toBe('variant');
     expect(codec.graph.root.metadata.role).toMatchObject({ tag: 'unstructured-binary' });
-    const inline = { tag: 'inline' as const, val: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
+    const inline = {
+      tag: 'inline' as const,
+      val: new Uint8Array([1, 2, 3]),
+      mimeType: 'image/png',
+    };
     expect(codec.fromValue(codec.toValue(inline))).toEqual(inline);
   });
 

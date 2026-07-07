@@ -12,10 +12,7 @@ import path from 'path';
 // the wasm runtime), plus `agent-guest`/`node:sqlite`. Externalize them all so the
 // fluent host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
-  id === 'agent-guest' ||
-  id === 'node:sqlite' ||
-  id.startsWith('golem:') ||
-  id.startsWith('wasi:');
+  id === 'agent-guest' || id === 'node:sqlite' || id.startsWith('golem:') || id.startsWith('wasi:');
 
 function onwarn(warning, warn) {
   if (warning.code === 'CIRCULAR_DEPENDENCY') return;

@@ -274,11 +274,7 @@ describe('isReader', () => {
 
 describe('RdbmsError', () => {
   it('classifies a tagged host error', () => {
-    const err = new RdbmsError(
-      { tag: 'connection-failure', val: 'refused' },
-      'open',
-      'Postgres',
-    );
+    const err = new RdbmsError({ tag: 'connection-failure', val: 'refused' }, 'open', 'Postgres');
     expect(err.reason).toBe('connection-failure');
     expect(err.trace).toBe('refused');
     expect(err.operation).toBe('open');

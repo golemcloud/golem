@@ -128,7 +128,12 @@ export interface MySqlConnection {
 }
 
 const makeTransaction = (
-  tx: { query: QueryTarget['query']; execute: QueryTarget['execute']; commit(): void; rollback(): void },
+  tx: {
+    query: QueryTarget['query'];
+    execute: QueryTarget['execute'];
+    commit(): void;
+    rollback(): void;
+  },
   mode: TemporalDecodeMode,
 ): MySqlTransaction => {
   const api = makeQueryApi(tx, mode);

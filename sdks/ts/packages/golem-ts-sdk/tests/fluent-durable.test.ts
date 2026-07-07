@@ -63,7 +63,11 @@ async function load() {
   await import('../src/fluent/schema/zod'); // side-effect: registers the Zod walker
   const durableMod = await import('../src/host/durable');
   const resultMod = await import('../src/host/result');
-  return { durable: durableMod.durable, FunctionType: durableMod.FunctionType, Result: resultMod.Result };
+  return {
+    durable: durableMod.durable,
+    FunctionType: durableMod.FunctionType,
+    Result: resultMod.Result,
+  };
 }
 
 const baseSpec = (FunctionType: { writeRemote: unknown }) => ({

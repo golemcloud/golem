@@ -207,7 +207,8 @@ const RETURNING_RE = /\bRETURNING\b/i;
  * Conservative — a stray `RETURNING` simply routes to `query` and the host
  * responds with the appropriate error.
  */
-export const isReader = (sql: string): boolean => READ_PREFIX_RE.test(sql) || RETURNING_RE.test(sql);
+export const isReader = (sql: string): boolean =>
+  READ_PREFIX_RE.test(sql) || RETURNING_RE.test(sql);
 
 // ---------------------------------------------------------------------------
 // Temporal decode mode
@@ -537,8 +538,7 @@ const encodeMacAddr = (input: unknown): MacAddress => {
 // through the real `LazyDbValue` constructor (see postgres.ts). In the
 // host-free codec path we use a plain object so round-trip tests work.
 let lazyCtor: (<T>(v: T) => Lazy<T>) | undefined;
-const makeLazy = <T>(v: T): Lazy<T> =>
-  lazyCtor ? lazyCtor(v) : { get: () => v };
+const makeLazy = <T>(v: T): Lazy<T> => (lazyCtor ? lazyCtor(v) : { get: () => v });
 
 /**
  * Install the host's `LazyDbValue` constructor so nested array/composite/domain

@@ -17,12 +17,7 @@
 // {@link PostgresError} on failure. The db-value <-> JS codec lives in `./shared`
 // (host-import-free, so it round-trips under node tests).
 
-import {
-  DbConnection,
-  type DbResult,
-  type DbValue,
-  LazyDbValue,
-} from 'golem:rdbms/postgres@1.5.0';
+import { DbConnection, type DbResult, type DbValue, LazyDbValue } from 'golem:rdbms/postgres@1.5.0';
 import {
   type DbColumnLike,
   type DbRowLike,
@@ -167,7 +162,12 @@ export interface PgConnection {
 }
 
 const makeTransaction = (
-  tx: { query: QueryTarget['query']; execute: QueryTarget['execute']; commit(): void; rollback(): void },
+  tx: {
+    query: QueryTarget['query'];
+    execute: QueryTarget['execute'];
+    commit(): void;
+    rollback(): void;
+  },
   mode: TemporalDecodeMode,
 ): PgTransaction => {
   const api = makeQueryApi(tx, mode);

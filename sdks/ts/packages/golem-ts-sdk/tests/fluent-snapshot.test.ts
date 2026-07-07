@@ -92,14 +92,20 @@ describe('fluent snapshot — typed state', () => {
 
   it('round-trips through the schema on load', async () => {
     const agent = await initiate('SnapTypedCounter');
-    await agent.loadSnapshot(new TextEncoder().encode(JSON.stringify({ count: 42 })), 'application/json');
+    await agent.loadSnapshot(
+      new TextEncoder().encode(JSON.stringify({ count: 42 })),
+      'application/json',
+    );
     expect(jsonOf((await agent.saveSnapshot()).data)).toEqual({ count: 42 });
   });
 
   it('rejects a snapshot that violates the declared schema', async () => {
     const agent = await initiate('SnapTypedCounter');
     await expect(
-      agent.loadSnapshot(new TextEncoder().encode(JSON.stringify({ count: 'nope' })), 'application/json'),
+      agent.loadSnapshot(
+        new TextEncoder().encode(JSON.stringify({ count: 'nope' })),
+        'application/json',
+      ),
     ).rejects.toBeTruthy();
   });
 });

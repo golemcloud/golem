@@ -160,7 +160,9 @@ export function buildUnionVariantCodec(
   label: string,
 ): FluentCodec {
   const defs = mergeGraphDefs(memberCodecs.map((c) => c.graph));
-  const cases: VariantCaseType[] = memberCodecs.map((c, i) => variantCase(`case${i}`, c.graph.root));
+  const cases: VariantCaseType[] = memberCodecs.map((c, i) =>
+    variantCase(`case${i}`, c.graph.root),
+  );
   return {
     graph: { defs, root: t.variant(cases) },
     toValue: (value) => {

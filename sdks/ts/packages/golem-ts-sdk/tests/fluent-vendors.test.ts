@@ -322,7 +322,9 @@ describe('fluent Effect Schema walker', () => {
   });
 
   it('maps an optional struct property to an option field', () => {
-    const obj = compileSchema(std(Schema.Struct({ a: Schema.String, b: Schema.optional(Schema.Number) })));
+    const obj = compileSchema(
+      std(Schema.Struct({ a: Schema.String, b: Schema.optional(Schema.Number) })),
+    );
     expect(obj.graph.root.body.tag).toBe('record');
     expect(obj.fromValue(obj.toValue({ a: 'hi', b: 2 }))).toEqual({ a: 'hi', b: 2 });
     expect(obj.fromValue(obj.toValue({ a: 'hi' }))).toEqual({ a: 'hi' });

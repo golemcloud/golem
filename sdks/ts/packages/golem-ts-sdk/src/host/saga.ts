@@ -174,9 +174,7 @@ export type SagaFailure<Err> =
  * @param f - The async function that defines the saga.
  * @returns A promise resolving to the result of the saga.
  */
-export async function infallibleSaga<Out>(
-  f: (saga: InfallibleSaga) => Promise<Out>,
-): Promise<Out> {
+export async function infallibleSaga<Out>(f: (saga: InfallibleSaga) => Promise<Out>): Promise<Out> {
   const guard = markAtomicOperation();
   const beginOplogIndex = getOplogIndex();
   const saga = new InfallibleSaga(beginOplogIndex);

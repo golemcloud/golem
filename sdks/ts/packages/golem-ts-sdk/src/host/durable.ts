@@ -40,7 +40,8 @@ export const FunctionType = {
   writeLocal: { tag: 'write-local' } as const,
   readRemote: { tag: 'read-remote' } as const,
   writeRemote: { tag: 'write-remote' } as const,
-  writeRemoteBatched: (begin?: OplogIndex) => ({ tag: 'write-remote-batched', val: begin }) as const,
+  writeRemoteBatched: (begin?: OplogIndex) =>
+    ({ tag: 'write-remote-batched', val: begin }) as const,
   writeRemoteTransaction: (begin?: OplogIndex) =>
     ({ tag: 'write-remote-transaction', val: begin }) as const,
 } as const;
@@ -71,7 +72,11 @@ const PERSIST_NOTHING = { tag: 'persist-nothing' } as const;
 
 // Infallible — body returns the success value directly; a throw is an uncaught
 // defect (the worker is retried, the region left open).
-export function durable<Req, Ok>(spec: DurableSpec<Req, Ok>, request: Req, body: () => Promise<Ok>): Promise<Ok>;
+export function durable<Req, Ok>(
+  spec: DurableSpec<Req, Ok>,
+  request: Req,
+  body: () => Promise<Ok>,
+): Promise<Ok>;
 export function durable<Req, Ok>(spec: DurableSpec<Req, Ok>, request: Req, body: () => Ok): Ok;
 // Fallible — body returns a `Result<Ok, Err>`; the Result (ok OR err) is persisted
 // and replayed. A throw is still an uncaught defect.

@@ -18,17 +18,77 @@ import { s } from '../src/fluent/schema/markers';
 
 // Each fluent typed-array marker → WIT `list<primN>`, decoded to the concrete subclass.
 const KINDS = [
-  { name: 'int8Array', make: () => s.int8Array(), ctor: Int8Array, prim: 's8', sample: [-1, 2, 127] },
-  { name: 'uint8Array', make: () => s.uint8Array(), ctor: Uint8Array, prim: 'u8', sample: [0, 255, 7] },
+  {
+    name: 'int8Array',
+    make: () => s.int8Array(),
+    ctor: Int8Array,
+    prim: 's8',
+    sample: [-1, 2, 127],
+  },
+  {
+    name: 'uint8Array',
+    make: () => s.uint8Array(),
+    ctor: Uint8Array,
+    prim: 'u8',
+    sample: [0, 255, 7],
+  },
   { name: 'bytes', make: () => s.bytes(), ctor: Uint8Array, prim: 'u8', sample: [1, 2, 3] },
-  { name: 'int16Array', make: () => s.int16Array(), ctor: Int16Array, prim: 's16', sample: [-100, 200] },
-  { name: 'uint16Array', make: () => s.uint16Array(), ctor: Uint16Array, prim: 'u16', sample: [0, 65535] },
-  { name: 'int32Array', make: () => s.int32Array(), ctor: Int32Array, prim: 's32', sample: [-5, 5, 1000000] },
-  { name: 'uint32Array', make: () => s.uint32Array(), ctor: Uint32Array, prim: 'u32', sample: [0, 4000000000] },
-  { name: 'float32Array', make: () => s.float32Array(), ctor: Float32Array, prim: 'f32', sample: [1.5, -2.5, 0.25] },
-  { name: 'float64Array', make: () => s.float64Array(), ctor: Float64Array, prim: 'f64', sample: [3.14, -1] },
-  { name: 'bigInt64Array', make: () => s.bigInt64Array(), ctor: BigInt64Array, prim: 's64', sample: [-1n, 9007199254740993n] },
-  { name: 'bigUint64Array', make: () => s.bigUint64Array(), ctor: BigUint64Array, prim: 'u64', sample: [0n, 18446744073709551615n] },
+  {
+    name: 'int16Array',
+    make: () => s.int16Array(),
+    ctor: Int16Array,
+    prim: 's16',
+    sample: [-100, 200],
+  },
+  {
+    name: 'uint16Array',
+    make: () => s.uint16Array(),
+    ctor: Uint16Array,
+    prim: 'u16',
+    sample: [0, 65535],
+  },
+  {
+    name: 'int32Array',
+    make: () => s.int32Array(),
+    ctor: Int32Array,
+    prim: 's32',
+    sample: [-5, 5, 1000000],
+  },
+  {
+    name: 'uint32Array',
+    make: () => s.uint32Array(),
+    ctor: Uint32Array,
+    prim: 'u32',
+    sample: [0, 4000000000],
+  },
+  {
+    name: 'float32Array',
+    make: () => s.float32Array(),
+    ctor: Float32Array,
+    prim: 'f32',
+    sample: [1.5, -2.5, 0.25],
+  },
+  {
+    name: 'float64Array',
+    make: () => s.float64Array(),
+    ctor: Float64Array,
+    prim: 'f64',
+    sample: [3.14, -1],
+  },
+  {
+    name: 'bigInt64Array',
+    make: () => s.bigInt64Array(),
+    ctor: BigInt64Array,
+    prim: 's64',
+    sample: [-1n, 9007199254740993n],
+  },
+  {
+    name: 'bigUint64Array',
+    make: () => s.bigUint64Array(),
+    ctor: BigUint64Array,
+    prim: 'u64',
+    sample: [0n, 18446744073709551615n],
+  },
 ] as const;
 
 describe('fluent typed-array markers → WIT list<primN>', () => {
