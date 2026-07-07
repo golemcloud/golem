@@ -58,7 +58,7 @@ export const MostlySecureAgent = defineAgent({
 
 ## Receiving the Principal
 
-When auth is enabled, access the authenticated user's `Principal` from the handler's `this` via `this.getPrincipal()`. Unlike the old decorator API, `Principal` is **not** a method parameter, so it is never mapped to path/query/header variables:
+When auth is enabled, read the authenticated user's `Principal` either from the handler's `this` via `this.getPrincipal()` (the init-time principal), or by declaring a bare `s.principal()` method parameter — which is **auto-injected** with the per-call caller principal. Either way the `Principal` is host-supplied: an auto-injected parameter consumes no wire field and is **never** mapped to path/query/header variables:
 
 ```typescript
 import { z } from 'zod';

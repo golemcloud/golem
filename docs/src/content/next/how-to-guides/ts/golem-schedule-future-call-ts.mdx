@@ -44,14 +44,15 @@ type, import it as `import type { Datetime } from 'golem:agent/host@2.0.0'`.
 
 ## Cancellation
 
-> **Note:** The fluent RPC client exposes only `.schedule()` — there is no
-> `.scheduleCancelable()` / `CancellationToken` variant on the generated client.
-> To make a scheduled invocation cancelable, either:
->
-> - Gate the scheduled method on agent state — set a `cancelled` flag the handler
->   checks and returns early when set (see the [`golem-recurring-task-ts`](/next/how-to-guides/ts/golem-recurring-task-ts) guide), or
-> - Schedule from the CLI with a known idempotency key and cancel it with
->   `golem agent invocation cancel` (see the [`golem-cancel-queued-invocation`](/next/how-to-guides/common/golem-cancel-queued-invocation) guide).
+Use `.scheduleCancelable(at, input)` instead of `.schedule(...)` — it returns a `CancellationToken`; call `.cancel()` on it any time before the scheduled time to cancel the invocation:
+
+```typescript
+const token = counter.increment.scheduleCancelable({ seconds: nowSecs + 60n, nanoseconds: 0 });
+// …later, if the run is no longer wanted:
+token.cancel();
+```
+
+(To cancel an in-flight — not scheduled — RPC call, use `.abortable(signal, input)` and abort the `AbortSignal`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem agent invocation cancel` — see [`golem-cancel-queued-invocation`](/next/how-to-guides/common/golem-cancel-queued-invocation).)
 
 ## Use Cases
 

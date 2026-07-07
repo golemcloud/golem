@@ -19,6 +19,7 @@ Verify each API name against the SDK source in `sdks/ts/packages/golem-ts-sdk/sr
 | method signature types (`increment(): Promise<number>`) | `method({ input: {...}, returns: <schema> })` with Standard Schema |
 | `this.getId()` | `this.getId()` (same, on the handler `this`) |
 | `getPrincipal()` | `this.getPrincipal()` |
+| injected `Principal` constructor/method param | a bare `s.principal()` parameter (auto-injected with the per-call caller principal) |
 
 There are **no classes, no decorators, and no code generation**. Handlers are plain functions whose `this` is the state.
 
@@ -110,7 +111,7 @@ Register the agent by importing its module from `src/main.ts` (`import './counte
 
 - `@description('...')` → `method({ description: '...' })`; agent-level `@description` → `defineAgent({ description })`.
 - `@prompt('...')` → `method({ promptHint: '...' })`; agent-level → `defineAgent({ promptHint })`.
-- `@readonly()` → `method({ readOnly: true })`.
+- `@readonly()` → `method({ readOnly: true })`; `@readonly({ cache, usesPrincipal })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos }, usesPrincipal } })`.
 - `@endpoint({ post: '/x' })` → `method({ http: http.post('/x') })`, with a mount declared via `defineAgent({ http: http.mount('/prefix/{idVar}', { cors, auth }) })`.
 - `@agent({ mount, cors })` → `defineAgent({ http: http.mount(mount, { cors }) })`.
 
@@ -178,16 +179,19 @@ Def.implement({
 });
 ```
 
-## Known feature deltas (a migrating user MUST know)
+## Feature parity — restored capabilities + the remaining deltas
 
-The fluent API is intentionally narrower than the decorator API in several places. Do not assume the old option exists:
+The fluent API now covers the decorator features it once lacked. Use the fluent forms below; only two genuine deltas remain.
 
-- **`readOnly` is boolean-only.** The decorator `@readonly({ cache: 'no-cache' | 'until-write' | { ttl } })` cache policies, TTLs, and principal-dependent caching are gone. `readOnly: true` only marks the method side-effect-free.
-- **No `getWithConfig` RPC variant.** The old `Agent.getWithConfig(...)` / `getPhantomWithConfig(...)` / `newPhantomWithConfig(...)` (passing config to a remote agent) have no fluent equivalent. Use `clientFor(Def)(id, phantomId?)` — config is provisioned via `golem.yaml`, not passed at call time.
+**Restored to base parity (use these — they are NOT gaps):**
+- **`readOnly` cache policies.** `@readonly({ cache: 'no-cache' | 'until-write' | { ttl } })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean } })`. Bare `readOnly: true` uses the `until-write` policy (the base default); principal-dependent caching → `usesPrincipal: true`.
+- **Config-on-RPC (`getWithConfig`).** `Agent.getWithConfig(id, overrides)` → `clientFor(Def)(id, phantomId?, overrides)` — the non-secret override leaves are encoded and applied to the remote agent at call time (secret overrides are rejected; secrets stay host-provisioned).
+- **Cancelable / abortable RPC.** The client method has `.abortable(signal, input)` (cancels the remote invocation when the `AbortSignal` fires) and `.scheduleCancelable(at, input)` → a `CancellationToken` (`.cancel()`), alongside `.trigger(input)` / `.schedule(at, input)`.
+- **`Principal` as data + auto-injected input.** `s.principal()` carries a `Principal` as a method return / nested value, and a bare `s.principal()` method (or constructor) PARAMETER is auto-injected with the per-call caller principal — it consumes no wire field and is not bound from HTTP/RPC callers (the fluent equivalent of the decorator's injected `Principal` parameter). `this.getPrincipal()` still reads the init-time principal.
+
+**Remaining deltas (verify against `src/fluent/` before assuming an option exists):**
 - **Custom snapshot is a bare `Uint8Array`.** No `{ data, mimeType }` return, no `application/json` vs `multipart/mixed` selection, and no automatic SQLite multipart part. `save` returns bytes, `load` takes bytes.
-- **No mount-level header→id binding.** The mount only binds path `{var}` names to id fields; there is no header-to-id mapping on the mount.
-- **No cancelable scheduling in the fluent client.** The client method has `.trigger(input)` (fire-and-forget) and `.schedule(at, input)` — there is no `scheduleCancelable` / returned `CancellationToken` on the fluent RPC client.
-- **`Principal` is read via `this.getPrincipal()`** inside a handler (also `InitContext.principal` in `init`), not a constructor-injected value.
+- **No mount-level header→id binding.** The mount only binds path `{var}` names to id fields; there is no header-to-id mapping on the mount (an endpoint-level `{ headers }` binding on a method DOES work).
 
 If a decorator feature you need has no fluent equivalent, stop and flag it rather than inventing an API name — verify against `src/fluent/` and `src/host/` first.
 

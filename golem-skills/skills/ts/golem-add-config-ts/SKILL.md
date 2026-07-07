@@ -96,5 +96,5 @@ Values set closer to the agent override those set at broader scopes.
 - Only object/record schemas are recursed into nested fields; unions, arrays, tuples, maps, and primitives are read whole
 - Optional fields use the schema's own optionality (e.g. `z.number().optional()`)
 - Config keys in `golem.yaml` use camelCase matching the field names
-- Config values are provisioned per environment (via `golem.yaml` / CLI), not passed at RPC call time
+- Config values are provisioned per environment (via `golem.yaml` / CLI); a caller may ALSO override non-secret config for a remote agent at call time via `clientFor(Def)(id, phantomId?, overrides)` (config-on-RPC — secret overrides are rejected)
 - If the config includes secret fields, mark them with `s.secret(...)` and see `golem-add-secret-ts` for secret-specific declaration and CLI guidance

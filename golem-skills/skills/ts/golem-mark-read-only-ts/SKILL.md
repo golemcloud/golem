@@ -44,7 +44,8 @@ export const CounterAgentImpl = CounterAgent.implement({
 });
 ```
 
-> **Fluent surface.** The fluent `method(...)` exposes read-only as a single boolean, `readOnly: true`. The finer-grained cache-policy choices and per-principal caching from the decorator SDK (`until-write` / TTL / `no-cache`, `Principal`-keyed caching) are **not** configurable here — `readOnly: true` marks the method as a side-effect-free read-only method. Reach for a regular (non-read-only) method whenever you need a side effect.
+> **Cache policy.** `readOnly: true` uses the `until-write` cache policy (the base-SDK default). For finer control, pass an object instead of the boolean:
+> `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean }` — `no-cache` never caches, `until-write` caches until a mutating (non-read-only) method runs, `{ ttlNanos }` caches for that time-to-live, and `usesPrincipal: true` keys the cache per caller principal. Reach for a regular (non-read-only) method whenever you need a side effect.
 
 ## What Works in a Read-Only Method
 

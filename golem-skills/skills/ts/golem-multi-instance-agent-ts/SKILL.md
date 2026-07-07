@@ -26,8 +26,9 @@ agent-type(param1, param2)
 You address another agent with a typed RPC client built from its `defineAgent` definition via `clientFor(Def)`. The returned factory takes the id record and an **optional phantom UUID**:
 
 ```typescript
-clientFor(Def)(id)              // non-phantom: same agent for the same id
-clientFor(Def)(id, phantomUuid) // phantom: addressed by id + a specific UUID
+clientFor(Def)(id)                       // non-phantom: same agent for the same id
+clientFor(Def)(id, phantomUuid)          // phantom: addressed by id + a specific UUID
+clientFor(Def)(id, phantomUuid, config)  // + per-call non-secret config overrides (config-on-RPC)
 ```
 
 | Call | Description |
@@ -35,6 +36,9 @@ clientFor(Def)(id, phantomUuid) // phantom: addressed by id + a specific UUID
 | `client(id)` | Get or create a **non-phantom** agent identified solely by its id record |
 | `client(id, Uuid.generate())` | Create a **new phantom** agent with a freshly generated random UUID |
 | `client(id, savedUuid)` | Get or create a phantom agent with a **specific** UUID |
+| `client(id, undefined, { foo })` | Override the target's non-secret config for this call (secrets stay host-provisioned) |
+
+Each method on the client has, besides the awaited call: `.trigger(input)` (fire-and-forget), `.schedule(at, input)` and `.scheduleCancelable(at, input) → CancellationToken`, and `.abortable(signal, input)` (cancels the in-flight remote invocation when the `AbortSignal` fires).
 
 ### Example
 
