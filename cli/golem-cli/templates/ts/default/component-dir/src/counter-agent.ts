@@ -4,8 +4,8 @@ import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 // A minimal durable counter agent in the fluent (Standard Schema) SDK:
 // `defineAgent(...)` declares the contract, `.implement(...)` supplies handlers
 // whose `this` is bound to the state returned by `init`.
-export const Counter = defineAgent({
-  name: 'Counter',
+export const CounterAgent = defineAgent({
+  name: 'CounterAgent',
   id: { name: z.string() },
   methods: {
     value: method({ input: {}, returns: z.number() }),
@@ -15,7 +15,7 @@ export const Counter = defineAgent({
   },
 });
 
-export const CounterImpl = Counter.implement({
+export const CounterAgentImpl = CounterAgent.implement({
   init: () => ({ count: 0 }),
   methods: {
     value() {

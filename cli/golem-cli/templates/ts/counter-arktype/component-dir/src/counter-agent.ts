@@ -7,8 +7,8 @@ import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 //
 // ArkType has no first-class `void`, so `reset` returns the reset value (0)
 // instead of nothing — keeping every method's return schema a real ArkType type.
-export const Counter = defineAgent({
-  name: 'Counter',
+export const CounterArktype = defineAgent({
+  name: 'CounterArktype',
   id: { name: type('string') },
   methods: {
     value: method({ input: {}, returns: type('number') }),
@@ -18,7 +18,7 @@ export const Counter = defineAgent({
   },
 });
 
-export const CounterImpl = Counter.implement({
+export const CounterArktypeImpl = CounterArktype.implement({
   init: () => ({ count: 0 }),
   methods: {
     value() {

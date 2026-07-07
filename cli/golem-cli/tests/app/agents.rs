@@ -765,35 +765,44 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
     fs::write_str(
         &component_source_code_main_file,
         indoc! { r#"
-            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
 
-            @agent()
-            class TargetAgent extends BaseAgent {
-              id: string;
+            export const TargetAgent = defineAgent({
+              name: 'TargetAgent',
+              id: { id: z.string() },
+              methods: {
+                ping: method({ input: {}, returns: z.string() }),
+              },
+            });
 
-              constructor(id: string) {
-                super();
-                this.id = id;
-              }
+            export const TargetAgentImpl = TargetAgent.implement({
+              init: ({ id }) => ({ id: id.id }),
+              methods: {
+                ping() {
+                  return `pong:${this.id}`;
+                },
+              },
+            });
 
-              async ping(): Promise<string> {
-                return `pong:${this.id}`;
-              }
-            }
+            const targetClient = clientFor(TargetAgent);
 
-            @agent()
-            class CallerAgent extends BaseAgent {
-              id: string;
+            export const CallerAgent = defineAgent({
+              name: 'CallerAgent',
+              id: { id: z.string() },
+              methods: {
+                callTarget: method({ input: { targetId: z.string() }, returns: z.string() }),
+              },
+            });
 
-              constructor(id: string) {
-                super();
-                this.id = id;
-              }
-
-              async callTarget(targetId: string): Promise<string> {
-                return await (await TargetAgent.get(targetId)).ping();
-              }
-            }
+            export const CallerAgentImpl = CallerAgent.implement({
+              init: ({ id }) => ({ id: id.id }),
+              methods: {
+                async callTarget({ targetId }) {
+                  return await targetClient({ id: targetId }).ping();
+                },
+              },
+            });
         "# },
     )
     .unwrap();
@@ -1244,25 +1253,30 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     fs::write_str(
         &component_source_code,
         indoc! { r#"
-            import { BaseAgent, agent, } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-            type Complex = {
-              oneField: string;
-              anotherField: number;
-            }
+            const Complex = z.object({
+              oneField: z.string(),
+              anotherField: z.number(),
+            });
 
-            @agent()
-            class LongAgentName extends BaseAgent {
-              params: Complex;
-              constructor(params: Complex) {
-                super();
-                this.params = params;
-              }
+            export const LongAgentName = defineAgent({
+              name: 'LongAgentName',
+              id: { params: Complex },
+              methods: {
+                ask: method({ input: { question: Complex }, returns: z.tuple([Complex, Complex]) }),
+              },
+            });
 
-              async ask(question: Complex): Promise<[Complex, Complex]> {
-                return [this.params, question];
-              }
-            }
+            export const LongAgentNameImpl = LongAgentName.implement({
+              init: ({ id }) => ({ params: id.params }),
+              methods: {
+                ask({ question }) {
+                  return [this.params, question];
+                },
+              },
+            });
         "# },
     )
     .unwrap();
