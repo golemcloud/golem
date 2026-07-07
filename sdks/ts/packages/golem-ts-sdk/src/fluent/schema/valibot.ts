@@ -54,6 +54,8 @@ interface NormalizedDef {
   enumCases?: string[];
   /** Literal value(s). */
   literalValues?: unknown[];
+  /** `v.lazy(() => S)` thunk returning the (stable) inner schema. */
+  getter?: (input?: unknown) => unknown;
 }
 
 /**
@@ -102,6 +104,8 @@ function normalize(raw: any): NormalizedDef {
         ? (schema.options as unknown[]).map(String)
         : undefined,
     literalValues: kind === 'literal' ? [schema.literal] : undefined,
+    // `v.lazy(() => S)` stores the thunk on `.getter` (called with the input).
+    getter: kind === 'lazy' ? schema.getter : undefined,
   };
 }
 
@@ -129,7 +133,17 @@ const valibotWalker: SchemaWalker = (schema, recurse): FluentCodec => {
     valueType,
     enumCases,
     literalValues,
+    getter,
   } = normalize(schema);
+
+  if (kind === 'lazy') {
+    // `v.lazy(() => S)` defers to its (stable) inner schema. Recursion is handled
+    // by the cycle-aware `recurse`: a self-reference resolves to the same schema
+    // object and closes to a `ref`. The getter ignores its input for recursive
+    // definitions, so we pass `undefined`.
+    if (typeof getter !== 'function') throw new Error('Valibot lazy schema has no getter thunk');
+    return recurse(getter(undefined));
+  }
 
   if (OPTIONAL.has(kind)) {
     const innerCodec = recurse(inner);

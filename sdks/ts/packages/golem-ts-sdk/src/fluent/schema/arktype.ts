@@ -40,6 +40,7 @@ import {
 import { FluentCodec, SchemaWalker } from './codec';
 import { buildUnionVariantCodec, matchesSchemaType } from './union';
 import { registerSchemaWalker } from './adapter';
+import { RecursionRegistry } from './recursion';
 
 type Node = any;
 
@@ -137,8 +138,30 @@ function isBooleanUnion(node: Node): boolean {
   return vals.length === 2 && vals.includes(true) && vals.includes(false);
 }
 
-/** Walk an ArkType internal node into a `FluentCodec`. */
-function walkNode(node: Node): FluentCodec {
+/**
+ * Walk an ArkType internal node into a `FluentCodec`, routing every node through
+ * the {@link RecursionRegistry} keyed on the node's identity. An `alias` node (a
+ * recursive reference, e.g. `tree` inside `scope({ tree: ... })`) is resolved to
+ * its STABLE target node first — `.resolution` returns the same object on every
+ * re-entry — so a back-reference is detected by identity and closed to a `ref`;
+ * non-recursive nodes pass through inline. ArkType recurses over its node tree
+ * internally (child nodes carry no `~standard` brand), so it drives its own
+ * registry rather than the adapter's `recurse`.
+ */
+function walkNode(node: Node, reg: RecursionRegistry): FluentCodec {
+  let n = node;
+  while (n && n.kind === 'alias') {
+    const resolved = n.resolution;
+    if (!resolved || typeof resolved.kind !== 'string') {
+      throw new Error(`ArkType alias '${n.reference ?? ''}' has no resolvable target node.`);
+    }
+    n = resolved;
+  }
+  return reg.compile(n, () => walkNodeBody(n, reg));
+}
+
+/** Structural dispatch for an (already alias-resolved) ArkType internal node. */
+function walkNodeBody(node: Node, reg: RecursionRegistry): FluentCodec {
   const kind: string = node.kind;
   const inner = node.inner ?? {};
 
@@ -150,16 +173,16 @@ function walkNode(node: Node): FluentCodec {
       return primitiveLiteral(unitValueOf(node));
 
     case 'union':
-      return walkUnion(node);
+      return walkUnion(node, reg);
 
     case 'intersection':
-      return walkIntersection(node);
+      return walkIntersection(node, reg);
 
     case 'structure':
-      return walkStructure(node);
+      return walkStructure(node, reg);
 
     case 'sequence':
-      return walkSequence(node);
+      return walkSequence(node, reg);
 
     default:
       throw new Error(
@@ -174,7 +197,7 @@ function walkNode(node: Node): FluentCodec {
  * `union` node: `boolean`, a string-literal enum, or an optional/nullable
  * (`T | undefined` / `T | null`). Plain non-literal unions are deferred.
  */
-function walkUnion(node: Node): FluentCodec {
+function walkUnion(node: Node, reg: RecursionRegistry): FluentCodec {
   if (isBooleanUnion(node)) {
     return leaf(
       t.bool(),
@@ -194,7 +217,7 @@ function walkUnion(node: Node): FluentCodec {
   const emptyBranches = branches.filter((b) => b.kind === 'unit' && isEmptyBranch(b));
   const realBranches = branches.filter((b) => !(b.kind === 'unit' && isEmptyBranch(b)));
   if (emptyBranches.length >= 1 && realBranches.length === 1) {
-    return optionCodec(walkNode(realBranches[0]));
+    return optionCodec(walkNode(realBranches[0], reg));
   }
 
   // String-literal enum: every branch is a string `unit`.
@@ -215,7 +238,7 @@ function walkUnion(node: Node): FluentCodec {
   // over the compiled member types (ArkType branches are internal nodes, not
   // Standard Schema values).
   if (branches.length === 0) throw new Error('ArkType union has no branches');
-  const memberCodecs = branches.map((b) => walkNode(b));
+  const memberCodecs = branches.map((b) => walkNode(b, reg));
   return buildUnionVariantCodec(
     memberCodecs,
     (value) => memberCodecs.findIndex((c) => matchesSchemaType(c.graph.defs, c.graph.root, value)),
@@ -227,22 +250,22 @@ function walkUnion(node: Node): FluentCodec {
  * `intersection` node: ArkType wraps objects, arrays, and tuples as an
  * intersection of a `domain`/`proto` constraint with a `structure` node.
  */
-function walkIntersection(node: Node): FluentCodec {
+function walkIntersection(node: Node, reg: RecursionRegistry): FluentCodec {
   const structure: Node | undefined = node.inner?.structure;
   if (!structure) {
     throw new Error(
       'ArkType intersection without a `structure` child is not supported by the fluent SDK walker.',
     );
   }
-  return walkStructure(structure);
+  return walkStructure(structure, reg);
 }
 
 /** `structure` node: object/record (`required`/`optional`/`index`) or array/tuple (`sequence`). */
-function walkStructure(node: Node): FluentCodec {
+function walkStructure(node: Node, reg: RecursionRegistry): FluentCodec {
   const inner = node.inner ?? node;
 
   if (inner.sequence) {
-    return walkSequence(inner.sequence);
+    return walkSequence(inner.sequence, reg);
   }
 
   // Index signature only → WIT map.
@@ -252,8 +275,8 @@ function walkStructure(node: Node): FluentCodec {
 
   if (required.length === 0 && optional.length === 0 && index.length === 1) {
     const idx = index[0];
-    const keyCodec = walkNode(nodeOf(idx.signature));
-    const valCodec = walkNode(nodeOf(idx.value));
+    const keyCodec = walkNode(nodeOf(idx.signature), reg);
+    const valCodec = walkNode(nodeOf(idx.value), reg);
     const defs = mergeGraphDefs([keyCodec.graph, valCodec.graph]);
     return {
       graph: { defs, root: t.map(keyCodec.graph.root, valCodec.graph.root) },
@@ -287,12 +310,12 @@ function walkStructure(node: Node): FluentCodec {
   const fieldCodecs: FieldCodec[] = [
     ...required.map((r) => ({
       name: r.key as string,
-      codec: walkNode(nodeOf(r.value)),
+      codec: walkNode(nodeOf(r.value), reg),
       optional: false,
     })),
     ...optional.map((o) => ({
       name: o.key as string,
-      codec: optionCodec(walkNode(nodeOf(o.value))),
+      codec: optionCodec(walkNode(nodeOf(o.value), reg)),
       optional: true,
     })),
   ];
@@ -338,11 +361,11 @@ function optionCodec(innerCodec: FluentCodec): FluentCodec {
 }
 
 /** `sequence` node: variadic (`.variadic`) → list, fixed prefix (`.prefix`) → tuple. */
-function walkSequence(node: Node): FluentCodec {
+function walkSequence(node: Node, reg: RecursionRegistry): FluentCodec {
   const inner = node.inner ?? node;
 
   if (inner.variadic) {
-    const elemCodec = walkNode(nodeOf(inner.variadic));
+    const elemCodec = walkNode(nodeOf(inner.variadic), reg);
     return {
       graph: { defs: elemCodec.graph.defs, root: t.list(elemCodec.graph.root) },
       toValue: (value) => v.list((value as unknown[]).map((e) => elemCodec.toValue(e))),
@@ -352,7 +375,7 @@ function walkSequence(node: Node): FluentCodec {
   }
 
   if (Array.isArray(inner.prefix) && inner.prefix.length > 0) {
-    const itemCodecs = (inner.prefix as Node[]).map((p) => walkNode(nodeOf(p)));
+    const itemCodecs = (inner.prefix as Node[]).map((p) => walkNode(nodeOf(p), reg));
     const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
     return {
       graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
@@ -370,7 +393,10 @@ function walkSequence(node: Node): FluentCodec {
 }
 
 const arktypeWalker: SchemaWalker = (schema): FluentCodec => {
-  return walkNode(nodeOf(schema));
+  // One registry per top-level compile: ArkType recurses over its node tree
+  // internally, so it drives its own cycle detection rather than the adapter's
+  // `recurse`.
+  return walkNode(nodeOf(schema), new RecursionRegistry());
 };
 
 registerSchemaWalker('arktype', arktypeWalker);

@@ -38,6 +38,7 @@ import {
 import { FluentCodec, SchemaWalker } from './codec';
 import { buildUnionVariantCodec, matchesSchemaType } from './union';
 import { registerSchemaWalker } from './adapter';
+import { RecursionRegistry } from './recursion';
 
 type Ast = any;
 
@@ -59,6 +60,10 @@ function isNullOrUndefinedAst(node: Ast): boolean {
  * Unwrap `Refinement` (`.from`) and `Transformation` (`.from`, the encoded side)
  * nodes to the underlying structural AST. We walk the *encoded* form so the
  * wire shape (not the decoded domain type) is what we encode/decode.
+ *
+ * `Suspend` (recursion) is intentionally NOT unwrapped here — resolving it
+ * eagerly would infinite-loop on a recursive schema. It is handled in
+ * {@link walkAst} via the {@link RecursionRegistry}, which detects the cycle.
  */
 function unwrap(ast: Ast): Ast {
   let cur = ast;
@@ -67,8 +72,6 @@ function unwrap(ast: Ast): Ast {
       cur = cur.from;
     } else if (cur && cur._tag === 'Transformation' && cur.from) {
       cur = cur.from;
-    } else if (cur && cur._tag === 'Suspend' && typeof cur.f === 'function') {
-      cur = cur.f();
     } else {
       return cur;
     }
@@ -83,9 +86,26 @@ function leaf(
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
-/** Recursively walk an Effect Schema AST node into a `FluentCodec`. */
-function walkAst(rawAst: Ast): FluentCodec {
-  const ast = unwrap(rawAst);
+/**
+ * Walk an Effect Schema AST node into a `FluentCodec`, routing every node through
+ * the {@link RecursionRegistry} keyed on the node's identity. `Schema.suspend`
+ * (recursion) is resolved to its STABLE target AST first — every recursive
+ * reference's `.f()` returns the same target object — so a back-reference is
+ * detected by identity and closed to a `ref`; non-recursive nodes pass through
+ * inline. Effect recurses over its AST internally (its child nodes carry no
+ * `~standard` brand), so it drives its own registry rather than the adapter's
+ * `recurse`.
+ */
+function walkAst(rawAst: Ast, reg: RecursionRegistry): FluentCodec {
+  let ast = unwrap(rawAst);
+  while (ast && ast._tag === 'Suspend' && typeof ast.f === 'function') {
+    ast = unwrap(ast.f());
+  }
+  return reg.compile(ast, () => walkAstBody(ast, reg));
+}
+
+/** Structural dispatch for an (already suspend-resolved) Effect AST node. */
+function walkAstBody(ast: Ast, reg: RecursionRegistry): FluentCodec {
   const tag: string = ast?._tag;
 
   switch (tag) {
@@ -157,11 +177,11 @@ function walkAst(rawAst: Ast): FluentCodec {
       );
     }
     case 'TupleType':
-      return walkTupleType(ast);
+      return walkTupleType(ast, reg);
     case 'TypeLiteral':
-      return walkTypeLiteral(ast);
+      return walkTypeLiteral(ast, reg);
     case 'Union':
-      return walkUnion(ast);
+      return walkUnion(ast, reg);
     default:
       throw new Error(
         `Effect Schema AST node '${tag}' is not yet supported by the fluent SDK walker ` +
@@ -172,13 +192,13 @@ function walkAst(rawAst: Ast): FluentCodec {
 }
 
 /** `TupleType`: rest-only → list, fixed elements → tuple. */
-function walkTupleType(ast: Ast): FluentCodec {
+function walkTupleType(ast: Ast, reg: RecursionRegistry): FluentCodec {
   const elements: Ast[] = ast.elements ?? [];
   const rest: Ast[] = ast.rest ?? [];
 
   if (elements.length === 0 && rest.length === 1) {
     // `Schema.Array(x)` → WIT list. Rest entries wrap the AST in `.type`.
-    const elemCodec = walkAst(rest[0].type ?? rest[0]);
+    const elemCodec = walkAst(rest[0].type ?? rest[0], reg);
     return {
       graph: { defs: elemCodec.graph.defs, root: t.list(elemCodec.graph.root) },
       toValue: (value) => v.list((value as unknown[]).map((e) => elemCodec.toValue(e))),
@@ -189,7 +209,7 @@ function walkTupleType(ast: Ast): FluentCodec {
 
   if (rest.length === 0 && elements.length > 0) {
     // `Schema.Tuple(...)` → WIT tuple. Each element wraps the AST in `.type`.
-    const itemCodecs = elements.map((el) => walkAst(el.type ?? el));
+    const itemCodecs = elements.map((el) => walkAst(el.type ?? el, reg));
     const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
     return {
       graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
@@ -205,15 +225,15 @@ function walkTupleType(ast: Ast): FluentCodec {
 }
 
 /** `TypeLiteral`: index signature → map, property signatures → record. */
-function walkTypeLiteral(ast: Ast): FluentCodec {
+function walkTypeLiteral(ast: Ast, reg: RecursionRegistry): FluentCodec {
   const props: Ast[] = ast.propertySignatures ?? [];
   const indexSigs: Ast[] = ast.indexSignatures ?? [];
 
   // `Schema.Record({ key, value })` → WIT map (no own properties).
   if (props.length === 0 && indexSigs.length === 1) {
     const is = indexSigs[0];
-    const keyCodec = walkAst(is.parameter);
-    const valCodec = walkAst(is.type);
+    const keyCodec = walkAst(is.parameter, reg);
+    const valCodec = walkAst(is.type, reg);
     const defs = mergeGraphDefs([keyCodec.graph, valCodec.graph]);
     return {
       graph: { defs, root: t.map(keyCodec.graph.root, valCodec.graph.root) },
@@ -246,7 +266,7 @@ function walkTypeLiteral(ast: Ast): FluentCodec {
     const optional = ps.isOptional === true;
     // Optional Effect properties encode as `Union(T, Undefined)`; unwrap to the
     // real member so the field becomes `option<T>`.
-    const codec = optional ? optionCodec(realMemberOf(ps.type)) : walkAst(ps.type);
+    const codec = optional ? optionCodec(realMemberOf(ps.type), reg) : walkAst(ps.type, reg);
     return { name: String(ps.name), codec, optional };
   });
   const fields: NamedFieldType[] = fieldCodecs.map((f) => field(f.name, f.codec.graph.root));
@@ -280,8 +300,8 @@ function realMemberOf(ast: Ast): Ast {
 }
 
 /** Build an `option<inner>` codec wrapping the codec for `innerAst`. */
-function optionCodec(innerAst: Ast): FluentCodec {
-  const innerCodec = walkAst(innerAst);
+function optionCodec(innerAst: Ast, reg: RecursionRegistry): FluentCodec {
+  const innerCodec = walkAst(innerAst, reg);
   const wrapped: FluentCodec = {
     graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
     toValue: (value) =>
@@ -302,7 +322,7 @@ function optionCodec(innerAst: Ast): FluentCodec {
 }
 
 /** `Union`: string-literal enum, NullOr/UndefinedOr option, or tagged variant. */
-function walkUnion(ast: Ast): FluentCodec {
+function walkUnion(ast: Ast, reg: RecursionRegistry): FluentCodec {
   const types: Ast[] = (ast.types ?? []).map((m: Ast) => m);
 
   // String-literal enum: every member is a string `Literal`.
@@ -323,7 +343,7 @@ function walkUnion(ast: Ast): FluentCodec {
   const emptyMembers = unwrapped.filter((m) => isNullOrUndefinedAst(m));
   const realMembers = types.filter((m) => !isNullOrUndefinedAst(unwrap(m)));
   if (emptyMembers.length >= 1 && realMembers.length === 1) {
-    return optionCodec(realMembers[0]);
+    return optionCodec(realMembers[0], reg);
   }
 
   // Tagged variant: every member is a `TypeLiteral` with a required string-literal
@@ -332,7 +352,7 @@ function walkUnion(ast: Ast): FluentCodec {
     unwrapped.length > 0 &&
     unwrapped.every((m) => m?._tag === 'TypeLiteral' && tagLiteralOf(m) !== undefined)
   ) {
-    return walkTaggedVariant(unwrapped);
+    return walkTaggedVariant(unwrapped, reg);
   }
 
   // Plain (non-tagged) union → WIT `variant` with auto-named cases
@@ -340,7 +360,7 @@ function walkUnion(ast: Ast): FluentCodec {
   // over the compiled member types (Effect members are AST nodes, not Standard
   // Schema values).
   if (types.length === 0) throw new Error('Effect Schema.Union(...) has no members');
-  const memberCodecs = types.map((m) => walkAst(m));
+  const memberCodecs = types.map((m) => walkAst(m, reg));
   return buildUnionVariantCodec(
     memberCodecs,
     (value) => memberCodecs.findIndex((c) => matchesSchemaType(c.graph.defs, c.graph.root, value)),
@@ -358,14 +378,14 @@ function tagLiteralOf(typeLiteral: Ast): string | undefined {
 }
 
 /** Build a WIT variant from tagged-union members (each `case<tag>` payload = the rest of the record). */
-function walkTaggedVariant(members: Ast[]): FluentCodec {
+function walkTaggedVariant(members: Ast[], reg: RecursionRegistry): FluentCodec {
   type Case = { tag: string; payload?: FluentCodec };
   const cases: Case[] = members.map((m) => {
     const tag = tagLiteralOf(m)!;
     const rest = (m.propertySignatures as Ast[]).filter((p) => p.name !== '_tag');
     if (rest.length === 0) return { tag };
     // Build a record codec from the non-`_tag` properties.
-    const payload = walkTypeLiteral({ ...m, propertySignatures: rest, indexSignatures: [] });
+    const payload = walkTypeLiteral({ ...m, propertySignatures: rest, indexSignatures: [] }, reg);
     return { tag, payload };
   });
 
@@ -415,7 +435,9 @@ const effectWalker: SchemaWalker = (schema): FluentCodec => {
       isUnit: true,
     };
   }
-  return walkAst(ast);
+  // One registry per top-level compile: Effect recurses over its AST internally,
+  // so it drives its own cycle detection rather than the adapter's `recurse`.
+  return walkAst(ast, new RecursionRegistry());
 };
 
 registerSchemaWalker('effect', effectWalker);

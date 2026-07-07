@@ -88,6 +88,8 @@ interface NormalizedDef {
   enumCases?: string[];
   /** Literal value(s). */
   literalValues?: unknown[];
+  /** `z.lazy(() => S)` thunk returning the (stable) inner schema. */
+  getter?: () => unknown;
 }
 
 const V3_TYPE_NAMES: Record<string, string> = {
@@ -114,6 +116,7 @@ const V3_TYPE_NAMES: Record<string, string> = {
   ZodRecord: 'record',
   ZodMap: 'map',
   ZodLiteral: 'literal',
+  ZodLazy: 'lazy',
 };
 
 /** Coerce a Zod enum's `entries`/`values` (object or array) to ordered string cases. */
@@ -148,6 +151,8 @@ function normalize(schema: any): NormalizedDef {
       valueType: def.valueType,
       enumCases: def.type === 'enum' ? enumCasesOf(def.entries) : undefined,
       literalValues: def.type === 'literal' ? def.values : undefined,
+      // Zod v4 `z.lazy(() => S)` stores the thunk on `def.getter`.
+      getter: def.type === 'lazy' ? def.getter : undefined,
     };
   }
   if (schema?._def?.typeName) {
@@ -167,6 +172,8 @@ function normalize(schema: any): NormalizedDef {
       valueType: def.valueType,
       enumCases: kind === 'enum' ? enumCasesOf(def.values) : undefined,
       literalValues: def.typeName === 'ZodLiteral' ? [def.value] : undefined,
+      // Zod v3 `z.lazy(() => S)` stores the thunk on `_def.getter`.
+      getter: def.typeName === 'ZodLazy' ? def.getter : undefined,
     };
   }
   throw new Error('Unrecognised Zod schema shape (expected Zod v3 or v4 internals)');
@@ -198,7 +205,16 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
     valueType,
     enumCases,
     literalValues,
+    getter,
   } = normalize(schema);
+
+  if (kind === 'lazy') {
+    // `z.lazy(() => S)` defers to its (stable) inner schema. Recursion is handled
+    // by the cycle-aware `recurse`: a self-reference resolves to the same schema
+    // object and closes to a `ref`.
+    if (typeof getter !== 'function') throw new Error('Zod lazy schema has no getter thunk');
+    return recurse(getter());
+  }
 
   if (OPTIONAL.has(kind)) {
     const innerCodec = recurse(inner);

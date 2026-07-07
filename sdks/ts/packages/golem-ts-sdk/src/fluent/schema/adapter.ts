@@ -25,6 +25,7 @@
 import { FluentCodec, SchemaWalker } from './codec';
 import { isStandardSchema } from './standardSchema';
 import { isMarkerSchema, WIT_MARKER } from './markers';
+import { RecursionRegistry } from './recursion';
 
 const walkers = new Map<string, SchemaWalker>();
 
@@ -39,14 +40,27 @@ export function registeredVendors(): string[] {
 
 /**
  * Compile a Standard Schema value into a {@link FluentCodec} via its vendor
- * walker. Recursive entry point: walkers call it for child schemas.
+ * walker. Seeds a fresh {@link RecursionRegistry} so self- and mutually-recursive
+ * schemas (e.g. a `Tree`) close to a named `ref` def instead of infinite-looping;
+ * the registry is threaded through the recursive walk (see {@link compileSchemaWith}).
  */
 export function compileSchema(schema: unknown): FluentCodec {
+  return compileSchemaWith(schema, new RecursionRegistry());
+}
+
+/**
+ * The cycle-aware recursive entry point walkers call for child schemas: it
+ * carries the shared {@link RecursionRegistry} so a recursive back-reference
+ * (which resolves to the same schema OBJECT) is detected by identity.
+ */
+function compileSchemaWith(schema: unknown, registry: RecursionRegistry): FluentCodec {
+  const recurse = (child: unknown): FluentCodec => compileSchemaWith(child, registry);
+
   // Markers carry a hidden `WIT_MARKER` brand (a `FluentCodec`-builder) so users
   // can express WIT kinds Standard Schema can't. Intercept them BEFORE the
   // vendor dispatch; non-markers fall through to the per-vendor walker path.
   if (isMarkerSchema(schema)) {
-    return schema[WIT_MARKER](compileSchema);
+    return schema[WIT_MARKER](recurse);
   }
   if (!isStandardSchema(schema)) {
     throw new Error(
@@ -63,5 +77,8 @@ export function compileSchema(schema: unknown): FluentCodec {
         ` Import the matching adapter (e.g. '@golemcloud/golem-ts-sdk' registers Zod).`,
     );
   }
-  return walker(schema, compileSchema);
+  // Route through the registry keyed on the schema object identity: a recursive
+  // re-entry short-circuits to a `ref`, and only genuinely recursive schemas are
+  // promoted to a named def (non-recursive ones pass through inline).
+  return registry.compile(schema as object, () => walker(schema, recurse));
 }
