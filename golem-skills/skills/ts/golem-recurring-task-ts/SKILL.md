@@ -7,139 +7,109 @@ description: "Implementing a recurring (cron-like) task in a TypeScript Golem ag
 
 ## Overview
 
-A Golem agent can act as its own scheduler by calling `.schedule()` on itself at the end of each invocation. This creates a durable, crash-resilient recurring task — if the agent restarts, the scheduled invocation is still pending and will fire at the designated time.
+A Golem agent can act as its own scheduler by scheduling one of its own methods to run again at the end of each invocation. This creates a durable, crash-resilient recurring task — if the agent restarts, the scheduled invocation is still pending and will fire at the designated time.
+
+Because a fluent handler's `this` is bound to the agent's **state** (not to its other methods), factor the self-scheduling logic into a small module-level helper that builds an RPC client for the agent itself with `clientFor` and calls `.schedule()`.
 
 ## Basic Pattern
 
-The agent schedules its own method to run again after a delay:
+The agent schedules its own `poll` method to run again after a delay:
 
 ```typescript
-import { agent, BaseAgent } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class PollerAgent extends BaseAgent {
-    name: string;
+export const PollerAgent = defineAgent({
+    name: 'PollerAgent',
+    id: { name: z.string() },
+    methods: {
+        start: method({ input: {}, returns: z.void() }),
+        poll: method({ input: {}, returns: z.void() }),
+    },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    start(): void {
-        this.poll();
-    }
-
-    poll(): void {
-        // 1. Do the recurring work
-        doWork();
-
-        // 2. Schedule the next run (60 seconds from now)
-        const self = PollerAgent.get(this.name);
-        const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-        self.poll.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
-    }
+// Self-scheduling helper: enqueue this agent's own `poll` to run after a delay.
+function scheduleNext(name: string, delaySecs: bigint): void {
+    const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+    clientFor(PollerAgent)({ name }).poll.schedule({ seconds: nowSecs + delaySecs, nanoseconds: 0 });
 }
+
+export const PollerAgentImpl = PollerAgent.implement({
+    init: ({ id }) => ({ name: id.name }),
+    methods: {
+        start() {
+            // Kick off the loop by enqueueing the first poll.
+            scheduleNext(this.name, 0n);
+        },
+        poll() {
+            // 1. Do the recurring work.
+            doWork();
+            // 2. Schedule the next run (60 seconds from now).
+            scheduleNext(this.name, 60n);
+        },
+    },
+});
 ```
 
 ## Exponential Backoff
 
-Increase the delay on repeated failures, reset on success:
+Increase the delay on repeated failures, reset on success. Keep the counters in the agent's state:
 
 ```typescript
-@agent()
-class PollerAgent extends BaseAgent {
-    name: string;
-    consecutiveFailures: number = 0;
-    baseIntervalSecs: bigint = 60n;
-    maxIntervalSecs: bigint = 3600n;
+export const PollerAgentImpl = PollerAgent.implement({
+    init: ({ id }) => ({
+        name: id.name,
+        consecutiveFailures: 0,
+        baseIntervalSecs: 60n,
+        maxIntervalSecs: 3600n,
+    }),
+    methods: {
+        poll() {
+            const success = tryWork();
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
+            let delay: bigint;
+            if (success) {
+                this.consecutiveFailures = 0;
+                delay = this.baseIntervalSecs;
+            } else {
+                this.consecutiveFailures++;
+                const exp = Math.min(this.consecutiveFailures, 6);
+                delay = this.baseIntervalSecs * BigInt(2 ** exp);
+                if (delay > this.maxIntervalSecs) delay = this.maxIntervalSecs;
+            }
 
-    poll(): void {
-        const success = tryWork();
-
-        let delay: bigint;
-        if (success) {
-            this.consecutiveFailures = 0;
-            delay = this.baseIntervalSecs;
-        } else {
-            this.consecutiveFailures++;
-            const exp = Math.min(this.consecutiveFailures, 6);
-            delay = this.baseIntervalSecs * BigInt(2 ** exp);
-            if (delay > this.maxIntervalSecs) delay = this.maxIntervalSecs;
-        }
-
-        const self = PollerAgent.get(this.name);
-        const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-        self.poll.schedule({ seconds: nowSecs + delay, nanoseconds: 0 });
-    }
-}
+            scheduleNext(this.name, delay);
+        },
+    },
+});
 ```
 
-## Cancellation with CancellationToken
+## Cancellation via State Flag
 
-Every method on the generated client has a `.scheduleCancelable()` variant that returns a `CancellationToken`. Store the token and call `.cancel()` to prevent the scheduled invocation from firing:
-
-```typescript
-import { CancellationToken } from '@golemcloud/golem-ts-sdk';
-
-@agent()
-class PollerAgent extends BaseAgent {
-    name: string;
-    cancelled: boolean = false;
-    pendingToken: CancellationToken | undefined;
-
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    poll(): void {
-        if (this.cancelled) {
-            return;
-        }
-
-        doWork();
-
-        const self = PollerAgent.get(this.name);
-        const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-        this.pendingToken = self.poll.scheduleCancelable(
-            { seconds: nowSecs + 60n, nanoseconds: 0 },
-        );
-    }
-
-    cancel(): void {
-        this.cancelled = true;
-        if (this.pendingToken) {
-            this.pendingToken.cancel();
-            this.pendingToken = undefined;
-        }
-    }
-}
-```
-
-### Cancellation via State Flag
-
-For simpler cases, just use a boolean flag — the next scheduled `poll` checks it and exits early:
+The fluent RPC client exposes only `.schedule()` — there is no
+`.scheduleCancelable()` / `CancellationToken` variant. To stop a self-scheduling
+loop, keep a boolean flag in state; the next scheduled `poll` checks it and exits
+early without rescheduling:
 
 ```typescript
-poll(): void {
-    if (this.cancelled) return;
-    doWork();
-    this.scheduleNext(60n);
-}
-
-cancel(): void {
-    this.cancelled = true;
-}
+export const PollerAgentImpl = PollerAgent.implement({
+    init: ({ id }) => ({ name: id.name, cancelled: false }),
+    methods: {
+        poll() {
+            if (this.cancelled) return; // stop the loop
+            doWork();
+            scheduleNext(this.name, 60n);
+        },
+        cancel() {
+            this.cancelled = true;
+        },
+    },
+});
 ```
 
 ### Cancellation from the CLI
 
-Schedule with an explicit idempotency key and cancel the pending invocation:
+If you scheduled the invocation from the CLI with an explicit idempotency key, cancel the pending invocation by key:
 
 ```shell
 # Schedule with a known idempotency key
@@ -156,12 +126,12 @@ golem agent invocation cancel 'PollerAgent("my-poller")' 'poll-next'
 Check an external API or queue for new work at regular intervals:
 
 ```typescript
-poll(): void {
+poll() {
     const items = fetchPendingItems();
     for (const item of items) {
         process(item);
     }
-    this.scheduleNext(60n);
+    scheduleNext(this.name, 60n);
 }
 ```
 
@@ -170,9 +140,9 @@ poll(): void {
 Remove expired data or stale resources on a schedule:
 
 ```typescript
-cleanup(): void {
-    this.entries = this.entries.filter(e => !e.isExpired());
-    this.scheduleNext(3600n); // run hourly
+cleanup() {
+    this.entries = this.entries.filter((e) => !e.isExpired());
+    scheduleNext(this.name, 3600n); // run hourly
 }
 ```
 
@@ -181,21 +151,20 @@ cleanup(): void {
 Periodically notify an external service that the agent is alive:
 
 ```typescript
-heartbeat(): void {
+heartbeat() {
     sendHeartbeat(this.serviceUrl);
-    this.scheduleNext(30n); // every 30s
+    scheduleNext(this.name, 30n); // every 30s
 }
 ```
 
 ## Helper for Scheduling Self
 
-Extract the scheduling logic into a helper to keep methods clean:
+Keep the scheduling logic in one module-level helper so every method stays clean. `clientFor(PollerAgent)` builds a typed RPC client for this same agent type; addressing it by the agent's own id record targets this instance:
 
 ```typescript
-private scheduleNext(delaySecs: bigint): void {
-    const self = PollerAgent.get(this.name);
+function scheduleNext(name: string, delaySecs: bigint): void {
     const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-    self.poll.schedule({ seconds: nowSecs + delaySecs, nanoseconds: 0 });
+    clientFor(PollerAgent)({ name }).poll.schedule({ seconds: nowSecs + delaySecs, nanoseconds: 0 });
 }
 ```
 
@@ -211,4 +180,4 @@ private scheduleNext(delaySecs: bigint): void {
 
 Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's oplog. For long-running or high-frequency recurring tasks, the oplog grows unboundedly, and recovery on crash will replay the full history — which becomes slow over time.
 
-**You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. See [`golem-custom-snapshot-ts`](../golem-custom-snapshot-ts/SKILL.md) for the `snapshotting: { every: N }` / `snapshotting: { periodic: ... }` decorator option and `saveSnapshot` / `loadSnapshot` overrides.
+**You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. Set `snapshotting` on `defineAgent` — `snapshotting: { everyNInvocations: N }` or `snapshotting: { periodicSeconds: N }` — and, for state the default JSON path can't represent, supply custom `snapshot: { save, load }` on `.implement(...)`. See [`golem-custom-snapshot-ts`](../golem-custom-snapshot-ts/SKILL.md).

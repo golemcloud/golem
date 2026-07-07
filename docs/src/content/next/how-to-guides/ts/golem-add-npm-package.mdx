@@ -47,10 +47,12 @@ Check the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs) fo
 
 These are already in the project's `package.json` — do NOT add them again:
 
-- `@golemcloud/golem-ts-sdk` — Golem agent framework, durability, transactions, RPC
-- `@golemcloud/golem-ts-typegen` (dev) — type metadata generation
-- `rollup` with plugins (dev) — bundling pipeline
-- `typescript` (dev) — TypeScript compiler
+- `@golemcloud/golem-ts-sdk` — Golem agent framework (`defineAgent` / `method`, Standard Schema markers, durability, transactions, RPC)
+- `rollup` with `@rollup/plugin-*` plugins (dev) — bundling pipeline
+- `typescript` and `tslib` (dev) — TypeScript compiler and runtime helpers
+- `@types/node` (dev) — Node type definitions
+
+The agent contract is described with a Standard Schema library. `zod` is used by the default template; `valibot`, `arktype`, and `effect` schemas are also supported — add whichever one your agents use if it is not already present.
 
 ## HTTP requests
 

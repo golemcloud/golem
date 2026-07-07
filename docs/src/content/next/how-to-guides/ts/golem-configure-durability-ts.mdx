@@ -11,61 +11,85 @@ By default, all Golem agents are **durable**:
 
 > **You cannot opt out of oplog writes for a durable agent.** The oplog is how durability works — every side effect must be recorded. If you are worried about oplog volume or replay cost (long-running agents, heartbeats, polling, recurring tasks), do *not* try to skip persistence. Use **durable with periodic snapshots** instead (see below).
 
-A standard durable agent:
+A standard durable agent — no `mode` is needed since durable is the default:
 
 ```typescript
-import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+export const CounterAgent = defineAgent({
+    name: 'CounterAgent',
+    id: { name: z.string() },
+    methods: {
+        increment: method({ input: {}, returns: z.number() }),
+        getCount: method({ input: {}, returns: z.number() }),
+    },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-
-    async getCount(): Promise<number> {
-        return this.value;
-    }
-}
+export const CounterAgentImpl = CounterAgent.implement({
+    init: () => ({ value: 0 }),
+    methods: {
+        increment() {
+            this.value += 1;
+            return this.value;
+        },
+        getCount() {
+            return this.value;
+        },
+    },
+});
 ```
 
 ## Durable with Periodic Snapshots
 
-Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Use this whenever the oplog grows unboundedly — long-running agents, high-frequency state changes, **heartbeats, polling loops, recurring tasks**.
+Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Use this whenever the oplog grows unboundedly — long-running agents, high-frequency state changes, **heartbeats, polling loops, recurring tasks**. Add a `snapshotting` option to `defineAgent(...)`:
 
 ```typescript
-@agent({ snapshotting: { every: 10 } })          // snapshot every 10 successful calls
-class CounterAgent extends BaseAgent { ... }
+// snapshot every 10 successful invocations
+defineAgent({
+    name: 'CounterAgent',
+    id: { name: z.string() },
+    snapshotting: { state: z.object({ value: z.number() }), policy: { everyNInvocations: 10 } },
+    methods: { /* ... */ },
+});
 
-@agent({ snapshotting: { periodic: "30s" } })    // or at most once per interval
-class HeartbeatAgent extends BaseAgent { ... }
+// or at most once per 30-second interval
+defineAgent({
+    name: 'HeartbeatAgent',
+    id: { name: z.string() },
+    snapshotting: { state: z.object({ /* ... */ }), policy: { periodicSeconds: 30 } },
+    methods: { /* ... */ },
+});
 ```
 
-See [`golem-custom-snapshot-ts`](/next/how-to-guides/ts/golem-custom-snapshot-ts) for snapshotting modes and `saveSnapshot` / `loadSnapshot` overrides.
+See [`golem-custom-snapshot-ts`](/next/how-to-guides/ts/golem-custom-snapshot-ts) for snapshotting policies, typed `state` schemas, and custom `save` / `load`.
 
 ## Ephemeral Agents
 
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
 
 - State is discarded after each invocation completes
-- No oplog is maintained — lower overhead
+- The oplog is not replayed — lower overhead
 - Useful for pure functions, request handlers, or adapters
 
+Set `mode: 'ephemeral'` on the spec:
+
 ```typescript
-@agent({ mode: "ephemeral" })
-class StatelessHandler extends BaseAgent {
-    async handle(input: string): Promise<string> {
-        return `processed: ${input}`;
-    }
-}
+export const StatelessHandler = defineAgent({
+    name: 'StatelessHandler',
+    mode: 'ephemeral',
+    id: { name: z.string() },
+    methods: { handle: method({ input: { input: z.string() }, returns: z.string() }) },
+});
+
+StatelessHandler.implement({
+    init: () => ({}),
+    methods: {
+        handle({ input }) {
+            return `processed: ${input}`;
+        },
+    },
+});
 ```
 
 ## When to Choose Which

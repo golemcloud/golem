@@ -11,34 +11,36 @@ Golem supports authentication on HTTP endpoints via OIDC providers. Authenticati
 
 ## Enabling Auth on All Endpoints (Mount Level)
 
-Set `auth: true` on the `@agent()` decorator to require authentication for all endpoints:
+Set `auth: true` in the mount options of `http.mount(...)` to require authentication for all endpoints:
 
 ```typescript
-@agent({
-  mount: '/secure/{name}',
-  auth: true
-})
-class SecureAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
-  // All endpoints require authentication
-}
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+
+export const SecureAgent = defineAgent({
+  name: 'SecureAgent',
+  id: { name: z.string() },
+  http: http.mount('/secure/{name}', { auth: true }),
+  methods: {
+    // All endpoints require authentication
+  },
+});
 ```
 
 ## Enabling Auth on Individual Endpoints
 
-Set `auth: true` on specific `@endpoint()` decorators:
+Set `auth: true` in the endpoint options (the second argument to a verb builder):
 
 ```typescript
-@agent({ mount: '/api/{name}' })
-class ApiAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
-
-  @endpoint({ get: '/public' })
-  async publicData(): Promise<string> { return "open"; }
-
-  @endpoint({ get: '/private', auth: true })
-  async privateData(): Promise<string> { return "secret"; }
-}
+export const ApiAgent = defineAgent({
+  name: 'ApiAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}'),
+  methods: {
+    publicData: method({ input: {}, returns: z.string(), http: http.get('/public') }),
+    privateData: method({ input: {}, returns: z.string(), http: http.get('/private', { auth: true }) }),
+  },
+});
 ```
 
 ## Overriding Mount-Level Auth
@@ -46,34 +48,53 @@ class ApiAgent extends BaseAgent {
 Per-endpoint `auth` overrides the mount-level setting:
 
 ```typescript
-@agent({ mount: '/api/{name}', auth: true })
-class MostlySecureAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
-
-  @endpoint({ get: '/health', auth: false })
-  async health(): Promise<string> { return "ok"; } // No auth required
-
-  @endpoint({ get: '/data' })
-  async getData(): Promise<Data> { ... } // Auth required (inherited)
-}
+export const MostlySecureAgent = defineAgent({
+  name: 'MostlySecureAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}', { auth: true }),
+  methods: {
+    // No auth required — overrides the mount default
+    health: method({ input: {}, returns: z.string(), http: http.get('/health', { auth: false }) }),
+    // Auth required (inherited from the mount)
+    getData: method({ input: {}, returns: Data, http: http.get('/data') }),
+  },
+});
 ```
 
 ## Receiving the Principal
 
-When auth is enabled, methods can receive a `Principal` parameter with information about the authenticated user. `Principal` is automatically populated and must **not** be mapped to path/query/header variables:
+When auth is enabled, access the authenticated user's `Principal` from the handler's `this` via `this.getPrincipal()`. Unlike the old decorator API, `Principal` is **not** a method parameter, so it is never mapped to path/query/header variables:
 
 ```typescript
-import { Principal } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http, Principal } from '@golemcloud/golem-ts-sdk';
 
-@endpoint({ get: '/whoami', auth: true })
-async whoAmI(principal: Principal): Promise<{ value: Principal }> {
-  return { value: principal };
-}
+export const ApiAgent = defineAgent({
+  name: 'ApiAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}', { auth: true }),
+  methods: {
+    whoAmI: method({ input: {}, returns: z.unknown(), http: http.get('/whoami') }),
+    getData: method({ input: { id: z.string() }, returns: Data, http: http.get('/data/{id}') }),
+  },
+});
 
-// Principal can appear at any position among parameters
-@endpoint({ get: '/data/{id}' })
-async getData(id: string, principal: Principal): Promise<Data> { ... }
+export const ApiAgentImpl = ApiAgent.implement({
+  init: () => ({}),
+  methods: {
+    whoAmI() {
+      const principal: Principal = this.getPrincipal();
+      return { value: principal };
+    },
+    getData({ id }) {
+      const principal = this.getPrincipal();
+      // ... use principal + id ...
+    },
+  },
+});
 ```
+
+`this.getPrincipal()` (and `this.getId()`, `this.getPhantomId()`) are available on every handler's `this`. The same `principal` is also available in `init` via the `InitContext` argument: `init: (ctx) => ({ caller: ctx.principal })`.
 
 ## Deployment Configuration
 

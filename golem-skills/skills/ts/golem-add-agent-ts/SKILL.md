@@ -7,62 +7,80 @@ description: "Adding a new TypeScript agent to a Golem component. Use when the u
 
 ## Overview
 
-An **agent** is a durable, stateful unit of computation in Golem. Each agent type is a class decorated with `@agent()` that extends `BaseAgent` from `@golemcloud/golem-ts-sdk`.
+An **agent** is a durable, stateful unit of computation in Golem. Each agent type is declared with `defineAgent(...)` and given behaviour with `.implement(...)` from `@golemcloud/golem-ts-sdk`. Method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values (Zod is used throughout these examples; Valibot, ArkType, and Effect Schema also work).
 
 ## Steps
 
 1. **Create the agent file** — add a new file `src/<agent-name>.ts`
-2. **Define the agent class** — decorate with `@agent()`, extend `BaseAgent`
-3. **Import from `main.ts`** — add `import './<agent-name>';` to `src/main.ts`
-4. **Build** — run `golem build` to verify
+2. **Declare the contract** — `defineAgent({ name, id, methods })`
+3. **Supply the behaviour** — `<Def>.implement({ init, methods })`
+4. **Import from `main.ts`** — add `import './<agent-name>.js';` to `src/main.ts`
+5. **Build** — run `golem build` to verify
 
-`src/main.ts` is the entrypoint module that must import each agent module for side effects. Agent classes do not need to be exported for discovery — importing the module is sufficient because `@agent()` registers the class.
+`src/main.ts` is the entrypoint module that must import each agent module for side effects. `defineAgent` / `.implement` register the agent at module-load time, so importing the module is sufficient for discovery — no class needs to be exported.
 
 ## Agent Definition
 
 ```typescript
-import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+// The contract: `name` is the wire-level agent type, `id` is the identity record
+// (its fields form the constructor parameters), and `methods` declares the typed
+// method surface.
+export const Counter = defineAgent({
+    name: 'Counter',
+    id: { name: z.string() },
+    methods: {
+        increment: method({ input: {}, returns: z.number() }),
+        getCount: method({ input: {}, returns: z.number() }),
+    },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-
-    async getCount(): Promise<number> {
-        return this.value;
-    }
-}
+// The behaviour: `init` returns the initial state; each handler's `this` is bound
+// to that state (plus SDK helpers like `getId()`).
+export const CounterImpl = Counter.implement({
+    init: () => ({ value: 0 }),
+    methods: {
+        increment() {
+            this.value += 1;
+            return this.value;
+        },
+        getCount() {
+            return this.value;
+        },
+    },
+});
 ```
+
+State lives in the object returned by `init()` and is read/written through `this` inside the handlers — there are no class fields. A method with no parameters declares `input: {}` and its handler takes no argument; a method with parameters declares one schema per named parameter and receives them as a single destructured object.
 
 ## Custom Types
 
-Use TypeScript type aliases or interfaces for parameters and return types. Use **named types** instead of anonymous inline object types for better interoperability. **TypeScript enums are not supported** — use string literal unions instead:
+Describe parameter and return shapes with schemas. For object types, define a schema once and derive the TypeScript type from it with `z.infer`. **TypeScript enums are not supported** — use a string-literal union (`z.enum([...])`) instead:
 
 ```typescript
-type Coordinates = { lat: number; lon: number };
-type WeatherReport = { temperature: number; description: string };
-type Priority = "low" | "medium" | "high";
+const Coordinates = z.object({ lat: z.number(), lon: z.number() });
+const WeatherReport = z.object({ temperature: z.number(), description: z.string() });
+const Priority = z.enum(['low', 'medium', 'high']);
 
-@agent()
-class WeatherAgent extends BaseAgent {
-    constructor(apiKey: string) {
-        super();
-    }
+export const WeatherAgent = defineAgent({
+    name: 'WeatherAgent',
+    id: { apiKey: z.string() },
+    methods: {
+        getWeather: method({ input: { coords: Coordinates }, returns: WeatherReport }),
+    },
+});
 
-    async getWeather(coords: Coordinates): Promise<WeatherReport> {
-        // ...
-    }
-}
+export const WeatherAgentImpl = WeatherAgent.implement({
+    init: () => ({}),
+    methods: {
+        getWeather({ coords }) {
+            // ...
+            return { temperature: 21, description: 'clear' };
+        },
+    },
+});
 ```
 
 ## Returning Failures
@@ -70,37 +88,43 @@ class WeatherAgent extends BaseAgent {
 Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
 
 - **Uncaught errors** (thrown exceptions, rejected promises) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
-- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using the SDK's `Result<T, E>` type.
+- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's `returns` schema as `s.result(okSchema, errSchema)`. The handler then returns `Result.ok(v)` / `Result.err(e)`, and the caller receives a decoded `Result<Ok, Err>`.
 
 ```typescript
-import { BaseAgent, agent, Result } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, s, Result } from '@golemcloud/golem-ts-sdk';
 
-type WithdrawError =
-    | { tag: 'insufficientFunds'; available: number }
-    | { tag: 'accountClosed' };
+const WithdrawError = z.discriminatedUnion('tag', [
+    z.object({ tag: z.literal('insufficientFunds'), available: z.number() }),
+    z.object({ tag: z.literal('accountClosed') }),
+]);
 
-@agent()
-class Wallet extends BaseAgent {
-    private readonly owner: string;
-    private balance: number = 0;
-    private closed: boolean = false;
+export const Wallet = defineAgent({
+    name: 'Wallet',
+    id: { owner: z.string() },
+    methods: {
+        withdraw: method({
+            input: { amount: z.number() },
+            returns: s.result(z.number(), WithdrawError),
+        }),
+    },
+});
 
-    constructor(owner: string) {
-        super();
-        this.owner = owner;
-    }
-
-    async withdraw(amount: number): Promise<Result<number, WithdrawError>> {
-        if (this.closed) {
-            return Result.err({ tag: 'accountClosed' });
-        }
-        if (amount > this.balance) {
-            return Result.err({ tag: 'insufficientFunds', available: this.balance });
-        }
-        this.balance -= amount;
-        return Result.ok(this.balance);
-    }
-}
+export const WalletImpl = Wallet.implement({
+    init: () => ({ balance: 0, closed: false }),
+    methods: {
+        withdraw({ amount }) {
+            if (this.closed) {
+                return Result.err({ tag: 'accountClosed' as const });
+            }
+            if (amount > this.balance) {
+                return Result.err({ tag: 'insufficientFunds' as const, available: this.balance });
+            }
+            this.balance -= amount;
+            return Result.ok(this.balance);
+        },
+    },
+});
 ```
 
 Returning `Result.err(...)` completes the invocation successfully — the caller receives the error as a value. Throwing (e.g. `throw new Error(...)`) or returning a rejected promise will instead trigger a retry and eventually fail the whole agent.
@@ -114,9 +138,10 @@ If the throw happens **after** a durable side effect has already completed, retr
 
 ## Key Constraints
 
-- All agent classes must extend `BaseAgent` and be decorated with `@agent()`
-- Constructor parameters define agent identity — they must be serializable types
-- TypeScript **enums are not supported** — use string literal unions instead
+- Every agent is declared with `defineAgent({...})` and given behaviour with `<Def>.implement({...})`
+- The `id` record fields define agent identity — they must be serializable schema types
+- State is the object returned by `init()` and is accessed through `this` in the handlers — do not use class fields
+- TypeScript **enums are not supported** — use `z.enum([...])` / string-literal unions instead
 - Agents are created implicitly on first invocation — no separate creation step
 - Invocations are processed sequentially in a single thread — no concurrency within a single agent
-- The build pipeline uses `golem-typegen` for type metadata extraction; ensure `experimentalDecorators` and `emitDecoratorMetadata` are enabled in `tsconfig.json`
+- Each method's `input` is a record of one schema per named parameter; `returns` is the success-value schema (use `z.void()` for no return value)

@@ -63,38 +63,38 @@ Content-Type: application/json
 ## Full Example: Human-in-the-Loop Approval
 
 ```typescript
-import { BaseAgent, agent, endpoint } from '@golemcloud/golem-ts-sdk';
-import { createPromise, awaitPromise, completePromise } from '@golemcloud/golem-ts-sdk';
-import type { PromiseId } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http, createPromise, awaitPromise } from '@golemcloud/golem-ts-sdk';
 
-@agent({ mount: "/workflows/{name}" })
-class WorkflowAgent extends BaseAgent {
-    private readonly name: string;
+export const WorkflowAgent = defineAgent({
+  name: 'WorkflowAgent',
+  id: { name: z.string() },
+  http: http.mount('/workflows/{name}'),
+  methods: {
+    startApproval: method({ input: {}, returns: z.string(), http: http.post('/approve') }),
+  },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
+export const WorkflowAgentImpl = WorkflowAgent.implement({
+  init: ({ id }) => ({ name: id.name }),
+  methods: {
+    async startApproval() {
+      // 1. Create a promise
+      const promiseId = createPromise();
 
-    @endpoint({ post: "/approve" })
-    async startApproval(): Promise<string> {
-        // 1. Create a promise
-        const promiseId = createPromise();
+      // 2. Pass promiseId.oplogIdx to an external system.
+      // The agent is now durably suspended.
 
-        // 2. Pass promiseId.oplogIdx to an external system
-        // The agent is now durably suspended.
+      // 3. Wait for external completion
+      const bytes = await awaitPromise(promiseId);
+      const decision = JSON.parse(new TextDecoder().decode(bytes));
 
-        // 3. Wait for external completion
-        const bytes = await awaitPromise(promiseId);
-        const decision = JSON.parse(new TextDecoder().decode(bytes));
-
-        if (decision.status === "approved") {
-            return `Workflow ${this.name} approved ✅`;
-        } else {
-            return `Workflow ${this.name} rejected ❌`;
-        }
-    }
-}
+      return decision.status === 'approved'
+        ? `Workflow ${this.name} approved ✅`
+        : `Workflow ${this.name} rejected ❌`;
+    },
+  },
+});
 ```
 
 ## Use Cases

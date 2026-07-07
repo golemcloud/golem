@@ -5,7 +5,7 @@ description: "Using phantom agents in TypeScript to create multiple agent instan
 
 # Phantom Agents in TypeScript
 
-Phantom agents allow creating **multiple distinct agent instances** that share the same constructor parameters. Normally, an agent is uniquely identified by its constructor parameter values — calling `get` with the same parameters always returns the same agent. Phantom agents add an extra **phantom ID** (a UUID) to the identity, so you can have many independent instances with identical parameters.
+Phantom agents allow creating **multiple distinct agent instances** that share the same identity (`id` record) values. Normally, an agent is uniquely identified by its `id` record — addressing it with the same id values always reaches the same agent. Phantom agents add an extra **phantom ID** (a UUID) to the identity, so you can have many independent instances with identical id values.
 
 ## Agent ID Format
 
@@ -23,94 +23,104 @@ agent-type(param1, param2)
 
 ## Creating and Addressing Phantom Agents (RPC)
 
-The `@agent()` decorator generates static methods on the agent class:
+You address another agent with a typed RPC client built from its `defineAgent` definition via `clientFor(Def)`. The returned factory takes the id record and an **optional phantom UUID**:
 
-| Method | Description |
+```typescript
+clientFor(Def)(id)              // non-phantom: same agent for the same id
+clientFor(Def)(id, phantomUuid) // phantom: addressed by id + a specific UUID
+```
+
+| Call | Description |
 |--------|-------------|
-| `AgentClass.get(params...)` | Get or create a **non-phantom** agent identified solely by its parameters |
-| `AgentClass.newPhantom(params...)` | Create a **new phantom** agent with a freshly generated random UUID |
-| `AgentClass.getPhantom(uuid, params...)` | Get or create a phantom agent with a **specific** UUID |
+| `client(id)` | Get or create a **non-phantom** agent identified solely by its id record |
+| `client(id, Uuid.generate())` | Create a **new phantom** agent with a freshly generated random UUID |
+| `client(id, savedUuid)` | Get or create a phantom agent with a **specific** UUID |
 
 ### Example
 
 ```typescript
-import { BaseAgent, agent, Uuid } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, clientFor, Uuid } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class CounterAgent extends BaseAgent {
-    private count: number = 0;
+export const Counter = defineAgent({
+    name: 'Counter',
+    id: { name: z.string() },
+    methods: { increment: method({ input: {}, returns: z.number() }) },
+});
 
-    constructor(private readonly name: string) {
-        super();
-    }
+Counter.implement({
+    init: () => ({ count: 0 }),
+    methods: {
+        increment() {
+            this.count += 1;
+            return this.count;
+        },
+    },
+});
 
-    async increment(): Promise<number> {
-        this.count += 1;
-        return this.count;
-    }
-}
-
-// --- In another agent, using the generated static methods: ---
+// --- In another agent, using the RPC client factory: ---
+const counters = clientFor(Counter);
 
 // Non-phantom: always the same agent for the same name
-const counter = CounterAgent.get("shared");
+const shared = counters({ name: 'shared' });
+await shared.increment();
 
-// New phantom: creates a brand new independent instance
-const phantom1 = CounterAgent.newPhantom("shared");
-const phantom2 = CounterAgent.newPhantom("shared");
+// New phantom: generate a fresh UUID for a brand new independent instance
+const phantomUuid1 = Uuid.generate();
+const phantom1 = counters({ name: 'shared' }, phantomUuid1);
+const phantom2 = counters({ name: 'shared' }, Uuid.generate());
 // phantom1 and phantom2 are different agents, both with name="shared"
 
-// Reconnect to an existing phantom by its UUID
-const existingId: Uuid = /* previously saved UUID */;
-const samePhantom = CounterAgent.getPhantom(existingId, "shared");
+// Reconnect to an existing phantom by its UUID (e.g. saved as a string, reparsed)
+const samePhantom = counters({ name: 'shared' }, Uuid.parse(savedUuidString));
 ```
 
-### WithConfig Variants
-
-If the agent has `@config` fields, additional methods are generated:
-
-- `AgentClass.getWithConfig(params..., configFields...)`
-- `AgentClass.newPhantomWithConfig(params..., configFields...)`
-- `AgentClass.getPhantomWithConfig(uuid, params..., configFields...)`
+Persist the phantom UUID yourself (as a string via `uuid.toString()`, reparsed with `Uuid.parse(...)`) whenever you need to reach the same phantom instance again later.
 
 ## Querying the Phantom ID from Inside an Agent
 
-An agent can check its own phantom ID using the `phantomId()` method inherited from `BaseAgent`:
+A handler can check its own phantom ID via `this.getPhantomId()`:
 
 ```typescript
-@agent()
-class MyAgent extends BaseAgent {
-    constructor() { super(); }
+export const MyAgent = defineAgent({
+    name: 'MyAgent',
+    id: { name: z.string() },
+    methods: { whoAmI: method({ input: {}, returns: z.string() }) },
+});
 
-    async whoAmI(): Promise<string> {
-        const phantom = this.phantomId(); // Uuid | undefined
-        if (phantom) {
-            return `I am a phantom agent with ID: ${phantom.toString()}`;
-        }
-        return "I am a regular agent";
-    }
-}
+MyAgent.implement({
+    init: () => ({}),
+    methods: {
+        whoAmI() {
+            const phantom = this.getPhantomId(); // Uuid | undefined
+            return phantom
+                ? `I am a phantom agent with ID: ${phantom.toString()}`
+                : 'I am a regular agent';
+        },
+    },
+});
 ```
 
 ## HTTP-Mounted Phantom Agents
 
-When an agent is mounted as an HTTP endpoint, you can set `phantom: true` in the decorator options to make every incoming HTTP request create a **new phantom instance** automatically:
+When an agent is mounted as an HTTP endpoint, set `phantomAgent: true` in the mount options to make every incoming HTTP request create a **new phantom instance** automatically:
 
 ```typescript
-@agent({ mount: "/api", phantom: true })
-class RequestHandler extends BaseAgent {
-    async handle(input: string): Promise<string> {
-        return `processed: ${input}`;
-    }
-}
+import { http } from '@golemcloud/golem-ts-sdk';
+
+export const RequestHandler = defineAgent({
+    name: 'RequestHandler',
+    id: { name: z.string() },
+    http: http.mount('/api/{name}', { phantomAgent: true }),
+    methods: { /* ... */ },
+});
 ```
 
-Each HTTP request will be handled by a fresh agent instance with its own phantom ID, even though all instances share the same constructor parameters.
+Each HTTP request will be handled by a fresh agent instance with its own phantom ID, even though all instances share the same id values.
 
 ## Key Points
 
 - Phantom agents are **fully durable** — they persist just like regular agents.
-- The phantom ID is a standard UUID (v4 by default when using `newPhantom`).
-- `newPhantom` generates the UUID internally via `Uuid.generate()`.
-- `getPhantom` is idempotent: calling it with the same UUID and parameters always returns the same agent.
-- Phantom and non-phantom agents with the same constructor parameters are **different agents** — they do not share state.
+- The phantom ID is a standard UUID; use `Uuid.generate()` for a fresh one and `Uuid.parse(str)` to restore a saved one.
+- Reaching a phantom with the same UUID and id values always returns the same agent (idempotent).
+- Phantom and non-phantom agents with the same id values are **different agents** — they do not share state.

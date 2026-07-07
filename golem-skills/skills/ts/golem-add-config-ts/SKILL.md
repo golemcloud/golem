@@ -7,42 +7,57 @@ description: "Adding typed configuration to a TypeScript Golem agent. Use when t
 
 ## Overview
 
-TypeScript agents receive typed configuration via `Config<T>` from `@golemcloud/golem-ts-sdk`. The configuration type is a plain TypeScript type literal that describes the shape of the config data. The `@agent()` decorator automatically detects `Config<T>` constructor parameters.
+TypeScript agents declare typed configuration with the `config` option on `defineAgent(...)`. It is a single record of named fields, each a Standard Schema value (Zod / Valibot / ArkType / Effect Schema). At runtime the config is read through `this.config` inside a handler — one property per declared field, freshly read on each access, and fully typed from the schema.
 
 ## Steps
 
-1. **Define a config type** — use a TypeScript type literal (not a class or interface with methods)
-2. **Add `Config<T>` to the constructor** — the decorator detects it automatically
-3. **Access config via `config.value`** — config is loaded lazily when `.value` is accessed
-4. **Set config in `golem.yaml` or via CLI**
+1. **Declare a `config` record** on `defineAgent(...)` — one schema per field
+2. **Read config via `this.config.<field>`** in handlers (each access reads the live value)
+3. **Set config in `golem.yaml` or via CLI**
 
 ## Example
 
-### Config Type and Agent
+### Agent with Config
 
 ```typescript
-import { agent, BaseAgent, Config } from "@golemcloud/golem-ts-sdk";
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-type MyAgentConfig = {
-  foo: number;
-  bar: string;
-  nested: {
-    a: boolean;
-    b: number[];
-  };
-};
+export const MyAgent = defineAgent({
+    name: 'MyAgent',
+    id: { name: z.string() },
+    // One config record; nested objects are supported and recursed field-by-field.
+    config: {
+        foo: z.number(),
+        bar: z.string(),
+        nested: z.object({
+            a: z.boolean(),
+            b: z.array(z.number()),
+        }),
+    },
+    methods: {
+        getFoo: method({ input: {}, returns: z.number() }),
+        describe: method({ input: {}, returns: z.string() }),
+    },
+});
 
-@agent()
-class MyAgent extends BaseAgent {
-  constructor(readonly name: string, readonly config: Config<MyAgentConfig>) {
-    super();
-  }
-
-  getFoo(): number {
-    return this.config.value.foo;
-  }
-}
+export const MyAgentImpl = MyAgent.implement({
+    init: () => ({}),
+    methods: {
+        getFoo() {
+            // `this.config` is statically typed from the config record — no casts,
+            // and `this.config.<typo>` is a compile error.
+            return this.config.foo;
+        },
+        describe() {
+            const n = this.config.nested;
+            return `${this.config.bar}:${n.a}:${n.b.join(',')}`;
+        },
+    },
+});
 ```
+
+`this.config` is also available during `init` via the `InitContext` argument (`init: (ctx) => ({ ... ctx.config.foo ... })`).
 
 ### Setting Config in `golem.yaml`
 
@@ -60,22 +75,10 @@ agents:
 ### Setting Config via CLI
 
 ```shell
-golem agent new my-ns:my-component/my-agent-1 \
+golem agent new 'MyAgent("agent-1")' \
   --config foo=42 \
   --config bar=hello \
   --config nested.a=true
-```
-
-### RPC Config Overrides
-
-When calling another agent, pass config overrides via `getWithConfig`:
-
-```typescript
-const client = MyAgent.getWithConfig("agent-1", {
-  foo: 99,
-  nested: { a: false },
-});
-const result = await client.getFoo();
 ```
 
 ## Config Cascade
@@ -88,9 +91,10 @@ Values set closer to the agent override those set at broader scopes.
 
 ## Key Constraints
 
-- Config types must be plain TypeScript type literals — not classes or interfaces with methods
-- The `Config<T>` parameter in the constructor is automatically detected by `@agent()`
-- Optional fields use `?` syntax (e.g., `timeout?: number`)
-- Config is loaded when `.value` is accessed
-- Config keys in `golem.yaml` use camelCase matching the TypeScript property names
-- If the config includes `Secret<T>` fields, also use `golem-add-secret-ts` for secret-specific declaration and CLI guidance
+- `config` is a single record on `defineAgent(...)`; each field is a Standard Schema value (not a class or interface with methods)
+- Read config through `this.config.<field>` — each access reads the current value, so config changes between invocations are observed
+- Only object/record schemas are recursed into nested fields; unions, arrays, tuples, maps, and primitives are read whole
+- Optional fields use the schema's own optionality (e.g. `z.number().optional()`)
+- Config keys in `golem.yaml` use camelCase matching the field names
+- Config values are provisioned per environment (via `golem.yaml` / CLI), not passed at RPC call time
+- If the config includes secret fields, mark them with `s.secret(...)` and see `golem-add-secret-ts` for secret-specific declaration and CLI guidance

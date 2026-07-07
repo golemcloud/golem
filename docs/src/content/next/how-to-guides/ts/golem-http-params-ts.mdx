@@ -2,165 +2,183 @@
 
 ## Overview
 
-When an agent is exposed over HTTP, Golem maps parts of each HTTP request to constructor and method parameters. This skill covers how path segments, query parameters, headers, and request bodies are mapped, which types are supported for each, and how return types map to HTTP responses.
+When an agent is exposed over HTTP, Golem maps parts of each HTTP request to the agent `id` record and to method inputs. This skill covers how path segments, query parameters, headers, and request bodies are mapped, which schema types are supported for each, and how return schemas map to HTTP responses.
 
 ## Path Variables
 
-Path variables `{varName}` in mount or endpoint paths map to parameters by name:
+Path variables `{varName}` map by name — mount-path variables bind to the agent's `id` fields, endpoint-path variables bind to the method's `input` keys:
 
 ```typescript
-// Mount path variables → constructor parameters
-@agent({ mount: '/api/tasks/{name}' })
-class TaskAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-  // Endpoint path variables → method parameters
-  @endpoint({ get: '/items/{itemId}' })
-  async getItem(itemId: string): Promise<Item> { ... }
-}
+export const TaskAgent = defineAgent({
+  name: 'TaskAgent',
+  id: { name: z.string() },                 // {name} in the mount path
+  http: http.mount('/api/tasks/{name}'),
+  methods: {
+    // {itemId} in the endpoint path binds to the `itemId` input
+    getItem: method({ input: { itemId: z.string() }, returns: Item, http: http.get('/items/{itemId}') }),
+  },
+});
 ```
 
 Remaining (catch-all) path variables capture everything after a prefix:
 
 ```typescript
-@endpoint({ get: '/files/{*path}' })
-async getFile(path: string): Promise<FileContent> { ... }
+getFile: method({ input: { path: z.string() }, returns: FileContent, http: http.get('/files/{*path}') }),
 // GET .../files/docs/readme.md → path = "docs/readme.md"
 ```
 
-Catch-all variables can only appear as the **last** path segment and are **not** allowed in mount paths.
+Catch-all variables can only appear as the **last** endpoint path segment and are **not** allowed in mount paths.
 
 ## Query Parameters
 
-Specified in the endpoint path using `?key={var}` syntax:
+Bind query parameters either inline in the endpoint path with `?key={var}` syntax, or explicitly via the `query` option map (its values are input keys):
 
 ```typescript
-@endpoint({ get: '/search?q={query}&limit={maxResults}' })
-async search(query: string, maxResults: number): Promise<SearchResult[]> { ... }
-// GET .../search?q=hello&limit=10
+// Inline form
+search: method({
+  input: { query: z.string(), maxResults: z.number() },
+  returns: z.array(SearchResult),
+  http: http.get('/search?q={query}&limit={maxResults}'),
+}),
+
+// Explicit map form (query-param name → input key)
+search2: method({
+  input: { query: z.string(), maxResults: z.number() },
+  returns: z.array(SearchResult),
+  http: http.get('/search', { query: { q: 'query', limit: 'maxResults' } }),
+}),
 ```
 
 ## Header Variables
 
-Map HTTP headers to parameters using the `headers` option on `@endpoint()`:
+Bind HTTP headers to inputs with the `headers` option map (header name → input key):
 
 ```typescript
-@endpoint({
-  get: '/data',
-  headers: { 'X-Request-Id': 'requestId', 'Authorization': 'token' }
-})
-async getData(requestId: string, token: string): Promise<Data> { ... }
+getData: method({
+  input: { requestId: z.string(), token: z.string() },
+  returns: Data,
+  http: http.get('/data', { headers: { 'X-Request-Id': 'requestId', 'Authorization': 'token' } }),
+}),
 ```
 
-Headers can also be mapped to **constructor** parameters at the mount level:
+> **Note:** Unlike the old decorator API, the fluent `http.mount(...)` does **not** support a mount-level `headers` map. Every agent `id` field must be supplied by a mount **path** variable. Header binding is available on endpoints only, and binds to method inputs.
 
-```typescript
-@agent({
-  mount: '/api',
-  headers: { 'X-Api-Key': 'apiKey' }
-})
-class ApiAgent extends BaseAgent {
-  constructor(readonly apiKey: string) { super(); }
-}
-```
+## Supported Schema Types for Path, Query, and Header Variables
 
-When using mount-level headers, all constructor parameters must be satisfied by either path variables or header variables.
+Only scalar schemas can be used for inputs bound to path/query/header variables (the value is parsed from the URL/header string):
 
-## Supported Types for Path, Query, and Header Variables
-
-Only these types can be used for parameters bound to path/query/header variables (the value is parsed from the URL/header string):
-
-| TypeScript Type | Parsed From |
+| Schema | Parsed From |
 |---|---|
-| `string` | Used as-is |
-| `number` | Parsed as float (`f64`) |
-| `boolean` | Parsed from `"true"` / `"false"` |
-| String literal union (e.g. `"red" \| "green"`) | Matched against known case names |
+| `z.string()` | Used as-is |
+| `z.number()` | Parsed as float (`f64`) |
+| `z.boolean()` | Parsed from `"true"` / `"false"` |
+| `z.enum(['red', 'green'])` | Matched against known case names |
 
-**For query parameters and headers only** (not path variables), two additional wrapper types are supported:
+**For query parameters and headers only** (not path variables), two additional wrapper forms are supported:
 
-| TypeScript Type | Behavior |
+| Schema | Behavior |
 |---|---|
-| `T \| undefined` (where `T` is a supported type above) | Optional — absent query param or header produces `undefined` |
-| `Array<T>` (where `T` is a supported type above) | Repeated query params or comma-separated header values |
+| `z.string().optional()` (any supported scalar) | Optional — absent query param or header produces `undefined` |
+| `z.array(z.string())` (any supported scalar) | Repeated query params or comma-separated header values |
 
-**All other types** (objects, interfaces, nested arrays, `Map`, etc.) can only be used as **body parameters**.
+**All other schemas** (`z.object(...)`, nested arrays, maps, etc.) can only be used as **body parameters**.
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE` endpoints, method parameters **not** bound to path variables, query parameters, or headers are populated from the JSON request body:
+For `POST`/`PUT`/`DELETE`/`PATCH` endpoints, any method input **not** bound to a path variable, query parameter, or header is populated from the JSON request body:
 
 ```typescript
-@endpoint({ post: '/items/{id}' })
-async updateItem(id: string, name: string, count: number): Promise<Item> { ... }
+updateItem: method({
+  input: { id: z.string(), name: z.string(), count: z.number() },
+  returns: Item,
+  http: http.post('/items/{id}'),
+}),
 // POST .../items/123
 // Body: { "name": "Widget", "count": 5 }
 // → id from path, name and count from body
 ```
 
-Each unmapped parameter becomes a top-level field in the expected JSON body object. Field names use the original camelCase parameter names.
+Each unbound input becomes a top-level field in the expected JSON body object. Field names use the input key names.
 
-> **⚠️ Important:** The request body is **always** a JSON object with parameter names as keys — even when there is only a single body parameter. For example, an endpoint `decide(decision: string)` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
+> **⚠️ Important:** The request body is **always** a JSON object with input keys as fields — even when there is only a single body parameter. For example, a method with `input: { decision: z.string() }` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
 
 ## Binary Request and Response Bodies
 
-Use `UnstructuredBinary` from the SDK for raw binary payloads:
+Use the `s.unstructuredBinary()` schema marker for raw binary payloads. Its decoded value is a reference: `{ tag: 'url', val: string }` or `{ tag: 'inline', val: Uint8Array, mimeType?: string }`. A method using it may have **only one** body parameter, and that input cannot also be bound to a path/query/header variable.
 
 ```typescript
-import { UnstructuredBinary } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
 
-// Accepting any binary content type
-@endpoint({ post: '/upload/{bucket}' })
-async upload(bucket: string, payload: UnstructuredBinary): Promise<number> {
-  if (payload.tag === 'url') return -1;
-  return payload.val.byteLength;
-}
+export const UploadAgent = defineAgent({
+  name: 'UploadAgent',
+  id: { name: z.string() },
+  http: http.mount('/uploads/{name}'),
+  methods: {
+    // Accepting any binary content type
+    upload: method({
+      input: { bucket: z.string(), payload: s.unstructuredBinary() },
+      returns: z.number(),
+      http: http.post('/upload/{bucket}'),
+    }),
+    // Restricting to specific MIME types
+    uploadImage: method({
+      input: { bucket: z.string(), payload: s.unstructuredBinary({ mimeTypes: ['image/gif'] }) },
+      returns: z.number(),
+      http: http.post('/upload-image/{bucket}'),
+    }),
+    // Returning binary data
+    download: method({ input: {}, returns: s.unstructuredBinary(), http: http.get('/download') }),
+  },
+});
 
-// Restricting to specific MIME types
-@endpoint({ post: '/upload-image/{bucket}' })
-async uploadImage(
-  bucket: string,
-  payload: UnstructuredBinary<["image/gif"]>
-): Promise<number> { ... }
-
-// Returning binary data
-@endpoint({ get: '/download' })
-async download(): Promise<UnstructuredBinary> {
-  return UnstructuredBinary.fromInline(
-    new Uint8Array([1, 2, 3]),
-    'application/octet-stream'
-  );
-}
+export const UploadAgentImpl = UploadAgent.implement({
+  init: () => ({}),
+  methods: {
+    upload({ payload }) {
+      if (payload.tag === 'url') return -1;
+      return payload.val.byteLength;
+    },
+    uploadImage({ payload }) {
+      return payload.tag === 'inline' ? payload.val.byteLength : -1;
+    },
+    download() {
+      return { tag: 'inline', val: new Uint8Array([1, 2, 3]), mimeType: 'application/octet-stream' };
+    },
+  },
+});
 ```
 
 ## Plain Text Request and Response Bodies
 
-Use `UnstructuredText` from the SDK for raw `text/plain` payloads. Like
-`UnstructuredBinary`, a method using `UnstructuredText` may have **only one
-body parameter**, and that parameter cannot be bound to a path/query/header/mount
-variable. The body is decoded as UTF-8.
+Use the `s.unstructuredText()` marker for raw `text/plain` payloads. Its decoded value is `{ tag: 'url', val: string }` or `{ tag: 'inline', val: string, languageCode?: string }`. Like binary, a method using it may have **only one body parameter**, not bound to any path/query/header variable. The body is decoded as UTF-8.
 
 ```typescript
-import { UnstructuredText } from '@golemcloud/golem-ts-sdk';
-
-// Accepting any text/plain content
-@endpoint({ post: '/notes/{id}' })
-async addNote(id: string, body: UnstructuredText): Promise<number> {
-  if (body.tag === 'url') return 0;
-  return body.val.length;
+methods: {
+  // Accepting any text/plain content
+  addNote: method({
+    input: { id: z.string(), body: s.unstructuredText() },
+    returns: z.number(),
+    http: http.post('/notes/{id}'),
+  }),
+  // Restricting to specific language codes
+  translate: method({
+    input: { id: z.string(), body: s.unstructuredText({ languages: ['en', 'de'] }) },
+    returns: z.string(),
+    http: http.post('/translate/{id}'),
+  }),
+  // Returning text/plain
+  getNote: method({ input: { id: z.string() }, returns: s.unstructuredText(), http: http.get('/notes/{id}') }),
 }
+```
 
-// Restricting to specific language codes
-@endpoint({ post: '/translate/{id}' })
-async translate(
-  id: string,
-  body: UnstructuredText<['en', 'de']>,
-): Promise<string> { ... }
-
-// Returning text/plain
-@endpoint({ get: '/notes/{id}' })
-async getNote(id: string): Promise<UnstructuredText> {
-  return UnstructuredText.fromInline('hello', 'en');
+```typescript
+// Handler returning inline text with a language code:
+getNote({ id }) {
+  return { tag: 'inline', val: 'hello', languageCode: 'en' };
 }
 ```
 
@@ -175,56 +193,46 @@ HTTP-level rules:
   case-insensitively against the allowed list; otherwise `415 Unsupported Media Type`.
 - A non-UTF-8 request body is rejected with `400 Bad Request`.
 - `Content-Language` cannot also be bound as an endpoint header parameter when
-  the body is `UnstructuredText` — that header is reserved for declaring the
+  the body is unstructured text — that header is reserved for declaring the
   body language.
 
 The response is sent as `Content-Type: text/plain; charset=utf-8`. If the
-returned `UnstructuredText` (inline form) has a `languageCode`, it is
-forwarded as the `Content-Language` response header.
+returned inline text has a `languageCode`, it is forwarded as the
+`Content-Language` response header.
 
-## Return Type to HTTP Response Mapping
+## Return Schema to HTTP Response Mapping
 
-| Return Type | HTTP Status | Response Body |
+| `returns` schema (and returned value) | HTTP Status | Response Body |
 |---|---|---|
-| `void` / no return | 204 No Content | empty |
-| `T` (any type) | 200 OK | JSON-serialized `T` |
-| `T \| undefined` | 200 OK if value, 404 Not Found if `undefined` | JSON `T` or empty |
-| `Result<T, E>` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
-| `Result<void, E>` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
-| `Result<T, void>` | 200 OK if `Ok`, 500 if `Err` | JSON `T` or empty |
-| `UnstructuredBinary` | 200 OK | Raw binary with Content-Type |
-| `UnstructuredText` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+| `z.void()` / no value | 204 No Content | empty |
+| any schema `T` | 200 OK | JSON-serialized `T` |
+| `T.nullable()` / `T.optional()` | 200 OK if value, 404 Not Found if `null` / `undefined` | JSON `T` or empty |
+| `s.result(ok, err)` returning `Result.ok` / `Result.err` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `ok` or JSON `err` |
+| `s.unstructuredBinary()` | 200 OK | Raw binary with Content-Type |
+| `s.unstructuredText()` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
 
 ## Data Type to JSON Mapping
 
-| TypeScript Type | JSON Representation |
+| Schema | JSON Representation |
 |---|---|
-| `string` | JSON string |
-| `number` | JSON number |
-| `boolean` | JSON boolean |
-| `Array<T>` | JSON array |
-| `object` / interface / type alias | JSON object (camelCase field names) |
-| `T \| undefined` or `T \| null` | value or `null` |
-| `string` literal union (e.g. `"a" \| "b"`) | JSON string |
-| `Map<K, V>` | JSON array of `[key, value]` tuples |
+| `z.string()` | JSON string |
+| `z.number()` | JSON number |
+| `z.boolean()` | JSON boolean |
+| `z.array(T)` | JSON array |
+| `z.object({...})` | JSON object |
+| `T.nullable()` / `T.optional()` | value or `null` |
+| `z.enum(['a', 'b'])` | JSON string |
 
-## Principal Parameter
+## Accessing the Principal
 
-When authentication is enabled, methods can receive a `Principal` parameter with info about the authenticated user. `Principal` parameters are automatically populated and must **not** be mapped to path/query/header variables:
+When authentication is enabled, access the authenticated user via `this.getPrincipal()` inside the handler (it is not a method input). See the [`golem-add-http-auth-ts`](/next/how-to-guides/ts/golem-add-http-auth-ts) skill:
 
 ```typescript
-import { Principal } from '@golemcloud/golem-ts-sdk';
-
-@endpoint({ get: '/whoami', auth: true })
-async whoAmI(principal: Principal): Promise<{ value: Principal }> {
+whoAmI() {
+  const principal = this.getPrincipal();
   return { value: principal };
 }
-
-// Principal can appear at any position among parameters
-@endpoint({ get: '/data/{id}' })
-async getData(id: string, principal: Principal): Promise<Data> { ... }
 ```
-
 
 ### Related Guides
 - Load [`golem-add-http-endpoint-ts`](/next/how-to-guides/ts/golem-add-http-endpoint-ts) for the high-level workflow of defining and mounting HTTP endpoints on an agent

@@ -2,21 +2,27 @@
 
 ## Overview
 
-A **fire-and-forget** call enqueues a method invocation on the target agent and returns immediately without waiting for the result. The target agent processes the invocation asynchronously.
+A **fire-and-forget** call enqueues a method invocation on the target agent and
+returns immediately without waiting for the result. The target agent processes
+the invocation asynchronously.
 
 ## Usage
 
-Every method on the generated client has a `.trigger()` variant:
+Every method on a `clientFor(...)` RPC client has a `.trigger()` variant. It takes
+the same input record as the awaited call but returns `void` immediately:
 
 ```typescript
-const counter = CounterAgent.get("my-counter");
+import { clientFor } from '@golemcloud/golem-ts-sdk';
+import { Counter } from './counter-agent.js';
+
+const counter = clientFor(Counter)({ name: 'my-counter' });
 
 // Fire-and-forget — returns immediately
-counter.increment.trigger();
+counter.increment.trigger();          // input: {}
 
 // With arguments
-const processor = DataProcessorAgent.get("pipeline-1");
-processor.processBatch.trigger(batchData);
+const processor = clientFor(DataProcessor)({ name: 'pipeline-1' });
+processor.processBatch.trigger({ batch: batchData });
 ```
 
 ## When to Use
@@ -29,20 +35,24 @@ processor.processBatch.trigger(batchData);
 ## Example: Breaking a Deadlock
 
 ```typescript
+import { clientFor } from '@golemcloud/golem-ts-sdk';
+import { AgentA } from './agent-a.js';
+import { AgentB } from './agent-b.js';
+
 // In AgentA — calls AgentB and waits
-const b = AgentB.get("b1");
-const result = await b.doWork(data); // OK: awaited call
+const b = clientFor(AgentB)({ name: 'b1' });
+const result = await b.doWork({ data }); // OK: awaited call
 
 // In AgentB — notifies AgentA without waiting (would deadlock if awaited)
-const a = AgentA.get("a1");
-a.onWorkDone.trigger(result); // OK: fire-and-forget
+const a = clientFor(AgentA)({ name: 'a1' });
+a.onWorkDone.trigger({ result }); // OK: fire-and-forget
 ```
 
 ## CLI Equivalent
 
-From the command line, use `--enqueue`:
+From the command line, use `--trigger` (or `-t`) to enqueue an invocation without
+waiting:
 
 ```shell
-golem agent invoke --enqueue 'counter-agent("my-counter")' \
-  'my:comp/counter-agent.{increment}'
+golem agent invoke --trigger 'Counter("my-counter")' increment
 ```
