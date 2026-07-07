@@ -14,13 +14,26 @@
 
 import { StandardSchemaV1 } from './schema/standardSchema';
 import { HttpEndpointSpec } from './http';
-import type {
-  BindableKeys,
-  ValidateEndpointsTuple,
-  ValidateSingleEndpoint,
-} from './httpTypes';
+import type { BindableKeys, ValidateEndpointsTuple, ValidateSingleEndpoint } from './httpTypes';
 
 export type InputRecord = Record<string, StandardSchemaV1>;
+
+/**
+ * Fine-grained read-only configuration for a method (surfaced as the WIT
+ * `agent-method.read-only` / `read-only-config`).
+ *
+ * - `cache`: the caching policy for the read-only result —
+ *   - `'no-cache'`: never cache;
+ *   - `'until-write'`: cache until a mutating (non-read-only) method runs — this
+ *     is the policy used when `readOnly` is set to the convenience boolean `true`;
+ *   - `{ ttlNanos }`: cache for the given time-to-live (nanoseconds).
+ * - `usesPrincipal`: when `true`, the cache key includes the caller principal
+ *   (a per-principal cache). Defaults to `false`.
+ */
+export type ReadOnlyOption = {
+  cache?: 'no-cache' | 'until-write' | { ttlNanos: bigint };
+  usesPrincipal?: boolean;
+};
 
 /**
  * The structural contract of one method: an input parameter record + a
@@ -38,8 +51,12 @@ export interface MethodSpec<Input extends InputRecord = InputRecord, Output = un
   readonly description?: string;
   /** Optional `prompt-hint`, surfaced as `agent-method.prompt-hint`. */
   readonly promptHint?: string;
-  /** When `true`, marks the method as read-only (surfaced as `agent-method.read-only`). */
-  readonly readOnly?: boolean;
+  /**
+   * Marks the method as read-only (surfaced as `agent-method.read-only`).
+   * `true` uses the `until-write` cache policy; pass a {@link ReadOnlyOption}
+   * for `no-cache` / `ttl` / per-principal caching.
+   */
+  readonly readOnly?: boolean | ReadOnlyOption;
   /**
    * HTTP endpoint(s) exposing this method. Each is compiled to one
    * `agent-method.http-endpoint` (`http-endpoint-details`) record. Requires the
@@ -78,7 +95,7 @@ export function method<
   returns: StandardSchemaV1<unknown, Output>;
   description?: string;
   promptHint?: string;
-  readOnly?: boolean;
+  readOnly?: boolean | ReadOnlyOption;
   http?: ValidateEndpointsTuple<Eps, Input>;
 }): MethodSpec<Input, Output>;
 export function method<
@@ -90,7 +107,7 @@ export function method<
   returns: StandardSchemaV1<unknown, Output>;
   description?: string;
   promptHint?: string;
-  readOnly?: boolean;
+  readOnly?: boolean | ReadOnlyOption;
   http?: ValidateSingleEndpoint<Ep, Input>;
 }): MethodSpec<Input, Output>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

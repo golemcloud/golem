@@ -77,8 +77,9 @@ describe('fluent agent metadata (Phase 3)', () => {
 
     expect(methods['read'].description).toBe('Reads the value');
     expect(methods['read'].promptHint).toBe('No arguments needed');
+    // `readOnly: true` uses the `until-write` cache policy (matching the base SDK).
     expect(methods['read'].readOnly).toEqual({
-      cachePolicy: { tag: 'no-cache' },
+      cachePolicy: { tag: 'until-write' },
       usesPrincipal: false,
     });
 
@@ -168,7 +169,7 @@ describe('fluent agent metadata (Phase 3)', () => {
     ).toThrow(/neverRegistered/);
   });
 
-  it('registers an agent with NO metadata using today\'s defaults', () => {
+  it("registers an agent with NO metadata using today's defaults", () => {
     defineAgent({
       name: 'noMeta',
       id: { name: z.string() },

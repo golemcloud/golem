@@ -19,9 +19,21 @@
 // symmetric by construction. Reuses the host `WasmRpc` resource (no decorator
 // `Type.Type`/metadata).
 
-import { makeAgentId, WasmRpc, Datetime } from 'golem:agent/host@2.0.0';
-import { schemaValueToWit, schemaValueFromWit, v } from '../internal/schema-model';
-import { awaitPollable } from '../internal/pollableUtils';
+import {
+  makeAgentId,
+  WasmRpc,
+  Datetime,
+  CancellationToken,
+  TypedAgentConfigValue,
+} from 'golem:agent/host@2.0.0';
+import {
+  schemaValueToWit,
+  schemaValueFromWit,
+  typedSchemaValueToWit,
+  v,
+} from '../internal/schema-model';
+import { awaitPollable, throwIfAborted } from '../internal/pollableUtils';
+import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from '../uuid';
 import { compileSchema } from './schema/adapter';
 import { FluentCodec } from './schema/codec';
@@ -43,11 +55,17 @@ type RemoteMethodFor<M> =
           trigger(): void;
           /** Enqueue the call to run at `at`. */
           schedule(at: Datetime): void;
+          /** Await the call, cancelling the remote invocation if `signal` aborts. */
+          abortable(signal: AbortSignal): Promise<Output>;
+          /** Enqueue at `at`, returning a token to cancel it before it runs. */
+          scheduleCancelable(at: Datetime): CancellationToken;
         }
       : {
           (input: InferRecord<Input>): Promise<Output>;
           trigger(input: InferRecord<Input>): void;
           schedule(at: Datetime, input: InferRecord<Input>): void;
+          abortable(signal: AbortSignal, input: InferRecord<Input>): Promise<Output>;
+          scheduleCancelable(at: Datetime, input: InferRecord<Input>): CancellationToken;
         }
     : never;
 
@@ -76,6 +94,48 @@ function encodeRecord(codecs: NamedCodec[], input: Record<string, unknown>) {
   return schemaValueToWit(v.record(codecs.map((c) => c.codec.toValue(input[c.name]))));
 }
 
+/** Walk a nested object by path; `present` is false if any segment is missing. */
+function getAtPath(
+  obj: Record<string, unknown>,
+  path: string[],
+): { present: boolean; value?: unknown } {
+  let cur: unknown = obj;
+  for (const seg of path) {
+    if (cur === null || typeof cur !== 'object' || !(seg in (cur as Record<string, unknown>))) {
+      return { present: false };
+    }
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return { present: true, value: cur };
+}
+
+/**
+ * Encode config overrides (a nested object mirroring the agent's config shape)
+ * into the `TypedAgentConfigValue[]` a remote `WasmRpc` accepts. Only `local`
+ * (non-secret) leaves present in `overrides` are encoded; overriding a secret
+ * leaf over RPC is rejected (secrets are provisioned host-side).
+ */
+function encodeConfigOverrides(
+  declarations: ConfigDeclaration[],
+  overrides: Record<string, unknown>,
+): TypedAgentConfigValue[] {
+  const out: TypedAgentConfigValue[] = [];
+  for (const decl of declarations) {
+    const found = getAtPath(overrides, decl.path);
+    if (!found.present) continue;
+    if (decl.source === 'secret') {
+      throw new Error(
+        `Cannot override secret config field '${decl.path.join('.')}' over RPC; secrets are provisioned host-side.`,
+      );
+    }
+    out.push({
+      path: [...decl.path],
+      value: typedSchemaValueToWit({ graph: decl.graph, value: decl.codec.toValue(found.value) }),
+    });
+  }
+  return out;
+}
+
 /**
  * Build a typed RPC client factory for a remote agent definition.
  *
@@ -88,9 +148,16 @@ function encodeRecord(codecs: NamedCodec[], input: Record<string, unknown>) {
  */
 export function clientFor<Id extends IdRecord, Methods extends MethodsRecord>(
   def: AgentDefinition<Id, Methods>,
-): (id: InferRecord<Id>, phantomId?: Uuid) => RemoteClient<Methods> {
+): (
+  id: InferRecord<Id>,
+  phantomId?: Uuid,
+  config?: Record<string, unknown>,
+) => RemoteClient<Methods> {
   // Compile the def's id + method codecs once (cached in this closure).
-  const idCodecs: NamedCodec[] = Object.keys(def.id).map((k) => ({ name: k, codec: compileSchema(def.id[k]) }));
+  const idCodecs: NamedCodec[] = Object.keys(def.id).map((k) => ({
+    name: k,
+    codec: compileSchema(def.id[k]),
+  }));
   const methodCodecs: CompiledRemoteMethod[] = Object.entries(def.methods).map(([name, spec]) => {
     const inputCodecs: NamedCodec[] = Object.keys((spec as MethodSpec).input).map((k) => ({
       name: k,
@@ -103,37 +170,67 @@ export function clientFor<Id extends IdRecord, Methods extends MethodsRecord>(
     return { name, inputCodecs, output };
   });
 
-  return (id: InferRecord<Id>, phantomId?: Uuid): RemoteClient<Methods> => {
+  const configDecls: ConfigDeclaration[] = compileConfig(def.config);
+
+  return (
+    id: InferRecord<Id>,
+    phantomId?: Uuid,
+    config?: Record<string, unknown>,
+  ): RemoteClient<Methods> => {
     const constructorTree = encodeRecord(idCodecs, id as Record<string, unknown>);
     const agentId = makeAgentId(def.name, constructorTree, phantomId);
-    const wasmRpc = new WasmRpc(def.name, constructorTree, phantomId, []);
+    const agentConfig = config ? encodeConfigOverrides(configDecls, config) : [];
+    const wasmRpc = new WasmRpc(def.name, constructorTree, phantomId, agentConfig);
 
     const decodeOutput = (mc: CompiledRemoteMethod, val: unknown): unknown => {
       if (mc.output.tag === 'unit' || val === undefined) return undefined;
-      return mc.output.codec.fromValue(schemaValueFromWit(val as Parameters<typeof schemaValueFromWit>[0]));
+      return mc.output.codec.fromValue(
+        schemaValueFromWit(val as Parameters<typeof schemaValueFromWit>[0]),
+      );
     };
 
     const client: Record<string, unknown> = {};
     for (const mc of methodCodecs) {
-      const methodFn = async (input: Record<string, unknown> = {}) => {
+      const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
+        throwIfAborted(signal);
         const inputTree = encodeRecord(mc.inputCodecs, input);
         const future = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree);
-        await awaitPollable(future.subscribe());
+        if (signal) {
+          signal.addEventListener(
+            'abort',
+            () => {
+              try {
+                future.cancel();
+              } catch {
+                /* the future may already have resolved */
+              }
+            },
+            { once: true },
+          );
+        }
+        await awaitPollable(future.subscribe(), signal);
         const result = future.get();
         if (!result) {
           throw new RemoteCallError(`RPC to ${agentId}.${mc.name} failed (no result)`);
         }
         if (result.tag === 'err') {
-          throw new RemoteCallError(`Remote agent ${agentId}.${mc.name} errored: ${JSON.stringify(result.val)}`);
+          throw new RemoteCallError(
+            `Remote agent ${agentId}.${mc.name} errored: ${JSON.stringify(result.val)}`,
+          );
         }
         return decodeOutput(mc, result.val);
       };
+      const methodFn = (input: Record<string, unknown> = {}) => invoke(input);
       methodFn.trigger = (input: Record<string, unknown> = {}) => {
         wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input));
       };
       methodFn.schedule = (at: Datetime, input: Record<string, unknown> = {}) => {
         wasmRpc.scheduleInvocation(at, mc.name, encodeRecord(mc.inputCodecs, input));
       };
+      methodFn.abortable = (signal: AbortSignal, input: Record<string, unknown> = {}) =>
+        invoke(input, signal);
+      methodFn.scheduleCancelable = (at: Datetime, input: Record<string, unknown> = {}) =>
+        wasmRpc.scheduleCancelableInvocation(at, mc.name, encodeRecord(mc.inputCodecs, input));
       client[mc.name] = methodFn;
     }
     return client as RemoteClient<Methods>;

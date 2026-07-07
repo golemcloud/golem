@@ -68,10 +68,38 @@ import type {
   SnapshotPolicy,
   SnapshottingSpec,
 } from './defineAgent';
-import { MethodSpec } from './method';
+import { MethodSpec, ReadOnlyOption } from './method';
 import { buildConfigAccessor, compileConfig, ConfigDeclaration, ConfigSpec } from './config';
 import { compileEndpoint, compileMount, pathVariableNames } from './http';
-import { HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@2.0.0';
+import {
+  HttpEndpointDetails,
+  HttpMountDetails,
+  ReadOnlyConfig,
+  CachePolicy,
+} from 'golem:agent/common@2.0.0';
+
+/**
+ * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
+ * `undefined` when the method is not read-only. A bare `true` uses the
+ * `until-write` cache policy (matching the base SDK default); an object form
+ * selects `no-cache` / `until-write` / `ttl` and per-principal caching.
+ */
+function resolveReadOnly(
+  readOnly: boolean | ReadOnlyOption | undefined,
+): ReadOnlyConfig | undefined {
+  if (!readOnly) return undefined;
+  const opt: ReadOnlyOption = readOnly === true ? {} : readOnly;
+  const cache = opt.cache;
+  let cachePolicy: CachePolicy;
+  if (cache === undefined || cache === 'until-write') {
+    cachePolicy = { tag: 'until-write' };
+  } else if (cache === 'no-cache') {
+    cachePolicy = { tag: 'no-cache' };
+  } else {
+    cachePolicy = { tag: 'ttl', val: cache.ttlNanos };
+  }
+  return { cachePolicy, usesPrincipal: opt.usesPrincipal ?? false };
+}
 
 /** A named parameter and its compiled codec, in declaration order. */
 interface NamedCodec {
@@ -122,7 +150,10 @@ export function registerAgentType(
 
   // Declaration order (Object.keys) is the single authoritative field order; it
   // drives both the AgentType named-field list and the value record codec.
-  const idCodecs: NamedCodec[] = Object.keys(id).map((k) => ({ name: k, codec: compileSchema(id[k]) }));
+  const idCodecs: NamedCodec[] = Object.keys(id).map((k) => ({
+    name: k,
+    codec: compileSchema(id[k]),
+  }));
 
   const methodCodecs = new Map<string, MethodCodec>();
   for (const [methodName, spec] of Object.entries(methods)) {
@@ -135,7 +166,8 @@ export function registerAgentType(
       ? { tag: 'unit' }
       : { tag: 'single', codec: returnsCodec };
 
-    const httpSpecs = spec.http === undefined ? [] : Array.isArray(spec.http) ? spec.http : [spec.http];
+    const httpSpecs =
+      spec.http === undefined ? [] : Array.isArray(spec.http) ? spec.http : [spec.http];
     const httpEndpoints = httpSpecs.map((ep) => {
       try {
         return compileEndpoint(ep);
@@ -185,7 +217,8 @@ export function registerAgentType(
  */
 /** Extract the WHEN-policy from a snapshotting spec (the `{ policy, state }` form defaults to `'default'`). */
 function snapshotPolicyOf(spec: SnapshottingSpec | undefined): SnapshotPolicy | undefined {
-  if (spec !== undefined && typeof spec === 'object' && 'state' in spec) return spec.policy ?? 'default';
+  if (spec !== undefined && typeof spec === 'object' && 'state' in spec)
+    return spec.policy ?? 'default';
   return spec;
 }
 
@@ -227,7 +260,10 @@ function resolveDependencies(name: string, depNames: readonly string[]): AgentDe
 }
 
 /** Compile the agent's HTTP mount, wrapping parse failures with the agent name. */
-function compileHttpMount(name: string, http: NonNullable<AgentMetadataSpec['http']>): HttpMountDetails {
+function compileHttpMount(
+  name: string,
+  http: NonNullable<AgentMetadataSpec['http']>,
+): HttpMountDetails {
   try {
     return compileMount(http);
   } catch (e) {
@@ -351,9 +387,9 @@ function assembleAgentType(
       description: mc.meta.description ?? '',
       promptHint: mc.meta.promptHint,
       httpEndpoint: mc.httpEndpoints,
-      // A simple `readOnly: true` maps to a non-caching, principal-agnostic
-      // `read-only-config`; omitted/`false` leaves the WIT field unset.
-      readOnly: mc.meta.readOnly ? { cachePolicy: { tag: 'no-cache' }, usesPrincipal: false } : undefined,
+      // `readOnly: true` → `until-write` caching (base default); the object form
+      // selects no-cache / ttl / per-principal; omitted/`false` → unset.
+      readOnly: resolveReadOnly(mc.meta.readOnly),
       inputSchema: encodeInput(mc.inputCodecs),
       outputSchema,
     });
@@ -426,7 +462,10 @@ class FluentResolvedAgent {
   ): Promise<Result<SchemaValueTree | undefined, AgentError>> {
     const mc = this.reg.methodCodecs.get(methodName);
     if (!mc) {
-      return { tag: 'err', val: invalidMethod(`Method ${methodName} not found on agent ${this.reg.name}`) };
+      return {
+        tag: 'err',
+        val: invalidMethod(`Method ${methodName} not found on agent ${this.reg.name}`),
+      };
     }
     const handler = this.methods[methodName];
     if (typeof handler !== 'function') {

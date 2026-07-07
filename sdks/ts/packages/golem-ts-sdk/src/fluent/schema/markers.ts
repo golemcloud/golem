@@ -52,6 +52,13 @@ import { FluentCodec } from './codec';
 import { buildResultCodec } from './result';
 import { StandardSchemaV1 } from './standardSchema';
 import { Result } from '../../host/result';
+import { Principal, sdkPrincipalToHost, sdkPrincipalFromHost } from '../../principal';
+import type {
+  Principal as HostPrincipal,
+  OidcPrincipal as HostOidcPrincipal,
+  AgentId as HostAgentId,
+  AccountId as HostAccountId,
+} from 'golem:agent/common@2.0.0';
 
 /**
  * Hidden brand key carried by every marker schema. The value is a
@@ -82,14 +89,17 @@ export type MarkerKind =
   | 'unstructured-binary'
   | 'secret'
   | 'result'
-  | 'typed-array';
+  | 'typed-array'
+  | 'principal';
 
 /** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
 declare const MARKER_KIND: unique symbol;
 
 /** A Standard Schema that additionally carries a {@link WIT_MARKER} brand. */
-export interface MarkerSchema<Output = unknown, Kind extends MarkerKind = 'scalar'>
-  extends StandardSchemaV1<Output, Output> {
+export interface MarkerSchema<
+  Output = unknown,
+  Kind extends MarkerKind = 'scalar',
+> extends StandardSchemaV1<Output, Output> {
   readonly [WIT_MARKER]: MarkerDescriptor;
   /**
    * PURE PHANTOM: never assigned at runtime (no runtime object carries it), so
@@ -234,7 +244,8 @@ function intMarker(pin: IntPin, opts?: NumericOpts): MarkerSchema<number | bigin
   const hi = opts?.max !== undefined && BigInt(opts.max) < typeMax ? BigInt(opts.max) : typeMax;
   const validate: Validator<number | bigint> = (value) => {
     if (big) {
-      const n = typeof value === 'bigint' ? value : typeof value === 'number' ? BigInt(value) : undefined;
+      const n =
+        typeof value === 'bigint' ? value : typeof value === 'number' ? BigInt(value) : undefined;
       if (n === undefined) return fail(`Expected a bigint or number for WIT ${tag}`);
       if (n < lo || n > hi) return fail(`Value ${n} out of range for WIT ${tag}`);
       return ok(n);
@@ -251,7 +262,9 @@ function intMarker(pin: IntPin, opts?: NumericOpts): MarkerSchema<number | bigin
     graph: { defs: new Map(), root: t[tag](restrictions) },
     toValue: (value) =>
       big
-        ? (v[tag] as (x: bigint) => SchemaValue)(typeof value === 'bigint' ? value : BigInt(value as number))
+        ? (v[tag] as (x: bigint) => SchemaValue)(
+            typeof value === 'bigint' ? value : BigInt(value as number),
+          )
         : (v[tag] as (x: number) => SchemaValue)(value as number),
     fromValue: (sv) => (sv as { value: number | bigint }).value,
   });
@@ -262,8 +275,10 @@ function f32Marker(opts?: NumericOpts): MarkerSchema<number> {
   const restrictions = buildRestrictions('float-bits', opts);
   const validate: Validator<number> = (value) => {
     if (typeof value !== 'number') return fail('Expected a number for WIT f32');
-    if (opts?.min !== undefined && value < Number(opts.min)) return fail(`Value ${value} below min for WIT f32`);
-    if (opts?.max !== undefined && value > Number(opts.max)) return fail(`Value ${value} above max for WIT f32`);
+    if (opts?.min !== undefined && value < Number(opts.min))
+      return fail(`Value ${value} below min for WIT f32`);
+    if (opts?.max !== undefined && value > Number(opts.max))
+      return fail(`Value ${value} above max for WIT f32`);
     return ok(value);
   };
   const descriptor: MarkerDescriptor = () => ({
@@ -302,7 +317,9 @@ function isDatetime(value: unknown): value is Datetime {
 
 function datetimeMarker(): MarkerSchema<Datetime> {
   const validate: Validator<Datetime> = (value) =>
-    isDatetime(value) ? ok(value) : fail('Expected a { seconds: bigint, nanoseconds: number } datetime');
+    isDatetime(value)
+      ? ok(value)
+      : fail('Expected a { seconds: bigint, nanoseconds: number } datetime');
   const descriptor: MarkerDescriptor = () => ({
     graph: { defs: new Map(), root: t.datetime() },
     toValue: (value) => v.datetime(value as Datetime),
@@ -388,13 +405,14 @@ function secretMarker<Output>(inner: StandardSchemaV1<Output>): SecretMarkerSche
       graph: { ...innerCodec.graph, root: t.secret(innerCodec.graph.root) },
       // Encode: wrap the freshly received owned `secret` resource in a
       // take-once handle. Decode: move the owned handle back out (take once).
-      toValue: (value) =>
-        v.secret(GuestSecretHandle.fromRaw(SECRET_INTERNAL, value as RawSecret)),
+      toValue: (value) => v.secret(GuestSecretHandle.fromRaw(SECRET_INTERNAL, value as RawSecret)),
       fromValue: (sv) => {
         const handle = (sv as { tag: 'secret'; handle: GuestSecretHandle }).handle;
         const raw = handle.take();
         if (raw === undefined) {
-          throw new Error('secret handle was already consumed; an owned secret can only be decoded once');
+          throw new Error(
+            'secret handle was already consumed; an owned secret can only be decoded once',
+          );
         }
         return raw;
       },
@@ -500,9 +518,13 @@ function unstructuredTextMarker(
         }
         const p = vv.payload as Extract<SchemaValue, { tag: 'text' }>;
         if (languages.length > 0 && p.language && !languages.includes(p.language)) {
-          throw new Error(`Language code \`${p.language}\` is not allowed. Allowed: ${languages.join(', ')}`);
+          throw new Error(
+            `Language code \`${p.language}\` is not allowed. Allowed: ${languages.join(', ')}`,
+          );
         }
-        return p.language ? { tag: 'inline', val: p.text, languageCode: p.language } : { tag: 'inline', val: p.text };
+        return p.language
+          ? { tag: 'inline', val: p.text, languageCode: p.language }
+          : { tag: 'inline', val: p.text };
       },
     };
   };
@@ -542,9 +564,13 @@ function unstructuredBinaryMarker(
         }
         const p = vv.payload as Extract<SchemaValue, { tag: 'binary' }>;
         if (mimeTypes.length > 0 && p.mimeType && !mimeTypes.includes(p.mimeType)) {
-          throw new Error(`Mime type \`${p.mimeType}\` is not allowed. Allowed: ${mimeTypes.join(', ')}`);
+          throw new Error(
+            `Mime type \`${p.mimeType}\` is not allowed. Allowed: ${mimeTypes.join(', ')}`,
+          );
         }
-        return p.mimeType ? { tag: 'inline', val: p.bytes, mimeType: p.mimeType } : { tag: 'inline', val: p.bytes };
+        return p.mimeType
+          ? { tag: 'inline', val: p.bytes, mimeType: p.mimeType }
+          : { tag: 'inline', val: p.bytes };
       },
     };
   };
@@ -567,13 +593,21 @@ export interface MultimodalCase {
   schema: unknown;
 }
 
-function multimodalMarker(cases: MultimodalCase[]): MarkerSchema<MultimodalElement[], 'multimodal'> {
+function multimodalMarker(
+  cases: MultimodalCase[],
+): MarkerSchema<MultimodalElement[], 'multimodal'> {
   const validate: Validator<MultimodalElement[]> = (value) =>
-    Array.isArray(value) ? ok(value as MultimodalElement[]) : fail('Expected an array of multimodal elements');
+    Array.isArray(value)
+      ? ok(value as MultimodalElement[])
+      : fail('Expected an array of multimodal elements');
   const descriptor: MarkerDescriptor = (recurse) => {
     const caseCodecs = cases.map((c) => ({ name: c.name, codec: recurse(c.schema) }));
-    const byName = new Map(caseCodecs.map((c, i) => [c.name, { codec: c.codec, index: i }] as const));
-    const variantCases: VariantCaseType[] = caseCodecs.map((c) => variantCase(c.name, c.codec.graph.root));
+    const byName = new Map(
+      caseCodecs.map((c, i) => [c.name, { codec: c.codec, index: i }] as const),
+    );
+    const variantCases: VariantCaseType[] = caseCodecs.map((c) =>
+      variantCase(c.name, c.codec.graph.root),
+    );
     const variant = t.variant(variantCases);
     const defs = mergeGraphDefs(caseCodecs.map((c) => c.codec.graph));
     const root: SchemaType = {
@@ -596,7 +630,8 @@ function multimodalMarker(cases: MultimodalCase[]): MarkerSchema<MultimodalEleme
           const vv = el as Extract<SchemaValue, { tag: 'variant' }>;
           const c = caseCodecs[vv.caseIndex];
           if (c === undefined) throw new Error(`multimodal: unknown case index ${vv.caseIndex}`);
-          if (vv.payload === undefined) throw new Error(`multimodal: missing payload for case '${c.name}'`);
+          if (vv.payload === undefined)
+            throw new Error(`multimodal: missing payload for case '${c.name}'`);
           return { tag: c.name, value: c.codec.fromValue(vv.payload) };
         });
       },
@@ -642,6 +677,177 @@ function resultMarker<Ok, Err>(
 }
 
 // ============================================================
+// Principal (WIT `golem:agent/common` `principal` variant)
+// ============================================================
+
+// The SDK `Principal` (produced by `this.getPrincipal()`) carried as a WIT
+// `principal` variant value. Unlike `this.getPrincipal()` (a capability read),
+// this marker lets a `Principal` travel as ordinary structured data in a method
+// param / return. The graph mirrors the host `Principal` shape from
+// `golem:agent/common@2.0.0` exactly (case order oidc/agent/golem-user/anonymous),
+// and the codec round-trips SDK `Principal` <-> `SchemaValue` via the host shape.
+
+const PRINCIPAL_TAGS = ['oidc', 'agent', 'golem-user', 'anonymous'];
+
+// --- graph type builders (no recursion: everything is built inline) ---
+const uuidType = (): SchemaType =>
+  t.record([field('highBits', t.u64()), field('lowBits', t.u64())]);
+const componentIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
+const agentIdType = (): SchemaType =>
+  t.record([field('componentId', componentIdType()), field('agentId', t.string())]);
+const accountIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
+const oidcType = (): SchemaType =>
+  t.record([
+    field('sub', t.string()),
+    field('issuer', t.string()),
+    field('email', t.option(t.string())),
+    field('name', t.option(t.string())),
+    field('emailVerified', t.option(t.bool())),
+    field('givenName', t.option(t.string())),
+    field('familyName', t.option(t.string())),
+    field('picture', t.option(t.string())),
+    field('preferredUsername', t.option(t.string())),
+    field('claims', t.string()),
+  ]);
+const agentPrincipalType = (): SchemaType => t.record([field('agentId', agentIdType())]);
+const golemUserType = (): SchemaType => t.record([field('accountId', accountIdType())]);
+
+// --- SchemaValue field accessors (positional record reads) ---
+const recFields = (sv: SchemaValue): SchemaValue[] =>
+  (sv as { tag: 'record'; fields: SchemaValue[] }).fields;
+const u64Of = (f: SchemaValue): bigint => (f as { tag: 'u64'; value: bigint }).value;
+const strOf = (f: SchemaValue): string => (f as { tag: 'string'; value: string }).value;
+const boolOf = (f: SchemaValue): boolean => (f as { tag: 'bool'; value: boolean }).value;
+const optOf = (f: SchemaValue): SchemaValue | undefined =>
+  (f as { tag: 'option'; value?: SchemaValue }).value;
+
+// --- codec helpers (round-trip via the host shape) ---
+type HostUuid = { highBits: bigint; lowBits: bigint };
+
+function uuidToValue(u: HostUuid): SchemaValue {
+  return v.record([v.u64(u.highBits), v.u64(u.lowBits)]);
+}
+function uuidFromValue(sv: SchemaValue): HostUuid {
+  const f = recFields(sv);
+  return { highBits: u64Of(f[0]), lowBits: u64Of(f[1]) };
+}
+
+function agentIdToValue(a: HostAgentId): SchemaValue {
+  return v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)]);
+}
+function agentIdFromValue(sv: SchemaValue): HostAgentId {
+  const f = recFields(sv);
+  const uuid = uuidFromValue(recFields(f[0])[0]);
+  return { componentId: { uuid }, agentId: strOf(f[1]) };
+}
+
+function accountIdToValue(a: HostAccountId): SchemaValue {
+  return v.record([uuidToValue(a.uuid)]);
+}
+function accountIdFromValue(sv: SchemaValue): HostAccountId {
+  return { uuid: uuidFromValue(recFields(sv)[0]) };
+}
+
+function oidcToValue(o: HostOidcPrincipal): SchemaValue {
+  const optStr = (x: string | undefined): SchemaValue =>
+    v.option(x === undefined ? undefined : v.string(x));
+  return v.record([
+    v.string(o.sub),
+    v.string(o.issuer),
+    optStr(o.email),
+    optStr(o.name),
+    v.option(o.emailVerified === undefined ? undefined : v.bool(o.emailVerified)),
+    optStr(o.givenName),
+    optStr(o.familyName),
+    optStr(o.picture),
+    optStr(o.preferredUsername),
+    v.string(o.claims),
+  ]);
+}
+function oidcFromValue(sv: SchemaValue): HostOidcPrincipal {
+  const f = recFields(sv);
+  const optStr = (field: SchemaValue): string | undefined => {
+    const val = optOf(field);
+    return val === undefined ? undefined : strOf(val);
+  };
+  const out: HostOidcPrincipal = { sub: strOf(f[0]), issuer: strOf(f[1]), claims: strOf(f[9]) };
+  const email = optStr(f[2]);
+  if (email !== undefined) out.email = email;
+  const name = optStr(f[3]);
+  if (name !== undefined) out.name = name;
+  const ev = optOf(f[4]);
+  if (ev !== undefined) out.emailVerified = boolOf(ev);
+  const givenName = optStr(f[5]);
+  if (givenName !== undefined) out.givenName = givenName;
+  const familyName = optStr(f[6]);
+  if (familyName !== undefined) out.familyName = familyName;
+  const picture = optStr(f[7]);
+  if (picture !== undefined) out.picture = picture;
+  const preferredUsername = optStr(f[8]);
+  if (preferredUsername !== undefined) out.preferredUsername = preferredUsername;
+  return out;
+}
+
+function principalMarker(): MarkerSchema<Principal, 'principal'> {
+  const validate: Validator<Principal> = (value) =>
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as { tag?: unknown }).tag === 'string' &&
+    PRINCIPAL_TAGS.includes((value as { tag: string }).tag)
+      ? ok(value as Principal)
+      : fail('Expected a Principal (e.g. from this.getPrincipal())');
+  const descriptor: MarkerDescriptor = () => ({
+    graph: {
+      defs: new Map(),
+      root: t.variant([
+        variantCase('oidc', oidcType()),
+        variantCase('agent', agentPrincipalType()),
+        variantCase('golem-user', golemUserType()),
+        variantCase('anonymous'),
+      ]),
+    },
+    toValue: (value) => {
+      const h = sdkPrincipalToHost(value as Principal);
+      switch (h.tag) {
+        case 'oidc':
+          return v.variant(0, oidcToValue(h.val));
+        case 'agent':
+          return v.variant(1, v.record([agentIdToValue(h.val.agentId)]));
+        case 'golem-user':
+          return v.variant(2, v.record([accountIdToValue(h.val.accountId)]));
+        case 'anonymous':
+          return v.variant(3);
+      }
+    },
+    fromValue: (sv) => {
+      const vv = sv as { tag: 'variant'; caseIndex: number; payload?: SchemaValue };
+      let host: HostPrincipal;
+      switch (vv.caseIndex) {
+        case 0:
+          host = { tag: 'oidc', val: oidcFromValue(vv.payload as SchemaValue) };
+          break;
+        case 1:
+          host = {
+            tag: 'agent',
+            val: { agentId: agentIdFromValue(recFields(vv.payload as SchemaValue)[0]) },
+          };
+          break;
+        case 2:
+          host = {
+            tag: 'golem-user',
+            val: { accountId: accountIdFromValue(recFields(vv.payload as SchemaValue)[0]) },
+          };
+          break;
+        default:
+          host = { tag: 'anonymous' };
+      }
+      return sdkPrincipalFromHost(host);
+    },
+  });
+  return marker<Principal, 'principal'>(validate, descriptor);
+}
+
+// ============================================================
 // Public `s` namespace
 // ============================================================
 
@@ -656,15 +862,20 @@ export const s = {
   // Numeric pins (f64 is the default `number`, so it is intentionally absent).
   u8: (opts?: NumericOpts) => intMarker({ tag: 'u8', min: 0n, max: 255n, big: false }, opts),
   u16: (opts?: NumericOpts) => intMarker({ tag: 'u16', min: 0n, max: 65535n, big: false }, opts),
-  u32: (opts?: NumericOpts) => intMarker({ tag: 'u32', min: 0n, max: 4294967295n, big: false }, opts),
+  u32: (opts?: NumericOpts) =>
+    intMarker({ tag: 'u32', min: 0n, max: 4294967295n, big: false }, opts),
   u64: (opts?: NumericOpts) =>
     intMarker({ tag: 'u64', min: 0n, max: 18446744073709551615n, big: true }, opts),
   s8: (opts?: NumericOpts) => intMarker({ tag: 's8', min: -128n, max: 127n, big: false }, opts),
-  s16: (opts?: NumericOpts) => intMarker({ tag: 's16', min: -32768n, max: 32767n, big: false }, opts),
+  s16: (opts?: NumericOpts) =>
+    intMarker({ tag: 's16', min: -32768n, max: 32767n, big: false }, opts),
   s32: (opts?: NumericOpts) =>
     intMarker({ tag: 's32', min: -2147483648n, max: 2147483647n, big: false }, opts),
   s64: (opts?: NumericOpts) =>
-    intMarker({ tag: 's64', min: -9223372036854775808n, max: 9223372036854775807n, big: true }, opts),
+    intMarker(
+      { tag: 's64', min: -9223372036854775808n, max: 9223372036854775807n, big: true },
+      opts,
+    ),
   f32: (opts?: NumericOpts) => f32Marker(opts),
 
   // Scalars Standard Schema can't pin.
@@ -685,11 +896,15 @@ export const s = {
   float32Array: () => typedArrayMarker({ ctor: Float32Array, elemType: t.f32, elemValue: v.f32 }),
   float64Array: () => typedArrayMarker({ ctor: Float64Array, elemType: t.f64, elemValue: v.f64 }),
   bigInt64Array: () => typedArrayMarker({ ctor: BigInt64Array, elemType: t.s64, elemValue: v.s64 }),
-  bigUint64Array: () => typedArrayMarker({ ctor: BigUint64Array, elemType: t.u64, elemValue: v.u64 }),
+  bigUint64Array: () =>
+    typedArrayMarker({ ctor: BigUint64Array, elemType: t.u64, elemValue: v.u64 }),
 
   // Capability wrappers / nodes.
   secret: <Output>(inner: StandardSchemaV1<Output>) => secretMarker(inner),
   quotaToken: () => quotaTokenMarker(),
+
+  // Principal carried as a data value (WIT `principal` variant).
+  principal: () => principalMarker(),
 
   // Rich nodes.
   multimodal: (cases: MultimodalCase[]) => multimodalMarker(cases),

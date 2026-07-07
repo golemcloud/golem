@@ -128,33 +128,35 @@ type ValidateSegments<
     ? ValidateSegmentsRec<Rest, IsMount, S>
     : 'ok';
 
-type ValidateMountShape<S extends string> = StartsWithSlash<S> extends false
-  ? Invalid<`mount path '${S}' must start with '/'`>
-  : HasTrailingSlash<S> extends true
-    ? Invalid<`mount path '${S}' must not end with '/' (except '/')`>
-    : HasDoubleSlash<S> extends true
-      ? Invalid<`mount path '${S}' must not contain '//'`>
-      : HasQuery<S> extends true
-        ? Invalid<`mount path '${S}' may not include a query string`>
-        : ValidateSegments<S, true, S> extends infer R
-          ? R extends Invalid<string>
-            ? R
-            : S
-          : never;
+type ValidateMountShape<S extends string> =
+  StartsWithSlash<S> extends false
+    ? Invalid<`mount path '${S}' must start with '/'`>
+    : HasTrailingSlash<S> extends true
+      ? Invalid<`mount path '${S}' must not end with '/' (except '/')`>
+      : HasDoubleSlash<S> extends true
+        ? Invalid<`mount path '${S}' must not contain '//'`>
+        : HasQuery<S> extends true
+          ? Invalid<`mount path '${S}' may not include a query string`>
+          : ValidateSegments<S, true, S> extends infer R
+            ? R extends Invalid<string>
+              ? R
+              : S
+            : never;
 
-type ValidateEndpointShape<S extends string> = StartsWithSlash<S> extends false
-  ? Invalid<`endpoint path '${S}' must start with '/'`>
-  : HasTrailingSlash<S> extends true
-    ? Invalid<`endpoint path '${S}' must not end with '/' (except '/')`>
-    : HasDoubleSlash<S> extends true
-      ? Invalid<`endpoint path '${S}' must not contain '//'`>
-      : CountQuery<S> extends 0 | 1
-        ? ValidateSegments<EndpointPathPart<S>, false, S> extends infer R
-          ? R extends Invalid<string>
-            ? R
-            : ValidateEndpointQuery<S>
-          : never
-        : Invalid<`endpoint path '${S}' contains more than one '?'`>;
+type ValidateEndpointShape<S extends string> =
+  StartsWithSlash<S> extends false
+    ? Invalid<`endpoint path '${S}' must start with '/'`>
+    : HasTrailingSlash<S> extends true
+      ? Invalid<`endpoint path '${S}' must not end with '/' (except '/')`>
+      : HasDoubleSlash<S> extends true
+        ? Invalid<`endpoint path '${S}' must not contain '//'`>
+        : CountQuery<S> extends 0 | 1
+          ? ValidateSegments<EndpointPathPart<S>, false, S> extends infer R
+            ? R extends Invalid<string>
+              ? R
+              : ValidateEndpointQuery<S>
+            : never
+          : Invalid<`endpoint path '${S}' contains more than one '?'`>;
 
 type ValidateEndpointQuery<S extends string> = S extends `${string}?${infer Q}`
   ? ValidateQueryString<Q, S> extends infer R
@@ -245,9 +247,7 @@ export type ValidMountPath<S extends string> = string extends S ? S : ValidateMo
  * except `?` is permitted at most once and `{*rest}` is allowed as the last
  * segment; also enforces query-key uniqueness.
  */
-export type ValidEndpointPath<S extends string> = string extends S
-  ? S
-  : ValidateEndpointShape<S>;
+export type ValidEndpointPath<S extends string> = string extends S ? S : ValidateEndpointShape<S>;
 
 // ---------------------------------------------------------------------------
 // Type-level path/query-variable extraction
@@ -333,16 +333,14 @@ type NonBindableKind =
   | 'unstructured-text'
   | 'unstructured-binary'
   | 'result'
-  | 'typed-array';
+  | 'typed-array'
+  | 'principal';
 
 // A value is bindable unless it is a marker tagged with a non-bindable kind.
 // Plain schemas (Zod / Valibot / ArkType / Effect Schema) and scalar markers
 // resolve to `undefined` / `'scalar'` respectively, both of which are bindable.
-type IsBindable<V> = IsAny<V> extends true
-  ? true
-  : [MarkerKindOf<V>] extends [NonBindableKind]
-    ? false
-    : true;
+type IsBindable<V> =
+  IsAny<V> extends true ? true : [MarkerKindOf<V>] extends [NonBindableKind] ? false : true;
 
 /**
  * Subset of `keyof C & string` whose value is statically eligible for binding
@@ -374,7 +372,8 @@ export type MountSpecCovering<Id, V extends string, W extends string = never> = 
   Exclude<keyof Id & string, V>,
 ] extends [never]
   ? HttpMountSpec<V, W>
-  : HttpMountSpec<V, W> & Invalid<`mount path missing var '${Exclude<keyof Id & string, V> & string}'`>;
+  : HttpMountSpec<V, W> &
+      Invalid<`mount path missing var '${Exclude<keyof Id & string, V> & string}'`>;
 
 // ---------------------------------------------------------------------------
 // WebhookVarsValid — every webhook-suffix {var} must be a *bindable* id field
@@ -530,9 +529,9 @@ export type HeaderKeysTuple<H> = [H[keyof H]] extends [never]
  * `Bound["header"]` slot. Empty (`ValuesOf<H>` = `never`) resolves to `readonly
  * []`; otherwise a non-tuple `ReadonlyArray<…>`.
  */
-export type HeaderValuesArray<H extends Readonly<Record<string, string>>> = [
-  ValuesOf<H>,
-] extends [never]
+export type HeaderValuesArray<H extends Readonly<Record<string, string>>> = [ValuesOf<H>] extends [
+  never,
+]
   ? readonly []
   : ReadonlyArray<ValuesOf<H>>;
 
@@ -626,10 +625,7 @@ type ValidateEndpointStructure<E, B, HN> = B extends EndpointBound
  * cross-source duplicate-binding check, then the case-fold header check. A
  * failing element is replaced with an {@link Invalid} carrier at that position.
  */
-export type ValidateEndpointsTuple<
-  Eps extends ReadonlyArray<HttpEndpointSpec<string>>,
-  Params,
-> = {
+export type ValidateEndpointsTuple<Eps extends ReadonlyArray<HttpEndpointSpec<string>>, Params> = {
   readonly [K in keyof Eps]: Eps[K] extends HttpEndpointSpec<infer V, infer Kind, infer B, infer HN>
     ? Kind extends 'bodyless'
       ? [Exclude<keyof Params & string, V>] extends [never]
@@ -648,7 +644,5 @@ export type ValidateEndpointsTuple<
  * factory's non-array `http` form. Wraps the spec in a one-tuple, validates, and
  * unwraps.
  */
-export type ValidateSingleEndpoint<
-  Ep extends HttpEndpointSpec<string>,
-  Params,
-> = ValidateEndpointsTuple<readonly [Ep], Params> extends readonly [infer R] ? R : Ep;
+export type ValidateSingleEndpoint<Ep extends HttpEndpointSpec<string>, Params> =
+  ValidateEndpointsTuple<readonly [Ep], Params> extends readonly [infer R] ? R : Ep;
