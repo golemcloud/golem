@@ -356,11 +356,17 @@ function assembleAgentType(
 
   const encoder = new GraphEncoder(mergeGraphDefs(graphs));
 
+  // A bare `s.principal()` parameter is auto-injected from the caller (the host
+  // supplies the `Principal`, so it carries NO wire field); every other parameter
+  // is user-supplied. Matches the base SDK's `auto-injected(principal)` source.
   const encodeInput = (codecs: NamedCodec[]): InputSchema => ({
     tag: 'parameters',
     val: codecs.map((c) => ({
       name: c.name,
-      source: { tag: 'user-supplied' },
+      source:
+        c.codec.autoInjected === 'principal'
+          ? { tag: 'auto-injected', val: 'principal' }
+          : { tag: 'user-supplied' },
       schema: encoder.encodeType(c.codec.graph.root),
       metadata: emptyMetadata(),
     })),
@@ -458,7 +464,7 @@ class FluentResolvedAgent {
   async invoke(
     methodName: string,
     methodArgs: SchemaValueTree,
-    _principal: HostPrincipal,
+    principal: HostPrincipal,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>> {
     const mc = this.reg.methodCodecs.get(methodName);
     if (!mc) {
@@ -480,12 +486,24 @@ class FluentResolvedAgent {
       if (mc.inputCodecs.length === 0) {
         args = undefined;
       } else {
-        const inputValue = schemaValueFromWit(methodArgs);
-        const fields = (inputValue as Extract<SchemaValue, { tag: 'record' }>).fields;
+        // The wire record carries ONE field per user-supplied parameter, in
+        // declaration order; an auto-injected `s.principal()` parameter has NO
+        // wire field and is filled from the separate `principal` arg. Walk with a
+        // cursor so user-supplied decoding stays aligned (mirrors the base SDK's
+        // `decodeInputRecord`). When every parameter is auto-injected the wire
+        // record is empty, so only read `methodArgs` when a user-supplied field exists.
+        const hasUserSupplied = mc.inputCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
+        const fields = hasUserSupplied
+          ? (schemaValueFromWit(methodArgs) as Extract<SchemaValue, { tag: 'record' }>).fields
+          : [];
         const record: Record<string, unknown> = {};
-        mc.inputCodecs.forEach((ic, i) => {
-          record[ic.name] = ic.codec.fromValue(fields[i]);
-        });
+        let cursor = 0;
+        for (const ic of mc.inputCodecs) {
+          record[ic.name] =
+            ic.codec.autoInjected === 'principal'
+              ? sdkPrincipalFromHost(principal)
+              : ic.codec.fromValue(fields[cursor++]);
+        }
         args = record;
       }
     } catch (e) {
@@ -653,11 +671,22 @@ export function registerAgentInitiator(
     async initiate(constructorInput: SchemaValue, principal: HostPrincipal) {
       let idRecord: Record<string, unknown>;
       try {
-        const fields = (constructorInput as Extract<SchemaValue, { tag: 'record' }>).fields;
+        // Same cursor-based decode as `invoke`: an auto-injected `s.principal()`
+        // id field is filled from the separate `principal` arg and consumes no
+        // wire field. For the common all-user-supplied case this is identical to
+        // a positional read.
+        const hasUserSupplied = reg.idCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
+        const fields = hasUserSupplied
+          ? (constructorInput as Extract<SchemaValue, { tag: 'record' }>).fields
+          : [];
         idRecord = {};
-        reg.idCodecs.forEach((ic, i) => {
-          idRecord[ic.name] = ic.codec.fromValue(fields[i]);
-        });
+        let cursor = 0;
+        for (const ic of reg.idCodecs) {
+          idRecord[ic.name] =
+            ic.codec.autoInjected === 'principal'
+              ? sdkPrincipalFromHost(principal)
+              : ic.codec.fromValue(fields[cursor++]);
+        }
       } catch (e) {
         return {
           tag: 'err',

@@ -544,6 +544,16 @@ export type HeaderValuesArray<H extends Readonly<Record<string, string>>> = [Val
 type BodylessLabel<K extends string> = K extends 'bodyless' ? 'GET/HEAD' : K;
 
 /**
+ * Keys of `Params` that are auto-injected `s.principal()` parameters. These carry
+ * no wire value (the host injects the caller principal), so they are NOT supplied
+ * by an HTTP/RPC caller and are exempt from the bodyless "every param must be
+ * bound" rule.
+ */
+type AutoInjectedKeys<C> = {
+  [K in keyof C & string]: [MarkerKindOf<C[K]>] extends ['principal'] ? K : never;
+}[keyof C & string];
+
+/**
  * Per-element validator for the `http` array of a `MethodSpec`. Endpoints whose
  * `Kind` extends `"bodyless"` and whose bound-var union does NOT cover every key
  * of `Params` are replaced with an {@link Invalid} carrier naming the missing
@@ -560,11 +570,11 @@ export type ValidateBodylessEndpoints<
     unknown
   >
     ? Kind extends 'bodyless'
-      ? [Exclude<keyof Params & string, Bound>] extends [never]
+      ? [Exclude<keyof Params & string, Bound | AutoInjectedKeys<Params>>] extends [never]
         ? Endpoints[I]
         : Invalid<`${BodylessLabel<Kind>} endpoint cannot have unbound param '${Exclude<
             keyof Params & string,
-            Bound
+            Bound | AutoInjectedKeys<Params>
           > &
             string}' (only path / query / header bindings are allowed because there is no request body)`>
       : Endpoints[I]
@@ -588,11 +598,11 @@ export type RequireValidBodylessEndpoints<
     unknown
   >
     ? Kind extends 'bodyless'
-      ? [Exclude<keyof Params & string, Bound>] extends [never]
+      ? [Exclude<keyof Params & string, Bound | AutoInjectedKeys<Params>>] extends [never]
         ? unknown
         : Invalid<`${BodylessLabel<Kind>} endpoint cannot have unbound param '${Exclude<
             keyof Params & string,
-            Bound
+            Bound | AutoInjectedKeys<Params>
           > &
             string}' (only path / query / header bindings are allowed because there is no request body)`>
       : unknown
@@ -628,11 +638,11 @@ type ValidateEndpointStructure<E, B, HN> = B extends EndpointBound
 export type ValidateEndpointsTuple<Eps extends ReadonlyArray<HttpEndpointSpec<string>>, Params> = {
   readonly [K in keyof Eps]: Eps[K] extends HttpEndpointSpec<infer V, infer Kind, infer B, infer HN>
     ? Kind extends 'bodyless'
-      ? [Exclude<keyof Params & string, V>] extends [never]
+      ? [Exclude<keyof Params & string, V | AutoInjectedKeys<Params>>] extends [never]
         ? ValidateEndpointStructure<Eps[K], B, HN>
         : Invalid<`GET/HEAD endpoint cannot have unbound param '${Exclude<
             keyof Params & string,
-            V
+            V | AutoInjectedKeys<Params>
           > &
             string}' (only path / query / header bindings are allowed because there is no request body)`>
       : ValidateEndpointStructure<Eps[K], B, HN>

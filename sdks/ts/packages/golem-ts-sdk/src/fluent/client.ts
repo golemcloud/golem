@@ -38,6 +38,7 @@ import { Uuid } from '../uuid';
 import { compileSchema } from './schema/adapter';
 import { FluentCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
+import type { MarkerKindOf } from './schema/markers';
 import { AgentDefinition, IdRecord, MethodsRecord } from './defineAgent';
 import { MethodSpec } from './method';
 
@@ -45,10 +46,25 @@ type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
 };
 
-/** The async remote signature for a method spec (no-arg when input is empty). */
+/** Keys of `C` that are auto-injected `s.principal()` params (host-supplied). */
+type AutoInjectedKeys<C> = {
+  [K in keyof C & string]: [MarkerKindOf<C[K]>] extends ['principal'] ? K : never;
+}[keyof C & string];
+
+/**
+ * Caller-facing input for a remote method: the declared params MINUS any
+ * auto-injected `s.principal()` param. The callee's host injects the caller's
+ * principal, so the RPC caller neither supplies nor encodes it.
+ */
+type CallerInput<Input extends Record<string, StandardSchemaV1>> = Omit<
+  Input,
+  AutoInjectedKeys<Input>
+>;
+
+/** The async remote signature for a method spec (no-arg when caller input is empty). */
 type RemoteMethodFor<M> =
   M extends MethodSpec<infer Input, infer Output>
-    ? keyof Input extends never
+    ? keyof CallerInput<Input> extends never
       ? {
           (): Promise<Output>;
           /** Fire-and-forget; no result is awaited. */
@@ -61,11 +77,14 @@ type RemoteMethodFor<M> =
           scheduleCancelable(at: Datetime): CancellationToken;
         }
       : {
-          (input: InferRecord<Input>): Promise<Output>;
-          trigger(input: InferRecord<Input>): void;
-          schedule(at: Datetime, input: InferRecord<Input>): void;
-          abortable(signal: AbortSignal, input: InferRecord<Input>): Promise<Output>;
-          scheduleCancelable(at: Datetime, input: InferRecord<Input>): CancellationToken;
+          (input: InferRecord<CallerInput<Input>>): Promise<Output>;
+          trigger(input: InferRecord<CallerInput<Input>>): void;
+          schedule(at: Datetime, input: InferRecord<CallerInput<Input>>): void;
+          abortable(signal: AbortSignal, input: InferRecord<CallerInput<Input>>): Promise<Output>;
+          scheduleCancelable(
+            at: Datetime,
+            input: InferRecord<CallerInput<Input>>,
+          ): CancellationToken;
         }
     : never;
 
@@ -159,10 +178,13 @@ export function clientFor<Id extends IdRecord, Methods extends MethodsRecord>(
     codec: compileSchema(def.id[k]),
   }));
   const methodCodecs: CompiledRemoteMethod[] = Object.entries(def.methods).map(([name, spec]) => {
-    const inputCodecs: NamedCodec[] = Object.keys((spec as MethodSpec).input).map((k) => ({
-      name: k,
-      codec: compileSchema((spec as MethodSpec).input[k]),
-    }));
+    // Skip auto-injected `s.principal()` params: the callee's host injects the
+    // caller principal, so the RPC caller encodes no wire field for them (the
+    // remaining user-supplied codecs stay in declaration order, matching the
+    // callee's cursor decode in runtime.ts `invoke`).
+    const inputCodecs: NamedCodec[] = Object.keys((spec as MethodSpec).input)
+      .map((k) => ({ name: k, codec: compileSchema((spec as MethodSpec).input[k]) }))
+      .filter((nc) => nc.codec.autoInjected !== 'principal');
     const retCodec = compileSchema((spec as MethodSpec).returns);
     const output = retCodec.isUnit
       ? ({ tag: 'unit' } as const)

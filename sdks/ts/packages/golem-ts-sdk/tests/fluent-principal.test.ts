@@ -126,3 +126,36 @@ describe('fluent s.principal() in agent-type assembly', () => {
     ).not.toThrow();
   });
 });
+
+// A bare `s.principal()` PARAMETER is auto-injected: the host supplies the caller
+// principal, so the field carries WIT source `auto-injected(principal)` (no wire
+// slot), while a normal param stays `user-supplied`. Mirrors the base SDK.
+describe('s.principal() as an auto-injected parameter', () => {
+  it('emits field-source auto-injected(principal) only for the bare principal param', async () => {
+    const { defineAgent } = await import('../src/fluent/defineAgent');
+    const { method } = await import('../src/fluent/method');
+    const { z } = await import('zod');
+    const { AgentTypeRegistry } = await import('../src/internal/registry/agentTypeRegistry');
+    const { AgentClassName } = await import('../src/agentClassName');
+    defineAgent({
+      name: 'AutoInjectPrincipalAgent',
+      id: { name: z.string() },
+      methods: {
+        whoAmI: method({
+          input: { label: z.string(), caller: s.principal() },
+          returns: z.string(),
+        }),
+      },
+    });
+    const at = AgentTypeRegistry.get(new AgentClassName('AutoInjectPrincipalAgent'))!;
+    const m = at.methods.find((x) => x.name === 'whoAmI')!;
+    const fields = (
+      m.inputSchema as { tag: 'parameters'; val: Array<{ name: string; source: unknown }> }
+    ).val;
+    expect(fields.find((f) => f.name === 'label')!.source).toEqual({ tag: 'user-supplied' });
+    expect(fields.find((f) => f.name === 'caller')!.source).toEqual({
+      tag: 'auto-injected',
+      val: 'principal',
+    });
+  });
+});

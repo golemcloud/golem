@@ -59,11 +59,14 @@ type ConfigObjectShapeOf<S> = S extends { readonly shape: infer Sh }
  * - anything else (primitive / union / array / map / scalar marker) → its
  *   decoded `InferOutput` value, read whole.
  */
-type ConfigFieldView<S> = MarkerKindOf<S> extends 'secret'
-  ? Secret<SecretInnerOf<S>>
-  : [ConfigObjectShapeOf<S>] extends [never]
-    ? OutputOf<S>
-    : { readonly [K in keyof ConfigObjectShapeOf<S>]: ConfigFieldView<ConfigObjectShapeOf<S>[K]> };
+type ConfigFieldView<S> =
+  MarkerKindOf<S> extends 'secret'
+    ? Secret<SecretInnerOf<S>>
+    : [ConfigObjectShapeOf<S>] extends [never]
+      ? OutputOf<S>
+      : {
+          readonly [K in keyof ConfigObjectShapeOf<S>]: ConfigFieldView<ConfigObjectShapeOf<S>[K]>;
+        };
 
 /** `InferOutput` guarded for the unconstrained recursion parameter. */
 type OutputOf<S> = S extends StandardSchemaV1 ? StandardSchemaV1.InferOutput<S> : unknown;
@@ -163,10 +166,10 @@ export interface AgentDefinition<
   readonly name: string;
   readonly id: Id;
   readonly methods: Methods;
+  /** The agent's config schema (used by `clientFor` to encode config overrides). */
+  readonly config?: Config;
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
-  implement<State extends object>(
-    impl: AgentImplementation<Id, Methods, Config, State>,
-  ): AgentImpl;
+  implement<State extends object>(impl: AgentImplementation<Id, Methods, Config, State>): AgentImpl;
 }
 
 /**

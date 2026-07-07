@@ -45,6 +45,17 @@ export interface FluentCodec {
    * secret leaf.
    */
   readonly secretInner?: FluentCodec;
+  /**
+   * For the PRINCIPAL marker (`s.principal()`): the auto-injection kind. When a
+   * method/constructor takes a bare `s.principal()` parameter, the caller does
+   * NOT supply it — the host injects the caller's `Principal` (WIT
+   * `field-source.auto-injected(principal)`). The runtime uses this to emit the
+   * `auto-injected` source, decode the param from the separate invoke `principal`
+   * arg (consuming no wire field), and exclude it from HTTP/RPC caller inputs.
+   * A principal NESTED inside a record/return is ordinary user-supplied data and
+   * is unaffected (only a top-level parameter codec is auto-injected).
+   */
+  readonly autoInjected?: 'principal';
 }
 
 /**

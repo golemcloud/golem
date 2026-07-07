@@ -806,6 +806,10 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
         variantCase('anonymous'),
       ]),
     },
+    // A bare `s.principal()` PARAMETER is auto-injected from the caller (the host
+    // supplies it, no wire field); see FluentCodec.autoInjected. As a return /
+    // nested field the codec below carries it as ordinary data.
+    autoInjected: 'principal',
     toValue: (value) => {
       const h = sdkPrincipalToHost(value as Principal);
       switch (h.tag) {
