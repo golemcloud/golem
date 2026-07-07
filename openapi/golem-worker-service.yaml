@@ -16,6 +16,7 @@ tags:
 - name: ApiDomain
 - name: ApiSecurity
 - name: Application
+- name: Card
 - name: Component
 - name: Debugging
 - name: Deployment

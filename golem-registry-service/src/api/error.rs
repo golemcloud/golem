@@ -17,6 +17,7 @@ use crate::services::account_usage::error::LimitExceededError;
 use crate::services::agent_secret::AgentSecretError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
+use crate::services::card::CardError;
 use crate::services::component::ComponentError;
 use crate::services::deployment::{DeployValidationError, DeploymentError, DeploymentWriteError};
 use crate::services::domain_registration::DomainRegistrationError;
@@ -324,6 +325,30 @@ impl From<AccountError> for ApiError {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
             AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<CardError> for ApiError {
+    fn from(value: CardError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            CardError::CardNotFound(_) => Self::not_found(api::error_code::CARD_NOT_FOUND, error),
+            CardError::AccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            CardError::ConcurrentModification => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            CardError::CannotRevokeSystemCard
+            | CardError::CannotRevokePermissionShareCard
+            | CardError::CardOwnerNotFound(_)
+            | CardError::Unauthorized(_) => Self::forbidden(api::error_code::AUTH_FORBIDDEN, error),
+            CardError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
@@ -1060,6 +1085,7 @@ impl From<ResourceDefinitionError> for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::model::card::CardRepoError;
     use crate::services::component::ComponentError;
     use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::base_model::quota::ResourceName;
@@ -1162,6 +1188,18 @@ mod tests {
                     body.0.code,
                     api::error_code::RESET_OVERRIDE_REQUIRES_COMPATIBILITY_CHECK_DISABLED
                 );
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn card_tree_changed_during_revoke_maps_to_concurrent_update() {
+        let api_error = ApiError::from(CardError::from(CardRepoError::CardTreeChangedDuringDelete));
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(body.0.code, api::error_code::CONCURRENT_UPDATE);
             }
             other => panic!("Expected Conflict, got: {other:?}"),
         }

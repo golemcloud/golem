@@ -31,6 +31,15 @@
       "$ref": "#/definitions/account.update"
     },
     {
+      "$ref": "#/definitions/card.get"
+    },
+    {
+      "$ref": "#/definitions/card.list"
+    },
+    {
+      "$ref": "#/definitions/card.revoke"
+    },
+    {
       "$ref": "#/definitions/agent-type.get"
     },
     {
@@ -660,6 +669,432 @@
         }
       },
       "additionalProperties": false
+    },
+    "card.get": {
+      "description": "Single structured output document emitted by `golem card get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "card get",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "$type",
+            "type",
+            "cardId",
+            "parentIds",
+            "lowerPositive",
+            "lowerNegative",
+            "upperPositive",
+            "upperNegative",
+            "createdAt",
+            "expiresAt",
+            "systemCard",
+            "managedBy"
+          ],
+          "properties": {
+            "$type": {
+              "const": "card.get"
+            },
+            "type": {
+              "const": "Concrete"
+            },
+            "cardId": {
+              "type": "string"
+            },
+            "parentIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "systemCard": {
+              "type": "boolean"
+            },
+            "managedBy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CardManagedBy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "$type",
+            "type",
+            "cardId",
+            "parentIds",
+            "lowerPositive",
+            "lowerNegative",
+            "upperPositive",
+            "upperNegative",
+            "createdAt",
+            "expiresAt",
+            "systemCard"
+          ],
+          "properties": {
+            "$type": {
+              "const": "card.get"
+            },
+            "type": {
+              "const": "Polymorphic"
+            },
+            "cardId": {
+              "type": "string"
+            },
+            "parentIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "systemCard": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "card.list": {
+      "description": "Single structured output document emitted by `golem card list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "card list",
+      "type": "object",
+      "required": [
+        "$type",
+        "cards"
+      ],
+      "properties": {
+        "$type": {
+          "const": "card.list"
+        },
+        "cards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/StoredCard"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "card.revoke": {
+      "description": "Single structured output document emitted by `golem card revoke`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "card revoke",
+      "type": "object",
+      "required": [
+        "$type",
+        "revokedCardIds"
+      ],
+      "properties": {
+        "$type": {
+          "const": "card.revoke"
+        },
+        "revokedCardIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoredCard": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "cardId",
+            "parentIds",
+            "lowerPositive",
+            "lowerNegative",
+            "upperPositive",
+            "upperNegative",
+            "createdAt",
+            "expiresAt",
+            "systemCard",
+            "managedBy"
+          ],
+          "properties": {
+            "type": {
+              "const": "Concrete"
+            },
+            "cardId": {
+              "type": "string"
+            },
+            "parentIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "systemCard": {
+              "type": "boolean"
+            },
+            "managedBy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CardManagedBy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "cardId",
+            "parentIds",
+            "lowerPositive",
+            "lowerNegative",
+            "upperPositive",
+            "upperNegative",
+            "createdAt",
+            "expiresAt",
+            "systemCard"
+          ],
+          "properties": {
+            "type": {
+              "const": "Polymorphic"
+            },
+            "cardId": {
+              "type": "string"
+            },
+            "parentIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lowerNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperPositive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "upperNegative": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "systemCard": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CardManagedBy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "accountId"
+          ],
+          "properties": {
+            "type": {
+              "const": "AccountRoot"
+            },
+            "accountId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "environmentId"
+          ],
+          "properties": {
+            "type": {
+              "const": "EnvironmentDefault"
+            },
+            "environmentId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "permissionShareId"
+          ],
+          "properties": {
+            "type": {
+              "const": "PermissionShare"
+            },
+            "permissionShareId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "componentId",
+            "componentRevision",
+            "agentType"
+          ],
+          "properties": {
+            "type": {
+              "const": "AgentInitial"
+            },
+            "componentId": {
+              "type": "string"
+            },
+            "componentRevision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "agentType": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "agent-type.get": {
       "type": "object",
@@ -6144,6 +6579,18 @@
     {
       "type": "account.update",
       "rustType": "AccountUpdateView"
+    },
+    {
+      "type": "card.get",
+      "rustType": "CardGetView"
+    },
+    {
+      "type": "card.list",
+      "rustType": "CardListView"
+    },
+    {
+      "type": "card.revoke",
+      "rustType": "CardRevokeResult"
     },
     {
       "type": "agent-type.get",

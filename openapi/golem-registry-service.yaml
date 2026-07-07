@@ -16,6 +16,7 @@ tags:
 - name: ApiDomain
 - name: ApiSecurity
 - name: Application
+- name: Card
 - name: Component
 - name: Debugging
 - name: Deployment
@@ -1428,6 +1429,214 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_application
+  /v1/accounts/{account_id}/cards:
+    get:
+      tags:
+      - RegistryService
+      - Card
+      - Account
+      summary: List cards owned by an account.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoredCard'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_account_cards
+  /v1/cards/{card_id}:
+    get:
+      tags:
+      - RegistryService
+      - Card
+      - Card
+      summary: Get a card by id.
+      parameters:
+      - name: card_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/StoredCard'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_card
+    delete:
+      tags:
+      - RegistryService
+      - Card
+      - Card
+      summary: Revoke a card and all of its descendants.
+      parameters:
+      - name: card_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RevokedCardsResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: revoke_card
   /v1/envs/{environment_id}/components:
     post:
       tags:
@@ -9097,6 +9306,158 @@ components:
             - UntilWrite
             example: UntilWrite
       - $ref: '#/components/schemas/Empty'
+    Card:
+      type: object
+      title: Card
+      required:
+      - cardId
+      - parentIds
+      - lowerPositive
+      - lowerNegative
+      - upperPositive
+      - upperNegative
+      - createdAt
+      - systemCard
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        lowerPositive:
+          type: array
+          items:
+            type: string
+        lowerNegative:
+          type: array
+          items:
+            type: string
+        upperPositive:
+          type: array
+          items:
+            type: string
+        upperNegative:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        systemCard:
+          type: boolean
+        managedBy:
+          $ref: '#/components/schemas/CardManagedBy'
+    CardManagedBy:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByAccountRoot'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      discriminator:
+        propertyName: type
+        mapping:
+          AccountRoot: '#/components/schemas/CardManagedBy_CardManagedByAccountRoot'
+          EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
+          PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
+          AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+    CardManagedByAccountRoot:
+      type: object
+      title: CardManagedByAccountRoot
+      required:
+      - accountId
+      properties:
+        accountId:
+          type: string
+          format: uuid
+    CardManagedByAgentInitial:
+      type: object
+      title: CardManagedByAgentInitial
+      required:
+      - componentId
+      - componentRevision
+      - agentType
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentRevision:
+          type: integer
+          format: uint64
+        agentType:
+          type: string
+    CardManagedByEnvironmentDefault:
+      type: object
+      title: CardManagedByEnvironmentDefault
+      required:
+      - environmentId
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+    CardManagedByPermissionShare:
+      type: object
+      title: CardManagedByPermissionShare
+      required:
+      - permissionShareId
+      properties:
+        permissionShareId:
+          type: string
+          format: uuid
+    CardManagedBy_CardManagedByAccountRoot:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AccountRoot
+            example: AccountRoot
+      - $ref: '#/components/schemas/CardManagedByAccountRoot'
+    CardManagedBy_CardManagedByAgentInitial:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AgentInitial
+            example: AgentInitial
+      - $ref: '#/components/schemas/CardManagedByAgentInitial'
+    CardManagedBy_CardManagedByEnvironmentDefault:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - EnvironmentDefault
+            example: EnvironmentDefault
+      - $ref: '#/components/schemas/CardManagedByEnvironmentDefault'
+    CardManagedBy_CardManagedByPermissionShare:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PermissionShare
+            example: PermissionShare
+      - $ref: '#/components/schemas/CardManagedByPermissionShare'
     ComponentCreation:
       type: object
       title: ComponentCreation
@@ -11753,6 +12114,17 @@ components:
           $ref: '#/components/schemas/UntypedJsonBody'
         policy:
           $ref: '#/components/schemas/UntypedJsonBody'
+    RevokedCardsResponse:
+      type: object
+      title: RevokedCardsResponse
+      required:
+      - revokedCardIds
+      properties:
+        revokedCardIds:
+          type: array
+          items:
+            type: string
+            format: uuid
     Role:
       type: object
       oneOf:
@@ -13148,6 +13520,40 @@ components:
             - Enabled
             example: Enabled
       - $ref: '#/components/schemas/SnapshottingConfig'
+    StoredCard:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/StoredCard_Card'
+      - $ref: '#/components/schemas/StoredCard_PolymorphicCard'
+      discriminator:
+        propertyName: type
+        mapping:
+          Concrete: '#/components/schemas/StoredCard_Card'
+          Polymorphic: '#/components/schemas/StoredCard_PolymorphicCard'
+    StoredCard_Card:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Concrete
+            example: Concrete
+      - $ref: '#/components/schemas/Card'
+    StoredCard_PolymorphicCard:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Polymorphic
+            example: Polymorphic
+      - $ref: '#/components/schemas/PolymorphicCard'
     SystemVariable:
       type: string
       enum:

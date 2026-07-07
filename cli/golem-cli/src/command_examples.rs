@@ -658,6 +658,26 @@ pub const ACCOUNT_PERMISSION_SHARE_DELETE: &str = "Examples:
   # Delete a permission share by ID
   golem-cli account permission-share delete 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
 
+// Card commands ------------------------------------------------------------------------------------
+
+pub const CARD_LIST: &str = "Examples:
+  # List cards owned by the current account
+  golem-cli card list
+
+  # List cards owned by a specific account
+  golem-cli card list --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211";
+
+pub const CARD_GET: &str = "Examples:
+  # Get a card by ID
+  golem-cli card get 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+
+pub const CARD_REVOKE: &str = "Examples:
+  # Revoke a card and all of its descendants after confirmation
+  golem-cli card revoke 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890
+
+  # Revoke without interactive confirmation
+  golem-cli card revoke 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 --yes";
+
 // API token commands -------------------------------------------------------------------------------
 
 pub const API_TOKEN_LIST: &str = "Examples:
