@@ -159,16 +159,14 @@ pub(crate) fn plan_dependency_fixes(
 
     let overrides = sdk_overrides()?;
 
-    if selected_languages.contains(&GuestLanguage::TypeScript)
-    {
+    if selected_languages.contains(&GuestLanguage::TypeScript) {
         let package_step = ts::plan_package_json_fix_step(ctx, overrides, &mut plan.warnings)?;
         if let Some(step) = package_step {
             plan.steps.push(step);
         }
     }
 
-    if selected_languages.contains(&GuestLanguage::TypeScript)
-    {
+    if selected_languages.contains(&GuestLanguage::TypeScript) {
         let tsconfig_steps = ts::plan_tsconfig_fix_steps(ctx)?;
         plan.steps.extend(tsconfig_steps);
     }

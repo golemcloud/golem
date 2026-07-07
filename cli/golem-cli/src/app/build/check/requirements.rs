@@ -111,11 +111,10 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     },
 ];
 
-const TS_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] =
-    &[TsConfigSettingRequirement {
-        path: &["compilerOptions", "moduleResolution"],
-        expected_literal: Some("\"bundler\""),
-    }];
+const TS_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[TsConfigSettingRequirement {
+    path: &["compilerOptions", "moduleResolution"],
+    expected_literal: Some("\"bundler\""),
+}];
 
 const SCALA_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     ToolRequirement {
