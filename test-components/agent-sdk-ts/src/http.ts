@@ -53,7 +53,9 @@ export const HttpAgent = defineAgent({
     pathAndHeader: method({
       input: { resourceId: z.string(), requestId: z.string() },
       returns: z.object({ resourceId: z.string(), requestId: z.string() }),
-      http: http.get('/path-and-header/{resourceId}', { headers: { 'x-request-id': 'requestId' } }),
+      http: http.get('/path-and-header/{resourceId}', {
+        headers: { 'x-request-id': 'requestId' } as const,
+      }),
     }),
 
     jsonBody: method({
