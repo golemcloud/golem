@@ -31,6 +31,7 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Error;
 use async_trait::async_trait;
@@ -1003,7 +1004,24 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     retry: InFunctionRetryController,
     /// Optional sink used by unit tests to observe unfinished-drop behaviour. `None` in production.
     drop_sink: Option<UnboundedSender<DropEvent>>,
+    /// Counts this handle as an in-flight live host call while present.
+    live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
+}
+
+struct LiveCallPermit(Arc<AtomicUsize>);
+
+impl LiveCallPermit {
+    fn new(counter: Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(counter)
+    }
+}
+
+impl Drop for LiveCallPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1806,10 +1824,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .push_durable_scope(scope.begin_index, kind, scope.replay_handle);
             ctx.state.current_retry_point = scope.begin_index;
         }
+        let is_live = executed.replay.is_none();
         Ok(CallHandle {
             start_idx: executed.start_idx,
             begin_index: executed.begin_index,
-            is_live: executed.replay.is_none(),
+            is_live,
             persisted: executed.persisted,
             request_upload: executed.request_upload,
             replay: executed.replay,
@@ -1818,6 +1837,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             atomic_region_registration: executed.atomic_region_registration,
             retry: executed.retry,
             drop_sink: executed.drop_sink,
+            live_call_permit: if is_live {
+                Some(LiveCallPermit::new(ctx.state.live_host_call_counter()))
+            } else {
+                None
+            },
             _phantom: PhantomData,
         })
     }
@@ -2482,6 +2506,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     // the call-owned `execution_scope` (and the semantic-trap error marker).
                     self.is_live = true;
                     self.persisted = true;
+                    self.live_call_permit =
+                        Some(LiveCallPermit::new(ctx.state.live_host_call_counter()));
                     Ok(CallReplayOutcome::Incomplete(self))
                 } else {
                     // Re-executing a non-idempotent / batched / transaction write could duplicate an
@@ -2570,6 +2596,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 if self.retry.can_reexecute_on_incomplete_replay() {
                     self.is_live = true;
                     self.persisted = true;
+                    self.live_call_permit = Some(LiveCallPermit::new(store.with(|mut access| {
+                        get_ctx(access.data_mut()).state.live_host_call_counter()
+                    })));
                     Ok(CallReplayOutcome::Incomplete(self))
                 } else {
                     self.finished = true;
@@ -3639,6 +3668,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             atomic_region_registration,
             retry: self.retry,
             drop_sink: self.drop_sink,
+            live_call_permit: Some(LiveCallPermit::new(ctx.state.live_host_call_counter())),
             _phantom: PhantomData,
         })
     }
@@ -3677,6 +3707,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             atomic_region_registration: None,
             retry: self.retry,
             drop_sink: self.drop_sink,
+            live_call_permit: None,
             _phantom: PhantomData,
         })
     }
@@ -3912,6 +3943,7 @@ mod tests {
                 "test:monotonic_clock::now",
             ),
             drop_sink: Some(sink),
+            live_call_permit: None,
             _phantom: PhantomData,
         }
     }
@@ -3952,8 +3984,21 @@ mod tests {
                 "test:monotonic_clock::now",
             ),
             drop_sink: None,
+            live_call_permit: None,
             _phantom: PhantomData,
         }
+    }
+
+    #[test]
+    fn live_call_permit_tracks_live_handle_lifetime() {
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        {
+            let _permit = LiveCallPermit::new(counter.clone());
+            assert_eq!(counter.load(Ordering::Acquire), 1);
+        }
+
+        assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
     #[test]

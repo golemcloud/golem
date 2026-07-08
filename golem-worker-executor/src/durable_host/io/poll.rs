@@ -14,20 +14,21 @@
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::{InFunctionRetryHost, mark_durable_call_trap_context};
+use crate::durable_host::suspendable_wait::{
+    PromiseWaiting, chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
-use crate::metrics::ephemeral::{dec_promise_waiting, inc_promise_waiting};
 use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
 use futures::pin_mut;
 use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
-use golem_common::model::oplog::{AgentError, EphemeralSleepTooLongError};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::InterruptKind;
 use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView as _;
@@ -261,7 +262,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     // is consumed, so attach this call's own trap classification directly rather than
                     // falling back to ambient worker state a sibling could clobber under overlap.
                     let err = ephemeral_sleep_too_long_error(
-                        duration_to_nanos(duration),
+                        chrono_duration_to_nanos(duration),
                         std_duration_to_nanos(max),
                     );
                     Err(wasmtime::Error::from_anyhow(
@@ -276,46 +277,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         }
     }
-}
-
-struct PromiseWaiting(bool);
-
-impl PromiseWaiting {
-    fn new(enabled: bool) -> Self {
-        if enabled {
-            inc_promise_waiting();
-        }
-        Self(enabled)
-    }
-}
-
-impl Drop for PromiseWaiting {
-    fn drop(&mut self) {
-        if self.0 {
-            dec_promise_waiting();
-        }
-    }
-}
-
-fn ephemeral_sleep_too_long_error(requested_nanos: u64, max_nanos: u64) -> wasmtime::Error {
-    wasmtime::Error::from_anyhow(anyhow::anyhow!(WorkerExecutorError::InvocationFailed {
-        error: AgentError::EphemeralSleepTooLong(EphemeralSleepTooLongError {
-            requested_nanos,
-            max_nanos,
-        }),
-        stderr: String::new(),
-    }))
-}
-
-fn duration_to_nanos(duration: Duration) -> u64 {
-    duration
-        .to_std()
-        .map(std_duration_to_nanos)
-        .unwrap_or(u64::MAX)
-}
-
-fn std_duration_to_nanos(duration: std::time::Duration) -> u64 {
-    duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
 fn is_suspend_for_sleep<T>(result: &Result<T, wasmtime::Error>) -> Option<Duration> {

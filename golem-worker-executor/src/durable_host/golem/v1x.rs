@@ -16,6 +16,9 @@ use crate::durable_host::concurrent::{
     CallHandle, CallReplayOutcome, Cancellable, NotCancellable, drain_dropped_call_events_access,
 };
 use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::suspendable_wait::{
+    ParkOutcome, SuspendableWaitContext, ephemeral_sleep_too_long_error, park_suspendable_wait,
+};
 use crate::durable_host::{
     ActiveAtomicRegion, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
 };
@@ -59,7 +62,7 @@ use golem_common::model::oplog::{
     HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, Timestamp};
 use golem_common::model::{OplogIndex, PromiseId, RetryContext};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
@@ -1272,7 +1275,50 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
                 return Err(handle.trap(WorkerExecutorError::runtime(err.clone())));
             }
         };
-        promise_handle.await_ready().await;
+        let wait_context = accessor.with(|mut access| {
+            let ctx = access.get();
+            SuspendableWaitContext {
+                wait_id: ctx.state.next_suspendable_wait_id(),
+                agent_mode: ctx.agent_mode(),
+                suspend: ctx.state.config.suspend.clone(),
+                wait_deadline: None,
+                suspendable_waits: ctx.state.suspendable_waits(),
+                wakeup_scheduler: ctx.state.wakeup_scheduler(),
+            }
+        });
+        let outcome = park_suspendable_wait(
+            wait_context,
+            || {
+                let promise_handle = promise_handle.clone();
+                async move {
+                    promise_handle.await_ready().await;
+                }
+            },
+            || promise_handle.is_ready_now(),
+            || {
+                accessor.with(|mut access| {
+                    let ctx = access.get();
+                    ctx.state.safe_to_suspend()
+                })
+            },
+            || None,
+        )
+        .await
+        .map_err(|err| handle.trap(err))?;
+
+        match outcome {
+            ParkOutcome::Ready => {}
+            ParkOutcome::SuspendWorker => {
+                return Err(handle.trap(InterruptKind::Suspend(Timestamp::now_utc())));
+            }
+            ParkOutcome::EphemeralTooLong {
+                requested_nanos,
+                max_nanos,
+            } => {
+                return Err(handle.trap(ephemeral_sleep_too_long_error(requested_nanos, max_nanos)));
+            }
+        }
+
         let result = match promise_handle.get().await {
             Some(result) => result,
             None => {

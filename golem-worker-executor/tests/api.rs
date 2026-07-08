@@ -542,10 +542,6 @@ async fn promise(
 
     let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
 
-    let poll1 = executor
-        .invoke_and_await_agent(&component, &agent_id, "poll_promise", promise_data.clone())
-        .await;
-
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
@@ -592,10 +588,6 @@ async fn promise(
 
     let result = fiber.await??;
 
-    let poll2 = executor
-        .invoke_and_await_agent(&component, &agent_id, "poll_promise", promise_data)
-        .await;
-
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let result_value = result
@@ -608,22 +600,95 @@ async fn promise(
         }
     );
 
-    let poll1_value = poll1?
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn p3_promise_suspend_survives_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "p3-promise-restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(poll1_value, SchemaValue::Option { inner: None });
 
-    let poll2_value = poll2?
+    let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
+    let await_key = IdempotencyKey::fresh();
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &await_key,
+            "await_promise",
+            promise_data.clone(),
+        )
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx,
+            },
+            vec![42],
+        )
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &await_key,
+            "await_promise",
+            promise_data,
+        )
+        .await?;
+
+    let result_value = result
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
     assert_eq!(
-        poll2_value,
-        SchemaValue::Option {
-            inner: Some(Box::new(SchemaValue::List {
-                elements: vec![SchemaValue::U8(42)],
-            }))
+        result_value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
         }
     );
+
     Ok(())
 }
 

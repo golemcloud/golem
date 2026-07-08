@@ -7,6 +7,7 @@ use std::time::Duration;
 pub trait Clock {
     fn new(name: String) -> Self;
     fn sleep(&self, secs: u64) -> Result<(), String>;
+    async fn sleep_p3(&self, secs: u64) -> bool;
     fn healthcheck(&self) -> bool;
     async fn sleep_during_request(&self, secs: u64) -> String;
     async fn sleep_during_parallel_requests(&self, secs: u64) -> String;
@@ -26,6 +27,14 @@ impl Clock for ClockImpl {
     fn sleep(&self, secs: u64) -> Result<(), String> {
         thread::sleep(Duration::from_secs(secs));
         Ok(())
+    }
+
+    async fn sleep_p3(&self, secs: u64) -> bool {
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+            secs.saturating_mul(1_000_000_000),
+        )
+        .await;
+        true
     }
 
     fn healthcheck(&self) -> bool {

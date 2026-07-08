@@ -71,11 +71,26 @@ impl PromiseHandle {
         self.inner.state.lock().await.is_some()
     }
 
+    pub fn is_ready_now(&self) -> bool {
+        self.inner
+            .state
+            .try_lock()
+            .map(|state| state.is_some())
+            .unwrap_or(false)
+    }
+
     pub async fn await_ready(&self) {
-        if self.is_ready().await {
-            return;
+        loop {
+            let notified = self.inner.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            if self.is_ready().await {
+                return;
+            }
+
+            notified.await;
         }
-        self.inner.notify.notified().await;
     }
 
     pub async fn get(&self) -> Option<Vec<u8>> {

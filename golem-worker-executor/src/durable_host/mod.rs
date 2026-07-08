@@ -33,6 +33,7 @@ mod random;
 pub mod rdbms;
 mod replay_state;
 mod sockets;
+mod suspendable_wait;
 pub mod wasm_rpc;
 pub mod websocket;
 
@@ -129,12 +130,12 @@ use golem_service_base::model::{
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
 use replay_state::ReplayEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
@@ -5056,6 +5057,16 @@ struct PrivateDurableWorkerState {
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
+    /// Number of live durable host calls currently in flight. Used by suspendable P3 waits to
+    /// detect when all in-flight work is parked in waits that can safely suspend the worker.
+    live_host_calls: Arc<AtomicUsize>,
+
+    /// Suspend-capable waits currently parked by P3 sleep / promise APIs. The value is the wall
+    /// clock deadline for a scheduled wake, if the wait has one; pure promise waits have no
+    /// deadline and are woken by promise completion.
+    suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
+    next_suspendable_wait_id: AtomicU64,
+
     dropped_call_events: (
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
@@ -5092,6 +5103,46 @@ struct PrivateDurableWorkerState {
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
     /// and to check remaining budgets from the epoch callback.
     resource_limit_entry: Arc<AtomicResourceEntry>,
+}
+
+#[derive(Clone)]
+pub(crate) struct WakeupScheduler {
+    promise_service: Arc<dyn PromiseService>,
+    scheduler_service: Arc<dyn SchedulerService>,
+    oplog: Arc<dyn Oplog>,
+    owned_agent_id: OwnedAgentId,
+    created_by: AccountId,
+}
+
+impl WakeupScheduler {
+    pub(crate) async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), WorkerExecutorError> {
+        let promise_id = self
+            .promise_service
+            .create(
+                &self.owned_agent_id.agent_id,
+                self.oplog.current_oplog_index().await,
+            )
+            .await;
+
+        let schedule_id = self
+            .scheduler_service
+            .schedule(
+                when,
+                ScheduledAction::CompletePromise {
+                    account_id: self.created_by,
+                    environment_id: self.owned_agent_id.environment_id(),
+                    promise_id,
+                },
+            )
+            .await;
+        debug!(
+            "Schedule added to awake suspended worker at {} with id {}",
+            when.to_rfc3339(),
+            schedule_id
+        );
+
+        Ok(())
+    }
 }
 
 impl PrivateDurableWorkerState {
@@ -5224,6 +5275,9 @@ impl PrivateDurableWorkerState {
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
             active_durable_scopes: Vec::new(),
+            live_host_calls: Arc::new(AtomicUsize::new(0)),
+            suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
+            next_suspendable_wait_id: AtomicU64::new(1),
             dropped_call_events,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
@@ -5428,6 +5482,34 @@ impl PrivateDurableWorkerState {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>> {
         Some(self.dropped_call_events.0.clone())
+    }
+
+    fn live_host_call_counter(&self) -> Arc<AtomicUsize> {
+        self.live_host_calls.clone()
+    }
+
+    fn suspendable_waits(&self) -> Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>> {
+        self.suspendable_waits.clone()
+    }
+
+    fn next_suspendable_wait_id(&self) -> u64 {
+        self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
+    }
+
+    fn safe_to_suspend(&self) -> bool {
+        self.live_host_calls.load(Ordering::Acquire) == self.suspendable_waits.lock().unwrap().len()
+            && self.active_durable_scopes.is_empty()
+            && self.pending_p3_http_request_transmissions.is_empty()
+    }
+
+    fn wakeup_scheduler(&self) -> WakeupScheduler {
+        WakeupScheduler {
+            promise_service: self.promise_service.clone(),
+            scheduler_service: self.scheduler_service.clone(),
+            oplog: self.oplog.clone(),
+            owned_agent_id: self.owned_agent_id.clone(),
+            created_by: self.created_by,
+        }
     }
 
     fn take_dropped_call_events(&mut self) -> Vec<concurrent::DropEvent> {
@@ -5639,32 +5721,7 @@ impl PrivateDurableWorkerState {
     }
 
     pub async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), WorkerExecutorError> {
-        let promise_id = self
-            .promise_service
-            .create(
-                &self.owned_agent_id.agent_id,
-                self.current_oplog_index().await,
-            )
-            .await;
-
-        let schedule_id = self
-            .scheduler_service
-            .schedule(
-                when,
-                ScheduledAction::CompletePromise {
-                    account_id: self.created_by,
-                    environment_id: self.owned_agent_id.environment_id(),
-                    promise_id,
-                },
-            )
-            .await;
-        debug!(
-            "Schedule added to awake suspended worker at {} with id {}",
-            when.to_rfc3339(),
-            schedule_id
-        );
-
-        Ok(())
+        self.wakeup_scheduler().sleep_until(when).await
     }
 
     pub fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {

@@ -230,6 +230,7 @@ where
         .map_err(wasmtime::Error::from)
 }
 
+#[allow(dead_code)]
 fn wasi_clocks_view<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> WasiClocksCtxView<'_> {
     WasiClocksView::clocks(expect_ctx::<Ctx, U>(u))
 }

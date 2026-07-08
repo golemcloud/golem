@@ -1639,6 +1639,69 @@ async fn sleep_longer_than_suspend_threshold(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+async fn p3_sleep_suspends_and_resumes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-sleep-suspends-and-resumes");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let start = Instant::now();
+    let mut fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "sleep_p3",
+                    data_value!(25u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    tokio::select! {
+        result = &mut fiber => {
+            let invoke_result = result??;
+            return Err(anyhow!("sleep_p3 returned before suspending: {:?}", invoke_result));
+        }
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => {
+            status?;
+        }
+    }
+
+    fiber.await??;
+    let duration = start.elapsed();
+    assert!(duration.as_secs() >= 25);
+
+    let start = Instant::now();
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_p3", data_value!(0u64))
+        .await?;
+    assert!(start.elapsed().as_secs() < 2);
+
+    Ok(())
+}
+
 async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -2108,6 +2171,60 @@ async fn resuming_sleep(
 
     assert!(duration.as_secs() < 20);
     assert!(duration.as_secs() >= 10);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn p3_resuming_sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-resuming-sleep");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_p3", data_value!(25u64))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    info!("Restarting worker...");
+    let executor = start(deps, &context).await?;
+    info!("Worker restarted");
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+
+    let start = Instant::now();
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_p3", data_value!(0u64))
+        .await?;
+    assert!(start.elapsed().as_secs() < 2);
 
     Ok(())
 }

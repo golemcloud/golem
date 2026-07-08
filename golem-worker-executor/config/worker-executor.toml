@@ -290,6 +290,8 @@ type = "Disabled"
 [suspend]
 ephemeral_max_sleep = "1m"
 suspend_after = "10s"
+wait_suspend_check_interval = "10s"
+wait_suspend_grace = "1s"
 
 [tracing]
 console = false
@@ -638,6 +640,8 @@ without_time = false
 # [suspend]
 # ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
+# wait_suspend_check_interval = "10s"
+# wait_suspend_grace = "1s"
 # 
 # [tracing]
 # console = false
@@ -956,6 +960,8 @@ without_time = false
 # [suspend]
 # ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
+# wait_suspend_check_interval = "10s"
+# wait_suspend_grace = "1s"
 # 
 # [tracing]
 # console = false
