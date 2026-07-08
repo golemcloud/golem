@@ -219,6 +219,153 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("ToolDefinitionMacro.tryMetadata[Remote]"))
   }
 
+  test("child wrappers omit parameters supplied through inherited canonical aliases") {
+    val source =
+      """package example
+        |
+        |import golem.runtime.annotations._
+        |
+        |@toolDefinition(name = "root")
+        |trait RootTool {
+        |  @arg("config", aliases = Array("cfg"), scope = "global")
+        |  def root(config: String): Unit
+        |
+        |  @arg("config")
+        |  def group(config: String): ChildTool
+        |}
+        |
+        |@toolDefinition(name = "child")
+        |trait ChildTool {
+        |  @arg("cfg")
+        |  def child(cfg: String): Unit
+        |}
+        |""".stripMargin
+
+    val result  = generate("RootTool.scala" -> source)
+    val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
+
+    assert(content.contains("def group(config: String): RootToolClient.GroupClient"))
+    assert(content.contains("""prefixValue("config", _root_.scala.List("cfg"), config"""))
+    assert(content.contains("def child():"))
+    assert(!content.contains("def child(cfg: String):"))
+    assert(!content.contains("""("cfg", _root_.scala.Predef.implicitly"""))
+  }
+
+  test("child wrappers do not omit subtree local aliases that were not emitted into the prefix") {
+    val source =
+      """package example
+        |
+        |import golem.runtime.annotations._
+        |
+        |@toolDefinition(name = "root")
+        |trait RootTool {
+        |  @arg("config", aliases = Array("cfg"), scope = "global")
+        |  def root(config: String): Unit
+        |
+        |  @arg("config", aliases = Array("local-cfg"))
+        |  def group(config: String): ChildTool
+        |}
+        |
+        |@toolDefinition(name = "child")
+        |trait ChildTool {
+        |  @arg("local-cfg")
+        |  def child(localCfg: String): Unit
+        |}
+        |""".stripMargin
+
+    val result  = generate("RootTool.scala" -> source)
+    val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
+
+    assert(content.contains("def group(config: String): RootToolClient.GroupClient"))
+    assert(content.contains("""prefixValue("config", _root_.scala.List("cfg"), config"""))
+    assert(
+      !content.contains("""prefixValue("config", _root_.scala.List("cfg", "local-cfg"), config"""),
+      "the inherited prefix should not advertise the subtree-local alias"
+    )
+    assert(content.contains("def child(localCfg: String):"))
+    assert(content.contains("""("local-cfg", _root_.scala.Predef.implicitly"""))
+    assert(!content.contains("def child():"))
+  }
+
+  test("grandchild wrappers do not omit aliases from a child root global that was not added to the prefix") {
+    val source =
+      """package example
+        |
+        |import golem.runtime.annotations._
+        |
+        |@toolDefinition(name = "root")
+        |trait RootTool {
+        |  @arg("config", aliases = Array("root-cfg"), scope = "global")
+        |  def root(config: String): Unit
+        |
+        |  def group(): ChildTool
+        |}
+        |
+        |@toolDefinition(name = "child")
+        |trait ChildTool {
+        |  @arg("config", aliases = Array("child-cfg"), scope = "global")
+        |  def child(config: String): Unit
+        |
+        |  @arg("config")
+        |  def nested(config: String): GrandChildTool
+        |}
+        |
+        |@toolDefinition(name = "grand-child")
+        |trait GrandChildTool {
+        |  @arg("child-cfg")
+        |  def grand(childCfg: String): Unit
+        |}
+        |""".stripMargin
+
+    val result  = generate("RootTool.scala" -> source)
+    val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
+
+    assert(content.contains("""prefixValue("config", _root_.scala.List("root-cfg"), config"""))
+    assert(content.contains("def nested(): RootToolClient.GroupNestedClient"))
+    assert(content.contains("def grand(childCfg: String):"))
+    assert(content.contains("""("child-cfg", _root_.scala.Predef.implicitly"""))
+    assert(!content.contains("def grand():"))
+  }
+
+  test("grandchild wrappers keep child root-global aliases when the child global was already inherited by another surface") {
+    val source =
+      """package example
+        |
+        |import golem.runtime.annotations._
+        |
+        |@toolDefinition(name = "root")
+        |trait RootTool {
+        |  @arg("config", aliases = Array("root-cfg"), scope = "global")
+        |  def root(config: String): Unit
+        |
+        |  def group(): ChildTool
+        |}
+        |
+        |@toolDefinition(name = "child")
+        |trait ChildTool {
+        |  @arg("config", aliases = Array("child-cfg"), scope = "global")
+        |  def child(config: String): Unit
+        |
+        |  def nested(): GrandChildTool
+        |}
+        |
+        |@toolDefinition(name = "grand-child")
+        |trait GrandChildTool {
+        |  @arg("child-cfg")
+        |  def grand(childCfg: String): Unit
+        |}
+        |""".stripMargin
+
+    val result  = generate("RootTool.scala" -> source)
+    val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
+
+    assert(content.contains("""prefixValue("config", _root_.scala.List("root-cfg"), config"""))
+    assert(content.contains("def nested(): RootToolClient.GroupNestedClient"))
+    assert(content.contains("def grand(childCfg: String):"))
+    assert(content.contains("""("child-cfg", _root_.scala.Predef.implicitly"""))
+    assert(!content.contains("def grand():"))
+  }
+
   test("every tool trait also gets its own standalone root client") {
     val result = generate("Git.scala" -> gitSource)
     assert(result.files.exists(_.relativePath == "example/RemoteClient.scala"))

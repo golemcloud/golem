@@ -311,7 +311,7 @@ object ToolRpcCodegen {
       rootMethodOf(tool).exists { root =>
         root.params.exists { rootParam =>
           isGlobalParam(rootParam) &&
-          omitted.contains(rootParam.kebab) &&
+          paramSurfaces(rootParam).exists(omitted.contains) &&
           surfacesIntersect(rootParam.kebab, rootParam.aliases, p.kebab, p.aliases)
         }
       }
@@ -329,10 +329,12 @@ object ToolRpcCodegen {
   ): List[String] = {
     val out = mutable.LinkedHashSet.empty[String]
     inheritedOmitted.foreach(out.add)
-    inheritedRootParams(tool, m).foreach(p => paramSurfaces(p).foreach(out.add))
-    m.params.filterNot(p => p.isPrincipal || isStreamParam(p)).foreach { p =>
+    inheritedRootParams(tool, m)
+      .filterNot(p => omittedMatches(tool, m, p, inheritedOmitted))
+      .foreach(p => paramSurfaces(p).foreach(out.add))
+    m.params.filterNot(p => p.isPrincipal || isStreamParam(p) || omittedMatches(tool, m, p, inheritedOmitted)).foreach { p =>
       out.add(canonicalValueName(tool, m, p))
-      paramSurfaces(p).foreach(out.add)
+      canonicalAliases(tool, m, p).foreach(out.add)
     }
     out.toList
   }
