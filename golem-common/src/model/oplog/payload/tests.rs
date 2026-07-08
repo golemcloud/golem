@@ -420,6 +420,14 @@ fn p3_http_client_consume_body_chunk_host_payload_pairs_roundtrip() {
             chunk: SerializableP3HttpBodyChunk::End,
         },
     );
+
+    // A pending body read cancelled by the guest before upstream bytes arrive.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Cancelled,
+        },
+    );
 }
 
 #[test]

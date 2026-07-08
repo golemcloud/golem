@@ -986,8 +986,8 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
 
 mod scope_scan {
     use crate::model::oplog::host_functions::HostFunctionName;
-    use crate::model::oplog::{DurableFunctionType, OplogEntry, ScopeScanState};
-    use crate::model::{OplogIndex, Timestamp};
+    use crate::model::oplog::{DurableFunctionType, OplogEntry, OplogPayload, ScopeScanState};
+    use crate::model::{AgentInvocationResult, ComponentRevision, OplogIndex, Timestamp};
     use test_r::test;
 
     fn idx(i: u64) -> OplogIndex {
@@ -1025,6 +1025,16 @@ mod scope_scan {
 
     fn persist_all() -> crate::model::oplog::PersistenceLevel {
         crate::model::oplog::PersistenceLevel::Smart
+    }
+
+    fn invocation_finished() -> OplogEntry {
+        OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+            method_name: None,
+            consumed_fuel: 0,
+            component_revision: ComponentRevision(0),
+        }
     }
 
     #[test]
@@ -1116,6 +1126,21 @@ mod scope_scan {
             (11, start(Some(10), DurableFunctionType::WriteRemote)),
             (12, end),
             (13, cancelled),
+        ];
+        assert!(scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn invocation_finished_marker_is_not_a_foreign_side_effect() {
+        let entries = vec![
+            (
+                11,
+                start(
+                    Some(10),
+                    DurableFunctionType::WriteRemoteBatched(Some(idx(10))),
+                ),
+            ),
+            (12, invocation_finished()),
         ];
         assert!(scan(10, &entries, persist_all()));
     }

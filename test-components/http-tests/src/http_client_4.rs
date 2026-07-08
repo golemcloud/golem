@@ -37,6 +37,18 @@ pub trait HttpClient4 {
     /// returning only the status code.
     async fn get_and_drop_response(&self) -> String;
 
+    /// Starts a GET request and cancels the still-pending response future
+    /// before the server sends response headers.
+    async fn get_and_cancel_before_response(&self) -> String;
+
+    /// Sends a GET request, reads one response-body chunk, then drops the body
+    /// stream before EOF.
+    async fn get_and_drop_body_after_first_chunk(&self) -> String;
+
+    /// Sends a GET request, starts reading a response-body chunk, then cancels
+    /// that pending read before the server sends any body bytes.
+    async fn get_and_cancel_pending_body_read(&self) -> String;
+
     /// Sends a POST via raw wasip3 `wasi:http` whose declared `content-length`
     /// is larger than the bytes actually written, and returns the request-body
     /// transmission future's result (together with the send outcome). The
@@ -130,9 +142,98 @@ impl HttpClient4 for HttpClient4Impl {
         format!("{status}")
     }
 
+    async fn get_and_cancel_before_response(&self) -> String {
+        do_get_and_cancel_before_response().await
+    }
+
+    async fn get_and_drop_body_after_first_chunk(&self) -> String {
+        do_get_and_drop_body_after_first_chunk().await
+    }
+
+    async fn get_and_cancel_pending_body_read(&self) -> String {
+        do_get_and_cancel_pending_body_read().await
+    }
+
     async fn post_with_short_body_transmission_error(&self) -> String {
         do_post_with_short_body_transmission_error().await
     }
+}
+
+async fn do_get_and_cancel_before_response() -> String {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let request = async {
+        let result = wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/delayed-response"))
+            .send()
+            .await;
+        match result {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                drop(response);
+                format!("completed({status})")
+            }
+            Err(error) => format!("error({error:?})"),
+        }
+    };
+    let cancel = async {
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(50_000_000).await;
+        "cancelled-before-response".to_string()
+    };
+
+    (request, cancel).race().await
+}
+
+async fn do_get_and_drop_body_after_first_chunk() -> String {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let response = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/slow-body"))
+        .send()
+        .await
+        .expect("Request failed");
+    let status = response.status().as_u16();
+    let mut body = response.into_body();
+    let first = body.chunk().await.unwrap_or_default();
+    let len = first.len();
+    drop(body);
+    format!("{status} first-chunk={len}")
+}
+
+async fn do_get_and_cancel_pending_body_read() -> String {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let response = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/stalled-body"))
+        .send()
+        .await
+        .expect("Request failed");
+    let status = response.status().as_u16();
+    let mut body = response.into_body();
+
+    let read = async {
+        let chunk = body.chunk().await.unwrap_or_default();
+        format!("read({status}, {})", chunk.len())
+    };
+    let cancel = async {
+        let mut yielded = false;
+        futures_util::future::poll_fn(|cx| {
+            if yielded {
+                std::task::Poll::Ready(())
+            } else {
+                yielded = true;
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        })
+        .await;
+        format!("cancelled-during-body-read({status})")
+    };
+
+    (read, cancel).race().await
 }
 
 async fn do_post_with_short_body_transmission_error() -> String {

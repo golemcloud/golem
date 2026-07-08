@@ -29,7 +29,10 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::spawn;
+use tokio::sync::mpsc;
+use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -523,6 +526,470 @@ async fn outgoing_http_response_dropped_without_consuming_body_replays(
         .await?
         .into_typed::<String>()?;
     assert_eq!(result2, "200");
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+async fn read_request_headers(stream: &mut tokio::net::TcpStream) -> anyhow::Result<Vec<u8>> {
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 256];
+    loop {
+        let read = stream.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    Ok(request)
+}
+
+async fn wait_for_peer_close(stream: &mut tokio::net::TcpStream) -> anyhow::Result<bool> {
+    let mut byte = [0u8; 1];
+    let closed = timeout(Duration::from_secs(5), stream.read(&mut byte)).await?? == 0;
+    Ok(closed)
+}
+
+async fn recv_close_event(
+    rx: &mut mpsc::UnboundedReceiver<anyhow::Result<bool>>,
+) -> anyhow::Result<bool> {
+    timeout(Duration::from_secs(10), rx.recv())
+        .await?
+        .transpose()
+        .map(|closed| closed.unwrap_or(false))
+}
+
+async fn recv_request_event(
+    rx: &mut mpsc::UnboundedReceiver<anyhow::Result<()>>,
+) -> anyhow::Result<()> {
+    timeout(Duration::from_secs(10), rx.recv())
+        .await?
+        .transpose()?
+        .unwrap_or(());
+    Ok(())
+}
+
+fn assert_partial_body_drop_result(result: &str) {
+    let len = result
+        .strip_prefix("200 first-chunk=")
+        .and_then(|len| len.parse::<usize>().ok())
+        .expect("partial body drop result must report a 200 status and first chunk length");
+    assert!(len > 0, "partial body drop must read a non-empty chunk");
+}
+
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_pending_body_read_can_be_cancelled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let request_tx = request_tx.clone();
+                spawn(async move {
+                    let result = async {
+                        let request = read_request_headers(&mut stream).await?;
+                        anyhow::ensure!(
+                            request.starts_with(b"GET /stalled-body "),
+                            "unexpected request: {}",
+                            String::from_utf8_lossy(&request)
+                        );
+                        stream
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n")
+                            .await?;
+                        stream.flush().await?;
+                        let _ = request_tx.send(Ok(()));
+                        futures::future::pending::<()>().await;
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        let _ = request_tx.send(Err(error));
+                    }
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_pending_body_read",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+
+    assert_eq!(result, "cancelled-during-body-read(200)");
+    recv_request_event(&mut request_rx).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_pending_body_read_cancellation_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let request_tx = request_tx.clone();
+                spawn(async move {
+                    let result = async {
+                        let request = read_request_headers(&mut stream).await?;
+                        anyhow::ensure!(
+                            request.starts_with(b"GET /stalled-body "),
+                            "unexpected request: {}",
+                            String::from_utf8_lossy(&request)
+                        );
+                        stream
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n")
+                            .await?;
+                        stream.flush().await?;
+                        let _ = request_tx.send(Ok(()));
+                        futures::future::pending::<()>().await;
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        let _ = request_tx.send(Err(error));
+                    }
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_pending_body_read",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, "cancelled-during-body-read(200)");
+    recv_request_event(&mut request_rx).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result2 = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_pending_body_read",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result2, "cancelled-during-body-read(200)");
+    recv_request_event(&mut request_rx).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+/// Dropping a still-pending P3 response future must cancel the durable send
+/// (`Cancelled` on replay for the in-flight write) and abort the underlying
+/// HTTP request instead of leaving the socket parked waiting for response
+/// headers. The restarted invocation replays the cancellation and then runs a
+/// fresh cancellation live.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
+
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let closed_tx = closed_tx.clone();
+                spawn(async move {
+                    let result = async {
+                        let request = read_request_headers(&mut stream).await?;
+                        anyhow::ensure!(
+                            request.starts_with(b"GET /delayed-response "),
+                            "unexpected request: {}",
+                            String::from_utf8_lossy(&request)
+                        );
+                        wait_for_peer_close(&mut stream).await
+                    }
+                    .await;
+                    let _ = closed_tx.send(result);
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_before_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "cancelled-before-response");
+    assert!(
+        recv_close_event(&mut closed_rx).await?,
+        "dropping the pending response future must close the in-flight request connection"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_before_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result2, "cancelled-before-response");
+    assert!(
+        recv_close_event(&mut closed_rx).await?,
+        "post-restart cancellation must still close the fresh live request connection"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+/// Dropping the P3 response body stream after a partial read must stop the
+/// consume-body task and release the pooled-connection permits instead of
+/// keeping the host pinned on unread bytes.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_body_stream_drop_releases_connection_permit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::golem_config::{
+        HttpClientConfig, HttpClientEnabledConfig,
+    };
+    use golem_worker_executor_test_utils::start_with_http_client_config;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_http_client_config(
+        deps,
+        &context,
+        HttpClientConfig::Enabled(HttpClientEnabledConfig {
+            max_idle_per_host: 1,
+            max_connections_per_host: 1,
+            max_total_connections: 1,
+            ..Default::default()
+        }),
+    )
+    .await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let request_tx = request_tx.clone();
+                let mut release_rx = release_rx.clone();
+                spawn(async move {
+                    let result = async {
+                        let request = read_request_headers(&mut stream).await?;
+                        anyhow::ensure!(
+                            request.starts_with(b"GET /slow-body "),
+                            "unexpected request: {}",
+                            String::from_utf8_lossy(&request)
+                        );
+                        stream
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\nhello")
+                            .await?;
+                        stream.flush().await?;
+                        let _ = request_tx.send(Ok(()));
+                        let _ = release_rx.changed().await;
+                        Ok(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        let _ = request_tx.send(Err(error));
+                    }
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_drop_body_after_first_chunk",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_partial_body_drop_result(&result);
+    recv_request_event(&mut request_rx).await?;
+    let _ = release_tx.send(true);
+
+    let result2_live = timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_drop_body_after_first_chunk",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_partial_body_drop_result(&result2_live);
+    recv_request_event(&mut request_rx).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    let executor = start_with_http_client_config(
+        deps,
+        &context,
+        HttpClientConfig::Enabled(HttpClientEnabledConfig {
+            max_idle_per_host: 1,
+            max_connections_per_host: 1,
+            max_total_connections: 1,
+            ..Default::default()
+        }),
+    )
+    .await?;
+
+    let result3_after_restart = timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_drop_body_after_first_chunk",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_partial_body_drop_result(&result3_after_restart);
+    recv_request_event(&mut request_rx).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

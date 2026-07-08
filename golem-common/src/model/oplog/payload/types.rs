@@ -1497,6 +1497,7 @@ pub enum SerializableP3HttpConsumeBodyResult {
 pub enum SerializableP3HttpBodyChunk {
     Data(Vec<u8>),
     End,
+    Cancelled,
 }
 
 /// One persisted unit of a P3 TCP socket receive stream.

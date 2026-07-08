@@ -2144,9 +2144,20 @@ impl<Ctx: WorkerCtx> types::HostResponse for DurableP3View<'_, Ctx> {
 /// Result fed to the guest-facing trailers `FutureReader` once the body closes.
 type HttpTrailersOutcome = Result<Option<HeaderMap>, ErrorCode>;
 
-/// A demand from the body stream producer to the durable [`HttpConsumeBodyTask`]
-/// for the next body chunk, carrying the channel the task replies on.
-type HttpBodyDemand = oneshot::Sender<HttpBodyChunkReply>;
+/// A demand from the body stream producer to the durable [`HttpConsumeBodyTask`].
+enum HttpBodyDemand {
+    /// Read and durably persist the next body chunk, replying on the channel.
+    Read {
+        reply: oneshot::Sender<HttpBodyChunkReply>,
+        cancel: oneshot::Receiver<()>,
+        cancel_ack: oneshot::Sender<()>,
+    },
+    /// The guest dropped/cancelled the stream with no read in flight. Finalize
+    /// the durable consume-body parent without reading more upstream bytes, then
+    /// acknowledge so the guest invocation cannot return with an incomplete
+    /// parent scope in the oplog.
+    Cancel(oneshot::Sender<()>),
+}
 
 /// The task's reply to a single producer demand.
 enum HttpBodyChunkReply {
@@ -2159,6 +2170,8 @@ enum HttpBodyChunkReply {
     /// resolves trailers (and finalizes the parent marker) once the terminal has
     /// actually been observed by the guest-facing stream.
     End { ack: oneshot::Sender<()> },
+    /// The guest cancelled this pending body read before upstream bytes arrived.
+    Cancelled,
     /// A durable failure occurred while persisting/replaying the body; the guest
     /// stream traps with this message, tagged with the failing call scope's trap
     /// context so post-trap retry grouping stays owned by that call.
@@ -2196,8 +2209,16 @@ enum HttpTrailersResolution {
 /// replay.
 struct DurableHttpBodyProducer {
     demand_tx: mpsc::UnboundedSender<HttpBodyDemand>,
-    pending: Option<oneshot::Receiver<HttpBodyChunkReply>>,
+    pending: Option<PendingHttpBodyRead>,
+    pending_cancel: Option<oneshot::Receiver<()>>,
     finished: bool,
+}
+
+struct PendingHttpBodyRead {
+    reply: oneshot::Receiver<HttpBodyChunkReply>,
+    cancel: Option<oneshot::Sender<()>>,
+    cancel_ack: Option<oneshot::Receiver<()>>,
+    cancelling: bool,
 }
 
 impl DurableHttpBodyProducer {
@@ -2205,6 +2226,7 @@ impl DurableHttpBodyProducer {
         Self {
             demand_tx,
             pending: None,
+            pending_cancel: None,
             finished: false,
         }
     }
@@ -2226,22 +2248,43 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 return Poll::Ready(Ok(StreamResult::Dropped));
             }
 
-            if let Some(rx) = self.pending.as_mut() {
+            if let Some(rx) = self.pending_cancel.as_mut() {
                 match Pin::new(rx).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(_) => {
+                        self.pending_cancel = None;
+                        self.finished = true;
+                        return Poll::Ready(Ok(StreamResult::Cancelled));
+                    }
+                }
+            }
+
+            if let Some(pending) = self.pending.as_mut() {
+                if finish && !pending.cancelling {
+                    if let Some(cancel) = pending.cancel.take() {
+                        let _ = cancel.send(());
+                    }
+                    pending.cancelling = true;
+                }
+                if pending.cancelling
+                    && let Some(cancel_ack) = pending.cancel_ack.as_mut()
+                {
+                    match Pin::new(cancel_ack).poll(cx) {
+                        Poll::Ready(_) => {
+                            self.pending = None;
+                            self.finished = true;
+                            return Poll::Ready(Ok(StreamResult::Cancelled));
+                        }
+                        Poll::Pending => {}
+                    }
+                }
+                match Pin::new(&mut pending.reply).poll(cx) {
                     Poll::Pending => {
-                        // A demand is in flight: the task has been asked for
-                        // (and will durably persist) exactly one chunk. We must
-                        // deliver that chunk to a guest read rather than abandon
-                        // it, otherwise the recorded child chunk would have no
-                        // matching delivery and replay would diverge. So even
-                        // when the guest is trying to cancel (`finish`), wait for
-                        // the in-flight chunk instead of returning `Cancelled`.
-                        // The demand is only ever issued from a positive-capacity
-                        // poll (a deterministic guest read), so the demand/child
-                        // sequence is identical on replay; the wait, however, is
-                        // only bounded if the upstream eventually produces the
-                        // frame (or closes) — a stalled upstream blocks
-                        // cancellation, matching P2 blocking-read semantics.
+                        // A demand is in flight. If `finish` was set above, the
+                        // durable task has also been signalled to stop the
+                        // upstream read and record a terminal, so this pending
+                        // wait is bounded by durable finalization rather than by
+                        // the remote peer producing more body bytes.
                         return Poll::Pending;
                     }
                     Poll::Ready(Ok(HttpBodyChunkReply::Data(bytes))) => {
@@ -2256,14 +2299,35 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         return Poll::Ready(Ok(StreamResult::Completed));
                     }
                     Poll::Ready(Ok(HttpBodyChunkReply::End { ack })) => {
+                        let cancelling = pending.cancelling;
+                        let cancel_ack = pending.cancel_ack.take();
                         self.pending = None;
-                        self.finished = true;
                         // Acknowledge the terminal *before* reporting EOF so the
                         // task only resolves trailers after this stream observes
                         // the terminal. A dropped `ack` receiver just means the
                         // task is already gone, which is harmless here.
                         let _ = ack.send(());
-                        return Poll::Ready(Ok(StreamResult::Dropped));
+                        if cancelling {
+                            if let Some(cancel_ack) = cancel_ack {
+                                self.pending_cancel = Some(cancel_ack);
+                                continue;
+                            }
+                            self.finished = true;
+                            return Poll::Ready(Ok(StreamResult::Cancelled));
+                        } else {
+                            self.finished = true;
+                            return Poll::Ready(Ok(StreamResult::Dropped));
+                        }
+                    }
+                    Poll::Ready(Ok(HttpBodyChunkReply::Cancelled)) => {
+                        let cancel_ack = pending.cancel_ack.take();
+                        self.pending = None;
+                        if let Some(cancel_ack) = cancel_ack {
+                            self.pending_cancel = Some(cancel_ack);
+                            continue;
+                        }
+                        self.finished = true;
+                        return Poll::Ready(Ok(StreamResult::Cancelled));
                     }
                     Poll::Ready(Ok(HttpBodyChunkReply::Failed {
                         message,
@@ -2294,20 +2358,44 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 return Poll::Ready(Ok(StreamResult::Completed));
             }
             if finish {
-                // The guest is cancelling a read and we have nothing buffered
-                // and no demand in flight: report a cancelled (empty) read
-                // without starting a new durable body read.
-                return Poll::Ready(Ok(StreamResult::Cancelled));
+                // The guest is cancelling the stream and we have nothing
+                // buffered and no demand in flight. Ask the durable task to
+                // finalize the parent scope and wait for that acknowledgement;
+                // otherwise a component that drops the body and returns
+                // immediately can leave an incomplete consume-body scope in the
+                // oplog and fail on replay.
+                let (tx, rx) = oneshot::channel();
+                if self.demand_tx.send(HttpBodyDemand::Cancel(tx)).is_err() {
+                    self.finished = true;
+                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                }
+                self.pending_cancel = Some(rx);
+                continue;
             }
 
-            let (tx, rx) = oneshot::channel();
-            if self.demand_tx.send(tx).is_err() {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            let (cancel_tx, cancel_rx) = oneshot::channel();
+            let (cancel_ack_tx, cancel_ack_rx) = oneshot::channel();
+            if self
+                .demand_tx
+                .send(HttpBodyDemand::Read {
+                    reply: reply_tx,
+                    cancel: cancel_rx,
+                    cancel_ack: cancel_ack_tx,
+                })
+                .is_err()
+            {
                 self.finished = true;
                 return Poll::Ready(Err(wasmtime::Error::msg(
                     "consume-body durable task is gone",
                 )));
             }
-            self.pending = Some(rx);
+            self.pending = Some(PendingHttpBodyRead {
+                reply: reply_rx,
+                cancel: Some(cancel_tx),
+                cancel_ack: Some(cancel_ack_rx),
+                cancelling: false,
+            });
             // Loop to register the receiver's waker (the reply is not ready yet).
         }
     }
@@ -2483,6 +2571,10 @@ enum HttpBodyFrame {
     End(Option<HeaderMap>),
     /// The body transfer errored.
     Error(ErrorCode),
+    /// The guest cancelled an already-pending body read before upstream bytes
+    /// arrived. This is persisted distinctly from EOF so replay can complete the
+    /// guest read with cancellation instead of delivering a synthetic terminal.
+    Cancelled,
 }
 
 /// One item produced by a single iteration of the durable consume-body loop —
@@ -2492,7 +2584,10 @@ enum ProducedChunk {
     /// A non-empty body chunk to hand to the guest.
     Data(Bytes),
     /// The recorded stream's terminal: there are no more chunks to deliver.
-    Terminal,
+    End,
+    /// A pending guest read was cancelled; finalize durability without
+    /// delivering EOF to the guest-facing stream.
+    Cancelled,
 }
 
 /// Reads the next meaningful frame from the upstream body, skipping empty data
@@ -2617,9 +2712,26 @@ where
         // The trailers / body-error terminal, set on the live path; on replay it
         // is taken from the parent marker instead.
         let mut terminal: HttpTrailersOutcome = Ok(None);
+        let mut cancel_ack: Option<oneshot::Sender<()>> = None;
 
         loop {
-            let demand = demand_rx.recv().await;
+            let (demand, cancel_rx, read_cancel_ack) = match demand_rx.recv().await {
+                Some(HttpBodyDemand::Read {
+                    reply,
+                    cancel,
+                    cancel_ack,
+                }) => {
+                    if reply.is_closed() {
+                        break;
+                    }
+                    (reply, Some(cancel), Some(cancel_ack))
+                }
+                Some(HttpBodyDemand::Cancel(ack)) => {
+                    cancel_ack = Some(ack);
+                    break;
+                }
+                None => break,
+            };
 
             let mut child =
                 match CallHandle::<P3HttpClientConsumeBodyChunk, NotCancellable>::start_access(
@@ -2639,12 +2751,10 @@ where
                         // cancellation) and tags the error with the parent scope's
                         // trap context for correct retry grouping.
                         let trap_context = parent.trap_context();
-                        if let Some(reply_tx) = demand {
-                            let _ = reply_tx.send(HttpBodyChunkReply::Failed {
-                                message: error.to_string(),
-                                trap_context,
-                            });
-                        }
+                        let _ = demand.send(HttpBodyChunkReply::Failed {
+                            message: error.to_string(),
+                            trap_context,
+                        });
                         return fail_consume_body_task(
                             trailers_tx,
                             wasmtime::Error::from_anyhow(parent.trap(error)),
@@ -2665,7 +2775,15 @@ where
                         SerializableP3HttpBodyChunk::Data(bytes) => {
                             ProducedChunk::Data(Bytes::from(bytes))
                         }
-                        SerializableP3HttpBodyChunk::End => ProducedChunk::Terminal,
+                        SerializableP3HttpBodyChunk::End => ProducedChunk::End,
+                        SerializableP3HttpBodyChunk::Cancelled => {
+                            if let Some(cancel_rx) = cancel_rx {
+                                let _ = cancel_rx.await;
+                            }
+                            cancel_ack = read_cancel_ack;
+                            terminal = Ok(None);
+                            ProducedChunk::Cancelled
+                        }
                     },
                     Ok(CallReplayOutcome::Incomplete(mut child)) => {
                         // A batched (`WriteRemoteBatched(Some(..))`) child is not
@@ -2680,12 +2798,10 @@ where
                             "consume-body chunk replay returned an unexpected incomplete child"
                                 .to_string();
                         let trap_context = parent.trap_context();
-                        if let Some(reply_tx) = demand {
-                            let _ = reply_tx.send(HttpBodyChunkReply::Failed {
-                                message: message.clone(),
-                                trap_context,
-                            });
-                        }
+                        let _ = demand.send(HttpBodyChunkReply::Failed {
+                            message: message.clone(),
+                            trap_context,
+                        });
                         return fail_consume_body_task(
                             trailers_tx,
                             wasmtime::Error::from_anyhow(parent.trap(anyhow::Error::msg(message))),
@@ -2694,12 +2810,10 @@ where
                     }
                     Err(error) => {
                         let trap_context = parent.trap_context();
-                        if let Some(reply_tx) = demand {
-                            let _ = reply_tx.send(HttpBodyChunkReply::Failed {
-                                message: error.to_string(),
-                                trap_context,
-                            });
-                        }
+                        let _ = demand.send(HttpBodyChunkReply::Failed {
+                            message: error.to_string(),
+                            trap_context,
+                        });
                         return fail_consume_body_task(
                             trailers_tx,
                             wasmtime::Error::from_anyhow(parent.trap(error)),
@@ -2708,17 +2822,7 @@ where
                     }
                 }
             } else {
-                // When the producer is already gone (guest dropped the stream) we
-                // terminate the recorded stream with an `End` child instead of
-                // reading more of the upstream body — and we must not start a new
-                // upstream read whose persisted chunk could never be delivered.
-                let producer_gone = demand
-                    .as_ref()
-                    .map(|reply_tx| reply_tx.is_closed())
-                    .unwrap_or(true);
-                let frame = if producer_gone {
-                    HttpBodyFrame::End(None)
-                } else if let Some(pending_rebuild) = rebuild.take() {
+                let frame = if let Some(pending_rebuild) = rebuild.take() {
                     // First live read of a replayed response's placeholder body:
                     // the durable consume-body scope turned out to be incomplete
                     // (the original run was interrupted mid-body-stream, so the
@@ -2741,6 +2845,14 @@ where
                             rebuild_refused = true;
                             HttpBodyFrame::Error(ErrorCode::InternalError(Some(message)))
                         }
+                    }
+                } else if let Some(cancel_rx) = cancel_rx {
+                    tokio::select! {
+                        _ = cancel_rx => {
+                            cancel_ack = read_cancel_ack;
+                            HttpBodyFrame::Cancelled
+                        }
+                        frame = read_http_body_frame(&mut body) => frame,
                     }
                 } else {
                     read_http_body_frame(&mut body).await
@@ -2785,12 +2897,10 @@ where
                         // incomplete `Start`) — the retry's replay reconstructs
                         // it.
                         child.abandon_for_trap();
-                        if let Some(reply_tx) = demand {
-                            let _ = reply_tx.send(HttpBodyChunkReply::Failed {
-                                message: error.to_string(),
-                                trap_context,
-                            });
-                        }
+                        let _ = demand.send(HttpBodyChunkReply::Failed {
+                            message: error.to_string(),
+                            trap_context,
+                        });
                         return fail_consume_body_task(
                             trailers_tx,
                             wasmtime::Error::from_anyhow(error),
@@ -2804,6 +2914,7 @@ where
                     HttpBodyFrame::End(_) | HttpBodyFrame::Error(_) => {
                         SerializableP3HttpBodyChunk::End
                     }
+                    HttpBodyFrame::Cancelled => SerializableP3HttpBodyChunk::Cancelled,
                 };
 
                 if let Err(error) = child
@@ -2824,12 +2935,10 @@ where
                     // to abandon the still-open parent so it is not dropped unfinished
                     // (which would wrongly record a parent `Cancelled`).
                     let trap_context = parent.trap_context();
-                    if let Some(reply_tx) = demand {
-                        let _ = reply_tx.send(HttpBodyChunkReply::Failed {
-                            message: error.to_string(),
-                            trap_context,
-                        });
-                    }
+                    let _ = demand.send(HttpBodyChunkReply::Failed {
+                        message: error.to_string(),
+                        trap_context,
+                    });
                     parent.abandon_for_trap();
                     return fail_consume_body_task(
                         trailers_tx,
@@ -2842,11 +2951,15 @@ where
                     HttpBodyFrame::Data(bytes) => ProducedChunk::Data(bytes),
                     HttpBodyFrame::End(trailers) => {
                         terminal = Ok(trailers);
-                        ProducedChunk::Terminal
+                        ProducedChunk::End
                     }
                     HttpBodyFrame::Error(error) => {
                         terminal = Err(error);
-                        ProducedChunk::Terminal
+                        ProducedChunk::End
+                    }
+                    HttpBodyFrame::Cancelled => {
+                        terminal = Ok(None);
+                        ProducedChunk::Cancelled
                     }
                 }
             };
@@ -2856,33 +2969,13 @@ where
             // replay, so the count/order of delivered chunks always matches the
             // count/order of persisted children.
             match produced {
-                ProducedChunk::Data(bytes) => match demand {
-                    Some(reply_tx) => {
-                        if reply_tx.send(HttpBodyChunkReply::Data(bytes)).is_err() {
-                            // The chunk was persisted but the producer vanished
-                            // before it could be delivered. The recorded stream
-                            // would diverge on replay (where the chunk *would* be
-                            // delivered), so fail loud instead of finalizing the
-                            // parent with a clean terminal over an undelivered chunk.
-                            let trap_context = parent.trap_context();
-                            parent.abandon_for_trap();
-                            return fail_consume_body_task(
-                                trailers_tx,
-                                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                                    anyhow::Error::msg(
-                                        "consume-body persisted a body chunk that could not be \
-                                         delivered to the guest stream",
-                                    ),
-                                    trap_context,
-                                )),
-                                Some(trap_context),
-                            );
-                        }
-                    }
-                    None => {
-                        // A `Data` item is only ever produced in response to a
-                        // demand, so a missing demand here is a protocol invariant
-                        // violation rather than a clean stream end.
+                ProducedChunk::Data(bytes) => {
+                    if demand.send(HttpBodyChunkReply::Data(bytes)).is_err() {
+                        // The chunk was persisted but the producer vanished
+                        // before it could be delivered. The recorded stream
+                        // would diverge on replay (where the chunk *would* be
+                        // delivered), so fail loud instead of finalizing the
+                        // parent with a clean terminal over an undelivered chunk.
                         let trap_context = parent.trap_context();
                         parent.abandon_for_trap();
                         return fail_consume_body_task(
@@ -2896,21 +2989,20 @@ where
                             Some(trap_context),
                         );
                     }
-                },
-                ProducedChunk::Terminal => {
-                    if let Some(reply_tx) = demand {
-                        let (ack_tx, ack_rx) = oneshot::channel();
-                        if reply_tx
-                            .send(HttpBodyChunkReply::End { ack: ack_tx })
-                            .is_ok()
-                        {
-                            // Wait for the producer to observe the terminal (report
-                            // EOF to the guest) before resolving trailers / finalizing
-                            // the parent, so trailers never surface before the body
-                            // stream's terminal is observed.
-                            let _ = ack_rx.await;
-                        }
+                }
+                ProducedChunk::End => {
+                    let (ack_tx, ack_rx) = oneshot::channel();
+                    if demand.send(HttpBodyChunkReply::End { ack: ack_tx }).is_ok() {
+                        // Wait for the producer to observe the terminal (report
+                        // EOF to the guest) before resolving trailers / finalizing
+                        // the parent, so trailers never surface before the body
+                        // stream's terminal is observed.
+                        let _ = ack_rx.await;
                     }
+                    break;
+                }
+                ProducedChunk::Cancelled => {
+                    let _ = demand.send(HttpBodyChunkReply::Cancelled);
                     break;
                 }
             }
@@ -3015,6 +3107,9 @@ where
         }
 
         let _ = trailers_tx.send(HttpTrailersResolution::Outcome(outcome));
+        if let Some(ack) = cancel_ack {
+            let _ = ack.send(());
+        }
         Ok(())
     }
 }

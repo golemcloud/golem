@@ -129,7 +129,13 @@ impl OplogEntry {
                 // `End` entries are pure markers and do not themselves cause a side effect.
                 OplogEntry::End { .. } => true,
                 OplogEntry::Cancelled { .. } => true,
-                OplogEntry::AgentInvocationFinished { .. } => false,
+                // A delayed terminal for an asynchronous host operation can be
+                // appended after the guest invocation result has already been
+                // recorded (for example a dropped P3 HTTP response body whose
+                // cleanup is driven by resource destruction). The invocation
+                // result marker is not itself a remote side effect, so it must
+                // not make the owning durable scope unreplayable.
+                OplogEntry::AgentInvocationFinished { .. } => true,
                 _ => true,
             }
         }
