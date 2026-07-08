@@ -303,6 +303,7 @@ wasmprinter = "0.248.0"
 wasmtime = { version = "=45.0.0", features = ["component-model", "anyhow"] }
 wasmtime-wasi = { version = "=45.0.0" }
 wasmtime-wasi-http = { version = "=45.0.0" }
+wat = "1.248.0"
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }

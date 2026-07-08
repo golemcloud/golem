@@ -663,7 +663,7 @@ impl<'a> Validator<'a> {
     }
 
     /// Check that every named definition body is well-formed and references only
-    /// definitions that exist in the graph. [`GraphEncoder`](super::wit) encodes
+    /// definitions that exist in the graph. `GraphEncoder` (in the WIT conversion layer) encodes
     /// all definition bodies eagerly, so an unresolved reference in any
     /// definition — even an unreferenced one — would fail wire encoding.
     fn check_def_refs(&mut self) {

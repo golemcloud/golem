@@ -12,68 +12,81 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::task_result_marker::ExtractAgentTypeMarkerHash;
+use crate::app::build::task_result_marker::ExtractComponentMetadataMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
 use crate::fs;
 use crate::log::{LogColorize, log_action, log_skipping_up_to_date};
 use anyhow::Context;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use golem_common::schema::AgentTypeSchema;
 
-pub async fn extract_and_store_agent_types(
+pub async fn extract_and_store_component_metadata(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
-) -> anyhow::Result<Vec<AgentTypeSchema>> {
+) -> anyhow::Result<ExtractedComponentMetadata> {
     let component = ctx.application().component(component_name);
     let wasm = component.agent_type_extraction_source_wasm();
-    let extracted_agent_types = component.extracted_agent_types(&wasm);
+    let extracted_component_metadata = component.extracted_component_metadata(&wasm);
 
-    let agent_types = new_task_up_to_date_check(ctx)
-        .with_task_result_marker(ExtractAgentTypeMarkerHash { component_name })?
+    let metadata = new_task_up_to_date_check(ctx)
+        .with_task_result_marker(ExtractComponentMetadataMarkerHash { component_name })?
         .with_sources(|| vec![&wasm])
-        .with_targets(|| vec![&extracted_agent_types])
+        .with_targets(|| vec![&extracted_component_metadata])
         .run_async_or_skip_returning(
             || async {
                 log_action(
                     "Extracting",
                     format!(
-                        "{} agent types from {}",
+                        "{} agent types and tools from {}",
                         component_name.as_str().log_color_highlight(),
                         wasm.log_color_highlight()
                     ),
                 );
 
-                let agent_types = ctx
-                    .agent_types()
-                    .get_or_extract_component_agent_types(component_name, &wasm)
+                let metadata = ctx
+                    .component_metadata()
+                    .get_or_extract_component_metadata(component_name, &wasm)
                     .await?;
 
                 fs::write_str(
-                    &extracted_agent_types,
-                    serde_json::to_string(&agent_types)
-                        .context("Failed to serialize agent types")?,
+                    &extracted_component_metadata,
+                    serde_json::to_string(&metadata)
+                        .context("Failed to serialize component metadata")?,
                 )?;
 
-                Ok(agent_types)
+                Ok(metadata)
             },
             || {
                 log_skipping_up_to_date(format!(
-                    "extracting {} agent types",
+                    "extracting {} agent types and tools",
                     component_name.as_str().log_color_highlight(),
                 ));
             },
         )
         .await?;
 
-    match agent_types {
-        Some(agent_types) => Ok(agent_types),
+    match metadata {
+        Some(metadata) => Ok(metadata),
         None => {
-            let agent_types = serde_json::from_str(&fs::read_to_string(&extracted_agent_types)?)
-                .context("Failed to deserialize agent types")?;
-            ctx.agent_types()
-                .add_cached_component_agent_types(component_name, agent_types)
+            let metadata =
+                serde_json::from_str(&fs::read_to_string(&extracted_component_metadata)?)
+                    .context("Failed to deserialize component metadata")?;
+            ctx.component_metadata()
+                .add_cached_component_metadata(component_name, metadata)
                 .await
         }
     }
+}
+
+/// Same as [`extract_and_store_component_metadata`], but returns only the
+/// extracted agent types.
+pub async fn extract_and_store_agent_types(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+) -> anyhow::Result<Vec<AgentTypeSchema>> {
+    Ok(extract_and_store_component_metadata(ctx, component_name)
+        .await?
+        .agent_types)
 }

@@ -23,6 +23,7 @@ use crate::fs;
 use crate::model::GuestLanguage;
 use crate::sdk_overrides::{RustDependency, SdkOverrides};
 use crate::versions;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub(super) fn plan_rust_cargo_fix_steps(
@@ -38,7 +39,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
         .map(|requirement| requirement.name)
         .collect::<Vec<_>>();
 
-    let mut steps = Vec::new();
+    let mut steps_by_path = BTreeMap::new();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
         if component.guess_language() != Some(GuestLanguage::Rust) {
@@ -86,16 +87,22 @@ pub(super) fn plan_rust_cargo_fix_steps(
         }
 
         if working != original {
-            steps.push(DependencyFixStep {
-                path: cargo_toml_path,
-                current: original,
-                new: working,
-            });
+            steps_by_path.insert(
+                cargo_toml_path.clone(),
+                DependencyFixStep {
+                    path: cargo_toml_path,
+                    current: original,
+                    new: working,
+                },
+            );
         }
     }
 
     if let Some((workspace_cargo_toml_path, workspace_source)) = cargo_workspace_manifest {
-        let mut working = workspace_source.clone();
+        let mut working = steps_by_path
+            .get(&workspace_cargo_toml_path)
+            .map(|step| step.new.clone())
+            .unwrap_or_else(|| workspace_source.clone());
         let specs = edit::cargo_toml::collect_dependency_specs(&workspace_source, &spec_names)?;
 
         for requirement in &requirements {
@@ -141,15 +148,18 @@ pub(super) fn plan_rust_cargo_fix_steps(
         }
 
         if working != workspace_source {
-            steps.push(DependencyFixStep {
-                path: workspace_cargo_toml_path,
-                current: workspace_source,
-                new: working,
-            });
+            steps_by_path.insert(
+                workspace_cargo_toml_path.clone(),
+                DependencyFixStep {
+                    path: workspace_cargo_toml_path,
+                    current: workspace_source,
+                    new: working,
+                },
+            );
         }
     }
 
-    Ok(steps)
+    Ok(steps_by_path.into_values().collect())
 }
 
 fn cargo_workspace_manifest(ctx: &BuildContext<'_>) -> anyhow::Result<Option<(PathBuf, String)>> {

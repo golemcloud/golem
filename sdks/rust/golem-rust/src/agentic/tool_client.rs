@@ -96,6 +96,86 @@ pub struct InvocationResult {
     pub stdout: Option<OutputStream>,
 }
 
+/// Decodes an invocation result declared to carry both a value and a stdout
+/// stream. A missing value, a missing stream, or an undecodable value is a
+/// protocol error.
+pub fn decode_result_with_stdout<T: FromSchema, E>(
+    result: InvocationResult,
+) -> Result<(T, OutputStream), ToolError<E>> {
+    let stdout = expect_stdout(result.stdout)?;
+    let value = decode_expected_value(result.result)?;
+    Ok((value, stdout))
+}
+
+/// Decodes an invocation result declared to carry a value and no stdout
+/// stream.
+pub fn decode_result_value<T: FromSchema, E>(result: InvocationResult) -> Result<T, ToolError<E>> {
+    expect_no_stdout(result.stdout)?;
+    decode_expected_value(result.result)
+}
+
+/// Decodes an invocation result declared to carry a stdout stream and no
+/// value.
+pub fn decode_result_stdout_only<E>(
+    result: InvocationResult,
+) -> Result<OutputStream, ToolError<E>> {
+    let stdout = expect_stdout(result.stdout)?;
+    expect_no_value(result.result)?;
+    Ok(stdout)
+}
+
+/// Decodes an invocation result declared to carry neither a value nor a
+/// stdout stream.
+pub fn decode_result_empty<E>(result: InvocationResult) -> Result<(), ToolError<E>> {
+    expect_no_stdout(result.stdout)?;
+    expect_no_value(result.result)
+}
+
+/// Requires the declared stdout stream to be present in an invocation result.
+pub fn expect_stdout<E>(stdout: Option<OutputStream>) -> Result<OutputStream, ToolError<E>> {
+    stdout.ok_or_else(|| {
+        protocol_error("tool result did not contain declared stdout stream".to_string())
+    })
+}
+
+/// Rejects an invocation result that unexpectedly carries a stdout stream.
+pub fn expect_no_stdout<E>(stdout: Option<OutputStream>) -> Result<(), ToolError<E>> {
+    if stdout.is_some() {
+        return Err(protocol_error(
+            "tool result unexpectedly contained stdout stream".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn decode_expected_value<T: FromSchema, E>(
+    value: Option<TypedSchemaValue>,
+) -> Result<T, ToolError<E>> {
+    let value = expect_value(value)?;
+    T::from_value(value.value()).map_err(|error| protocol_error(error.to_string()))
+}
+
+/// Requires the declared result value to be present in an invocation result.
+pub fn expect_value<E>(value: Option<TypedSchemaValue>) -> Result<TypedSchemaValue, ToolError<E>> {
+    value.ok_or_else(|| protocol_error("tool result did not contain a value".to_string()))
+}
+
+/// Maps a client-side encode/decode failure message onto the protocol error
+/// variant of [`ToolError`].
+pub fn tool_protocol_error<E>(message: impl Into<String>) -> ToolError<E> {
+    protocol_error(message.into())
+}
+
+/// Rejects an invocation result that unexpectedly carries a value.
+pub fn expect_no_value<E>(value: Option<TypedSchemaValue>) -> Result<(), ToolError<E>> {
+    if value.is_some() {
+        return Err(protocol_error(
+            "tool result unexpectedly contained a value".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Tool RPC resource types accepted by typed tool client helpers.
 pub trait ToolRpcClient {
     fn invoke_and_await_tool(

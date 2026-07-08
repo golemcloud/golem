@@ -22,9 +22,10 @@
 //! and to the server's own (de)serialization, by construction. There is no
 //! dependency on the legacy `AnalysedType` / `IntoValue` / `FromValue` surface.
 
+use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::rust::rust::{is_valid_rust_ident, to_rust_ident};
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
-use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::{anyhow, bail};
@@ -32,12 +33,14 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+    typed_schema_value_with_projected_defs,
 };
 use golem_common::schema::graph::SchemaTypeDef;
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
 };
+use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::unstructured::{
     unstructured_binary_restrictions, unstructured_text_restrictions,
 };
@@ -50,9 +53,97 @@ use tracing::debug;
 
 #[allow(clippy::module_inception)]
 mod rust;
+pub mod tool;
 mod type_name;
 
 pub use type_name::RustTypeName;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RustBridgeMode {
+    ExternalRest,
+    GuestWasmRpc,
+}
+
+struct GuestMethodNames {
+    await_name: Ident,
+    trigger_name: Ident,
+    schedule_name: Ident,
+    schedule_cancelable_name: Ident,
+    internal_name: Ident,
+    scheduled_time_param: Ident,
+    param_names: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustRuntimeConfig {
+    mode: RustBridgeMode,
+    reexport_golem_server_at_root: bool,
+}
+
+impl RustRuntimeConfig {
+    fn new(mode: RustBridgeMode) -> Self {
+        Self {
+            mode,
+            reexport_golem_server_at_root: false,
+        }
+    }
+
+    fn with_root_golem_server_reexport(mut self, reexport: bool) -> Self {
+        self.reexport_golem_server_at_root = reexport;
+        self
+    }
+
+    fn generated_prelude(&self) -> TokenStream {
+        match self.mode {
+            RustBridgeMode::ExternalRest => {
+                let root_golem_server_reexport = self
+                    .reexport_golem_server_at_root
+                    .then(|| quote! { pub use golem_client::bridge::GolemServer; });
+
+                quote! {
+                    #root_golem_server_reexport
+
+                    pub mod __golem_bridge_runtime {
+                    pub use golem_client::bridge::ClientError;
+                    pub use golem_client::bridge::GolemServer;
+
+                    pub mod schema {
+                        pub use golem_common::schema::*;
+                    }
+
+                    pub mod agentic {
+                        pub use golem_common::agentic::*;
+                    }
+                }
+                }
+            }
+            RustBridgeMode::GuestWasmRpc => quote! {
+                pub mod __golem_bridge_runtime {
+                    #[derive(Debug, Clone)]
+                    pub enum ClientError {
+                        SchemaEncodeFailed { message: String },
+                        SchemaDecodeFailed { message: String },
+                        RpcFailed { message: String },
+                        MissingResult { method: String },
+                        ConfigEncodingFailed { message: String },
+                    }
+
+                    pub mod schema {
+                        pub use golem_rust::SchemaValue;
+                        pub use golem_rust::schema::{
+                            DurationValuePayload, ResultValuePayload, UnionValuePayload,
+                            VariantValuePayload,
+                        };
+                    }
+
+                    pub mod agentic {
+                        pub use golem_rust::agentic::*;
+                    }
+                }
+            },
+        }
+    }
+}
 
 /// User-supplied input shape for a constructor or method.
 enum RustInput {
@@ -77,6 +168,7 @@ pub struct RustBridgeGenerator {
     target_path: Utf8PathBuf,
     agent_type: AgentTypeSchema,
     testing: bool,
+    mode: RustBridgeMode,
     same_language: bool,
 
     type_naming: TypeNaming<RustTypeName>,
@@ -97,19 +189,12 @@ impl BridgeGenerator for RustBridgeGenerator {
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
-        let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
-        let type_naming = TypeNaming::new(&agent_type, same_language)?;
-
-        Ok(Self {
-            target_path: target_path.to_path_buf(),
+        Self::new_with_mode(
             agent_type,
+            target_path,
             testing,
-            same_language,
-            type_naming,
-            generated_language_enums: Vec::new(),
-            generated_mimetypes_enums: Vec::new(),
-            known_multimodals: Vec::new(),
-        })
+            RustBridgeMode::ExternalRest,
+        )
     }
 
     fn generate(&mut self) -> anyhow::Result<()> {
@@ -132,6 +217,74 @@ impl BridgeGenerator for RustBridgeGenerator {
 }
 
 impl RustBridgeGenerator {
+    pub fn new_with_mode(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: RustBridgeMode,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            mode,
+            std::iter::empty::<String>(),
+        )
+    }
+
+    pub(crate) fn new_guest_with_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        extra: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            RustBridgeMode::GuestWasmRpc,
+            extra,
+        )
+    }
+
+    fn new_with_mode_and_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: RustBridgeMode,
+        extra: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
+        let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
+        let type_naming = match mode {
+            RustBridgeMode::ExternalRest => TypeNaming::new(&agent_type, same_language)?,
+            RustBridgeMode::GuestWasmRpc => {
+                let reserved_names = [
+                    RustTypeName::Derived("__golem_bridge_runtime".to_string()),
+                    RustTypeName::Derived(Self::guest_client_struct_name_string(
+                        &agent_type.type_name.0,
+                    )),
+                    RustTypeName::Derived("languages".to_string()),
+                    RustTypeName::Derived("mimetypes".to_string()),
+                ]
+                .into_iter()
+                .chain(extra.into_iter().map(RustTypeName::Derived));
+                TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved_names)?
+            }
+        };
+
+        Ok(Self {
+            target_path: target_path.to_path_buf(),
+            agent_type,
+            testing,
+            mode,
+            same_language,
+            type_naming,
+            generated_language_enums: Vec::new(),
+            generated_mimetypes_enums: Vec::new(),
+            known_multimodals: Vec::new(),
+        })
+    }
+
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let golem_source = if self.testing {
@@ -154,10 +307,19 @@ impl RustBridgeGenerator {
 
         doc["dependencies"] = Item::Table(Table::default());
         doc["dependencies"]["chrono"] = dep("0.4", &[]);
-        doc["dependencies"]["golem-client"] = golem_source.dep_item("golem-client", &[])?;
-        doc["dependencies"]["golem-common"] = golem_source.dep_item("golem-common", &["client"])?;
-        doc["dependencies"]["reqwest"] = dep("0.13", &["rustls"]);
-        doc["dependencies"]["reqwest-middleware"] = dep("0.5", &[]);
+        match self.mode {
+            RustBridgeMode::ExternalRest => {
+                doc["dependencies"]["golem-client"] = golem_source.dep_item("golem-client", &[])?;
+                doc["dependencies"]["golem-common"] =
+                    golem_source.dep_item("golem-common", &["client"])?;
+                doc["dependencies"]["reqwest"] = dep("0.13", &["rustls"]);
+                doc["dependencies"]["reqwest-middleware"] = dep("0.5", &[]);
+            }
+            RustBridgeMode::GuestWasmRpc => {
+                doc["dependencies"]["golem-rust"] = golem_source
+                    .dep_item("sdks/rust/golem-rust", &["export_golem_agentic", "macro"])?;
+            }
+        }
         doc["dependencies"]["serde"] = dep("1", &["derive"]);
         doc["dependencies"]["serde_json"] = dep("1", &[]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
@@ -179,6 +341,13 @@ impl RustBridgeGenerator {
 
     /// Generates the TokenStream for lib.rs content
     fn generate_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
+        match self.mode {
+            RustBridgeMode::ExternalRest => self.generate_external_lib_rs_tokens(),
+            RustBridgeMode::GuestWasmRpc => self.generate_guest_lib_rs_tokens(),
+        }
+    }
+
+    fn generate_external_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
         let agent_type_name = self.agent_type.type_name.0.clone();
         let client_struct_name = Ident::new(&agent_type_name, Span::call_site());
 
@@ -224,10 +393,10 @@ impl RustBridgeGenerator {
                 self.emit_encode_expr(quote! { value }, &config.value_type, false, 0)?;
             config_encode_stmts.push(quote! {
                 if let Some(value) = #param_name {
-                    let __config_value: golem_common::schema::SchemaValue = (|| -> Result<golem_common::schema::SchemaValue, String> {
+                    let __config_value: crate::__golem_bridge_runtime::schema::SchemaValue = (|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
                         #value_encode
-                    })().map_err(|__e| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to encode config value: {__e}") })?;
-                    let __config_json = serde_json::to_value(&__config_value).map_err(|__e| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to serialize config value: {__e}") })?;
+                    })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode config value: {__e}") })?;
+                    let __config_json = serde_json::to_value(&__config_value).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to serialize config value: {__e}") })?;
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
                         value: __config_json.into(),
@@ -236,9 +405,11 @@ impl RustBridgeGenerator {
             });
         }
 
-        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable {
+        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable
+            && !local_configs.is_empty()
+        {
             quote! {
-                pub async fn get_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
+                pub async fn get_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
@@ -253,14 +424,14 @@ impl RustBridgeGenerator {
             quote! {
                 #get_with_config_method
 
-                pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
+                pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
                     Self::__create(constructor_parameters, Some(uuid), agent_config).await
                 }
 
-                pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
+                pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
@@ -275,7 +446,7 @@ impl RustBridgeGenerator {
 
         let get_method = if self.agent_type.mode == AgentMode::Durable {
             quote! {
-                pub async fn get(#(#constructor_param_defs),*) -> Result<Self, golem_client::bridge::ClientError> {
+                pub async fn get(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     Self::__create(constructor_parameters, None, vec![]).await
                 }
@@ -291,11 +462,16 @@ impl RustBridgeGenerator {
         let multimodals = self.multimodals()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
+        let runtime_prelude = RustRuntimeConfig::new(self.mode)
+            .with_root_golem_server_reexport(!self.root_type_name_conflicts("GolemServer"))
+            .generated_prelude();
 
         let tokens = quote! {
             #![allow(unused)]
             #![allow(non_snake_case)]
             #![allow(clippy::all)]
+
+            #runtime_prelude
 
             #[derive(Debug, Clone)]
             pub struct #client_struct_name {
@@ -307,12 +483,12 @@ impl RustBridgeGenerator {
             impl #client_struct_name {
                 #get_method
 
-                pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_param_defs),*) -> Result<Self, golem_client::bridge::ClientError> {
+                pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     Self::__create(constructor_parameters, Some(uuid), vec![]).await
                 }
 
-                pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, golem_client::bridge::ClientError> {
+                pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     Self::__create(constructor_parameters, Some(uuid::Uuid::new_v4()), vec![]).await
                 }
@@ -338,7 +514,7 @@ impl RustBridgeGenerator {
                     constructor_parameters: serde_json::Value,
                     phantom_id: Option<uuid::Uuid>,
                     agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
-                ) -> Result<Self, golem_client::bridge::ClientError> {
+                ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let config = CONFIG.get().expect("Configuration has not been set");
 
                     let client = reqwest_middleware::ClientWithMiddleware::from(
@@ -373,7 +549,7 @@ impl RustBridgeGenerator {
                     method_parameters: serde_json::Value,
                     mode: golem_client::model::AgentInvocationMode,
                     schedule_at: Option<chrono::DateTime<chrono::Utc>>,
-                ) -> Result<Option<golem_client::model::TypedSchemaValue>, golem_client::bridge::ClientError> {
+                ) -> Result<Option<golem_client::model::TypedSchemaValue>, crate::__golem_bridge_runtime::ClientError> {
                     let config = CONFIG.get().expect("Configuration has not been set");
 
                     let client = reqwest_middleware::ClientWithMiddleware::from(
@@ -409,6 +585,249 @@ impl RustBridgeGenerator {
             }
 
             #global_config
+
+            #type_definitions
+
+            #multimodals
+
+            #languages
+
+            #mimetypes
+        };
+
+        Ok(tokens)
+    }
+
+    fn generate_guest_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
+        let agent_type_name = self.agent_type.type_name.0.clone();
+        let client_struct_name = Ident::new(
+            &Self::guest_client_struct_name_string(&agent_type_name),
+            Span::call_site(),
+        );
+
+        let constructor_input = self.agent_type.constructor.input_schema.clone();
+        let constructor_param_names = self.input_param_ident_names_unique(&constructor_input)?;
+        let constructor_param_defs =
+            self.input_param_defs_with_ident_names(&constructor_input, &constructor_param_names)?;
+        let constructor_param_refs =
+            self.input_param_refs_with_ident_names(&constructor_param_names);
+        let constructor_params_value = self.input_param_schema_value_with_ident_names(
+            &constructor_input,
+            &constructor_param_names,
+        )?;
+
+        let local_configs: Vec<AgentConfigDeclarationSchema> = self
+            .agent_type
+            .config
+            .iter()
+            .filter(|c| c.source == AgentConfigSource::Local)
+            .cloned()
+            .collect();
+
+        let mut impl_names = ParameterNaming::new();
+        let guest_method_names = self.allocate_guest_method_names(&mut impl_names)?;
+        let has_get_method = guest_method_names
+            .iter()
+            .any(|names| names.await_name == "get");
+        let get_method_name = (self.agent_type.mode == AgentMode::Durable).then(|| {
+            if has_get_method {
+                Self::ident_from_name(impl_names.fresh("get_"))
+            } else {
+                Self::ident_from_name(impl_names.fresh("get"))
+            }
+        });
+        let get_phantom_method_name = Self::ident_from_name(impl_names.fresh("get_phantom"));
+        let new_phantom_method_name = Self::ident_from_name(impl_names.fresh("new_phantom"));
+        let get_with_config_method_name = (self.agent_type.mode == AgentMode::Durable
+            && !local_configs.is_empty())
+        .then(|| Self::ident_from_name(impl_names.fresh("get_with_config")));
+        let get_phantom_with_config_method_name = (!local_configs.is_empty())
+            .then(|| Self::ident_from_name(impl_names.fresh("get_phantom_with_config")));
+        let new_phantom_with_config_method_name = (!local_configs.is_empty())
+            .then(|| Self::ident_from_name(impl_names.fresh("new_phantom_with_config")));
+        let create_method_name = Self::ident_from_name(impl_names.fresh("__create"));
+
+        let mut methods = Vec::new();
+        for (method, names) in self
+            .agent_type
+            .methods
+            .clone()
+            .iter()
+            .zip(guest_method_names.iter())
+        {
+            methods.extend(self.guest_methods(method, names)?);
+        }
+
+        let mut create_signature_names = ParameterNaming::new();
+        create_signature_names.reserve_many(constructor_param_names.clone());
+        let phantom_id_param = Self::ident_from_name(
+            create_signature_names.fresh(self.to_rust_ident("__golem_bridge_phantom_id")),
+        );
+        let agent_config_param = Self::ident_from_name(
+            create_signature_names.fresh(self.to_rust_ident("__golem_bridge_agent_config")),
+        );
+
+        let mut config_param_defs = Vec::new();
+        let mut config_encode_stmts = Vec::new();
+        let mut config_names = ParameterNaming::new();
+        config_names.reserve_many(constructor_param_names.clone());
+        config_names.reserve(phantom_id_param.to_string());
+        let agent_config_values = Self::ident_from_name(
+            config_names.fresh(self.to_rust_ident("__golem_bridge_agent_config_values")),
+        );
+        for config in &local_configs {
+            let param_name_str = format!(
+                "__golem_bridge_config_{}",
+                config
+                    .path
+                    .iter()
+                    .map(|s| s.to_snake_case())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            );
+            let param_name =
+                Self::ident_from_name(config_names.fresh(self.to_rust_ident(&param_name_str)));
+            let param_type = self.type_reference(&config.value_type, false)?;
+            config_param_defs.push(quote! { #param_name: Option<#param_type> });
+
+            let path_segments: Vec<TokenStream> = config
+                .path
+                .iter()
+                .map(|s| quote! { #s.to_string() })
+                .collect();
+            let value_encode =
+                self.emit_encode_expr(quote! { value }, &config.value_type, false, 0)?;
+            let config_graph = typed_schema_value_with_projected_defs(
+                &self.agent_type.schema,
+                config.value_type.clone(),
+                SchemaValue::Bool(false),
+            )
+            .graph()
+            .clone();
+            let schema_graph_json = serde_json::to_string(&config_graph)?;
+            config_encode_stmts.push(quote! {
+                if let Some(value) = #param_name {
+                    let __config_value: crate::__golem_bridge_runtime::schema::SchemaValue = (|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                        #value_encode
+                    })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::ConfigEncodingFailed { message: __e })?;
+                    let __config_graph: golem_rust::SchemaGraph = serde_json::from_str(#schema_graph_json)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::ConfigEncodingFailed { message: format!("Failed to deserialize config schema: {__e}") })?;
+                    let __typed = golem_rust::TypedSchemaValue::new(__config_graph, __config_value);
+                    #agent_config_values.push(golem_rust::golem_agentic::golem::agent::common::TypedAgentConfigValue {
+                        path: vec![#(#path_segments),*],
+                        value: golem_rust::encode_typed_schema_value(&__typed)
+                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::ConfigEncodingFailed { message: format!("Failed to encode config value: {__e}") })?,
+                    });
+                }
+            });
+        }
+
+        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable
+            && !local_configs.is_empty()
+        {
+            let get_with_config_method_name = get_with_config_method_name
+                .as_ref()
+                .expect("durable agents with local config allocate get_with_config");
+            quote! {
+                pub fn #get_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    let mut #agent_config_values = Vec::new();
+                    #(#config_encode_stmts)*
+                    Self::#create_method_name(None, #agent_config_values, #(#constructor_param_refs),*)
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let with_config_methods = if !local_configs.is_empty() {
+            let get_phantom_with_config_method_name = get_phantom_with_config_method_name
+                .as_ref()
+                .expect("agents with local config allocate get_phantom_with_config");
+            let new_phantom_with_config_method_name = new_phantom_with_config_method_name
+                .as_ref()
+                .expect("agents with local config allocate new_phantom_with_config");
+            quote! {
+                #get_with_config_method
+
+                pub fn #get_phantom_with_config_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    let mut #agent_config_values = Vec::new();
+                    #(#config_encode_stmts)*
+                    Self::#create_method_name(Some(#phantom_id_param), #agent_config_values, #(#constructor_param_refs),*)
+                }
+
+                pub fn #new_phantom_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    let mut #agent_config_values = Vec::new();
+                    #(#config_encode_stmts)*
+                    Self::#create_method_name(Some(golem_rust::Uuid::new_v4()), #agent_config_values, #(#constructor_param_refs),*)
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let get_method = if self.agent_type.mode == AgentMode::Durable {
+            let get_method_name = get_method_name
+                .as_ref()
+                .expect("durable agents allocate get");
+            quote! {
+                pub fn #get_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    Self::#create_method_name(None, Vec::new(), #(#constructor_param_refs),*)
+                }
+            }
+        } else {
+            quote! {}
+        };
+
+        let type_definitions = self.type_definitions()?;
+        let multimodals = self.multimodals()?;
+        let languages = self.languages_module();
+        let mimetypes = self.mimetypes_module();
+        let runtime_prelude = RustRuntimeConfig::new(self.mode).generated_prelude();
+
+        let tokens = quote! {
+            #![allow(unused)]
+            #![allow(non_snake_case)]
+            #![allow(clippy::all)]
+
+            #runtime_prelude
+
+            #[derive(Debug)]
+            pub struct #client_struct_name {
+                wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
+            }
+
+            impl #client_struct_name {
+                #get_method
+
+                pub fn #get_phantom_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    Self::#create_method_name(Some(#phantom_id_param), Vec::new(), #(#constructor_param_refs),*)
+                }
+
+                pub fn #new_phantom_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    Self::#create_method_name(Some(golem_rust::Uuid::new_v4()), Vec::new(), #(#constructor_param_refs),*)
+                }
+
+                #with_config_methods
+
+                fn #create_method_name(
+                    #phantom_id_param: Option<golem_rust::Uuid>,
+                    #agent_config_param: Vec<golem_rust::golem_agentic::golem::agent::common::TypedAgentConfigValue>,
+                    #(#constructor_param_defs),*
+                ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    let constructor_value: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
+                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                        #agent_type_name,
+                        golem_rust::encode_schema_value(&constructor_value)
+                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?,
+                        #phantom_id_param.map(Into::into),
+                        #agent_config_param,
+                    );
+
+                    Ok(Self { wasm_rpc })
+                }
+
+                #(#methods)*
+            }
 
             #type_definitions
 
@@ -516,29 +935,236 @@ impl RustBridgeGenerator {
         ])
     }
 
+    fn guest_methods(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+    ) -> anyhow::Result<Vec<TokenStream>> {
+        Ok(vec![
+            self.guest_await_method(method, names)?,
+            self.guest_trigger_method(method, names)?,
+            self.guest_schedule_method(method, names)?,
+            self.guest_schedule_cancelable_method(method, names)?,
+            self.guest_internal_method(method, names)?,
+        ])
+    }
+
+    fn allocate_guest_method_names(
+        &self,
+        impl_names: &mut ParameterNaming,
+    ) -> anyhow::Result<Vec<GuestMethodNames>> {
+        let user_bases = self
+            .agent_type
+            .methods
+            .iter()
+            .map(|method| self.to_rust_ident(&method.name))
+            .collect::<Vec<_>>();
+
+        let await_names = user_bases
+            .iter()
+            .map(|base| Self::ident_from_name(impl_names.fresh(base)))
+            .collect::<Vec<_>>();
+        user_bases
+            .iter()
+            .zip(await_names)
+            .zip(self.agent_type.methods.iter())
+            .map(|((base, await_name), method)| {
+                let trigger_name =
+                    Self::ident_from_name(impl_names.fresh(format!("trigger_{base}")));
+                let schedule_name =
+                    Self::ident_from_name(impl_names.fresh(format!("schedule_{base}")));
+                let schedule_cancelable_name =
+                    Self::ident_from_name(impl_names.fresh(format!("schedule_cancelable_{base}")));
+                let internal_name = Self::ident_from_name(
+                    impl_names.fresh(format!("__golem_bridge_invoke_{base}")),
+                );
+
+                let param_names = self.input_param_ident_names_unique(&method.input_schema)?;
+                let mut signature_names = ParameterNaming::new();
+                signature_names.reserve_many(param_names.clone());
+                let scheduled_time_param = Self::ident_from_name(
+                    signature_names.fresh(self.to_rust_ident("__golem_bridge_scheduled_time")),
+                );
+                Ok(GuestMethodNames {
+                    await_name,
+                    trigger_name,
+                    schedule_name,
+                    schedule_cancelable_name,
+                    internal_name,
+                    scheduled_time_param,
+                    param_names,
+                })
+            })
+            .collect()
+    }
+
     fn method_ident(&self, method: &AgentMethodSchema) -> Ident {
-        Ident::new(&self.to_rust_ident(&method.name), Span::call_site())
+        let name = self.to_rust_ident(&method.name);
+        Ident::new(&name, Span::call_site())
     }
 
     fn trigger_method_ident(&self, method: &AgentMethodSchema) -> Ident {
-        Ident::new(
-            &format!("trigger_{}", self.to_rust_ident(&method.name)),
-            Span::call_site(),
-        )
+        let name = format!("trigger_{}", self.to_rust_ident(&method.name));
+        Ident::new(&name, Span::call_site())
     }
 
     fn schedule_method_ident(&self, method: &AgentMethodSchema) -> Ident {
-        Ident::new(
-            &format!("schedule_{}", self.to_rust_ident(&method.name)),
-            Span::call_site(),
-        )
+        let name = format!("schedule_{}", self.to_rust_ident(&method.name));
+        Ident::new(&name, Span::call_site())
     }
 
     fn internal_method_ident(&self, method: &AgentMethodSchema) -> Ident {
-        Ident::new(
-            &format!("__{}", self.to_rust_ident(&method.name)),
-            Span::call_site(),
-        )
+        let name = format!("__{}", self.to_rust_ident(&method.name));
+        Ident::new(&name, Span::call_site())
+    }
+
+    fn guest_await_method(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+    ) -> anyhow::Result<TokenStream> {
+        let name = &names.await_name;
+        let internal_name = &names.internal_name;
+        let return_type = self.output_return_type(&method.output_schema)?;
+        let param_defs =
+            self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
+        let param_refs = self.input_param_refs_with_ident_names(&names.param_names);
+        let name_lit = method.name.as_str();
+
+        match return_type {
+            Some(return_type) => Ok(quote! {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
+                    let result = self.#internal_name(#(#param_refs),*).await?;
+                    result.ok_or_else(|| crate::__golem_bridge_runtime::ClientError::MissingResult { method: #name_lit.to_string() })
+                }
+            }),
+            None => Ok(quote! {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+                    let _result = self.#internal_name(#(#param_refs),*).await?;
+                    Ok(())
+                }
+            }),
+        }
+    }
+
+    fn guest_trigger_method(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+    ) -> anyhow::Result<TokenStream> {
+        let name = &names.trigger_name;
+        let param_defs =
+            self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
+        let name_lit = method.name.as_str();
+        let params_schema_value = self
+            .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
+
+        Ok(quote! {
+            pub fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+                let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                self.wasm_rpc.invoke(#name_lit, method_parameters)
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
+            }
+        })
+    }
+
+    fn guest_schedule_method(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+    ) -> anyhow::Result<TokenStream> {
+        let name = &names.schedule_name;
+        let scheduled_time_param = &names.scheduled_time_param;
+        let param_defs =
+            self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
+        let name_lit = method.name.as_str();
+        let params_schema_value = self
+            .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
+
+        Ok(quote! {
+            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+                let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters);
+                Ok(())
+            }
+        })
+    }
+
+    fn guest_schedule_cancelable_method(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+    ) -> anyhow::Result<TokenStream> {
+        let name = &names.schedule_cancelable_name;
+        let scheduled_time_param = &names.scheduled_time_param;
+        let param_defs =
+            self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
+        let name_lit = method.name.as_str();
+        let params_schema_value = self
+            .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
+
+        Ok(quote! {
+            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, crate::__golem_bridge_runtime::ClientError> {
+                let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters))
+            }
+        })
+    }
+
+    fn guest_internal_method(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+    ) -> anyhow::Result<TokenStream> {
+        let name_lit = method.name.as_str();
+        let name = &names.internal_name;
+        let param_defs =
+            self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
+        let return_type = self.output_return_type(&method.output_schema)?;
+        let params_schema_value = self
+            .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
+
+        match return_type {
+            Some(return_type) => {
+                let decode_body = self.output_decode_expr(&method.output_schema)?;
+                Ok(quote! {
+                    async fn #name(&self, #(#param_defs),*) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
+                        let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                        let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                        let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                        let response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
+                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
+                        match response {
+                            Some(__value) => {
+                                let __decoded: #return_type = (|| -> Result<#return_type, String> {
+                                    #decode_body
+                                })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaDecodeFailed { message: __e })?;
+                                Ok(Some(__decoded))
+                            }
+                            None => Ok(None),
+                        }
+                    }
+                })
+            }
+            None => Ok(quote! {
+                async fn #name(&self, #(#param_defs),*) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
+                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                    let _response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
+                    Ok(Some(()))
+                }
+            }),
+        }
     }
 
     fn await_method(&mut self, method: &AgentMethodSchema) -> anyhow::Result<TokenStream> {
@@ -550,14 +1176,14 @@ impl RustBridgeGenerator {
 
         match return_type {
             Some(return_type) => Ok(quote! {
-                pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, golem_client::bridge::ClientError> {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
                     let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
                     let result = result.unwrap(); // always Some because of Await
                     Ok(result)
                 }
             }),
             None => Ok(quote! {
-                pub async fn #name(&self, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                     let _result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
                     Ok(())
                 }
@@ -572,7 +1198,7 @@ impl RustBridgeGenerator {
         let param_refs = self.input_param_refs(&method.input_schema)?;
 
         Ok(quote! {
-            pub async fn #name(&self, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
+            pub async fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
                 Ok(())
             }
@@ -586,7 +1212,7 @@ impl RustBridgeGenerator {
         let param_refs = self.input_param_refs(&method.input_schema)?;
 
         Ok(quote! {
-            pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), golem_client::bridge::ClientError> {
+            pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
                 Ok(())
             }
@@ -604,7 +1230,7 @@ impl RustBridgeGenerator {
             Some(return_type) => {
                 let decode_body = self.output_decode_expr(&method.output_schema)?;
                 Ok(quote! {
-                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, golem_client::bridge::ClientError> {
+                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
                         let method_parameters: serde_json::Value = #params_value;
                         let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                         match response {
@@ -612,7 +1238,7 @@ impl RustBridgeGenerator {
                                 let (_, __value) = __typed.into_parts();
                                 let __decoded: #return_type = (|| -> Result<#return_type, String> {
                                     #decode_body
-                                })().map_err(|__e| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to decode result value: {__e}") })?;
+                                })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to decode result value: {__e}") })?;
                                 Ok(Some(__decoded))
                             }
                             None => Ok(None),
@@ -621,7 +1247,7 @@ impl RustBridgeGenerator {
                 })
             }
             None => Ok(quote! {
-                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<()>, golem_client::bridge::ClientError> {
+                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: serde_json::Value = #params_value;
                     let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                     match response {
@@ -637,67 +1263,144 @@ impl RustBridgeGenerator {
 
     /// `name: type` parameter definitions for a constructor or method.
     fn input_param_defs(&mut self, input: &InputSchema) -> anyhow::Result<Vec<TokenStream>> {
+        let names = self.input_param_ident_names(input)?;
+        self.input_param_defs_with_ident_names(input, &names)
+    }
+
+    fn input_param_defs_with_ident_names(
+        &mut self,
+        input: &InputSchema,
+        names: &[String],
+    ) -> anyhow::Result<Vec<TokenStream>> {
         match self.rust_input(input)? {
             RustInput::Params(params) => {
+                if params.len() != names.len() {
+                    bail!("parameter name allocation does not match input parameter count");
+                }
                 let mut result = Vec::new();
-                for (name, schema) in &params {
-                    let ident = Ident::new(&self.to_rust_ident(name), Span::call_site());
+                for ((_, schema), name) in params.iter().zip(names) {
+                    let ident = Self::ident_from_name(name);
                     let typ = self.type_reference(schema, false)?;
                     result.push(quote! { #ident: #typ });
                 }
                 Ok(result)
             }
             RustInput::Multimodal(cases) => {
+                if names.len() != 1 {
+                    bail!("multimodal input must have exactly one allocated parameter name");
+                }
                 let name = self.get_or_create_multimodal(&cases);
                 let name = Ident::new(&name, Span::call_site());
-                Ok(vec![quote! { values: Vec<#name> }])
+                let param_name = Self::ident_from_name(&names[0]);
+                Ok(vec![quote! { #param_name: Vec<#name> }])
             }
         }
     }
 
     /// Bare parameter idents for forwarding to the internal method.
     fn input_param_refs(&mut self, input: &InputSchema) -> anyhow::Result<Vec<TokenStream>> {
+        let names = self.input_param_ident_names(input)?;
+        Ok(self.input_param_refs_with_ident_names(&names))
+    }
+
+    fn input_param_refs_with_ident_names(&self, names: &[String]) -> Vec<TokenStream> {
+        names
+            .iter()
+            .map(|name| {
+                let ident = Self::ident_from_name(name);
+                quote! { #ident }
+            })
+            .collect()
+    }
+
+    fn input_param_ident_names(&self, input: &InputSchema) -> anyhow::Result<Vec<String>> {
         match self.rust_input(input)? {
             RustInput::Params(params) => Ok(params
                 .iter()
-                .map(|(name, _)| {
-                    let ident = Ident::new(&self.to_rust_ident(name), Span::call_site());
-                    quote! { #ident }
-                })
+                .map(|(name, _)| self.to_rust_ident(name))
                 .collect()),
-            RustInput::Multimodal(_) => Ok(vec![quote! { values }]),
+            RustInput::Multimodal(_) => Ok(vec!["values".to_string()]),
         }
+    }
+
+    fn input_param_ident_names_unique(&self, input: &InputSchema) -> anyhow::Result<Vec<String>> {
+        let mut naming = ParameterNaming::new();
+        Ok(self
+            .input_param_ident_names(input)?
+            .into_iter()
+            .map(|name| naming.fresh(name))
+            .collect())
+    }
+
+    fn ident_from_name(name: impl AsRef<str>) -> Ident {
+        Ident::new(name.as_ref(), Span::call_site())
     }
 
     /// Block expression of type `serde_json::Value` encoding the input
     /// parameters into a schema-native `record` and serializing it.
     fn input_param_value(&mut self, input: &InputSchema) -> anyhow::Result<TokenStream> {
+        let schema_value = self.input_param_schema_value(input)?;
+
+        Ok(quote! {
+            {
+                let __sv: crate::__golem_bridge_runtime::schema::SchemaValue = #schema_value;
+                serde_json::to_value(&__sv).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to serialize parameters: {__e}") })?
+            }
+        })
+    }
+
+    /// Block expression of type `SchemaValue` encoding the input parameters
+    /// into a schema-native `record`.
+    fn input_param_schema_value(&mut self, input: &InputSchema) -> anyhow::Result<TokenStream> {
+        let names = self.input_param_ident_names(input)?;
+        self.input_param_schema_value_with_ident_names(input, &names)
+    }
+
+    fn input_param_schema_value_with_ident_names(
+        &mut self,
+        input: &InputSchema,
+        names: &[String],
+    ) -> anyhow::Result<TokenStream> {
+        let encode_error = match self.mode {
+            RustBridgeMode::ExternalRest => quote! {
+                crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode parameters: {__e}") }
+            },
+            RustBridgeMode::GuestWasmRpc => quote! {
+                crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: format!("Failed to encode parameters: {__e}") }
+            },
+        };
         let record_body = match self.rust_input(input)? {
             RustInput::Params(params) => {
+                if params.len() != names.len() {
+                    bail!("parameter name allocation does not match input parameter count");
+                }
                 let mut field_encs = Vec::new();
-                for (name, schema) in &params {
-                    let ident = Ident::new(&self.to_rust_ident(name), Span::call_site());
+                for ((_, schema), name) in params.iter().zip(names) {
+                    let ident = Self::ident_from_name(name);
                     let enc = self.emit_encode_expr(quote! { #ident }, schema, false, 0)?;
                     field_encs.push(quote! { #enc? });
                 }
                 quote! {
-                    Ok(golem_common::schema::SchemaValue::Record { fields: vec![#(#field_encs),*] })
+                    Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields: vec![#(#field_encs),*] })
                 }
             }
             RustInput::Multimodal(cases) => {
-                let list = self.multimodal_list_encode(&cases, quote! { values })?;
+                if names.len() != 1 {
+                    bail!("multimodal input must have exactly one allocated parameter name");
+                }
+                let param_name = Self::ident_from_name(&names[0]);
+                let list = self.multimodal_list_encode(&cases, quote! { #param_name })?;
                 quote! {
-                    Ok(golem_common::schema::SchemaValue::Record { fields: vec![#list?] })
+                    Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields: vec![#list?] })
                 }
             }
         };
 
         Ok(quote! {
             {
-                let __sv: golem_common::schema::SchemaValue = (|| -> Result<golem_common::schema::SchemaValue, String> {
+                (|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
                     #record_body
-                })().map_err(|__e| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to encode parameters: {__e}") })?;
-                serde_json::to_value(&__sv).map_err(|__e| golem_client::bridge::ClientError::InvocationFailed { message: format!("Failed to serialize parameters: {__e}") })?
+                })().map_err(|__e| #encode_error)?
             }
         })
     }
@@ -755,8 +1458,8 @@ impl RustBridgeGenerator {
             #values_expr
                 .into_iter()
                 .map(|__m| #encode_fn(__m))
-                .collect::<Result<Vec<golem_common::schema::SchemaValue>, String>>()
-                .map(|__elems| golem_common::schema::SchemaValue::List { elements: __elems })
+                .collect::<Result<Vec<crate::__golem_bridge_runtime::schema::SchemaValue>, String>>()
+                .map(|__elems| crate::__golem_bridge_runtime::schema::SchemaValue::List { elements: __elems })
         })
     }
 
@@ -772,7 +1475,7 @@ impl RustBridgeGenerator {
         let decode_fn = Ident::new(&format!("decode_{name}"), Span::call_site());
         Ok(quote! {
             match #value_expr {
-                golem_common::schema::SchemaValue::List { elements } => {
+                crate::__golem_bridge_runtime::schema::SchemaValue::List { elements } => {
                     elements.into_iter().map(|__e| #decode_fn(__e)).collect::<Result<Vec<#enum_ident>, String>>()
                 }
                 __other => Err(format!("Expected a multimodal list value, got {:?}", __other)),
@@ -801,7 +1504,7 @@ impl RustBridgeGenerator {
                 let idx_u32 = idx as u32;
                 let enc = self.emit_encode_expr(quote! { __inner }, payload, false, 0)?;
                 encode_arms.push(quote! {
-                    #enum_ident::#case_ident(__inner) => Ok(golem_common::schema::SchemaValue::Variant(golem_common::schema::VariantValuePayload {
+                    #enum_ident::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
                         case: #idx_u32,
                         payload: Some(Box::new(#enc?)),
                     })),
@@ -826,15 +1529,15 @@ impl RustBridgeGenerator {
                     #(#variants),*
                 }
 
-                fn #encode_fn(value: #enum_ident) -> Result<golem_common::schema::SchemaValue, String> {
+                fn #encode_fn(value: #enum_ident) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
                     match value {
                         #(#encode_arms)*
                     }
                 }
 
-                fn #decode_fn(value: golem_common::schema::SchemaValue) -> Result<#enum_ident, String> {
+                fn #decode_fn(value: crate::__golem_bridge_runtime::schema::SchemaValue) -> Result<#enum_ident, String> {
                     match value {
-                        golem_common::schema::SchemaValue::Variant(golem_common::schema::VariantValuePayload { case, payload }) => match case {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload { case, payload }) => match case {
                             #(#decode_arms)*
                             __other => Err(format!("Invalid multimodal variant case index: {}", __other)),
                         },
@@ -875,11 +1578,11 @@ impl RustBridgeGenerator {
             defs.push(quote! {
                 #typedef
 
-                fn #encode_fn(value: #name_ident) -> Result<golem_common::schema::SchemaValue, String> {
+                fn #encode_fn(value: #name_ident) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
                     #encode_body
                 }
 
-                fn #decode_fn(value: golem_common::schema::SchemaValue) -> Result<#name_ident, String> {
+                fn #decode_fn(value: crate::__golem_bridge_runtime::schema::SchemaValue) -> Result<#name_ident, String> {
                     #decode_body
                 }
             });
@@ -999,7 +1702,7 @@ impl RustBridgeGenerator {
                 }
                 Ok(quote! {
                     let #name { #(#field_idents),* } = value;
-                    Ok(golem_common::schema::SchemaValue::Record { fields: vec![#(#field_encs),*] })
+                    Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields: vec![#(#field_encs),*] })
                 })
             }
             SchemaType::Variant { cases, .. } => {
@@ -1013,14 +1716,14 @@ impl RustBridgeGenerator {
                             let enc =
                                 self.emit_encode_expr(quote! { __inner }, payload, true, 0)?;
                             arms.push(quote! {
-                                #name::#case_ident(__inner) => Ok(golem_common::schema::SchemaValue::Variant(golem_common::schema::VariantValuePayload {
+                                #name::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
                                     case: #idx_u32,
                                     payload: Some(Box::new(#enc?)),
                                 })),
                             });
                         }
                         None => arms.push(quote! {
-                            #name::#case_ident => Ok(golem_common::schema::SchemaValue::Variant(golem_common::schema::VariantValuePayload {
+                            #name::#case_ident => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
                                 case: #idx_u32,
                                 payload: None,
                             })),
@@ -1039,7 +1742,7 @@ impl RustBridgeGenerator {
                     let case_ident = Ident::new(&self.to_rust_case_name(case), Span::call_site());
                     let idx_u32 = idx as u32;
                     arms.push(quote! {
-                        #name::#case_ident => Ok(golem_common::schema::SchemaValue::Enum { case: #idx_u32 }),
+                        #name::#case_ident => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Enum { case: #idx_u32 }),
                     });
                 }
                 Ok(quote! {
@@ -1055,7 +1758,7 @@ impl RustBridgeGenerator {
                     .collect::<Vec<_>>();
                 Ok(quote! {
                     let #name { #(#flag_idents),* } = value;
-                    Ok(golem_common::schema::SchemaValue::Flags { bits: vec![#(#flag_idents),*] })
+                    Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Flags { bits: vec![#(#flag_idents),*] })
                 })
             }
             SchemaType::Union { spec, .. } => {
@@ -1066,7 +1769,7 @@ impl RustBridgeGenerator {
                     let tag = branch.tag.as_str();
                     let enc = self.emit_encode_expr(quote! { __inner }, &branch.body, true, 0)?;
                     arms.push(quote! {
-                        #name::#branch_ident(__inner) => Ok(golem_common::schema::SchemaValue::Union(golem_common::schema::UnionValuePayload {
+                        #name::#branch_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Union(crate::__golem_bridge_runtime::schema::UnionValuePayload {
                             tag: #tag.to_string(),
                             body: Box::new(#enc?),
                         })),
@@ -1105,7 +1808,7 @@ impl RustBridgeGenerator {
                 }
                 Ok(quote! {
                     match value {
-                        golem_common::schema::SchemaValue::Record { fields } => {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields } => {
                             if fields.len() != #n {
                                 return Err(format!("Expected record with {} fields, got {}", #n, fields.len()));
                             }
@@ -1140,7 +1843,7 @@ impl RustBridgeGenerator {
                 }
                 Ok(quote! {
                     match value {
-                        golem_common::schema::SchemaValue::Variant(golem_common::schema::VariantValuePayload { case, payload }) => match case {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload { case, payload }) => match case {
                             #(#arms)*
                             __other => Err(format!("Invalid variant case index: {}", __other)),
                         },
@@ -1157,7 +1860,7 @@ impl RustBridgeGenerator {
                 }
                 Ok(quote! {
                     match value {
-                        golem_common::schema::SchemaValue::Enum { case } => match case {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Enum { case } => match case {
                             #(#arms)*
                             __other => Err(format!("Invalid enum case index: {}", __other)),
                         },
@@ -1174,7 +1877,7 @@ impl RustBridgeGenerator {
                 }
                 Ok(quote! {
                     match value {
-                        golem_common::schema::SchemaValue::Flags { bits } => {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Flags { bits } => {
                             if bits.len() != #n {
                                 return Err(format!("Expected flags with {} bits, got {}", #n, bits.len()));
                             }
@@ -1197,7 +1900,7 @@ impl RustBridgeGenerator {
                 }
                 Ok(quote! {
                     match value {
-                        golem_common::schema::SchemaValue::Union(golem_common::schema::UnionValuePayload { tag, body }) => {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Union(crate::__golem_bridge_runtime::schema::UnionValuePayload { tag, body }) => {
                             let __bv = *body;
                             match tag.as_str() {
                                 #(#arms)*
@@ -1278,38 +1981,80 @@ impl RustBridgeGenerator {
         depth: usize,
     ) -> anyhow::Result<TokenStream> {
         // Role-marked unstructured-text/binary variant → ergonomic wrapper.
-        let is_unstructured = {
+        let text_restrictions = {
             let graph = self.type_naming.graph();
-            unstructured_text_restrictions(graph, typ)?.is_some()
-                || unstructured_binary_restrictions(graph, typ)?.is_some()
+            unstructured_text_restrictions(graph, typ)?.cloned()
         };
-        if is_unstructured {
-            return Ok(quote! { #val.to_schema_value() });
+        if let Some(restrictions) = text_restrictions {
+            let ty = self.unstructured_text_type(&restrictions);
+            return Ok(match self.mode {
+                RustBridgeMode::ExternalRest => quote! { #val.to_schema_value() },
+                RustBridgeMode::GuestWasmRpc => {
+                    quote! { <#ty as crate::__golem_bridge_runtime::agentic::Schema>::to_schema_value(#val) }
+                }
+            });
+        }
+        let binary_restrictions = {
+            let graph = self.type_naming.graph();
+            unstructured_binary_restrictions(graph, typ)?.cloned()
+        };
+        if let Some(restrictions) = binary_restrictions {
+            let ty = self.unstructured_binary_type(&restrictions);
+            return Ok(match self.mode {
+                RustBridgeMode::ExternalRest => quote! { #val.to_schema_value() },
+                RustBridgeMode::GuestWasmRpc => {
+                    quote! { <#ty as crate::__golem_bridge_runtime::agentic::Schema>::to_schema_value(#val) }
+                }
+            });
         }
         let e = Ident::new(&format!("__e{depth}"), Span::call_site());
         let next = depth + 1;
         let rendered = match typ {
-            SchemaType::Bool { .. } => quote! { Ok(golem_common::schema::SchemaValue::Bool(#val)) },
-            SchemaType::S8 { .. } => quote! { Ok(golem_common::schema::SchemaValue::S8(#val)) },
-            SchemaType::S16 { .. } => quote! { Ok(golem_common::schema::SchemaValue::S16(#val)) },
-            SchemaType::S32 { .. } => quote! { Ok(golem_common::schema::SchemaValue::S32(#val)) },
-            SchemaType::S64 { .. } => quote! { Ok(golem_common::schema::SchemaValue::S64(#val)) },
-            SchemaType::U8 { .. } => quote! { Ok(golem_common::schema::SchemaValue::U8(#val)) },
-            SchemaType::U16 { .. } => quote! { Ok(golem_common::schema::SchemaValue::U16(#val)) },
-            SchemaType::U32 { .. } => quote! { Ok(golem_common::schema::SchemaValue::U32(#val)) },
-            SchemaType::U64 { .. } => quote! { Ok(golem_common::schema::SchemaValue::U64(#val)) },
-            SchemaType::F32 { .. } => quote! { Ok(golem_common::schema::SchemaValue::F32(#val)) },
-            SchemaType::F64 { .. } => quote! { Ok(golem_common::schema::SchemaValue::F64(#val)) },
-            SchemaType::Char { .. } => quote! { Ok(golem_common::schema::SchemaValue::Char(#val)) },
+            SchemaType::Bool { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Bool(#val)) }
+            }
+            SchemaType::S8 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::S8(#val)) }
+            }
+            SchemaType::S16 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::S16(#val)) }
+            }
+            SchemaType::S32 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::S32(#val)) }
+            }
+            SchemaType::S64 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::S64(#val)) }
+            }
+            SchemaType::U8 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::U8(#val)) }
+            }
+            SchemaType::U16 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::U16(#val)) }
+            }
+            SchemaType::U32 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::U32(#val)) }
+            }
+            SchemaType::U64 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::U64(#val)) }
+            }
+            SchemaType::F32 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::F32(#val)) }
+            }
+            SchemaType::F64 { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::F64(#val)) }
+            }
+            SchemaType::Char { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Char(#val)) }
+            }
             SchemaType::String { .. } => {
-                quote! { Ok(golem_common::schema::SchemaValue::String(#val)) }
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::String(#val)) }
             }
             SchemaType::Option { inner, .. } => {
                 let inner_enc = self.emit_encode_expr(quote! { #e }, inner, box_recursive, next)?;
                 quote! {
                     match #val {
-                        Some(#e) => Ok(golem_common::schema::SchemaValue::Option { inner: Some(Box::new(#inner_enc?)) }),
-                        None => Ok(golem_common::schema::SchemaValue::Option { inner: None }),
+                        Some(#e) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Option { inner: Some(Box::new(#inner_enc?)) }),
+                        None => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Option { inner: None }),
                     }
                 }
             }
@@ -1319,8 +2064,8 @@ impl RustBridgeGenerator {
                     #val
                         .into_iter()
                         .map(|#e| #inner_enc)
-                        .collect::<Result<Vec<golem_common::schema::SchemaValue>, String>>()
-                        .map(|__elems| golem_common::schema::SchemaValue::List { elements: __elems })
+                        .collect::<Result<Vec<crate::__golem_bridge_runtime::schema::SchemaValue>, String>>()
+                        .map(|__elems| crate::__golem_bridge_runtime::schema::SchemaValue::List { elements: __elems })
                 }
             }
             SchemaType::FixedList {
@@ -1333,11 +2078,11 @@ impl RustBridgeGenerator {
                         let __elems = #val
                             .into_iter()
                             .map(|#e| #inner_enc)
-                            .collect::<Result<Vec<golem_common::schema::SchemaValue>, String>>()?;
+                            .collect::<Result<Vec<crate::__golem_bridge_runtime::schema::SchemaValue>, String>>()?;
                         if __elems.len() != #len {
                             Err(format!("Expected fixed-list of length {}, got {}", #len, __elems.len()))
                         } else {
-                            Ok(golem_common::schema::SchemaValue::FixedList { elements: __elems })
+                            Ok(crate::__golem_bridge_runtime::schema::SchemaValue::FixedList { elements: __elems })
                         }
                     }
                 }
@@ -1350,9 +2095,9 @@ impl RustBridgeGenerator {
                 quote! {
                     #val
                         .into_iter()
-                        .map(|(#k, #v)| Ok::<(golem_common::schema::SchemaValue, golem_common::schema::SchemaValue), String>((#key_enc?, #val_enc?)))
-                        .collect::<Result<Vec<(golem_common::schema::SchemaValue, golem_common::schema::SchemaValue)>, String>>()
-                        .map(|__entries| golem_common::schema::SchemaValue::Map { entries: __entries })
+                        .map(|(#k, #v)| Ok::<(crate::__golem_bridge_runtime::schema::SchemaValue, crate::__golem_bridge_runtime::schema::SchemaValue), String>((#key_enc?, #val_enc?)))
+                        .collect::<Result<Vec<(crate::__golem_bridge_runtime::schema::SchemaValue, crate::__golem_bridge_runtime::schema::SchemaValue)>, String>>()
+                        .map(|__entries| crate::__golem_bridge_runtime::schema::SchemaValue::Map { entries: __entries })
                 }
             }
             SchemaType::Tuple { elements, .. } => {
@@ -1367,7 +2112,7 @@ impl RustBridgeGenerator {
                 quote! {
                     {
                         let #t = #val;
-                        Ok(golem_common::schema::SchemaValue::Tuple { elements: vec![#(#parts),*] })
+                        Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Tuple { elements: vec![#(#parts),*] })
                     }
                 }
             }
@@ -1376,20 +2121,20 @@ impl RustBridgeGenerator {
                     Some(ok_type) => {
                         let enc =
                             self.emit_encode_expr(quote! { __r }, ok_type, box_recursive, next)?;
-                        quote! { Ok(__r) => Ok(golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Ok { value: Some(Box::new(#enc?)) })), }
+                        quote! { Ok(__r) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value: Some(Box::new(#enc?)) })), }
                     }
                     None => {
-                        quote! { Ok(_) => Ok(golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Ok { value: None })), }
+                        quote! { Ok(_) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value: None })), }
                     }
                 };
                 let err_arm = match spec.err.as_deref() {
                     Some(err_type) => {
                         let enc =
                             self.emit_encode_expr(quote! { __r }, err_type, box_recursive, next)?;
-                        quote! { Err(__r) => Ok(golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Err { value: Some(Box::new(#enc?)) })), }
+                        quote! { Err(__r) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value: Some(Box::new(#enc?)) })), }
                     }
                     None => {
-                        quote! { Err(_) => Ok(golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Err { value: None })), }
+                        quote! { Err(_) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value: None })), }
                     }
                 };
                 quote! {
@@ -1406,20 +2151,20 @@ impl RustBridgeGenerator {
                 )
             }
             SchemaType::Path { .. } => {
-                quote! { Ok(golem_common::schema::SchemaValue::Path { path: #val }) }
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Path { path: #val }) }
             }
             SchemaType::Url { .. } => {
-                quote! { Ok(golem_common::schema::SchemaValue::Url { url: #val }) }
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Url { url: #val }) }
             }
             SchemaType::Datetime { .. } => {
                 quote! {
                     chrono::DateTime::parse_from_rfc3339(&#val)
-                        .map(|__dt| golem_common::schema::SchemaValue::Datetime { value: __dt.with_timezone(&chrono::Utc) })
+                        .map(|__dt| crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value: __dt.with_timezone(&chrono::Utc) })
                         .map_err(|__err| format!("Invalid RFC3339 datetime: {__err}"))
                 }
             }
             SchemaType::Duration { .. } => {
-                quote! { Ok(golem_common::schema::SchemaValue::Duration(golem_common::schema::DurationValuePayload { nanoseconds: #val })) }
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Duration(crate::__golem_bridge_runtime::schema::DurationValuePayload { nanoseconds: #val })) }
             }
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -1454,7 +2199,15 @@ impl RustBridgeGenerator {
         };
         if let Some(restrictions) = text_restrictions {
             let ty = self.unstructured_text_type(&restrictions);
-            return Ok(quote! { <#ty>::from_schema_value(#val) });
+            return Ok(match self.mode {
+                RustBridgeMode::ExternalRest => quote! { <#ty>::from_schema_value(#val) },
+                RustBridgeMode::GuestWasmRpc => quote! {
+                    <#ty as crate::__golem_bridge_runtime::agentic::Schema>::from_schema_value(
+                        #val,
+                        <#ty as crate::__golem_bridge_runtime::agentic::Schema>::get_type(),
+                    )
+                },
+            });
         }
         let binary_restrictions = {
             let graph = self.type_naming.graph();
@@ -1462,55 +2215,63 @@ impl RustBridgeGenerator {
         };
         if let Some(restrictions) = binary_restrictions {
             let ty = self.unstructured_binary_type(&restrictions);
-            return Ok(quote! { <#ty>::from_schema_value(#val) });
+            return Ok(match self.mode {
+                RustBridgeMode::ExternalRest => quote! { <#ty>::from_schema_value(#val) },
+                RustBridgeMode::GuestWasmRpc => quote! {
+                    <#ty as crate::__golem_bridge_runtime::agentic::Schema>::from_schema_value(
+                        #val,
+                        <#ty as crate::__golem_bridge_runtime::agentic::Schema>::get_type(),
+                    )
+                },
+            });
         }
         let e = Ident::new(&format!("__e{depth}"), Span::call_site());
         let next = depth + 1;
         let rendered = match typ {
             SchemaType::Bool { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::Bool(__b) => Ok(__b), __other => Err(format!("Expected bool value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Bool(__b) => Ok(__b), __other => Err(format!("Expected bool value, got {:?}", __other)) }
             },
             SchemaType::S8 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::S8(__b) => Ok(__b), __other => Err(format!("Expected s8 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::S8(__b) => Ok(__b), __other => Err(format!("Expected s8 value, got {:?}", __other)) }
             },
             SchemaType::S16 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::S16(__b) => Ok(__b), __other => Err(format!("Expected s16 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::S16(__b) => Ok(__b), __other => Err(format!("Expected s16 value, got {:?}", __other)) }
             },
             SchemaType::S32 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::S32(__b) => Ok(__b), __other => Err(format!("Expected s32 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::S32(__b) => Ok(__b), __other => Err(format!("Expected s32 value, got {:?}", __other)) }
             },
             SchemaType::S64 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::S64(__b) => Ok(__b), __other => Err(format!("Expected s64 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::S64(__b) => Ok(__b), __other => Err(format!("Expected s64 value, got {:?}", __other)) }
             },
             SchemaType::U8 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::U8(__b) => Ok(__b), __other => Err(format!("Expected u8 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::U8(__b) => Ok(__b), __other => Err(format!("Expected u8 value, got {:?}", __other)) }
             },
             SchemaType::U16 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::U16(__b) => Ok(__b), __other => Err(format!("Expected u16 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::U16(__b) => Ok(__b), __other => Err(format!("Expected u16 value, got {:?}", __other)) }
             },
             SchemaType::U32 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::U32(__b) => Ok(__b), __other => Err(format!("Expected u32 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::U32(__b) => Ok(__b), __other => Err(format!("Expected u32 value, got {:?}", __other)) }
             },
             SchemaType::U64 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::U64(__b) => Ok(__b), __other => Err(format!("Expected u64 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::U64(__b) => Ok(__b), __other => Err(format!("Expected u64 value, got {:?}", __other)) }
             },
             SchemaType::F32 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::F32(__b) => Ok(__b), __other => Err(format!("Expected f32 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::F32(__b) => Ok(__b), __other => Err(format!("Expected f32 value, got {:?}", __other)) }
             },
             SchemaType::F64 { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::F64(__b) => Ok(__b), __other => Err(format!("Expected f64 value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::F64(__b) => Ok(__b), __other => Err(format!("Expected f64 value, got {:?}", __other)) }
             },
             SchemaType::Char { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::Char(__b) => Ok(__b), __other => Err(format!("Expected char value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Char(__b) => Ok(__b), __other => Err(format!("Expected char value, got {:?}", __other)) }
             },
             SchemaType::String { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::String(__b) => Ok(__b), __other => Err(format!("Expected string value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::String(__b) => Ok(__b), __other => Err(format!("Expected string value, got {:?}", __other)) }
             },
             SchemaType::Option { inner, .. } => {
                 let inner_dec = self.emit_decode_expr(quote! { #e }, inner, box_recursive, next)?;
                 quote! {
                     match #val {
-                        golem_common::schema::SchemaValue::Option { inner } => match inner {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Option { inner } => match inner {
                             Some(__bx) => { let #e = *__bx; Ok(Some(#inner_dec?)) },
                             None => Ok(None),
                         },
@@ -1522,7 +2283,7 @@ impl RustBridgeGenerator {
                 let inner_dec = self.emit_decode_expr(quote! { #e }, element, false, next)?;
                 quote! {
                     match #val {
-                        golem_common::schema::SchemaValue::List { elements } => {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::List { elements } => {
                             elements.into_iter().map(|#e| #inner_dec).collect::<Result<Vec<_>, String>>()
                         }
                         __other => Err(format!("Expected list value, got {:?}", __other)),
@@ -1536,7 +2297,7 @@ impl RustBridgeGenerator {
                 let len = *length as usize;
                 quote! {
                     match #val {
-                        golem_common::schema::SchemaValue::FixedList { elements } => {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::FixedList { elements } => {
                             if elements.len() != #len {
                                 return Err(format!("Expected fixed-list of length {}, got {}", #len, elements.len()));
                             }
@@ -1553,7 +2314,7 @@ impl RustBridgeGenerator {
                 let val_dec = self.emit_decode_expr(quote! { #v }, value, false, next)?;
                 quote! {
                     match #val {
-                        golem_common::schema::SchemaValue::Map { entries } => {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Map { entries } => {
                             entries.into_iter().map(|(#k, #v)| Ok::<_, String>((#key_dec?, #val_dec?))).collect::<Result<Vec<_>, String>>()
                         }
                         __other => Err(format!("Expected map value, got {:?}", __other)),
@@ -1564,7 +2325,7 @@ impl RustBridgeGenerator {
                 if elements.is_empty() {
                     quote! {
                         match #val {
-                            golem_common::schema::SchemaValue::Tuple { elements } if elements.is_empty() => Ok(()),
+                            crate::__golem_bridge_runtime::schema::SchemaValue::Tuple { elements } if elements.is_empty() => Ok(()),
                             __other => Err(format!("Expected empty tuple value, got {:?}", __other)),
                         }
                     }
@@ -1587,7 +2348,7 @@ impl RustBridgeGenerator {
                     };
                     quote! {
                         match #val {
-                            golem_common::schema::SchemaValue::Tuple { elements } => {
+                            crate::__golem_bridge_runtime::schema::SchemaValue::Tuple { elements } => {
                                 if elements.len() != #n {
                                     return Err(format!("Expected tuple with {} elements, got {}", #n, elements.len()));
                                 }
@@ -1605,14 +2366,14 @@ impl RustBridgeGenerator {
                         let dec =
                             self.emit_decode_expr(quote! { __ov }, ok_type, box_recursive, next)?;
                         quote! {
-                            golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Ok { value }) => {
+                            crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value }) => {
                                 let __ov = *value.ok_or_else(|| "Missing ok value".to_string())?;
                                 Ok(Ok(#dec?))
                             }
                         }
                     }
                     None => quote! {
-                        golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Ok { .. }) => Ok(Ok(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { .. }) => Ok(Ok(())),
                     },
                 };
                 let err_arm = match spec.err.as_deref() {
@@ -1620,14 +2381,14 @@ impl RustBridgeGenerator {
                         let dec =
                             self.emit_decode_expr(quote! { __ev }, err_type, box_recursive, next)?;
                         quote! {
-                            golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Err { value }) => {
+                            crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value }) => {
                                 let __ev = *value.ok_or_else(|| "Missing err value".to_string())?;
                                 Ok(Err(#dec?))
                             }
                         }
                     }
                     None => quote! {
-                        golem_common::schema::SchemaValue::Result(golem_common::schema::ResultValuePayload::Err { .. }) => Ok(Err(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { .. }) => Ok(Err(())),
                     },
                 };
                 quote! {
@@ -1645,16 +2406,16 @@ impl RustBridgeGenerator {
                 )
             }
             SchemaType::Path { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::Path { path } => Ok(path), __other => Err(format!("Expected path value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Path { path } => Ok(path), __other => Err(format!("Expected path value, got {:?}", __other)) }
             },
             SchemaType::Url { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::Url { url } => Ok(url), __other => Err(format!("Expected url value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Url { url } => Ok(url), __other => Err(format!("Expected url value, got {:?}", __other)) }
             },
             SchemaType::Datetime { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::Datetime { value } => Ok(value.to_rfc3339()), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value } => Ok(value.to_rfc3339()), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
             },
             SchemaType::Duration { .. } => quote! {
-                match #val { golem_common::schema::SchemaValue::Duration(__p) => Ok(__p.nanoseconds), __other => Err(format!("Expected duration value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Duration(__p) => Ok(__p.nanoseconds), __other => Err(format!("Expected duration value, got {:?}", __other)) }
             },
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -1795,9 +2556,9 @@ impl RustBridgeGenerator {
         match &restrictions.languages {
             Some(langs) if !langs.is_empty() => {
                 let enum_ty = self.get_languages_enum(langs);
-                quote! { golem_common::agentic::UnstructuredText<#enum_ty> }
+                quote! { crate::__golem_bridge_runtime::agentic::UnstructuredText<#enum_ty> }
             }
-            _ => quote! { golem_common::agentic::UnstructuredText },
+            _ => quote! { crate::__golem_bridge_runtime::agentic::UnstructuredText },
         }
     }
 
@@ -1805,9 +2566,12 @@ impl RustBridgeGenerator {
         match &restrictions.mime_types {
             Some(mimes) if !mimes.is_empty() => {
                 let enum_ty = self.get_mimetypes_enum(mimes);
-                quote! { golem_common::agentic::UnstructuredBinary<#enum_ty> }
+                quote! { crate::__golem_bridge_runtime::agentic::UnstructuredBinary<#enum_ty> }
             }
-            _ => quote! { golem_common::agentic::UnstructuredBinary },
+            _ if self.mode == RustBridgeMode::GuestWasmRpc => {
+                quote! { crate::__golem_bridge_runtime::agentic::UnstructuredBinary<String> }
+            }
+            _ => quote! { crate::__golem_bridge_runtime::agentic::UnstructuredBinary },
         }
     }
 
@@ -1874,7 +2638,7 @@ impl RustBridgeGenerator {
                     #(#cases),*
                 }
 
-                impl golem_common::agentic::AllowedLanguages for #ident {
+                impl crate::__golem_bridge_runtime::agentic::AllowedLanguages for #ident {
                     fn all() -> &'static [&'static str] {
                         &[#(#code_strings),*]
                     }
@@ -1908,6 +2672,9 @@ impl RustBridgeGenerator {
         let mut enums = Vec::new();
         for (mimes, name) in &self.generated_mimetypes_enums {
             let ident = Ident::new(name, Span::call_site());
+            let mime_type_arg = Ident::new("mime_type", Span::call_site());
+            let from_method = self.mime_type_from_method(&mime_type_arg);
+            let to_method = self.mime_type_to_method();
             let mut cases = Vec::new();
             let mut code_strings = Vec::new();
             let mut from_cases = Vec::new();
@@ -1928,19 +2695,19 @@ impl RustBridgeGenerator {
                     #(#cases),*
                 }
 
-                impl golem_common::agentic::AllowedMimeTypes for #ident {
+                impl crate::__golem_bridge_runtime::agentic::AllowedMimeTypes for #ident {
                     fn all() -> &'static [&'static str] {
                         &[#(#code_strings),*]
                     }
 
-                    fn from_mime_type(mime_type: &str) -> Option<Self> {
-                        match mime_type {
+                    #from_method {
+                        match #mime_type_arg {
                             #(#from_cases,)*
                             _ => None,
                         }
                     }
 
-                    fn to_mime_type(&self) -> String {
+                    #to_method {
                         match self {
                             #(#to_cases),*
                         }
@@ -1952,6 +2719,22 @@ impl RustBridgeGenerator {
             pub mod mimetypes {
                 #(#enums)*
             }
+        }
+    }
+
+    fn mime_type_from_method(&self, arg: &Ident) -> TokenStream {
+        match self.mode {
+            RustBridgeMode::ExternalRest => {
+                quote! { fn from_mime_type(#arg: &str) -> Option<Self> }
+            }
+            RustBridgeMode::GuestWasmRpc => quote! { fn from_string(#arg: &str) -> Option<Self> },
+        }
+    }
+
+    fn mime_type_to_method(&self) -> TokenStream {
+        match self.mode {
+            RustBridgeMode::ExternalRest => quote! { fn to_mime_type(&self) -> String },
+            RustBridgeMode::GuestWasmRpc => quote! { fn to_string(&self) -> String },
         }
     }
 
@@ -1970,7 +2753,36 @@ impl RustBridgeGenerator {
     }
 
     fn package_crate_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name)
+        Self::package_crate_name_for_mode(&self.agent_type.type_name, self.mode)
+    }
+
+    fn package_crate_name_for_mode(
+        agent_type_name: &golem_common::model::agent::AgentTypeName,
+        mode: RustBridgeMode,
+    ) -> String {
+        match mode {
+            RustBridgeMode::ExternalRest => {
+                bridge_client_directory_name(agent_type_name, BridgeMode::External)
+            }
+            RustBridgeMode::GuestWasmRpc => {
+                bridge_client_directory_name(agent_type_name, BridgeMode::Guest)
+            }
+        }
+    }
+
+    fn guest_client_struct_name_string(agent_type_name: &str) -> String {
+        if agent_type_name == "__golem_bridge_runtime" {
+            "__GolemBridgeRuntimeClient".to_string()
+        } else {
+            agent_type_name.to_string()
+        }
+    }
+
+    fn root_type_name_conflicts(&self, name: &str) -> bool {
+        self.agent_type.type_name.0 == name
+            || self.type_naming.types().any(|(_, type_name)| {
+                matches!(type_name, RustTypeName::Derived(type_name) if type_name == name)
+            })
     }
 }
 
@@ -2031,4 +2843,1147 @@ fn path_dep(path: &str, features: &[&str]) -> Item {
     entry.insert("path", Value::from(path));
     add_features(&mut entry, features);
     Item::Value(Value::InlineTable(entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+    use golem_common::schema::metadata::TypeId;
+    use golem_common::schema::{
+        AgentConstructorSchema, MetadataEnvelope, NamedField, NamedFieldType, SchemaGraph,
+        SchemaType,
+    };
+    use test_r::test;
+
+    #[test]
+    fn package_crate_name_is_mode_separated() {
+        let agent_type_name = AgentTypeName("AlphaAgent".to_string());
+
+        assert_eq!(
+            RustBridgeGenerator::package_crate_name_for_mode(
+                &agent_type_name,
+                RustBridgeMode::ExternalRest
+            ),
+            "alpha-agent-client"
+        );
+        assert_eq!(
+            RustBridgeGenerator::package_crate_name_for_mode(
+                &agent_type_name,
+                RustBridgeMode::GuestWasmRpc
+            ),
+            "alpha-agent-guest-client"
+        );
+    }
+
+    #[test]
+    fn external_runtime_prelude_preserves_rest_runtime_paths() {
+        let mut generator =
+            RustBridgeGenerator::new(minimal_agent_type("AlphaAgent"), Utf8Path::new("."), true)
+                .unwrap();
+
+        let rendered = generator.generate_lib_rs_tokens().unwrap().to_string();
+
+        assert!(rendered.contains("pub use golem_client :: bridge :: ClientError"));
+        assert!(rendered.contains("pub mod __golem_bridge_runtime"));
+        assert!(rendered.contains("pub use golem_client :: bridge :: GolemServer"));
+        assert!(rendered.contains("pub use golem_common :: schema :: *"));
+        assert!(rendered.contains("pub use golem_common :: agentic :: *"));
+        assert!(rendered.contains("golem_client :: api :: AgentClient :: create_agent"));
+        assert!(rendered.contains("reqwest_middleware :: ClientWithMiddleware"));
+    }
+
+    #[test]
+    fn external_generation_preserves_rest_cargo_dependencies_and_api_shape() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        let mut generator = RustBridgeGenerator::new(agent_type, &target_path, true).unwrap();
+
+        generator.generate().unwrap();
+
+        let cargo_toml = std::fs::read_to_string(target_path.join("Cargo.toml")).unwrap();
+        assert!(cargo_toml.contains("name = \"alpha-agent-client\""));
+        for dependency in [
+            "chrono",
+            "golem-client",
+            "golem-common",
+            "reqwest",
+            "reqwest-middleware",
+            "serde_json",
+            "uuid",
+        ] {
+            assert!(
+                cargo_toml.contains(&format!("{dependency} = ")),
+                "missing external REST dependency {dependency}:\n{cargo_toml}"
+            );
+        }
+        assert!(!cargo_toml.contains("golem-rust"));
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        for rest_shape in [
+            "pub async fn get(",
+            "pub async fn get_phantom(",
+            "pub async fn new_phantom(",
+            "pub fn configure(",
+            "server: golem_client::bridge::GolemServer",
+            "pub mod __golem_bridge_runtime",
+            "pub use golem_client::bridge::GolemServer",
+            "pub use golem_client::bridge::ClientError",
+            "pub use golem_common::schema::*",
+            "pub use golem_common::agentic::*",
+            "golem_client::api::AgentClient::create_agent",
+            "golem_client::api::AgentClient::invoke_agent",
+            "reqwest_middleware::ClientWithMiddleware",
+        ] {
+            assert!(
+                lib_rs.contains(rest_shape),
+                "missing external REST API shape {rest_shape}:\n{lib_rs}"
+            );
+        }
+        assert!(!lib_rs.contains("golem_rust"));
+    }
+
+    #[test]
+    fn guest_runtime_prelude_uses_golem_rust_paths() {
+        let rendered = RustRuntimeConfig::new(RustBridgeMode::GuestWasmRpc)
+            .generated_prelude()
+            .to_string();
+
+        assert!(rendered.contains("pub enum ClientError"));
+        assert!(rendered.contains("pub use golem_rust :: SchemaValue"));
+        assert!(rendered.contains("pub use golem_rust :: schema"));
+        assert!(rendered.contains("pub use golem_rust :: agentic :: *"));
+        assert!(!rendered.contains("golem_common"));
+        assert!(!rendered.contains("golem_client"));
+    }
+
+    #[test]
+    fn guest_runtime_prelude_compiles_with_generated_golem_rust_dependency_flags() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let golem_rust_path = workspace_root().unwrap().join("sdks/rust/golem-rust");
+        let golem_rust_path = golem_rust_path.to_string_lossy();
+
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            format!(
+                r#"[package]
+name = "guest-runtime-prelude-generated-flags-check"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+golem-rust = {{ path = {golem_rust_path:?}, default-features = false, features = ["export_golem_agentic", "macro"] }}
+"#
+            ),
+        )
+        .unwrap();
+
+        let prelude = prettyplease::unparse(
+            &syn::parse2::<syn::File>(
+                RustRuntimeConfig::new(RustBridgeMode::GuestWasmRpc).generated_prelude(),
+            )
+            .unwrap(),
+        );
+        let body = guest_generated_unstructured_body();
+        std::fs::write(dir.path().join("src/lib.rs"), format!("{prelude}\n{body}")).unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn guest_generated_unstructured_body() -> &'static str {
+        r#"
+pub fn takes_unrestricted_binary(
+    _value: crate::__golem_bridge_runtime::agentic::UnstructuredBinary<String>,
+) {
+}
+
+pub mod mimetypes {
+    #[derive(Debug, Clone)]
+    pub enum Mimetypes0 {
+        ApplicationJson,
+    }
+
+    impl crate::__golem_bridge_runtime::agentic::AllowedMimeTypes for Mimetypes0 {
+        fn all() -> &'static [&'static str] {
+            &["application/json"]
+        }
+
+        fn from_string(mime_type: &str) -> Option<Self> {
+            match mime_type {
+                "application/json" => Some(Self::ApplicationJson),
+                _ => None,
+            }
+        }
+
+        fn to_string(&self) -> String {
+            match self {
+                Self::ApplicationJson => "application/json".to_string(),
+            }
+        }
+    }
+}
+
+pub fn encode_text(
+    value: crate::__golem_bridge_runtime::agentic::UnstructuredText,
+) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+    <crate::__golem_bridge_runtime::agentic::UnstructuredText as crate::__golem_bridge_runtime::agentic::Schema>::to_schema_value(value)
+}
+
+pub fn decode_text(
+    value: crate::__golem_bridge_runtime::schema::SchemaValue,
+) -> Result<crate::__golem_bridge_runtime::agentic::UnstructuredText, String> {
+    <crate::__golem_bridge_runtime::agentic::UnstructuredText as crate::__golem_bridge_runtime::agentic::Schema>::from_schema_value(
+        value,
+        <crate::__golem_bridge_runtime::agentic::UnstructuredText as crate::__golem_bridge_runtime::agentic::Schema>::get_type(),
+    )
+}
+"#
+    }
+
+    #[test]
+    fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.methods.push(AgentMethodSchema {
+            name: "run".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                "value",
+                SchemaType::s32(),
+            )]),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let cargo_toml = std::fs::read_to_string(target_path.join("Cargo.toml")).unwrap();
+        assert!(cargo_toml.contains("name = \"alpha-agent-guest-client\""));
+        assert!(cargo_toml.contains("golem-rust"));
+        assert!(cargo_toml.contains("export_golem_agentic"));
+        assert!(!cargo_toml.contains("golem-client"));
+        assert!(!cargo_toml.contains("reqwest"));
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        for guest_shape in [
+            "wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc",
+            "pub fn get(",
+            "pub fn get_phantom(",
+            "pub fn new_phantom(",
+            "golem_rust::golem_agentic::golem::agent::host::WasmRpc::new",
+            "pub async fn run(\n        &self,\n        value: i32,",
+            "pub fn trigger_run(\n        &self,\n        value: i32,",
+            "pub fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::wasip2::clocks::wall_clock::Datetime,",
+            "pub fn schedule_cancelable_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::wasip2::clocks::wall_clock::Datetime,",
+            "async_invoke_and_await",
+            "await_invoke_schema_value_result",
+            ".invoke(",
+            "schedule_invocation",
+            "schedule_cancelable_invocation",
+            "MissingResult",
+        ] {
+            assert!(
+                lib_rs.contains(guest_shape),
+                "missing guest wasm-rpc API shape {guest_shape}:\n{lib_rs}"
+            );
+        }
+        assert!(!lib_rs.contains("pub fn __golem_bridge_trigger_run"));
+        assert!(!lib_rs.contains("pub fn __golem_bridge_schedule_run"));
+        assert!(!lib_rs.contains("golem_client"));
+        assert!(!lib_rs.contains("reqwest"));
+        assert!(!lib_rs.contains("constructor_parameters"));
+        assert!(!lib_rs.contains("agent_id: String"));
+        assert!(
+            !lib_rs.contains("phantom_id: Option<golem_rust::Uuid>,\n                wasm_rpc")
+        );
+        assert!(!lib_rs.contains("golem_rust::golem_agentic::golem::agent::host::make_agent_id"));
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_with_non_copy_constructor_parameters() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.constructor.input_schema =
+            InputSchema::parameters(vec![NamedField::user_supplied(
+                "name",
+                SchemaType::string(),
+            )]);
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with non-Copy constructor parameter failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_constructor_parameter_matches_internal_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.constructor.input_schema =
+            InputSchema::parameters(vec![NamedField::user_supplied(
+                "phantom_id",
+                SchemaType::s32(),
+            )]);
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with constructor parameter matching an internal name failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_agent_type_name_matches_guest_client_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("client-error-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("ClientError");
+        agent_type.mode = AgentMode::Durable;
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with agent type named ClientError failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_agent_type_name_matches_guest_runtime_module() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("runtime-module-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("__golem_bridge_runtime");
+        agent_type.source_language = "rust".to_string();
+        agent_type.mode = AgentMode::Durable;
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with agent type named __golem_bridge_runtime failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_method_parameter_is_named_when() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.methods.push(AgentMethodSchema {
+            name: "run".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                "when",
+                SchemaType::s32(),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with method parameter named when failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_method_name_matches_phantom_id_helper() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.methods.push(AgentMethodSchema {
+            name: "phantom_id".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with method named phantom_id failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_method_name_matches_removed_agent_id_field() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.methods.push(AgentMethodSchema {
+            name: "agent_id".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with method named agent_id failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_method_name_matches_guest_get_helper() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.methods.push(AgentMethodSchema {
+            name: "get".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with method named get failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_keeps_get_agent_method_name_when_constructor_collides() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.methods.push(AgentMethodSchema {
+            name: "get".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        assert!(
+            lib_rs.contains("pub async fn get(&self")
+                || lib_rs.contains("pub async fn get(\n        &self"),
+            "macro-compatible guest bridge should keep the user method named get public as get; generated source:\n{lib_rs}"
+        );
+    }
+
+    #[test]
+    fn ephemeral_guest_generation_does_not_reserve_absent_get_with_config_helper() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["foo".to_string()],
+            value_type: SchemaType::string(),
+        });
+        agent_type.methods.push(AgentMethodSchema {
+            name: "get_with_config".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        assert!(
+            lib_rs.contains("pub async fn get_with_config(\n        &self"),
+            "ephemeral agents do not generate a get_with_config constructor, so the user method should keep that public name; generated source:\n{lib_rs}"
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_get_helper_deconflicted_name_matches_user_method() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        for method_name in ["get", "get_1"] {
+            agent_type.methods.push(AgentMethodSchema {
+                name: method_name.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            });
+        }
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with methods named get and get_1 failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_method_name_matches_trigger_wrapper_for_another_method() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        for method_name in ["run", "trigger_run"] {
+            agent_type.methods.push(AgentMethodSchema {
+                name: method_name.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            });
+        }
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with method named trigger_run next to run failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_schedule_cancelable_name_matches_macro_collision_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        for method_name in ["run", "cancelable_run"] {
+            agent_type.methods.push(AgentMethodSchema {
+                name: method_name.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            });
+        }
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        let method_start = lib_rs
+            .find("pub fn schedule_cancelable_run(")
+            .expect("generated guest client should expose schedule_cancelable_run");
+        let body_start = method_start
+            + lib_rs[method_start..]
+                .find('{')
+                .expect("generated method should have a body");
+        let mut depth = 0usize;
+        let mut method_end = None;
+        for (offset, ch) in lib_rs[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        method_end = Some(body_start + offset + ch.len_utf8());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let method_src = &lib_rs[method_start..method_end.expect("method body should close")];
+
+        assert!(
+            method_src.contains("CancellationToken"),
+            "schedule_cancelable_run should be the cancelable wrapper for run, not another method's plain schedule wrapper:\n{method_src}"
+        );
+        assert!(
+            method_src.contains("schedule_cancelable_invocation"),
+            "schedule_cancelable_run should call the cancelable scheduler:\n{method_src}"
+        );
+        assert!(
+            method_src.contains("\"run\""),
+            "schedule_cancelable_run should target the run method to match macro client name allocation:\n{method_src}"
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_reserved_trigger_wrapper_suffix_matches_another_wrapper() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.source_language = "rust".to_string();
+        for method_name in ["run", "__golem_bridge_trigger_run", "run_1"] {
+            agent_type.methods.push(AgentMethodSchema {
+                name: method_name.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            });
+        }
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with a reserved trigger wrapper suffix matching another wrapper failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_rust_method_name_matches_reserved_trigger_wrapper() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.source_language = "rust".to_string();
+        for method_name in ["run", "__golem_bridge_trigger_run"] {
+            agent_type.methods.push(AgentMethodSchema {
+                name: method_name.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            });
+        }
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with Rust method named __golem_bridge_trigger_run next to run failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_constructor_parameter_matches_config_parameter_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.constructor.input_schema =
+            InputSchema::parameters(vec![NamedField::user_supplied(
+                "config_foo",
+                SchemaType::s32(),
+            )]);
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["foo".to_string()],
+            value_type: SchemaType::string(),
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with constructor parameter matching local config parameter failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_emits_self_contained_typed_config_schema_values() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        let config_type_id = TypeId::new("config-shared");
+        agent_type.schema = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: config_type_id.clone(),
+                name: Some("ConfigShared".to_string()),
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "label".to_string(),
+                    body: SchemaType::string(),
+                    metadata: MetadataEnvelope::default(),
+                }]),
+            }],
+            root: SchemaType::record(vec![]),
+        };
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["shared".to_string()],
+            value_type: SchemaType::ref_to(config_type_id),
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        assert!(
+            lib_rs.contains("config-shared"),
+            "generated typed config schema graph must include referenced definitions:\n{lib_rs}"
+        );
+        assert!(
+            lib_rs.contains("TypedSchemaValue::new"),
+            "generated typed config encoding must build a typed value:\n{lib_rs}"
+        );
+        assert!(
+            lib_rs.contains("golem_rust::encode_typed_schema_value"),
+            "generated typed config encoding must use guest golem-rust wire encoding:\n{lib_rs}"
+        );
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with referenced local config type failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_constructor_parameter_is_named_agent_config() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
+        agent_type.constructor.input_schema =
+            InputSchema::parameters(vec![NamedField::user_supplied(
+                "agent_config",
+                SchemaType::s32(),
+            )]);
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["foo".to_string()],
+            value_type: SchemaType::string(),
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with constructor parameter named agent_config failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_rust_constructor_parameter_matches_reserved_phantom_id_name()
+    {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.source_language = "rust".to_string();
+        agent_type.mode = AgentMode::Durable;
+        agent_type.constructor.input_schema =
+            InputSchema::parameters(vec![NamedField::user_supplied(
+                "__golem_bridge_phantom_id",
+                SchemaType::s32(),
+            )]);
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with Rust constructor parameter matching reserved phantom id name failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn guest_generation_compiles_when_method_parameter_names_sanitize_to_same_ident() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.methods.push(AgentMethodSchema {
+            name: "run".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![
+                NamedField::user_supplied("foo-bar", SchemaType::s32()),
+                NamedField::user_supplied("foo_bar", SchemaType::s32()),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated guest crate with method parameters that sanitize to the same Rust ident failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn minimal_agent_type(type_name: &str) -> AgentTypeSchema {
+        AgentTypeSchema {
+            type_name: AgentTypeName(type_name.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Ephemeral,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
 }

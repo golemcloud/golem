@@ -45,7 +45,7 @@ use crate::bridge_gen::scala::scala::{
 };
 use crate::bridge_gen::scala::scala_writer::ScalaWriter;
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
-use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::fs;
 use crate::versions::scala_dep;
 use anyhow::{Context, anyhow, bail};
@@ -347,7 +347,7 @@ impl ScalaBridgeGenerator {
     }
 
     fn library_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name)
+        bridge_client_directory_name(&self.agent_type.type_name, BridgeMode::External)
     }
 
     /// The per-agent client package segment appended to `golem.bridge.client`,

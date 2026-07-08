@@ -139,6 +139,7 @@ proptest = { workspace = true }
 reqwest = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }
+wat = { workspace = true }
 
 [build-dependencies]
 lenient_bool = { workspace = true }
