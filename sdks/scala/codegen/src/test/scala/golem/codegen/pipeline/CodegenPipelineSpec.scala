@@ -1169,6 +1169,145 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assertNotEquals(originalAutoRegister, updatedAutoRegister)
   }
 
+  test("auto-register does not expand imports inside root-qualified tool trait parent") {
+    val api = SourceDiscovery.SourceInput(
+      "api/Grep.scala",
+      """|package api
+         |
+         |import golem.runtime.annotations._
+         |
+         |@toolDefinition(version = "1.0.0")
+         |trait Grep {
+         |  def grep(pattern: String): String
+         |}
+         |""".stripMargin
+    )
+
+    val impl = SourceDiscovery.SourceInput(
+      "impl/GrepImpl.scala",
+      """|package example.impl
+         |
+         |import golem.runtime.annotations._
+         |import external.api
+         |
+         |@toolImplementation()
+         |final class GrepImpl extends _root_.api.Grep {
+         |  def grep(pattern: String): String = pattern
+         |}
+         |""".stripMargin
+    )
+
+    val result  = CodegenPipeline.run(discover(api, impl), Some("example"), rpcEnabled = false)
+    val content = result.autoRegister.get.files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example_impl.scala"))
+      .get
+      .content
+
+    assert(content.contains("ToolImplementation.registerClass[api.Grep, example.impl.GrepImpl]"), content)
+    assert(!content.contains("ToolImplementation.registerClass[external.api.Grep"), content)
+  }
+
+  test("auto-register resolves root-qualified tool trait parent from root package before relative package collision") {
+    val rootApi = SourceDiscovery.SourceInput(
+      "root-api/Grep.scala",
+      """|package api
+         |
+         |import golem.runtime.annotations._
+         |
+         |@toolDefinition(version = "1.0.0")
+         |trait Grep {
+         |  def root(pattern: String): String
+         |}
+         |""".stripMargin
+    )
+
+    val relativeApi = SourceDiscovery.SourceInput(
+      "relative-api/Grep.scala",
+      """|package example.api
+         |
+         |import golem.runtime.annotations._
+         |
+         |@toolDefinition(version = "1.0.0")
+         |trait Grep {
+         |  def relative(pattern: String): String
+         |}
+         |""".stripMargin
+    )
+
+    val impl = SourceDiscovery.SourceInput(
+      "impl/GrepImpl.scala",
+      """|package example.impl
+         |
+         |import golem.runtime.annotations._
+         |
+         |@toolImplementation()
+         |final class GrepImpl extends _root_.api.Grep {
+         |  def root(pattern: String): String = pattern
+         |}
+         |""".stripMargin
+    )
+
+    val result  = CodegenPipeline.run(discover(rootApi, relativeApi, impl), Some("example"), rpcEnabled = false)
+    val content = result.autoRegister.get.files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example_impl.scala"))
+      .get
+      .content
+
+    assert(content.contains("ToolImplementation.registerClass[api.Grep, example.impl.GrepImpl]"), content)
+    assert(!content.contains("ToolImplementation.registerClass[example.api.Grep"), content)
+  }
+
+  test("auto-register preserves root-qualified imported package qualifier before relative collision") {
+    val rootApi = SourceDiscovery.SourceInput(
+      "root-api/Grep.scala",
+      """|package api
+         |
+         |import golem.runtime.annotations._
+         |
+         |@toolDefinition(version = "1.0.0")
+         |trait Grep {
+         |  def root(pattern: String): String
+         |}
+         |""".stripMargin
+    )
+
+    val relativeApi = SourceDiscovery.SourceInput(
+      "relative-api/Grep.scala",
+      """|package example.api
+         |
+         |import golem.runtime.annotations._
+         |
+         |@toolDefinition(version = "1.0.0")
+         |trait Grep {
+         |  def relative(pattern: String): String
+         |}
+         |""".stripMargin
+    )
+
+    val impl = SourceDiscovery.SourceInput(
+      "impl/GrepImpl.scala",
+      """|package example.impl
+         |
+         |import golem.runtime.annotations._
+         |import _root_.api
+         |
+         |@toolImplementation()
+         |final class GrepImpl extends api.Grep {
+         |  def root(pattern: String): String = pattern
+         |}
+         |""".stripMargin
+    )
+
+    val result  = CodegenPipeline.run(discover(rootApi, relativeApi, impl), Some("example"), rpcEnabled = false)
+    val content = result.autoRegister.get.files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example_impl.scala"))
+      .get
+      .content
+
+    assert(content.contains("ToolImplementation.registerClass[api.Grep, example.impl.GrepImpl]"), content)
+    assert(!content.contains("ToolImplementation.registerClass[example.api.Grep"), content)
+  }
+
   test("auto-register chooses agent trait when implementation has a base class") {
     val source = SourceDiscovery.SourceInput(
       "Agent.scala",

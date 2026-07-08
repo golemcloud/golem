@@ -233,6 +233,11 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
     case NoSuchRemote(name: String)
   }
 
+  enum SetUrlError {
+    @error(kind = "usage-error", exitCode = 128)
+    case NoSuchRemote(name: String)
+  }
+
   enum StashError {
     @error(kind = "usage-error", exitCode = 128)
     case NoSuchStash(name: String)
@@ -344,6 +349,24 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
     @annotations(destructive = true, idempotent = true)
     @arg("name", scope = "positional", regex = "^[a-zA-Z][a-zA-Z0-9_-]*$")
     def remove(name: String): Either[CanonicalRemoteError, Unit]
+
+    /** Change a remote URL. */
+    @annotations(destructive = true)
+    @arg("name", scope = "positional")
+    @arg("newurl", scope = "positional")
+    @arg("oldurl", scope = "positional", required = false)
+    @arg("push", kind = "flag")
+    @arg("add", kind = "flag")
+    @arg("delete", kind = "flag")
+    @constraint(mutexGroups = Array(Array[Any]("add"), Array[Any]("delete")))
+    def setUrl(
+      name: String,
+      newurl: Url,
+      oldurl: Option[Url],
+      push: Boolean,
+      add: Boolean,
+      delete: Boolean
+    ): Either[SetUrlError, Unit]
   }
 
   @toolDefinition(name = "stash")
@@ -619,13 +642,17 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
           )
         },
         test("git top-level commands, annotations and formatter metadata match the canonical shape") {
-          val root    = canonicalGit.commands(0)
-          val commit  = child(canonicalGit, 0, "commit")
-          val remote  = child(canonicalGit, 0, "remote")
-          val log     = child(canonicalGit, 0, "log")
-          val body    = commit.body.get
-          val output  = body.options.find(_.long == "output").get
-          val valueIs = body.constraints.collectFirst { case ExtendedConstraint.RequiresAll(refs) =>
+          val root     = canonicalGit.commands(0)
+          val commit   = child(canonicalGit, 0, "commit")
+          val remote   = child(canonicalGit, 0, "remote")
+          val log      = child(canonicalGit, 0, "log")
+          val body     = commit.body.get
+          val verbose  = commit.globals.flags.find(_.long == "verbose").get
+          val paginate = commit.globals.flags.find(_.long == "paginate").get
+          val gitDir   = commit.globals.options.find(_.long == "git-dir").get
+          val config   = commit.globals.options.find(_.long == "config").get
+          val output   = body.options.find(_.long == "output").get
+          val valueIs  = body.constraints.collectFirst { case ExtendedConstraint.RequiresAll(refs) =>
             refs.collectFirst { case ExtendedRef.ValueIs(v) => v }
           }.flatten.get
           assertTrue(
@@ -633,6 +660,16 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
             root.subcommands.map(canonicalGit.commands(_).name).toSet == Set("commit", "remote", "stash", "log"),
             commit.aliases == List("ci"),
             commit.body.flatMap(_.annotations).exists(_.destructive),
+            verbose.short == Some('v'),
+            verbose.shape == FlagShape.CountFlag(Some(3)),
+            paginate.shape == FlagShape.BoolFlag(BoolFlagShape(default = true, negatable = true)),
+            gitDir.envVar == Some("GIT_DIR"),
+            gitDir.default.isDefined,
+            config.shape match {
+              case ExtendedOptionShape.RepeatableMap(ExtendedRepeatableMapShape(Repetition.Repeated, graph, _)) =>
+                rootBody(graph).isInstanceOf[SchemaTypeBody.MapType]
+              case _ => false
+            },
             remote.aliases == List("rmt"),
             remote.body.isEmpty,
             log.body.flatMap(_.annotations).exists(a => a.readOnly && a.idempotent),
@@ -641,6 +678,7 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
               .exists(o => o.short == Some('m') && o.required && o.aliases == List("msg")),
             rootBody(collectedGraph(output.shape)).isInstanceOf[SchemaTypeBody.EnumType],
             output.default == Some(SchemaValue.EnumValue(0)),
+            body.constraints.exists(_.isInstanceOf[ExtendedConstraint.Implies]),
             valueIs.name == "output",
             valueIs.value == ExtendedValueIsLiteral.Resolved(SchemaValue.EnumValue(2)),
             body.result.exists(r =>
@@ -655,21 +693,56 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
           val stashIdx  = childIndex(canonicalGit, 0, "stash")
           val popIdx    = childIndex(canonicalGit, stashIdx, "pop")
           val add       = canonicalGit.commands(addIdx)
+          val remote    = canonicalGit.commands(remoteIdx)
           val stash     = canonicalGit.commands(stashIdx)
+          val addBody   = add.body.get
+          val urlPos    = addBody.positionals.fixed.find(_.name == "url").get
+          val track     = addBody.options.find(_.long == "track").get
+          val remove    = child(canonicalGit, remoteIdx, "remove")
           assertTrue(
+            remote.globals.flags.exists(_.long == "verbose"),
+            remote.globals.options.exists(_.long == "git-dir"),
+            remote.subcommands.map(canonicalGit.commands(_).name).toSet == Set("add", "remove", "set-url"),
             canonicalGit.effectiveGlobals(addIdx).map {
               case EffectiveCommandField.OptionField(o) => o.long
               case EffectiveCommandField.FlagField(f)   => f.long
             } == List("git-dir", "config", "verbose", "paginate"),
-            add.body.get.flags.forall(_.long != "verbose"),
+            addBody.flags.forall(_.long != "verbose"),
+            rootBody(urlPos.tpe) match {
+              case _: SchemaTypeBody.UrlType => true
+              case _                         => false
+            },
+            track.shape match {
+              case ExtendedOptionShape.RepeatableList(ExtendedRepeatableListShape(Repetition.Repeated, _)) => true
+              case _                                                                                       => false
+            },
+            remove.aliases == List("rm"),
             canonicalGit.canonicalInputFields(addIdx).map(_.name) ==
               List("git-dir", "config", "verbose", "paginate", "name", "url", "track", "master", "tags", "fetch"),
             stash.body.isDefined,
             stash.body.get.options.map(_.long) == List("message"),
             stash.body.get.flags.map(_.long) == List("keep-index"),
+            stash.globals.flags.exists(_.long == "verbose"),
+            stash.globals.options.exists(_.long == "git-dir"),
             canonicalGit.canonicalInputFields(stashIdx).map(_.name) ==
               List("git-dir", "verbose", "message", "keep-index"),
             canonicalGit.canonicalInputFields(popIdx).map(_.name) == List("git-dir", "verbose", "name", "index")
+          )
+        },
+        test("git set-url covers optional trailing positional and mutex groups") {
+          val remoteIdx = childIndex(canonicalGit, 0, "remote")
+          val setUrl    = child(canonicalGit, remoteIdx, "set-url")
+          val body      = setUrl.body.get
+          assertTrue(
+            setUrl.body.flatMap(_.annotations).exists(_.destructive),
+            body.positionals.fixed.map(p => p.name -> p.required) ==
+              List(("name", true), ("newurl", true), ("oldurl", false)),
+            rootBody(body.positionals.fixed(1).tpe).isInstanceOf[SchemaTypeBody.UrlType],
+            rootBody(body.positionals.fixed(2).tpe).isInstanceOf[SchemaTypeBody.UrlType],
+            body.flags.map(_.long).toSet == Set("push", "add", "delete"),
+            body.constraints.exists(_.isInstanceOf[ExtendedConstraint.MutexGroups]),
+            canonicalGit.canonicalInputFields(childIndex(canonicalGit, remoteIdx, "set-url")).map(_.name) ==
+              List("git-dir", "config", "verbose", "paginate", "name", "newurl", "oldurl", "push", "add", "delete")
           )
         },
         test("git log covers bounds, datetime, repeatable modes, tail separator and constraints") {
@@ -701,6 +774,19 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
             body.result.exists(_.defaultFormatter == "medium"),
             canonicalGit.tryToTool.isRight
           )
+        },
+        test("git stash help resolves at subtree root and child depth") {
+          val stashHelp = ToolHelp.renderHelp(canonicalGit, List("stash")).toOption.get
+          val popHelp   = ToolHelp.renderHelp(canonicalGit, List("stash", "pop")).toOption.get
+          assertTrue(
+            stashHelp.contains("--message"),
+            stashHelp.contains("--keep-index"),
+            stashHelp.contains("Subcommands:"),
+            popHelp.contains("--index")
+          )
+        },
+        test("git builds valid wire metadata") {
+          assertTrue(canonicalGit.tryToTool.isRight)
         },
         test("u64 maximum option bound is preserved and wire-encodable") {
           import golem.schema.NumericBound

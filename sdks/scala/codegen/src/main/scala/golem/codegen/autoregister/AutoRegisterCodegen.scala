@@ -292,6 +292,20 @@ object AutoRegisterCodegen {
   private def normalizeTypeRef(tpe: String): String =
     tpe.stripPrefix("_root_.")
 
+  private def expandImportedQualifier(tpe: String, imports: Map[String, String]): String = {
+    val normalized = normalizeTypeRef(tpe)
+    if (tpe.startsWith("_root_.")) normalized
+    else {
+      val dot = normalized.indexOf('.')
+      if (dot < 0) normalized
+      else {
+        val qualifier = normalized.substring(0, dot)
+        val rest      = normalized.substring(dot + 1)
+        imports.get(qualifier).map(imported => s"$imported.$rest").getOrElse(normalized)
+      }
+    }
+  }
+
   private def resolveParentTrait[S <: DiscoveredSurface](
     implPkg: String,
     parentTypes: List[String],
@@ -324,19 +338,10 @@ object AutoRegisterCodegen {
         .toSeq
         .headOption
 
-    def expandImportedQualifier(tpe: String): String = {
-      val dot = tpe.indexOf('.')
-      if (dot < 0) tpe
-      else {
-        val qualifier = tpe.substring(0, dot)
-        val rest      = tpe.substring(dot + 1)
-        imports.get(qualifier).map(imported => s"${normalizeTypeRef(imported)}.$rest").getOrElse(tpe)
-      }
-    }
-
     def resolve(parent: String, allowGlobalSimpleNameFallback: Boolean): Option[String] = {
-      val normalized = normalizeTypeRef(expandImportedQualifier(parent))
-      resolveImportedRef(normalized).orElse {
+      val expanded   = if (parent.startsWith("_root_.")) parent else expandImportedQualifier(parent, imports)
+      val normalized = normalizeTypeRef(expanded)
+      resolveImportedRef(expanded).orElse {
         val samePackage = byName.get(normalized).flatMap(_.find(_.pkg == implPkg)).map(s => s"${s.pkg}.${s.name}")
         samePackage.orElse {
           imports
@@ -385,7 +390,7 @@ object AutoRegisterCodegen {
       impl.imports,
       impl.wildcardImports,
       traits.map(AgentSurface.apply)
-    ).getOrElse(normalizeTypeRef(impl.traitType))
+    ).getOrElse(normalizeTypeRef(expandImportedQualifier(impl.traitType, impl.imports)))
 
     AgentImpl(impl.pkg, impl.implClass, resolvedTrait, impl.ctorTypes)
   }
@@ -400,7 +405,7 @@ object AutoRegisterCodegen {
       impl.imports,
       impl.wildcardImports,
       tools.map(ToolSurface.apply)
-    ).getOrElse(normalizeTypeRef(impl.traitType))
+    ).getOrElse(normalizeTypeRef(expandImportedQualifier(impl.traitType, impl.imports)))
 
     ToolImpl(impl.pkg, impl.implClass, resolvedTrait)
   }
