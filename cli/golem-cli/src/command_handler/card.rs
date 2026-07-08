@@ -14,6 +14,7 @@
 
 use crate::command::card::CardSubcommand;
 use crate::command_handler::Handlers;
+use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
@@ -21,7 +22,7 @@ use crate::log::log_warn_action;
 use crate::model::text::card::{CardGetView, CardListView, CardRevokeResult};
 use crate::model::worker::RawAgentId;
 use anyhow::bail;
-use golem_client::api::CardClient;
+use golem_client::api::{CardClient, WorkerClient};
 use golem_common::model::account::AccountId;
 use golem_common::model::card::CardId;
 use std::sync::Arc;
@@ -51,9 +52,7 @@ impl CardCommandHandler {
         agent: Option<RawAgentId>,
     ) -> anyhow::Result<()> {
         if let Some(agent) = agent {
-            bail!(
-                "Listing the wallet for agent {agent} requires the get-agent-wallet worker endpoint"
-            );
+            return self.cmd_list_agent_wallet(agent).await;
         }
 
         let account_id = account_id.unwrap_or(*self.ctx.golem_clients().await?.account_id());
@@ -63,6 +62,29 @@ impl CardCommandHandler {
             .await?
             .card
             .list_account_cards(&account_id.0)
+            .await
+            .map_service_error()?;
+
+        self.ctx.log_handler().log_output(CardListView { cards })?;
+
+        Ok(())
+    }
+
+    async fn cmd_list_agent_wallet(&self, agent: RawAgentId) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+
+        let worker_handler = WorkerCommandHandler::new(self.ctx.clone());
+        let agent_name_match = worker_handler.match_agent_name(agent).await?;
+        let (component, agent_name) = worker_handler
+            .component_by_agent_name_match(&agent_name_match)
+            .await?;
+
+        let cards = self
+            .ctx
+            .golem_clients()
+            .await?
+            .worker
+            .get_agent_wallet(&component.id.0, &agent_name.0)
             .await
             .map_service_error()?;
 

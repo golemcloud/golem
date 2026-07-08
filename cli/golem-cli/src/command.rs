@@ -2313,13 +2313,13 @@ pub mod card {
 
     #[derive(Debug, Subcommand)]
     pub enum CardSubcommand {
-        /// List cards owned by an account.
+        /// List cards owned by an account, or cards in an agent's wallet with --agent.
         #[command(after_help = crate::command_examples::CARD_LIST)]
         List {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
 
-            /// Reserved for listing cards in an agent's wallet once the worker wallet endpoint is available.
+            /// List cards in an agent's wallet instead of account-owned cards. Activates the agent if not already active.
             #[arg(long, conflicts_with = "account_id")]
             agent: Option<RawAgentId>,
         },
