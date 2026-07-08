@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,11 +25,12 @@ import scala.meta.dialects.Scala213
 import scala.meta.parsers._
 
 /**
- * Pure, build-tool-agnostic code generator for Golem agent auto-registration.
+ * Pure, build-tool-agnostic code generator for Golem agent/tool
+ * auto-registration.
  *
- * Scans Scala source text for `@agentImplementation` annotated classes and
- * produces Scala source files that register them via
- * `AgentImplementation.registerClass`.
+ * Scans Scala source text for `@agentImplementation` and `@toolImplementation`
+ * annotated classes and produces Scala source files that register them via
+ * `AgentImplementation.registerClass` and `ToolImplementation.registerClass`.
  *
  * All generated code is constructed as scalameta AST nodes and pretty-printed
  * via `.syntax`, following the project's code-generation conventions.
@@ -55,8 +56,8 @@ object AutoRegisterCodegen {
     s"golem.runtime.__generated.autoregister.${autoRegisterSuffix(basePackage)}"
 
   /**
-   * Generates auto-registration source files for all `@agentImplementation`
-   * classes found in the given sources.
+   * Generates auto-registration source files for all `@agentImplementation` and
+   * `@toolImplementation` classes found in the given sources.
    *
    * @param basePackage
    *   the user's base package (e.g. `"example"`)
@@ -83,14 +84,21 @@ object AutoRegisterCodegen {
 
     val warnings: Seq[Warning] = discovered.warnings.map(w => Warning(w.path, w.message))
 
-    val impls: List[AgentImpl] =
+    val agentImpls: List[AgentImpl] =
       discovered.implementations
-        .map(di => AgentImpl(di.pkg, di.implClass, di.traitType, di.ctorTypes))
+        .map(di => resolveAgentImpl(di, discovered.traits))
         .toList
         .distinct
         .sortBy(ai => (ai.pkg, ai.traitType, ai.implClass))
 
-    if (impls.isEmpty) {
+    val toolImpls: List[ToolImpl] =
+      discovered.toolImplementations
+        .map(di => resolveToolImpl(di, discovered.tools))
+        .toList
+        .distinct
+        .sortBy(ti => (ti.pkg, ti.traitType, ti.implClass))
+
+    if (agentImpls.isEmpty && toolImpls.isEmpty) {
       Result(
         generatedPackage = genBasePkg,
         files = Seq.empty,
@@ -99,21 +107,26 @@ object AutoRegisterCodegen {
         packageCount = 0
       )
     } else {
-      val byPkg: Map[String, List[AgentImpl]] =
-        impls
-          .groupBy(_.pkg)
-          .map { case (pkg, pkgImpls) =>
-            pkg -> pkgImpls.sortBy(ai => (ai.traitType, ai.implClass))
+      val packages                               = (agentImpls.map(_.pkg) ++ toolImpls.map(_.pkg)).distinct.sorted
+      val byPkg: Map[String, List[Registration]] =
+        packages.map { pkg =>
+          val registrations =
+            agentImpls.filter(_.pkg == pkg).map(Registration.Agent(_)) ++
+              toolImpls.filter(_.pkg == pkg).map(Registration.Tool(_))
+          pkg -> registrations.sortBy {
+            case Registration.Agent(ai) => ("agent", ai.traitType, ai.implClass)
+            case Registration.Tool(ti)  => ("tool", ti.traitType, ti.implClass)
           }
+        }.toMap
 
       val perPkgFiles: Seq[GeneratedFile] =
-        byPkg.toSeq.sortBy(_._1).map { case (pkg, pkgImpls) =>
+        byPkg.toSeq.sortBy(_._1).map { case (pkg, registrations) =>
           val objSuffix = sanitizeSuffix(pkg)
           val tree      = buildPerPkgSource(
             genBasePkg,
             objSuffix,
-            pkgImpls,
-            surfaceFingerprint(pkgImpls, discovered.traits)
+            registrations,
+            surfaceFingerprint(registrations, discovered.traits, discovered.tools, discovered.sourceHashes)
           )
           GeneratedFile(
             relativePath = packagePath(genBasePkg, s"__GolemAutoRegister_$objSuffix.scala"),
@@ -138,7 +151,7 @@ object AutoRegisterCodegen {
         generatedPackage = genBasePkg,
         files = perPkgFiles :+ baseFile,
         warnings = warnings,
-        implCount = impls.length,
+        implCount = agentImpls.length + toolImpls.length,
         packageCount = byPkg.size
       )
     }
@@ -149,28 +162,37 @@ object AutoRegisterCodegen {
   private def buildPerPkgSource(
     genBasePkg: String,
     objSuffix: String,
-    pkgImpls: List[AgentImpl],
+    registrations: List[Registration],
     surfaceFingerprint: String
   ): Source = {
     val pkgRef  = parseTermRef(genBasePkg)
     val objName = Term.Name(s"__GolemAutoRegister_$objSuffix")
 
-    val registrations: List[Stat] = pkgImpls.map { ai =>
-      buildRegistrationCall(ai)
+    val registrationStats: List[Stat] = registrations.map {
+      case Registration.Agent(ai) => buildAgentRegistrationCall(ai)
+      case Registration.Tool(ti)  => buildToolRegistrationCall(ti)
     }
 
-    val agentImplImport = parseImporter("golem.runtime.autowire.AgentImplementation")
+    val imports: List[Stat] =
+      List(
+        if (registrations.exists(_.isInstanceOf[Registration.Agent]))
+          Some(parseMeta[Stat]("import golem.runtime.autowire.AgentImplementation"))
+        else None,
+        if (registrations.exists(_.isInstanceOf[Registration.Tool]))
+          Some(parseMeta[Stat]("import golem.runtime.autowire.ToolImplementation"))
+        else None
+      ).flatten
 
     source"""
       package $pkgRef {
-        import ..$agentImplImport
+        ..$imports
 
         /** Generated. Do not edit. */
         private[golem] object $objName {
           private val __golemSurfaceVersion = ${Lit.String(surfaceFingerprint)}
 
           def register(): Unit = {
-            ..$registrations
+            ..$registrationStats
             ()
           }
         }
@@ -212,10 +234,16 @@ object AutoRegisterCodegen {
     """
   }
 
-  private def buildRegistrationCall(ai: AgentImpl): Stat = {
+  private def buildAgentRegistrationCall(ai: AgentImpl): Stat = {
     val traitTpe = parseType(fqn(ai.pkg, ai.traitType))
     val implTpe  = parseType(fqn(ai.pkg, ai.implClass))
     q"AgentImplementation.registerClass[$traitTpe, $implTpe]"
+  }
+
+  private def buildToolRegistrationCall(ti: ToolImpl): Stat = {
+    val traitTpe = parseType(fqn(ti.pkg, ti.traitType))
+    val implTpe  = parseType(fqn(ti.pkg, ti.implClass))
+    q"ToolImplementation.registerClass[$traitTpe, $implTpe]"
   }
 
   // ── Type/term reference helpers ────────────────────────────────────────────
@@ -238,32 +266,212 @@ object AutoRegisterCodegen {
 
   private final case class AgentImpl(pkg: String, implClass: String, traitType: String, ctorTypes: List[String])
 
-  private def surfaceFingerprint(
-    pkgImpls: List[AgentImpl],
+  private final case class ToolImpl(pkg: String, implClass: String, traitType: String)
+
+  private sealed trait Registration extends Product with Serializable
+  private object Registration {
+    final case class Agent(value: AgentImpl) extends Registration
+    final case class Tool(value: ToolImpl)   extends Registration
+  }
+
+  private trait DiscoveredSurface {
+    def pkg: String
+    def name: String
+  }
+
+  private final case class AgentSurface(value: SourceDiscovery.AgentTrait) extends DiscoveredSurface {
+    def pkg: String  = value.pkg
+    def name: String = value.name
+  }
+
+  private final case class ToolSurface(value: SourceDiscovery.ToolTrait) extends DiscoveredSurface {
+    def pkg: String  = value.pkg
+    def name: String = value.name
+  }
+
+  private def normalizeTypeRef(tpe: String): String =
+    tpe.stripPrefix("_root_.")
+
+  private def expandImportedQualifier(tpe: String, imports: Map[String, String]): String = {
+    val normalized = normalizeTypeRef(tpe)
+    if (tpe.startsWith("_root_.")) normalized
+    else {
+      val dot = normalized.indexOf('.')
+      if (dot < 0) normalized
+      else {
+        val qualifier = normalized.substring(0, dot)
+        val rest      = normalized.substring(dot + 1)
+        imports.get(qualifier).map(imported => s"$imported.$rest").getOrElse(normalized)
+      }
+    }
+  }
+
+  private def resolveParentTrait[S <: DiscoveredSurface](
+    implPkg: String,
+    parentTypes: List[String],
+    imports: Map[String, String],
+    wildcardImports: List[SourceDiscovery.WildcardImport],
+    surfaces: Seq[S]
+  ): Option[String] = {
+    val byFqn  = surfaces.map(s => s"${s.pkg}.${s.name}" -> s).toMap
+    val byName = surfaces.groupBy(_.name)
+
+    def enclosingPackages: List[String] = {
+      val parts = implPkg.split('.').toList.filter(_.nonEmpty)
+      parts.indices.reverse.map(i => parts.take(i + 1).mkString(".")).toList
+    }
+
+    def importedCandidates(ref: String): List[String] = {
+      val rooted     = ref.startsWith("_root_.")
+      val normalized = normalizeTypeRef(ref)
+      val relative   =
+        if (!rooted && normalized.contains(".")) enclosingPackages.map(prefix => s"$prefix.$normalized")
+        else Nil
+      if (rooted) List(normalized)
+      else (relative :+ normalized).distinct
+    }
+
+    def resolveImportedRef(ref: String): Option[String] =
+      importedCandidates(ref).iterator
+        .flatMap(candidate => byFqn.get(candidate))
+        .map(s => s"${s.pkg}.${s.name}")
+        .toSeq
+        .headOption
+
+    def resolve(parent: String, allowGlobalSimpleNameFallback: Boolean): Option[String] = {
+      val expanded   = if (parent.startsWith("_root_.")) parent else expandImportedQualifier(parent, imports)
+      val normalized = normalizeTypeRef(expanded)
+      resolveImportedRef(expanded).orElse {
+        val samePackage = byName.get(normalized).flatMap(_.find(_.pkg == implPkg)).map(s => s"${s.pkg}.${s.name}")
+        samePackage.orElse {
+          imports
+            .get(normalized)
+            .flatMap(resolveImportedRef)
+            .orElse(imports.get(normalized).map(normalizeTypeRef))
+            .orElse {
+              val wildcardMatches = wildcardImports
+                .filterNot(_.excludes.contains(normalized))
+                .flatMap(wildcard => importedCandidates(s"${wildcard.pkg}.$normalized"))
+                .flatMap(candidate => byFqn.get(candidate).map(surface => s"${surface.pkg}.${surface.name}"))
+                .distinct
+              wildcardMatches match {
+                case single :: Nil                      => Some(single)
+                case _ if allowGlobalSimpleNameFallback =>
+                  byName.get(normalized).map(_.toList) match {
+                    case Some(single :: Nil) => Some(s"${single.pkg}.${single.name}")
+                    case _                   => None
+                  }
+                case _ => None
+              }
+            }
+        }
+      }
+    }
+
+    parentTypes.iterator
+      .flatMap(parent => resolve(parent, allowGlobalSimpleNameFallback = false))
+      .toSeq
+      .headOption
+      .orElse(
+        parentTypes.iterator
+          .flatMap(parent => resolve(parent, allowGlobalSimpleNameFallback = true))
+          .toSeq
+          .headOption
+      )
+  }
+
+  private def resolveAgentImpl(
+    impl: SourceDiscovery.AgentImpl,
     traits: Seq[SourceDiscovery.AgentTrait]
+  ): AgentImpl = {
+    val resolvedTrait = resolveParentTrait(
+      impl.pkg,
+      impl.parentTypes,
+      impl.imports,
+      impl.wildcardImports,
+      traits.map(AgentSurface.apply)
+    ).getOrElse(normalizeTypeRef(expandImportedQualifier(impl.traitType, impl.imports)))
+
+    AgentImpl(impl.pkg, impl.implClass, resolvedTrait, impl.ctorTypes)
+  }
+
+  private def resolveToolImpl(
+    impl: SourceDiscovery.ToolImpl,
+    tools: Seq[SourceDiscovery.ToolTrait]
+  ): ToolImpl = {
+    val resolvedTrait = resolveParentTrait(
+      impl.pkg,
+      impl.parentTypes,
+      impl.imports,
+      impl.wildcardImports,
+      tools.map(ToolSurface.apply)
+    ).getOrElse(normalizeTypeRef(expandImportedQualifier(impl.traitType, impl.imports)))
+
+    ToolImpl(impl.pkg, impl.implClass, resolvedTrait)
+  }
+
+  private def surfaceFingerprint(
+    registrations: List[Registration],
+    traits: Seq[SourceDiscovery.AgentTrait],
+    tools: Seq[SourceDiscovery.ToolTrait],
+    sourceHashes: Seq[(String, String)]
   ): String = {
     val traitsByFqn  = traits.map(t => s"${t.pkg}.${t.name}" -> t).toMap
     val traitsByName = traits.map(t => (t.pkg, t.name) -> t).toMap
+    val toolsByFqn   = tools.map(t => s"${t.pkg}.${t.name}" -> t).toMap
+    val toolsByName  = tools.map(t => (t.pkg, t.name) -> t).toMap
 
-    val surface = pkgImpls.map { impl =>
-      val resolvedTrait =
-        traitsByName.get((impl.pkg, impl.traitType)).orElse(traitsByFqn.get(impl.traitType))
+    val registeredSurface = registrations.map {
+      case Registration.Agent(impl) =>
+        val resolvedTrait =
+          traitsByName.get((impl.pkg, impl.traitType)).orElse(traitsByFqn.get(normalizeTypeRef(impl.traitType)))
 
-      val traitSurface = resolvedTrait match {
-        case Some(agentTrait) =>
-          val constructor = agentTrait.constructorParams.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
-          val methods     = agentTrait.methods.map { method =>
-            val params = method.params.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
-            s"${method.name}($params)=>${method.returnTypeExpr}[${method.principalParams.mkString(",")}]"
-          }.mkString(";")
+        val traitSurface = resolvedTrait match {
+          case Some(agentTrait) =>
+            val constructor =
+              agentTrait.constructorParams.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
+            val methods = agentTrait.methods.map { method =>
+              val params = method.params.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
+              s"${method.name}($params)=>${method.returnTypeExpr}[${method.principalParams.mkString(",")}]"
+            }.mkString(";")
 
-          s"trait=${agentTrait.pkg}.${agentTrait.name}|typeName=${agentTrait.typeName.getOrElse(agentTrait.name)}|ctor=$constructor|methods=$methods|mode=${agentTrait.mode.getOrElse("durable")}|desc=${agentTrait.descriptionValue.getOrElse("")}"
-        case None =>
-          s"trait=${impl.traitType}"
-      }
+            s"trait=${agentTrait.pkg}.${agentTrait.name}|typeName=${agentTrait.typeName.getOrElse(agentTrait.name)}|ctor=$constructor|methods=$methods|mode=${agentTrait.mode.getOrElse("durable")}|desc=${agentTrait.descriptionValue.getOrElse("")}"
+          case None =>
+            s"trait=${impl.traitType}"
+        }
 
-      s"impl=${impl.pkg}.${impl.implClass}|ctorTypes=${impl.ctorTypes.mkString(",")}|$traitSurface"
+        s"impl=${impl.pkg}.${impl.implClass}|ctorTypes=${impl.ctorTypes.mkString(",")}|$traitSurface"
+      case Registration.Tool(impl) =>
+        val resolvedTool =
+          toolsByName.get((impl.pkg, impl.traitType)).orElse(toolsByFqn.get(normalizeTypeRef(impl.traitType)))
+
+        val toolSurface = resolvedTool match {
+          case Some(tool) =>
+            val methods = tool.methods.map { method =>
+              val params = method.params.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
+              val args   = method.args
+                .map(arg =>
+                  s"${arg.name}:${arg.scope.getOrElse("")}:${arg.kind.getOrElse("")}:${arg.aliases.mkString(",")}:${arg.syntax}"
+                )
+                .mkString(";")
+              val results     = method.resultAnnotations.mkString(";")
+              val constraints = method.constraintAnnotations.mkString(";")
+              val annotations = method.commandAnnotations.mkString(";")
+              s"${method.name}($params)=>${method.returnTypeExpr}|cmd=${method.commandName.getOrElse("")}|aliases=${method.commandAliases.mkString(",")}|args=$args|result=$results|constraints=$constraints|annotations=$annotations"
+            }.mkString(";")
+            s"tool=${tool.pkg}.${tool.name}|toolName=${tool.toolName.getOrElse(tool.name)}|version=${tool.version.getOrElse("")}|source=${tool.sourceHash}|methods=$methods"
+          case None =>
+            s"tool=${impl.traitType}"
+        }
+
+        s"toolImpl=${impl.pkg}.${impl.implClass}|$toolSurface"
     }.mkString("\n")
+
+    val sourceSurface =
+      if (registrations.exists(_.isInstanceOf[Registration.Tool]))
+        sourceHashes.map { case (path, hash) => s"source=$path:$hash" }.mkString("\n")
+      else ""
+    val surface = s"$registeredSurface\n$sourceSurface"
 
     sha256Hex(surface)
   }

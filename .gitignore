@@ -56,3 +56,5 @@ docs/build/
 docs/snippets/progress.json
 docs/snippets/loop.log
 
+/sdks/scala/out/
+/sdks/scala/mill/out/
