@@ -28,7 +28,7 @@ impl Display for AppValidationError {
         let warns = format_warns(&self.warns);
         let errors = format_errors(&self.errors);
 
-        write!(f, "\n{}{}\n{}", warns, errors, &self.message)
+        write!(f, "\n{}{}\n{}", warns, errors, self.message)
     }
 }
 
