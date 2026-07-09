@@ -181,13 +181,13 @@ cells:
   # are resumed concurrently with increment. The ramp finds max oplog entries per
   # agent before replay hits timeout/ceiling. Shared component only; axis is
   # snapshotting disabled/enabled.
-  - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-250
-    scenario: resume-under-saturation
-    agentMode: durable
-    sharing: shared
-    snapshotting: disabled
-    ramp: [1000, 2500, 3000]
-    prefill: 250
+  # - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-250
+  #   scenario: resume-under-saturation
+  #   agentMode: durable
+  #   sharing: shared
+  #   snapshotting: disabled
+  #   ramp: [1000, 2500, 3000]
+  #   prefill: 250
   - name: resume-under-saturation-durable-shared-component-snapshot-enabled-prefill-250
     scenario: resume-under-saturation
     agentMode: durable
