@@ -568,6 +568,7 @@ dependencies = [
  "golem-wasi-http",
  "serde",
  "serde_json",
+ "wstd",
 ]
 
 [[package]]

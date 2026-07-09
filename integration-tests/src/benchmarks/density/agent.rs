@@ -43,8 +43,9 @@
 //!    background.
 //! 3. concurrent-active: invoke all N agents concurrently with `increment`.
 //! 4. resume-under-saturation: durable-only. For each independent target, warm
-//!    exactly N agents to produce oplog, restart the executor to unload them,
-//!    then measure concurrent replay/resume latency.
+//!    the fixed prefill set with N cheap host calls each to produce oplog,
+//!    restart the executor to unload them, then measure concurrent replay/resume
+//!    latency.
 //!
 //! Durable and ephemeral active modes run the same ramp/round driver
 //! ([`run_ramp_cell`]). Durable agents are deleted between ramp targets so each
@@ -141,8 +142,8 @@ pub enum Scenario {
     CreateWithActiveFraction,
     /// Create N agents, keep all active concurrently.
     ConcurrentActive,
-    /// Durable-only: pre-fill with `prefill_n` idle agents, then measure
-    /// resume-vs-create latency under eviction pressure.
+    /// Durable-only: pre-fill `prefill_n` agents, then ramp oplog entries per
+    /// agent and measure replay/resume latency under saturation.
     ResumeUnderSaturation,
 }
 
@@ -626,6 +627,12 @@ mod keys {
     pub const RESUME_EXISTING_P99_MS: &str = "resume-existing-p99-ms";
     pub const CREATE_FRESH_P50_MS: &str = "create-fresh-p50-ms";
     pub const CREATE_FRESH_P99_MS: &str = "create-fresh-p99-ms";
+    pub const SOFT_CEILING_OPLOG_ENTRIES: &str = "soft-ceiling-oplog-entries-per-agent";
+    pub const USABILITY_CEILING_OPLOG_ENTRIES: &str = "usability-ceiling-oplog-entries-per-agent";
+    pub const HARD_CEILING_OPLOG_ENTRIES: &str = "hard-ceiling-oplog-entries-per-agent";
+    pub const CATASTROPHIC_CEILING_OPLOG_ENTRIES: &str =
+        "catastrophic-ceiling-oplog-entries-per-agent";
+    pub const MAX_OPLOG_ENTRIES_REACHED: &str = "max-oplog-entries-per-agent-reached";
 }
 
 /// The outcome of running one cell: the agent counts at which each ceiling was
@@ -638,6 +645,7 @@ struct CellOutcome {
     catastrophic_ceiling_agents: Option<u32>,
     terminated_reason: TerminatedReason,
     max_agents_reached: u32,
+    max_oplog_entries_reached: u32,
     /// Internal bookkeeping: scenarios 1-3 clean durable agents between ramp
     /// targets, so the outer cell cleanup can be skipped when the last target
     /// was already removed successfully.
@@ -665,6 +673,7 @@ impl Default for CellOutcome {
             // sharing-mode upper bound.
             terminated_reason: TerminatedReason::UpperBoundHit,
             max_agents_reached: 0,
+            max_oplog_entries_reached: 0,
             cleanup_already_done: false,
             invoke_latencies: BTreeMap::new(),
             cold_invoke_latencies: BTreeMap::new(),
@@ -684,21 +693,44 @@ impl CellOutcome {
         // `null` ceilings (never crossed) are recorded as the max reached so the
         // result distinguishes "crossed at N" from "did not cross within bound".
         // The terminated_reason disambiguates upper-bound-hit from catastrophic.
+        let resume_cell = config.scenario == Scenario::ResumeUnderSaturation;
         if let Some(n) = self.soft_ceiling_agents {
-            recorder.count(&ResultKey::primary(keys::SOFT_CEILING_AGENTS), n as u64);
+            recorder.count(
+                &ResultKey::primary(if resume_cell {
+                    keys::SOFT_CEILING_OPLOG_ENTRIES
+                } else {
+                    keys::SOFT_CEILING_AGENTS
+                }),
+                n as u64,
+            );
         }
         if let Some(n) = self.usability_ceiling_agents {
             recorder.count(
-                &ResultKey::primary(keys::USABILITY_CEILING_AGENTS),
+                &ResultKey::primary(if resume_cell {
+                    keys::USABILITY_CEILING_OPLOG_ENTRIES
+                } else {
+                    keys::USABILITY_CEILING_AGENTS
+                }),
                 n as u64,
             );
         }
         if let Some(n) = self.hard_ceiling_agents {
-            recorder.count(&ResultKey::primary(keys::HARD_CEILING_AGENTS), n as u64);
+            recorder.count(
+                &ResultKey::primary(if resume_cell {
+                    keys::HARD_CEILING_OPLOG_ENTRIES
+                } else {
+                    keys::HARD_CEILING_AGENTS
+                }),
+                n as u64,
+            );
         }
         if let Some(n) = self.catastrophic_ceiling_agents {
             recorder.count(
-                &ResultKey::primary(keys::CATASTROPHIC_CEILING_AGENTS),
+                &ResultKey::primary(if resume_cell {
+                    keys::CATASTROPHIC_CEILING_OPLOG_ENTRIES
+                } else {
+                    keys::CATASTROPHIC_CEILING_AGENTS
+                }),
                 n as u64,
             );
         }
@@ -710,6 +742,12 @@ impl CellOutcome {
             &ResultKey::primary(keys::MAX_AGENTS_REACHED),
             self.max_agents_reached as u64,
         );
+        if resume_cell {
+            recorder.count(
+                &ResultKey::primary(keys::MAX_OPLOG_ENTRIES_REACHED),
+                self.max_oplog_entries_reached as u64,
+            );
+        }
 
         // Invoke-latency distribution per ramp step, each rendered as the same
         // avg/min/max/p50/p90/p95/p99 table as cloud-perf. Keying per step (the
@@ -758,7 +796,11 @@ impl CellOutcome {
 
         let run_config = RunConfig {
             cluster_size: 0,
-            size: self.max_agents_reached as usize,
+            size: if resume_cell {
+                self.max_oplog_entries_reached as usize
+            } else {
+                self.max_agents_reached as usize
+            },
             length: 0,
             disable_compilation_cache: false,
         };
@@ -869,11 +911,12 @@ fn log_cell_summary(config: &CellConfig, outcome: &CellOutcome) {
     }
 
     info!(
-        "Density-agent[{}]: stopped — reason {} (code {}), max-agents-reached {}, {}, {}, {}, {}",
+        "Density-agent[{}]: stopped — reason {} (code {}), max-agents-reached {}, max-oplog-entries-per-agent-reached {}, {}, {}, {}, {}",
         config.cell_name(),
         outcome.terminated_reason.as_str(),
         outcome.terminated_reason.code(),
         outcome.max_agents_reached,
+        outcome.max_oplog_entries_reached,
         ceiling("soft-ceiling", outcome.soft_ceiling_agents),
         ceiling("usability-ceiling", outcome.usability_ceiling_agents),
         ceiling("hard-ceiling", outcome.hard_ceiling_agents),
@@ -1165,8 +1208,8 @@ async fn warm_resume_canary_agent(
         user,
         components,
         vec![canary_index],
-        "busy_for",
-        data_value!(RESUME_WARMUP_BUSY_MILLIS),
+        "increment",
+        data_value!(),
         timeout,
     )
     .await;
@@ -1586,18 +1629,15 @@ fn coord_agents(coord: SampleCoord) -> Option<u32> {
 
 // ── Scenario 4: resume-under-saturation ──────────────────────────────────────
 
-/// Number of warmup calls made per prepared agent in scenario 4. These calls
-/// create oplog history to replay after the executor restart.
-const RESUME_WARMUP_CALLS_PER_AGENT: u32 = 100;
-
-/// Busy time for each scenario-4 warmup call. Match the active-load scenarios
-/// so the replay test uses comparable per-invocation work.
-const RESUME_WARMUP_BUSY_MILLIS: u32 = 250;
+/// Number of cheap host calls made by one warmup invocation in scenario 4.
+/// SnapshotCounter snapshots every 10 invocations, so this gives snapshots every
+/// 100k oplog-heavy host calls while keeping warmup request counts bounded.
+const RESUME_OPLOG_ENTRIES_PER_WARMUP_INVOCATION: u32 = 10_000;
 
 /// Scenario 4 (durable-only): each ramp target is an independent replay burst.
-/// The driver warms exactly `target` agents to produce oplog, restarts the
-/// worker-executor to unload them, then revives all `target` agents concurrently.
-/// `prefill_n` is only the per-cell upper bound for allowed targets.
+/// The driver keeps the worker count fixed at `prefill_n`; each ramp target is
+/// the number of cheap host calls (and therefore oplog-heavy replay work) made
+/// by every prepared agent before the executor restart.
 async fn run_resume_cell(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
@@ -1613,41 +1653,42 @@ async fn run_resume_cell(
     let started = Instant::now();
 
     let ramp = config.ramp.clone();
-    if let Some(max_target) = ramp.iter().max()
-        && *max_target > prefill
-    {
-        anyhow::bail!("resume-under-saturation ramp target {max_target} exceeds prefill {prefill}");
-    }
 
-    'ramp: for &target in &ramp {
-        outcome.max_agents_reached = target;
+    'ramp: for &oplog_entries_per_agent in &ramp {
+        outcome.max_agents_reached = prefill;
+        outcome.max_oplog_entries_reached = oplog_entries_per_agent;
         outcome.cleanup_already_done = false;
 
         info!(
-            "Density-agent[{}]: warming {target} agents with {} calls each",
+            "Density-agent[{}]: warming {prefill} agents with {oplog_entries_per_agent} oplog-heavy host calls each",
             config.cell_name(),
-            RESUME_WARMUP_CALLS_PER_AGENT
         );
         let timeout_current = timeout.current;
-        let warmups: Vec<(u32, Vec<AttemptOutcome>)> = futures::stream::iter(0..target)
+        let warmups: Vec<(u32, Vec<AttemptOutcome>)> = futures::stream::iter(0..prefill)
             .map(|index| {
                 let (component, agent) = agent_for_index(config, index, components)
                     .expect("agent_for_index within warmup");
                 let component = component.clone();
                 async move {
-                    let mut attempts = Vec::with_capacity(RESUME_WARMUP_CALLS_PER_AGENT as usize);
-                    for _ in 0..RESUME_WARMUP_CALLS_PER_AGENT {
+                    let mut remaining = oplog_entries_per_agent;
+                    let mut attempts = Vec::with_capacity(
+                        oplog_entries_per_agent.div_ceil(RESUME_OPLOG_ENTRIES_PER_WARMUP_INVOCATION)
+                            as usize,
+                    );
+                    while remaining > 0 {
+                        let chunk = remaining.min(RESUME_OPLOG_ENTRIES_PER_WARMUP_INVOCATION);
                         attempts.push(
                             timed_invoke(
                                 user,
                                 &component,
                                 &agent,
-                                "busy_for",
-                                data_value!(RESUME_WARMUP_BUSY_MILLIS),
+                                "oplog_heavy",
+                                data_value!(chunk),
                                 timeout_current,
                             )
                             .await,
                         );
+                        remaining -= chunk;
                     }
                     (index, attempts)
                 }
@@ -1663,24 +1704,31 @@ async fn run_resume_cell(
         let warmup_connection_alive = batch_connection_alive(&warmup_attempts);
         if !warmup_connection_alive {
             outcome.terminated_reason = TerminatedReason::ConnectionLost;
-            outcome.catastrophic_ceiling_agents = Some(target);
+            outcome.catastrophic_ceiling_agents = Some(oplog_entries_per_agent);
             break 'ramp;
         }
-        warm_resume_canary_agent(config, user, components, target, timeout.current).await?;
+        warm_resume_canary_agent(
+            config,
+            user,
+            components,
+            oplog_entries_per_agent,
+            timeout.current,
+        )
+        .await?;
 
         probe.restart_executor().await?;
         probe.restart_worker_service().await?;
-        wait_for_resume_canary_agent(config, user, components, target).await?;
+        wait_for_resume_canary_agent(config, user, components, oplog_entries_per_agent).await?;
 
         info!(
-            "Density-agent[{}]: reviving {target} warmed agents concurrently",
+            "Density-agent[{}]: reviving {prefill} warmed agents concurrently after {oplog_entries_per_agent} oplog-heavy host calls each",
             config.cell_name()
         );
         let resumed_batch = invoke_agent_indices(
             config,
             user,
             components,
-            (0..target).collect(),
+            (0..prefill).collect(),
             "increment",
             data_value!(),
             super::ceiling::ESCALATED_TIMEOUT,
@@ -1696,12 +1744,12 @@ async fn run_resume_cell(
                 .push(resume.latency.as_secs_f64() * 1000.0);
             outcome
                 .invoke_latencies
-                .entry(target)
+                .entry(oplog_entries_per_agent)
                 .or_default()
                 .push(resume.latency);
             let sample = Sample {
                 latency: resume.latency,
-                coord: SampleCoord::Agents(target),
+                coord: SampleCoord::Agents(oplog_entries_per_agent),
                 // The executor restart above is intentional; this phase relies
                 // on connection-lost and timeout signals for catastrophic state.
                 pod_restart_count: 0,
@@ -1723,19 +1771,19 @@ async fn run_resume_cell(
         }
 
         info!(
-            "Density-agent[{}]: revived {target} warmed agents",
+            "Density-agent[{}]: revived {prefill} warmed agents after {oplog_entries_per_agent} oplog-heavy host calls each",
             config.cell_name()
         );
 
         let step_outcome = CellOutcome {
-            max_agents_reached: target,
+            max_agents_reached: prefill,
             ..CellOutcome::default()
         };
         if cleanup_cell_agents(config, user, components, &step_outcome).await
             == CleanupResult::Failed
         {
             outcome.terminated_reason = TerminatedReason::ConnectionLost;
-            outcome.catastrophic_ceiling_agents = Some(target);
+            outcome.catastrophic_ceiling_agents = Some(oplog_entries_per_agent);
             break 'ramp;
         }
         outcome.cleanup_already_done = true;

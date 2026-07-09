@@ -175,22 +175,23 @@ cells:
   #   ramp: [50, 100, 250, 500, 1000, 2000]
   #   activeFraction: 75
 
-  # Scenario 4 — resume-under-saturation: for each independent ramp target N,
-  # warm N durable agents with 100 busy_for(250ms) calls each to create oplog,
-  # restart the executor, then revive all N agents concurrently with increment.
-  # Snapshotting should avoid replaying all 100 calls and should therefore be
-  # much faster. Shared component only; the axis is snapshotting disabled/enabled.
-  # - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-250
-  #   scenario: resume-under-saturation
-  #   agentMode: durable
-  #   sharing: shared
-  #   snapshotting: disabled
-  #   ramp: [10, 25, 50, 100, 150, 250]
-  #   prefill: 250
+  # Scenario 4 — resume-under-saturation: keep 250 durable agents fixed. For
+  # each independent ramp target N, every agent performs N cheap host calls in
+  # one oplog-heavy invocation, then the executor is restarted and all 250 agents
+  # are resumed concurrently with increment. The ramp finds max oplog entries per
+  # agent before replay hits timeout/ceiling. Shared component only; axis is
+  # snapshotting disabled/enabled.
+  - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-250
+    scenario: resume-under-saturation
+    agentMode: durable
+    sharing: shared
+    snapshotting: disabled
+    ramp: [1000, 2500, 5000, 7500, 10000, 15000]
+    prefill: 250
   - name: resume-under-saturation-durable-shared-component-snapshot-enabled-prefill-250
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
     snapshotting: enabled
-    ramp: [10, 25, 50, 100, 150, 250]
+    ramp: [100000, 170000, 250000, 500000, 1000000]
     prefill: 250

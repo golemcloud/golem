@@ -1,5 +1,5 @@
-mod snapshot_test;
 pub mod repository;
+mod snapshot_test;
 
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
@@ -57,6 +57,10 @@ trait Counter {
     /// increments the counter. The memory stays resident across invocations so
     /// the agent contributes a controllable footprint to the executor's pool.
     fn allocate_memory(&mut self, bytes: u32) -> u32;
+
+    /// Performs `entries` cheap host calls under smart persistence. Used by
+    /// oplog recovery benchmarks to grow replay history without CPU burn.
+    fn oplog_heavy(&mut self, entries: u32) -> u32;
 }
 
 struct CounterImpl {
@@ -104,6 +108,15 @@ impl Counter for CounterImpl {
     fn allocate_memory(&mut self, bytes: u32) -> u32 {
         retain_memory(&mut self.retained, bytes);
         self.count += 1;
+        self.count
+    }
+
+    fn oplog_heavy(&mut self, entries: u32) -> u32 {
+        for _ in 0..entries {
+            let mut buf = [0u8; 4];
+            wstd::rand::get_random_bytes(&mut buf);
+            self.count = self.count.wrapping_add(u32::from_le_bytes(buf));
+        }
         self.count
     }
 }
@@ -154,7 +167,6 @@ impl EphemeralCounter for EphemeralCounterImpl {
     }
 }
 
-
 #[agent_definition(ephemeral)]
 trait EphemeralSingletonCounter {
     fn new() -> Self;
@@ -162,7 +174,7 @@ trait EphemeralSingletonCounter {
 }
 
 struct EphemeralSingletonCounterImpl {
-    count: u32
+    count: u32,
 }
 
 #[agent_implementation]
@@ -176,7 +188,6 @@ impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
         self.count
     }
 }
-
 
 #[agent_definition(ephemeral)]
 trait HostFunctionTests {
