@@ -68,12 +68,13 @@ use crate::benchmarks::density::ceiling::{
 use crate::benchmarks::density::prep::PrepManifest;
 use crate::benchmarks::density::{AgentMode, ComponentSharing};
 use futures::StreamExt;
+use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::agent_id;
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::data_value;
-use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::{AgentEvent, AgentId};
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
 };
@@ -84,6 +85,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot::Sender;
 use tracing::{debug, info, warn};
 
 /// Agent type names exported by the agent-counters component.
@@ -120,6 +123,9 @@ const DELETE_CONCURRENCY: usize = 25;
 const INVOCATION_PATH_CANARY_BUDGET: Duration = Duration::from_secs(120);
 const INVOCATION_PATH_CANARY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 const INVOCATION_PATH_CANARY_RETRY_DELAY: Duration = Duration::from_secs(2);
+const SNAPSHOT_EVENT_STREAM_BUDGET: Duration = Duration::from_secs(30);
+const SNAPSHOT_EVENT_STREAM_RETRY_DELAY: Duration = Duration::from_secs(2);
+const SNAPSHOT_EVENT_OBSERVATION_BUDGET: Duration = Duration::from_secs(10);
 const RESUME_CANARY_INDEX_OFFSET: u32 = 1_000_000;
 
 /// Fraction of a ramp batch that must fail at the transport level (request
@@ -1762,25 +1768,11 @@ async fn run_resume_cell(
         wait_for_resume_canary_agent(config, user, components, requested_host_calls_per_agent)
             .await?;
 
-        let mut snapshot_event_log_guards = Vec::new();
-        if config.snapshotting {
-            for index in 0..prefill.min(3) {
-                let (component, parsed) = agent_for_index(config, index, components)?;
-                let agent_id = AgentId::from_agent_id(component.id, &parsed)
-                    .map_err(|err| anyhow::anyhow!(err))?;
-                info!(
-                    "Density-agent[{}]: streaming snapshot recovery events for warmed agent {index} ({agent_id})",
-                    config.cell_name()
-                );
-                match user.log_output_scoped(&agent_id).await {
-                    Ok(guard) => snapshot_event_log_guards.push(guard),
-                    Err(err) => warn!(
-                        "Density-agent[{}]: failed to stream snapshot recovery events for warmed agent {index} ({agent_id}): {err:?}",
-                        config.cell_name()
-                    ),
-                }
-            }
-        }
+        let mut snapshot_event_capture = if config.snapshotting {
+            start_snapshot_event_capture(config, user, components, 0).await
+        } else {
+            None
+        };
 
         info!(
             "Density-agent[{}]: reviving {prefill} warmed agents concurrently after {requested_host_calls_per_agent} requested host calls each (observed max oplog last-index {observed_oplog_entries_per_agent})",
@@ -1796,7 +1788,10 @@ async fn run_resume_cell(
             super::ceiling::ESCALATED_TIMEOUT,
         )
         .await;
-        drop(snapshot_event_log_guards);
+        if let Some((receiver, abort_tx)) = snapshot_event_capture.as_mut() {
+            observe_snapshot_recovery_event(config, 0, receiver).await;
+            let _ = abort_tx.take().map(|tx| tx.send(()));
+        }
 
         detector.set_elapsed_secs(started.elapsed().as_secs_f64());
         let attempt_refs: Vec<&AttemptOutcome> = resumed_batch.iter().map(|(_, a)| a).collect();
@@ -1853,6 +1848,115 @@ async fn run_resume_cell(
     }
 
     Ok(outcome)
+}
+
+type SnapshotEventCapture = (UnboundedReceiver<Option<LogEvent>>, Option<Sender<()>>);
+
+async fn start_snapshot_event_capture(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    index: u32,
+) -> Option<SnapshotEventCapture> {
+    let (component, parsed) = match agent_for_index(config, index, components) {
+        Ok(agent) => agent,
+        Err(err) => {
+            warn!(
+                "Density-agent[{}]: failed to resolve snapshot event stream agent {index}: {err:?}",
+                config.cell_name()
+            );
+            return None;
+        }
+    };
+    let agent_id = match AgentId::from_agent_id(component.id, &parsed) {
+        Ok(agent_id) => agent_id,
+        Err(err) => {
+            warn!(
+                "Density-agent[{}]: failed to build snapshot event stream agent id {index}: {err}",
+                config.cell_name()
+            );
+            return None;
+        }
+    };
+
+    let deadline = Instant::now() + SNAPSHOT_EVENT_STREAM_BUDGET;
+    let mut attempt_no = 0u32;
+    loop {
+        attempt_no += 1;
+        info!(
+            "Density-agent[{}]: capturing snapshot recovery events for warmed agent {index} ({agent_id}), attempt {attempt_no}",
+            config.cell_name()
+        );
+        match user.capture_output_with_termination(&agent_id).await {
+            Ok((receiver, abort_tx)) => return Some((receiver, Some(abort_tx))),
+            Err(err) => {
+                warn!(
+                    "Density-agent[{}]: failed to capture snapshot recovery events for warmed agent {index} ({agent_id}) attempt {attempt_no}: {err:?}",
+                    config.cell_name()
+                );
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                tokio::time::sleep(SNAPSHOT_EVENT_STREAM_RETRY_DELAY).await;
+            }
+        }
+    }
+}
+
+async fn observe_snapshot_recovery_event(
+    config: &CellConfig,
+    index: u32,
+    receiver: &mut UnboundedReceiver<Option<LogEvent>>,
+) {
+    let deadline = Instant::now() + SNAPSHOT_EVENT_OBSERVATION_BUDGET;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            warn!(
+                "Density-agent[{}]: no snapshot recovery event observed for sampled warmed agent {index}",
+                config.cell_name()
+            );
+            return;
+        }
+
+        match tokio::time::timeout(remaining, receiver.recv()).await {
+            Ok(Some(Some(event))) => match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    info!(
+                        "Density-agent[{}]: sampled warmed agent {index} snapshot recovery succeeded from {snapshot_index}",
+                        config.cell_name()
+                    );
+                    return;
+                }
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) => {
+                    warn!(
+                        "Density-agent[{}]: sampled warmed agent {index} snapshot recovery failed from {snapshot_index}: {error}",
+                        config.cell_name()
+                    );
+                    return;
+                }
+                _ => {}
+            },
+            Ok(Some(None)) | Ok(None) => {
+                warn!(
+                    "Density-agent[{}]: snapshot event stream ended before recovery event for sampled warmed agent {index}",
+                    config.cell_name()
+                );
+                return;
+            }
+            Err(_) => {
+                warn!(
+                    "Density-agent[{}]: timed out waiting for snapshot recovery event for sampled warmed agent {index}",
+                    config.cell_name()
+                );
+                return;
+            }
+        }
+    }
 }
 
 async fn collect_resume_oplog_last_indices(
