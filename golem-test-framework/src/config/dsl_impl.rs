@@ -972,15 +972,10 @@ struct HttpWorkerLogEventStream {
 
 impl HttpWorkerLogEventStream {
     async fn new(client: Arc<WorkerClientLive>, agent_id: &AgentId) -> anyhow::Result<Self> {
-        let url = format!(
-            "ws://{}:{}/v1/components/{}/workers/{}/connect",
-            client.context.base_url.host().unwrap(),
-            client.context.base_url.port_or_known_default().unwrap(),
-            agent_id.component_id.0,
-            agent_id.agent_id,
-        );
+        let url = worker_log_event_stream_url(&client.context.base_url, agent_id)?;
 
         let mut connection_request = url
+            .as_str()
             .into_client_request()
             .context("Failed to create request")?;
 
@@ -996,7 +991,11 @@ impl HttpWorkerLogEventStream {
             connection_request,
             None,
             false,
-            Some(Connector::Plain),
+            if url.scheme() == "ws" {
+                Some(Connector::Plain)
+            } else {
+                None
+            },
         )
         .await?;
         let (mut write, read) = stream.split();
@@ -1018,6 +1017,30 @@ impl HttpWorkerLogEventStream {
 
         Ok(Self { read })
     }
+}
+
+fn worker_log_event_stream_url(
+    base_url: &reqwest::Url,
+    agent_id: &AgentId,
+) -> anyhow::Result<reqwest::Url> {
+    let mut url = base_url.clone();
+    let ws_scheme = if base_url.scheme() == "https" {
+        "wss"
+    } else {
+        "ws"
+    };
+    url.set_scheme(ws_scheme)
+        .map_err(|()| anyhow!("Failed to set worker log event stream URL scheme"))?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow!("Failed to build worker log event stream URL"))?
+        .clear()
+        .push("v1")
+        .push("components")
+        .push(&agent_id.component_id.0.to_string())
+        .push("workers")
+        .push(&agent_id.agent_id)
+        .push("connect");
+    Ok(url)
 }
 
 #[async_trait]
@@ -1050,5 +1073,58 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
                 None => return Ok(None),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn test_agent_id() -> AgentId {
+        AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: "SnapshotCounter(\"resume-under-saturation-0\")".to_string(),
+        }
+    }
+
+    #[test]
+    fn worker_log_event_stream_url_uses_wss_for_https_base_url() {
+        let url = worker_log_event_stream_url(
+            &reqwest::Url::parse("https://release.dev-api.golem.cloud").unwrap(),
+            &test_agent_id(),
+        )
+        .unwrap();
+
+        assert_eq!(url.scheme(), "wss");
+        assert_eq!(url.host_str(), Some("release.dev-api.golem.cloud"));
+        assert_eq!(url.port_or_known_default(), Some(443));
+    }
+
+    #[test]
+    fn worker_log_event_stream_url_uses_ws_for_http_base_url() {
+        let url = worker_log_event_stream_url(
+            &reqwest::Url::parse("http://127.0.0.1:9005").unwrap(),
+            &test_agent_id(),
+        )
+        .unwrap();
+
+        assert_eq!(url.scheme(), "ws");
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+        assert_eq!(url.port_or_known_default(), Some(9005));
+    }
+
+    #[test]
+    fn worker_log_event_stream_url_encodes_agent_id_path_segment() {
+        let url = worker_log_event_stream_url(
+            &reqwest::Url::parse("https://release.dev-api.golem.cloud").unwrap(),
+            &test_agent_id(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.path(),
+            "/v1/components/00000000-0000-0000-0000-000000000000/workers/SnapshotCounter(%22resume-under-saturation-0%22)/connect"
+        );
     }
 }

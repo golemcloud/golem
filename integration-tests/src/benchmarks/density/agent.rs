@@ -73,6 +73,7 @@ use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::data_value;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::oplog::PublicOplogEntry;
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
 };
@@ -1708,6 +1709,17 @@ async fn run_resume_cell(
             break 'ramp;
         }
 
+        if config.snapshotting {
+            assert_sampled_resume_snapshots_present(
+                config,
+                user,
+                components,
+                prefill,
+                oplog_entries_per_agent,
+            )
+            .await?;
+        }
+
         let mut snapshot_event_log_guards = Vec::new();
         if config.snapshotting {
             for index in 0..prefill.min(3) {
@@ -1718,7 +1730,13 @@ async fn run_resume_cell(
                     "Density-agent[{}]: streaming snapshot recovery events for warmed agent {index} ({agent_id})",
                     config.cell_name()
                 );
-                snapshot_event_log_guards.push(user.log_output_scoped(&agent_id).await?);
+                match user.log_output_scoped(&agent_id).await {
+                    Ok(guard) => snapshot_event_log_guards.push(guard),
+                    Err(err) => warn!(
+                        "Density-agent[{}]: failed to stream snapshot recovery events for warmed agent {index} ({agent_id}): {err:?}",
+                        config.cell_name()
+                    ),
+                }
             }
         }
 
@@ -1806,6 +1824,41 @@ async fn run_resume_cell(
     }
 
     Ok(outcome)
+}
+
+async fn assert_sampled_resume_snapshots_present(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    prefill: u32,
+    oplog_entries_per_agent: u32,
+) -> anyhow::Result<()> {
+    let sampled = prefill.min(3);
+    for index in 0..sampled {
+        let (component, parsed) = agent_for_index(config, index, components)?;
+        let agent_id =
+            AgentId::from_agent_id(component.id, &parsed).map_err(|err| anyhow::anyhow!(err))?;
+        let snapshot_entries = user.search_oplog(&agent_id, "snapshot").await?;
+        let snapshot_indices: Vec<_> = snapshot_entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Snapshot(_) => Some(entry.oplog_index),
+                _ => None,
+            })
+            .collect();
+        info!(
+            "Density-agent[{}]: warmed agent {index} ({agent_id}) has {} snapshot oplog entries before restart: {:?}",
+            config.cell_name(),
+            snapshot_indices.len(),
+            snapshot_indices,
+        );
+        if snapshot_indices.is_empty() {
+            anyhow::bail!(
+                "snapshot-enabled resume target {oplog_entries_per_agent} produced no snapshot oplog entries for sampled warmed agent {index} ({agent_id}) before restart"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
