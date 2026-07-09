@@ -1263,6 +1263,12 @@ pub enum SerializableStreamError {
 
 impl From<StreamError> for SerializableStreamError {
     fn from(value: StreamError) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&StreamError> for SerializableStreamError {
+    fn from(value: &StreamError) -> Self {
         match value {
             StreamError::Closed => Self::Closed,
             StreamError::LastOperationFailed(e) => Self::LastOperationFailed(e.to_string()),
