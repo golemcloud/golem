@@ -609,7 +609,7 @@ where
             }
 
             let file = open_options.open(&file_path).unwrap_or_else(|err| {
-                panic!("cannot create log file: {:?}, error: {}", &file_path, err)
+                panic!("cannot create log file: {:?}, error: {}", file_path, err)
             });
 
             layers.push(make_layer(
