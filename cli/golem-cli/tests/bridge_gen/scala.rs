@@ -22,7 +22,7 @@ use golem_cli::bridge_gen::scala::scala::{
     unique_idents_with_reserved,
 };
 use golem_cli::bridge_gen::scala::type_name::RemappedType;
-use golem_cli::bridge_gen::scala::{ScalaBridgeGenerator, ScalaTypeName};
+use golem_cli::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode, ScalaTypeName};
 use golem_cli::bridge_gen::type_naming::{TypeName, TypeNaming};
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_common::model::agent::AgentMode;
@@ -37,12 +37,20 @@ struct GeneratedPackage {
 
 impl GeneratedPackage {
     pub fn new(agent_type: AgentTypeSchema) -> Self {
-        let package_name =
-            bridge_client_directory_name(&agent_type.type_name, BridgeMode::External);
+        Self::new_with_mode(agent_type, ScalaBridgeMode::ExternalRest)
+    }
+
+    pub fn new_with_mode(agent_type: AgentTypeSchema, mode: ScalaBridgeMode) -> Self {
+        let bridge_mode = match mode {
+            ScalaBridgeMode::ExternalRest => BridgeMode::External,
+            ScalaBridgeMode::GuestWasmRpc => BridgeMode::Guest,
+        };
+        let package_name = bridge_client_directory_name(&agent_type.type_name, bridge_mode);
         let dir = TempDir::new().unwrap();
         let target_dir = Utf8Path::from_path(dir.path()).unwrap();
         let package_dir = target_dir.join(&package_name);
-        let mut generator = ScalaBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
+        let mut generator =
+            ScalaBridgeGenerator::new_with_mode(agent_type, &package_dir, true, mode).unwrap();
         generator.generate().unwrap();
         GeneratedPackage { dir, package_name }
     }
@@ -123,6 +131,43 @@ fn generated_project_layout_is_correct() {
     let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
     assert!(build_sbt.contains("crossScalaVersions"));
     assert!(build_sbt.contains("counter-agent-client"));
+}
+
+/// Guest Scala bridge projects skip embedding the external REST runtime and
+/// depend on the Scala SDK's guest runtime instead, so the generated client must
+/// not refer to the external-only `golem.bridge.runtime` package.
+#[test]
+fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "CounterAgent",
+            "scala",
+            vec![field("name", SchemaType::string())],
+            vec![method("increment", vec![], Some(SchemaType::f64()))],
+            vec![],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+
+    assert!(
+        !dir.join("src/main/scala/golem/bridge/runtime").exists(),
+        "guest bridge must not embed the external REST runtime"
+    );
+
+    let client_path =
+        dir.join("src/main/scala/golem/bridge/client/counter_agent/CounterAgentClient.scala");
+    let client_source = std::fs::read_to_string(&client_path).unwrap();
+    assert!(
+        !client_source.contains("golem.bridge.runtime"),
+        "guest bridge client references the external REST runtime package:\n{client_source}"
+    );
+
+    let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
+    assert!(build_sbt.contains("golem-scala-core"));
+    assert!(build_sbt.contains("golem-scala-model"));
+    assert!(build_sbt.contains("ScalaJSPlugin"));
 }
 
 /// Generates a bridge for an agent with rich named types (record, enum,

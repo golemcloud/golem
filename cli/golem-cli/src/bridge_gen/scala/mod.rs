@@ -47,6 +47,7 @@ use crate::bridge_gen::scala::scala_writer::ScalaWriter;
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::fs;
+use crate::sdk_overrides::sdk_overrides;
 use crate::versions::scala_dep;
 use anyhow::{Context, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -254,6 +255,13 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "ResolvedAgent",
 ];
 
+const RESERVED_GUEST_RUNTIME_TYPE_NAMES: &[&str] = &[
+    "ClientError",
+    "CancellationToken",
+    "ConfigOverride",
+    "RemoteAgentClient",
+];
+
 /// The `(case_name, payload_schema)` modality pairs of one multimodal set.
 type MultimodalModalities = Vec<(String, SchemaType)>;
 
@@ -261,11 +269,78 @@ type MultimodalModalities = Vec<(String, SchemaType)>;
 /// `Multimodal<N>` sealed-trait name.
 type NamedMultimodal = (MultimodalModalities, String);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScalaBridgeMode {
+    ExternalRest,
+    GuestWasmRpc,
+}
+
+impl ScalaBridgeMode {
+    fn bridge_mode(self) -> BridgeMode {
+        match self {
+            ScalaBridgeMode::ExternalRest => BridgeMode::External,
+            ScalaBridgeMode::GuestWasmRpc => BridgeMode::Guest,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+struct ScalaRuntimeConfig {
+    runtime_pkg: &'static str,
+    schema_value: &'static str,
+    schema_value_codec: &'static str,
+    schema_result: &'static str,
+    schema_map_entry: &'static str,
+    bridge_exception: &'static str,
+    schema_value_type: &'static str,
+    agent_config_entry: &'static str,
+    bridge: &'static str,
+    configuration: &'static str,
+    resolved_agent: &'static str,
+    agent_id: &'static str,
+    golem_server: &'static str,
+    datetime: &'static str,
+    uuid: &'static str,
+}
+
+impl ScalaRuntimeConfig {
+    fn new(mode: ScalaBridgeMode) -> Self {
+        match mode {
+            ScalaBridgeMode::ExternalRest | ScalaBridgeMode::GuestWasmRpc => Self {
+                runtime_pkg: RUNTIME_PKG,
+                schema_value: SV,
+                schema_value_codec: CODEC,
+                schema_result: SCHEMA_RESULT,
+                schema_map_entry: SCHEMA_MAP_ENTRY,
+                bridge_exception: BRIDGE_EXCEPTION,
+                schema_value_type: SCHEMA_VALUE_TYPE,
+                agent_config_entry: AGENT_CONFIG_ENTRY,
+                bridge: BRIDGE,
+                configuration: CONFIGURATION,
+                resolved_agent: RESOLVED_AGENT,
+                agent_id: AGENT_ID,
+                golem_server: GOLEM_SERVER,
+                datetime: DATETIME,
+                uuid: UUID,
+            },
+        }
+    }
+
+    fn reserved_type_names(self) -> &'static [&'static str] {
+        match self.runtime_pkg {
+            RUNTIME_PKG => RESERVED_RUNTIME_TYPE_NAMES,
+            _ => &[],
+        }
+    }
+}
+
 pub struct ScalaBridgeGenerator {
     target_path: Utf8PathBuf,
     agent_type: AgentTypeSchema,
     #[allow(dead_code)]
     testing: bool,
+    mode: ScalaBridgeMode,
     same_language: bool,
     type_naming: TypeNaming<ScalaTypeName>,
     /// Distinct multimodal modality sets discovered up front (constructor input,
@@ -306,14 +381,35 @@ impl ScalaBridgeGenerator {
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mode(
+            agent_type,
+            target_path,
+            testing,
+            ScalaBridgeMode::ExternalRest,
+        )
+    }
+
+    pub fn new_with_mode(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: ScalaBridgeMode,
+    ) -> anyhow::Result<Self> {
         let same_language = agent_type.source_language.eq_ignore_ascii_case("scala");
+        let runtime_config = ScalaRuntimeConfig::new(mode);
 
         // Discover the multimodal modality sets first so their generated
         // `Multimodal<N>` names can be reserved in the walker below.
         let multimodals = collect_multimodals(&agent_type)?;
 
-        let reserved = RESERVED_RUNTIME_TYPE_NAMES
+        let mode_reserved = match mode {
+            ScalaBridgeMode::ExternalRest => &[][..],
+            ScalaBridgeMode::GuestWasmRpc => RESERVED_GUEST_RUNTIME_TYPE_NAMES,
+        };
+        let reserved = runtime_config
+            .reserved_type_names()
             .iter()
+            .chain(mode_reserved.iter())
             .map(|name| ScalaTypeName::Derived((*name).to_string()))
             .chain(std::iter::once(ScalaTypeName::Derived(client_object_name(
                 &agent_type,
@@ -340,14 +436,19 @@ impl ScalaBridgeGenerator {
             target_path: target_path.to_path_buf(),
             agent_type,
             testing,
+            mode,
             same_language,
             type_naming,
             multimodals,
         })
     }
 
+    fn runtime_config(&self) -> ScalaRuntimeConfig {
+        ScalaRuntimeConfig::new(self.mode)
+    }
+
     fn library_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name, BridgeMode::External)
+        bridge_client_directory_name(&self.agent_type.type_name, self.mode.bridge_mode())
     }
 
     /// The per-agent client package segment appended to `golem.bridge.client`,
@@ -410,22 +511,49 @@ impl ScalaBridgeGenerator {
     }
 
     fn write_build_files(&self) -> anyhow::Result<()> {
-        let build_sbt = formatdoc! {r#"
-            ThisBuild / organization := "golem.bridge"
-            ThisBuild / version      := "0.0.1"
+        let build_sbt = match self.mode {
+            ScalaBridgeMode::ExternalRest => formatdoc! {r#"
+                ThisBuild / organization := "golem.bridge"
+                ThisBuild / version      := "0.0.1"
 
-            lazy val root = (project in file("."))
-              .settings(
-                name               := "{name}",
-                scalaVersion       := "{scala3}",
-                crossScalaVersions := Seq("{scala2}", "{scala3}"),
-                libraryDependencies += "dev.zio" %% "zio-blocks-schema" % "{zio_blocks}"
-              )
-            "#,
-            name = self.library_name(),
-            scala2 = scala_dep::SCALA_2_VERSION,
-            scala3 = scala_dep::SCALA_VERSION,
-            zio_blocks = scala_dep::ZIO_BLOCKS_VERSION,
+                lazy val root = (project in file("."))
+                  .settings(
+                    name               := "{name}",
+                    scalaVersion       := "{scala3}",
+                    crossScalaVersions := Seq("{scala2}", "{scala3}"),
+                    libraryDependencies += "dev.zio" %% "zio-blocks-schema" % "{zio_blocks}"
+                  )
+                "#,
+                name = self.library_name(),
+                scala2 = scala_dep::SCALA_2_VERSION,
+                scala3 = scala_dep::SCALA_VERSION,
+                zio_blocks = scala_dep::ZIO_BLOCKS_VERSION,
+            },
+            ScalaBridgeMode::GuestWasmRpc => formatdoc! {r#"
+                import org.scalajs.linker.interface.ModuleKind
+
+                ThisBuild / organization := "golem.bridge"
+                ThisBuild / version      := "0.0.1"
+
+                lazy val root = (project in file("."))
+                  .enablePlugins(ScalaJSPlugin)
+                  .settings(
+                    name                         := "{name}",
+                    scalaVersion                 := "{scala3}",
+                    crossScalaVersions           := Seq("{scala2}", "{scala3}"),
+                    scalaJSUseMainModuleInitializer := false,
+                    scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.ESModule)),
+                    libraryDependencies ++= Seq(
+                      "cloud.golem" %%% "golem-scala-core"  % "{sdk_version}",
+                      "cloud.golem" %%% "golem-scala-model" % "{sdk_version}"
+                    )
+                  )
+                "#,
+                name = self.library_name(),
+                scala2 = scala_dep::SCALA_2_VERSION,
+                scala3 = scala_dep::SCALA_VERSION,
+                sdk_version = sdk_overrides()?.scala_sdk_dep(),
+            },
         };
         fs::write_str(self.target_path.join("build.sbt"), build_sbt)?;
 
@@ -435,16 +563,36 @@ impl ScalaBridgeGenerator {
             build_properties,
         )?;
 
+        if self.mode == ScalaBridgeMode::GuestWasmRpc {
+            let plugins_sbt = formatdoc! {r#"
+                addSbtPlugin("org.scala-js" % "sbt-scalajs" % "{scalajs_plugin}")
+                "#,
+                scalajs_plugin = scala_dep::SCALAJS_PLUGIN_VERSION,
+            };
+            fs::write_str(
+                self.target_path.join("project").join("plugins.sbt"),
+                plugins_sbt,
+            )?;
+        }
+
         Ok(())
     }
 
     fn write_runtime(&self) -> anyhow::Result<()> {
-        let source_root = self.target_path.join(SCALA_SOURCE_ROOT);
-        write_dir(&RUNTIME_DIR, &source_root)
+        match self.mode {
+            ScalaBridgeMode::ExternalRest => {
+                let source_root = self.target_path.join(SCALA_SOURCE_ROOT);
+                write_dir(&RUNTIME_DIR, &source_root)
+            }
+            ScalaBridgeMode::GuestWasmRpc => Ok(()),
+        }
     }
 
     fn write_client(&self) -> anyhow::Result<()> {
-        let content = self.generate_client_source()?;
+        let content = match self.mode {
+            ScalaBridgeMode::ExternalRest => self.generate_client_source()?,
+            ScalaBridgeMode::GuestWasmRpc => self.generate_guest_client_source(),
+        };
 
         let mut client_path = self
             .target_path
@@ -461,10 +609,17 @@ impl ScalaBridgeGenerator {
     /// Renders the full generated client source file: package declaration,
     /// imports, the generated type definitions, and the client object.
     fn generate_client_source(&self) -> anyhow::Result<String> {
+        let runtime_config = self.runtime_config();
         let mut writer = ScalaWriter::new();
         writer.line(format!("package {}", self.client_package()));
         writer.blank();
-        writer.line("import golem.bridge.runtime._");
+        writer.line(format!(
+            "import {}._",
+            runtime_config
+                .runtime_pkg
+                .strip_prefix("_root_.")
+                .unwrap_or(runtime_config.runtime_pkg)
+        ));
         writer.blank();
         writer.line("// Generated by golem-cli. Do not edit.");
         writer.blank();
@@ -483,6 +638,16 @@ impl ScalaBridgeGenerator {
         self.write_client_object(&mut writer)?;
 
         Ok(writer.finish())
+    }
+
+    fn generate_guest_client_source(&self) -> String {
+        let mut writer = ScalaWriter::new();
+        writer.line(format!("package {}", self.client_package()));
+        writer.blank();
+        writer.line("// Generated by golem-cli. Do not edit.");
+        writer.blank();
+        writer.line(format!("object {}", self.client_object_name()));
+        writer.finish()
     }
 
     // --- Client object ------------------------------------------------------
