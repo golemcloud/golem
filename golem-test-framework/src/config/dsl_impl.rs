@@ -531,6 +531,28 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(result)
     }
 
+    async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+
+        let response = client
+            .get_oplog(
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
+                Some(OplogIndex::INITIAL.as_u64()),
+                1,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
+
+        Ok(response.last_index)
+    }
+
     async fn search_oplog(
         &self,
         agent_id: &AgentId,

@@ -634,6 +634,7 @@ mod keys {
     pub const CATASTROPHIC_CEILING_OPLOG_ENTRIES: &str =
         "catastrophic-ceiling-oplog-entries-per-agent";
     pub const MAX_OPLOG_ENTRIES_REACHED: &str = "max-oplog-entries-per-agent-reached";
+    pub const MAX_REQUESTED_HOST_CALLS_REACHED: &str = "max-requested-host-calls-per-agent-reached";
 }
 
 /// The outcome of running one cell: the agent counts at which each ceiling was
@@ -646,7 +647,8 @@ struct CellOutcome {
     catastrophic_ceiling_agents: Option<u32>,
     terminated_reason: TerminatedReason,
     max_agents_reached: u32,
-    max_oplog_entries_reached: u32,
+    max_oplog_entries_reached: u64,
+    max_requested_host_calls_reached: u32,
     /// Internal bookkeeping: scenarios 1-3 clean durable agents between ramp
     /// targets, so the outer cell cleanup can be skipped when the last target
     /// was already removed successfully.
@@ -675,6 +677,7 @@ impl Default for CellOutcome {
             terminated_reason: TerminatedReason::UpperBoundHit,
             max_agents_reached: 0,
             max_oplog_entries_reached: 0,
+            max_requested_host_calls_reached: 0,
             cleanup_already_done: false,
             invoke_latencies: BTreeMap::new(),
             cold_invoke_latencies: BTreeMap::new(),
@@ -746,7 +749,11 @@ impl CellOutcome {
         if resume_cell {
             recorder.count(
                 &ResultKey::primary(keys::MAX_OPLOG_ENTRIES_REACHED),
-                self.max_oplog_entries_reached as u64,
+                self.max_oplog_entries_reached,
+            );
+            recorder.count(
+                &ResultKey::primary(keys::MAX_REQUESTED_HOST_CALLS_REACHED),
+                self.max_requested_host_calls_reached as u64,
             );
         }
 
@@ -912,12 +919,13 @@ fn log_cell_summary(config: &CellConfig, outcome: &CellOutcome) {
     }
 
     info!(
-        "Density-agent[{}]: stopped — reason {} (code {}), max-agents-reached {}, max-oplog-entries-per-agent-reached {}, {}, {}, {}, {}",
+        "Density-agent[{}]: stopped — reason {} (code {}), max-agents-reached {}, max-oplog-entries-per-agent-reached {}, max-requested-host-calls-per-agent-reached {}, {}, {}, {}, {}",
         config.cell_name(),
         outcome.terminated_reason.as_str(),
         outcome.terminated_reason.code(),
         outcome.max_agents_reached,
         outcome.max_oplog_entries_reached,
+        outcome.max_requested_host_calls_reached,
         ceiling("soft-ceiling", outcome.soft_ceiling_agents),
         ceiling("usability-ceiling", outcome.usability_ceiling_agents),
         ceiling("hard-ceiling", outcome.hard_ceiling_agents),
@@ -1633,7 +1641,7 @@ fn coord_agents(coord: SampleCoord) -> Option<u32> {
 /// Number of cheap host calls made by one warmup invocation in scenario 4.
 /// SnapshotCounter snapshots every 10 invocations, so this gives snapshots every
 /// 100k oplog-heavy host calls while keeping warmup request counts bounded.
-const RESUME_OPLOG_ENTRIES_PER_WARMUP_INVOCATION: u32 = 10_000;
+const RESUME_HOST_CALLS_PER_WARMUP_INVOCATION: u32 = 10_000;
 
 /// Scenario 4 (durable-only): each ramp target is an independent replay burst.
 /// The driver keeps the worker count fixed at `prefill_n`; each ramp target is
@@ -1655,13 +1663,13 @@ async fn run_resume_cell(
 
     let ramp = config.ramp.clone();
 
-    'ramp: for &oplog_entries_per_agent in &ramp {
+    'ramp: for &requested_host_calls_per_agent in &ramp {
         outcome.max_agents_reached = prefill;
-        outcome.max_oplog_entries_reached = oplog_entries_per_agent;
+        outcome.max_requested_host_calls_reached = requested_host_calls_per_agent;
         outcome.cleanup_already_done = false;
 
         info!(
-            "Density-agent[{}]: warming {prefill} agents with {oplog_entries_per_agent} oplog-heavy host calls each",
+            "Density-agent[{}]: warming {prefill} agents with {requested_host_calls_per_agent} host calls each",
             config.cell_name(),
         );
         let timeout_current = timeout.current;
@@ -1671,13 +1679,14 @@ async fn run_resume_cell(
                     .expect("agent_for_index within warmup");
                 let component = component.clone();
                 async move {
-                    let mut remaining = oplog_entries_per_agent;
+                    let mut remaining = requested_host_calls_per_agent;
                     let mut attempts = Vec::with_capacity(
-                        oplog_entries_per_agent.div_ceil(RESUME_OPLOG_ENTRIES_PER_WARMUP_INVOCATION)
+                        requested_host_calls_per_agent
+                            .div_ceil(RESUME_HOST_CALLS_PER_WARMUP_INVOCATION)
                             as usize,
                     );
                     while remaining > 0 {
-                        let chunk = remaining.min(RESUME_OPLOG_ENTRIES_PER_WARMUP_INVOCATION);
+                        let chunk = remaining.min(RESUME_HOST_CALLS_PER_WARMUP_INVOCATION);
                         attempts.push(
                             timed_invoke(
                                 user,
@@ -1705,8 +1714,27 @@ async fn run_resume_cell(
         let warmup_connection_alive = batch_connection_alive(&warmup_attempts);
         if !warmup_connection_alive {
             outcome.terminated_reason = TerminatedReason::ConnectionLost;
-            outcome.catastrophic_ceiling_agents = Some(oplog_entries_per_agent);
+            outcome.catastrophic_ceiling_agents =
+                u32::try_from(outcome.max_oplog_entries_reached).ok();
             break 'ramp;
+        }
+
+        let oplog_last_indices =
+            collect_resume_oplog_last_indices(config, user, components, prefill).await?;
+        let observed_oplog_entries_per_agent =
+            oplog_last_indices.iter().copied().max().unwrap_or(0);
+        let observed_oplog_entries_coord = u32::try_from(observed_oplog_entries_per_agent)
+            .map_err(|_| anyhow::anyhow!("observed oplog index exceeds u32 ceiling coordinate"))?;
+        outcome.max_oplog_entries_reached = observed_oplog_entries_per_agent;
+        let min_observed = oplog_last_indices.iter().copied().min().unwrap_or(0);
+        info!(
+            "Density-agent[{}]: warmed {prefill} agents with {requested_host_calls_per_agent} requested host calls each; observed oplog last-index range {min_observed}..={observed_oplog_entries_per_agent}",
+            config.cell_name(),
+        );
+        if min_observed != observed_oplog_entries_per_agent {
+            anyhow::bail!(
+                "resume target {requested_host_calls_per_agent} requested host calls produced inconsistent oplog last-index range {min_observed}..={observed_oplog_entries_per_agent} across warmed agents"
+            );
         }
 
         if config.snapshotting {
@@ -1715,10 +1743,24 @@ async fn run_resume_cell(
                 user,
                 components,
                 prefill,
-                oplog_entries_per_agent,
+                requested_host_calls_per_agent,
             )
             .await?;
         }
+
+        warm_resume_canary_agent(
+            config,
+            user,
+            components,
+            requested_host_calls_per_agent,
+            timeout.current,
+        )
+        .await?;
+
+        probe.restart_executor().await?;
+        probe.restart_worker_service().await?;
+        wait_for_resume_canary_agent(config, user, components, requested_host_calls_per_agent)
+            .await?;
 
         let mut snapshot_event_log_guards = Vec::new();
         if config.snapshotting {
@@ -1740,21 +1782,8 @@ async fn run_resume_cell(
             }
         }
 
-        warm_resume_canary_agent(
-            config,
-            user,
-            components,
-            oplog_entries_per_agent,
-            timeout.current,
-        )
-        .await?;
-
-        probe.restart_executor().await?;
-        probe.restart_worker_service().await?;
-        wait_for_resume_canary_agent(config, user, components, oplog_entries_per_agent).await?;
-
         info!(
-            "Density-agent[{}]: reviving {prefill} warmed agents concurrently after {oplog_entries_per_agent} oplog-heavy host calls each",
+            "Density-agent[{}]: reviving {prefill} warmed agents concurrently after {requested_host_calls_per_agent} requested host calls each (observed max oplog last-index {observed_oplog_entries_per_agent})",
             config.cell_name()
         );
         let resumed_batch = invoke_agent_indices(
@@ -1778,12 +1807,12 @@ async fn run_resume_cell(
                 .push(resume.latency.as_secs_f64() * 1000.0);
             outcome
                 .invoke_latencies
-                .entry(oplog_entries_per_agent)
+                .entry(observed_oplog_entries_coord)
                 .or_default()
                 .push(resume.latency);
             let sample = Sample {
                 latency: resume.latency,
-                coord: SampleCoord::Agents(oplog_entries_per_agent),
+                coord: SampleCoord::Agents(observed_oplog_entries_coord),
                 // The executor restart above is intentional; this phase relies
                 // on connection-lost and timeout signals for catastrophic state.
                 pod_restart_count: 0,
@@ -1805,7 +1834,7 @@ async fn run_resume_cell(
         }
 
         info!(
-            "Density-agent[{}]: revived {prefill} warmed agents after {oplog_entries_per_agent} oplog-heavy host calls each",
+            "Density-agent[{}]: revived {prefill} warmed agents after {requested_host_calls_per_agent} requested host calls each (observed max oplog last-index {observed_oplog_entries_per_agent})",
             config.cell_name()
         );
 
@@ -1817,7 +1846,7 @@ async fn run_resume_cell(
             == CleanupResult::Failed
         {
             outcome.terminated_reason = TerminatedReason::ConnectionLost;
-            outcome.catastrophic_ceiling_agents = Some(oplog_entries_per_agent);
+            outcome.catastrophic_ceiling_agents = Some(observed_oplog_entries_coord);
             break 'ramp;
         }
         outcome.cleanup_already_done = true;
@@ -1826,12 +1855,32 @@ async fn run_resume_cell(
     Ok(outcome)
 }
 
+async fn collect_resume_oplog_last_indices(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    prefill: u32,
+) -> anyhow::Result<Vec<u64>> {
+    let indices: Vec<anyhow::Result<u64>> = futures::stream::iter(0..prefill)
+        .map(|index| async move {
+            let (component, parsed) = agent_for_index(config, index, components)?;
+            let agent_id = AgentId::from_agent_id(component.id, &parsed)
+                .map_err(|err| anyhow::anyhow!(err))?;
+            user.get_oplog_last_index(&agent_id).await
+        })
+        .buffer_unordered(RESUME_WARMUP_CONCURRENCY)
+        .collect()
+        .await;
+
+    indices.into_iter().collect()
+}
+
 async fn assert_sampled_resume_snapshots_present(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
     components: &[ComponentDto],
     prefill: u32,
-    oplog_entries_per_agent: u32,
+    requested_host_calls_per_agent: u32,
 ) -> anyhow::Result<()> {
     let sampled = prefill.min(3);
     for index in 0..sampled {
@@ -1854,7 +1903,7 @@ async fn assert_sampled_resume_snapshots_present(
         );
         if snapshot_indices.is_empty() {
             anyhow::bail!(
-                "snapshot-enabled resume target {oplog_entries_per_agent} produced no snapshot oplog entries for sampled warmed agent {index} ({agent_id}) before restart"
+                "snapshot-enabled resume target {requested_host_calls_per_agent} requested host calls produced no snapshot oplog entries for sampled warmed agent {index} ({agent_id}) before restart"
             );
         }
     }

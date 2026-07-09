@@ -186,7 +186,7 @@ cells:
     agentMode: durable
     sharing: shared
     snapshotting: disabled
-    ramp: [1000, 2500, 5000, 7500, 10000, 15000]
+    ramp: [1000, 2500, 3000]
     prefill: 250
   - name: resume-under-saturation-durable-shared-component-snapshot-enabled-prefill-250
     scenario: resume-under-saturation

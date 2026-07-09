@@ -394,6 +394,8 @@ pub trait TestDsl {
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
+    async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64>;
+
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
