@@ -187,6 +187,9 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "constructorParameters",
     "ec",
     "__result",
+    "__future",
+    "__token",
+    "__tree",
     "__value",
     "__response",
     "when",
@@ -870,9 +873,30 @@ impl ScalaBridgeGenerator {
             "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).map {{ __result =>"
         ));
         writer.indent();
-        writer.line(decode_block);
+        writer.line(decode_block.clone());
         writer.dedent();
         writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.line(format!(
+            "def cancelable({param_decls}): ({FUTURE}[{ret_ty}], {GUEST_RUNTIME_PKG}.runtime.rpc.CancellationToken) = {{"
+        ));
+        writer.indent();
+        writer.line(format!(
+            "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+        ));
+        writer.line(format!(
+            "val (__future, __token) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)"
+        ));
+        writer.line("(__future.map { __result =>");
+        writer.indent();
+        writer.line(decode_block.clone());
+        writer.dedent();
+        writer.line(
+            "}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue), __token)",
+        );
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -903,6 +927,20 @@ impl ScalaBridgeGenerator {
         ));
         writer.line(format!(
             "_root_.golem.FutureInterop.fromEither(resolved.scheduleInvocation(when, {method_name_lit}, parameters))"
+        ));
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.line(format!(
+            "def scheduleCancelableAt({schedule_decls}): {FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.CancellationToken] = {{"
+        ));
+        writer.indent();
+        writer.line(format!(
+            "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+        ));
+        writer.line(format!(
+            "_root_.golem.FutureInterop.fromEither(resolved.scheduleCancelableInvocation(when, {method_name_lit}, parameters))"
         ));
         writer.dedent();
         writer.line("}");
@@ -3348,6 +3386,7 @@ mod tests {
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
         let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.source_language = "scala".to_string();
         agent_type.methods.push(AgentMethodSchema {
             name: "echo".to_string(),
             description: String::new(),
@@ -3379,6 +3418,11 @@ mod tests {
         assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
         assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
+        assert!(client_source.contains("def cancelable("));
+        assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
+        assert!(client_source.contains("def scheduleCancelableAt("));
+        assert!(client_source.contains("resolved.scheduleCancelableInvocation"));
+        assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue"));
         assert!(!client_source.contains("golem.bridge.runtime"));
         assert!(!client_source.contains("Bridge.createAgent"));
@@ -3419,6 +3463,46 @@ mod tests {
             client_source.contains(&scala_string_literal(wire_method_name)),
             "guest runtime reference rewriting must not alter wire method-name string literals:\n{client_source}"
         );
+    }
+
+    #[test]
+    fn guest_generation_renames_parameters_that_collide_with_cancelable_locals() {
+        let dir = TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.source_language = "scala".to_string();
+        agent_type.methods.push(AgentMethodSchema {
+            name: "echo".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![
+                NamedField::user_supplied("__future", SchemaType::string()),
+                NamedField::user_supplied("__token", SchemaType::string()),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = ScalaBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            ScalaBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let client_source = std::fs::read_to_string(
+            target_path
+                .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
+        )
+        .unwrap();
+        assert!(client_source.contains("def cancelable(__future_2:"));
+        assert!(client_source.contains("__token_2:"));
+        assert!(client_source.contains("val (__future, __token) ="));
+        assert!(!client_source.contains("def cancelable(__future:"));
     }
 
     #[test]
