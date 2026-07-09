@@ -120,6 +120,28 @@ impl ProtobufInvocationDetails
 }
 
 impl ProtobufInvocationDetails
+    for golem_api_grpc::proto::golem::workerexecutor::v1::GetAgentWalletRequest
+{
+    fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
+        &self.agent_id
+    }
+
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
+    }
+
+    fn proto_invocation_context(
+        &self,
+    ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
+        &None
+    }
+
+    fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
+        &self.principal
+    }
+}
+
+impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest
 {
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {

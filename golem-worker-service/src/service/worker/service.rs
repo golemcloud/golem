@@ -33,6 +33,7 @@ use golem_common::model::agent::{
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentMethodName, AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+    StoredCard,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
@@ -568,6 +569,34 @@ impl WorkerService {
             .await?;
 
         Ok(nodes)
+    }
+
+    pub async fn get_agent_wallet(
+        &self,
+        agent_id: &AgentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<StoredCard>> {
+        let component = self
+            .component_service
+            .get_current_by_id(agent_id.component_id)
+            .await?;
+
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
+
+        self.worker_client
+            .get_agent_wallet(
+                agent_id,
+                component.environment_id,
+                component.account_id,
+                auth_ctx,
+            )
+            .await
     }
 
     pub async fn get_file_contents(
@@ -1150,7 +1179,7 @@ mod tests {
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::card::AgentVerb;
+    use golem_common::model::card::{AgentVerb, StoredCard};
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
     };
@@ -1578,6 +1607,16 @@ mod tests {
             _: AccountId,
             _: AuthCtx,
         ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
+            unimplemented!()
+        }
+
+        async fn get_agent_wallet(
+            &self,
+            _: &AgentId,
+            _: EnvironmentId,
+            _: AccountId,
+            _: AuthCtx,
+        ) -> WorkerResult<Vec<StoredCard>> {
             unimplemented!()
         }
 

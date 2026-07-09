@@ -37,6 +37,7 @@ pub mod error_code {
     pub const AGENT_SECRET_NOT_FOUND: &str = "AGENT_SECRET_NOT_FOUND";
     pub const AGENT_TYPE_NOT_FOUND: &str = "AGENT_TYPE_NOT_FOUND";
     pub const APPLICATION_NOT_FOUND: &str = "APPLICATION_NOT_FOUND";
+    pub const CARD_NOT_FOUND: &str = "CARD_NOT_FOUND";
     pub const COMPONENT_NOT_FOUND: &str = "COMPONENT_NOT_FOUND";
     pub const DEPLOYMENT_NOT_FOUND: &str = "DEPLOYMENT_NOT_FOUND";
     pub const DOMAIN_REGISTRATION_NOT_FOUND: &str = "DOMAIN_REGISTRATION_NOT_FOUND";

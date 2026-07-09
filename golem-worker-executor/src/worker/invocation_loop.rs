@@ -826,6 +826,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
             }
+            QueuedWorkerInvocation::GetWalletCards { sender } => {
+                let wallet = self
+                    .store
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .active_agent_wallet_cards_snapshot()
+                    .await;
+                let _ = sender.send(wallet);
+                CommandOutcome::Continue
+            }
             QueuedWorkerInvocation::ReadFile { path, sender } => {
                 self.read_file(path, sender).await;
                 CommandOutcome::Continue
