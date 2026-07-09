@@ -193,5 +193,5 @@ cells:
     agentMode: durable
     sharing: shared
     snapshotting: enabled
-    ramp: [100000, 200000, 500000, 1000000]
+    ramp: [100000, 200000, 500000]
     prefill: 250
