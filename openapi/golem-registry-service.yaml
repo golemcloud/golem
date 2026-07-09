@@ -1445,6 +1445,34 @@ paths:
         required: true
         deprecated: false
         explode: true
+      - name: include_root
+        schema:
+          type: boolean
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: include_permission_shares
+        schema:
+          type: boolean
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: include_environment_defaults
+        schema:
+          type: boolean
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: include_agent_initials
+        schema:
+          type: boolean
+        in: query
+        required: false
+        deprecated: false
+        explode: true
       responses:
         '200':
           description: ''

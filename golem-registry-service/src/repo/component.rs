@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::model::card::{CardManagedBy, CardManagedByAgentInitial};
+use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAgentInitial};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -115,6 +115,11 @@ pub trait ComponentRepo: Send + Sync {
         deployment_revision_id: i64,
         name: &str,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
+
+    async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> RepoResult<Vec<CardId>>;
 }
 
 pub struct LoggedComponentRepo<Repo: ComponentRepo> {
@@ -214,6 +219,16 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         self.repo
             .get_staged_by_name(environment_id, name)
             .instrument(Self::span_name(environment_id, name))
+            .await
+    }
+
+    async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> RepoResult<Vec<CardId>> {
+        self.repo
+            .list_initial_permission_card_ids_by_account(account_id)
+            .instrument(info_span!(SPAN_NAME, account_id = %account_id))
             .await
     }
 
@@ -759,6 +774,66 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             Some(revision) => Ok(Some(revision)),
             None => Ok(None),
         }
+    }
+
+    async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> RepoResult<Vec<CardId>> {
+        let revisions: Vec<ComponentRevisionRecord> = self
+            .with_ro("list_initial_permission_card_ids_by_account")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.size, cr.metadata,
+                           cr.object_store_key, cr.binary_hash
+                    FROM component_revisions cr
+                    JOIN components c ON c.component_id = cr.component_id
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    WHERE ap.account_id = $1
+                        AND c.deleted_at IS NULL
+                        AND NOT cr.deleted
+                        AND c.current_revision_id = cr.revision_id
+                        -- Component ids can be reused after deleting and recreating a same-name component.
+                        -- Ignore all revisions at or before the latest deleted revision so old provision
+                        -- metadata cannot reappear as an agent-initial card.
+                        AND cr.revision_id > COALESCE(
+                            (
+                                SELECT MAX(deleted_cr.revision_id)
+                                FROM component_revisions deleted_cr
+                                WHERE deleted_cr.component_id = c.component_id
+                                    AND deleted_cr.deleted
+                            ),
+                            -1
+                        )
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
+                    ORDER BY cr.created_at, cr.component_id, cr.revision_id
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        let mut result = Vec::new();
+        for revision in revisions {
+            for config in revision
+                .metadata
+                .into_value()
+                .agent_type_provision_configs()
+                .values()
+            {
+                let card_id = config.initial_permissions.card_id;
+                if !result.contains(&card_id) {
+                    result.push(card_id);
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     async fn list_staged(

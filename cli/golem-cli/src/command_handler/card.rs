@@ -31,6 +31,46 @@ pub struct CardCommandHandler {
     ctx: Arc<Context>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CardListFilter {
+    include_root: bool,
+    include_permission_shares: bool,
+    include_environment_defaults: bool,
+    include_agent_initials: bool,
+    explicit_includes: bool,
+}
+
+impl CardListFilter {
+    fn from_flags(
+        include_root: bool,
+        include_permission_shares: bool,
+        include_environment_defaults: bool,
+        include_agent_initials: bool,
+    ) -> Self {
+        let explicit_includes = include_root
+            || include_permission_shares
+            || include_environment_defaults
+            || include_agent_initials;
+        if explicit_includes {
+            Self {
+                include_root,
+                include_permission_shares,
+                include_environment_defaults,
+                include_agent_initials,
+                explicit_includes,
+            }
+        } else {
+            Self {
+                include_root: true,
+                include_permission_shares: true,
+                include_environment_defaults: true,
+                include_agent_initials: true,
+                explicit_includes,
+            }
+        }
+    }
+}
+
 impl CardCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
@@ -38,8 +78,25 @@ impl CardCommandHandler {
 
     pub async fn handle_command(&self, subcommand: CardSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            CardSubcommand::List { account_id, agent } => {
-                self.cmd_list(account_id.account_id, agent).await
+            CardSubcommand::List {
+                account_id,
+                agent,
+                include_root,
+                include_permission_shares,
+                include_environment_defaults,
+                include_agent_initials,
+            } => {
+                self.cmd_list(
+                    account_id.account_id,
+                    agent,
+                    CardListFilter::from_flags(
+                        include_root,
+                        include_permission_shares,
+                        include_environment_defaults,
+                        include_agent_initials,
+                    ),
+                )
+                .await
             }
             CardSubcommand::Get { card_id } => self.cmd_get(card_id).await,
             CardSubcommand::Revoke { card_id } => self.cmd_revoke(card_id).await,
@@ -50,8 +107,12 @@ impl CardCommandHandler {
         &self,
         account_id: Option<AccountId>,
         agent: Option<RawAgentId>,
+        filter: CardListFilter,
     ) -> anyhow::Result<()> {
         if let Some(agent) = agent {
+            if filter.explicit_includes {
+                bail!("card list include flags cannot be used together with --agent");
+            }
             return self.cmd_list_agent_wallet(agent).await;
         }
 
@@ -61,7 +122,13 @@ impl CardCommandHandler {
             .golem_clients()
             .await?
             .card
-            .list_account_cards(&account_id.0)
+            .list_account_cards(
+                &account_id.0,
+                Some(filter.include_root),
+                Some(filter.include_permission_shares),
+                Some(filter.include_environment_defaults),
+                Some(filter.include_agent_initials),
+            )
             .await
             .map_service_error()?;
 

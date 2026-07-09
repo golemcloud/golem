@@ -3472,6 +3472,34 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: include_root
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
+      - in: query
+        name: include_permission_shares
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
+      - in: query
+        name: include_environment_defaults
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
+      - in: query
+        name: include_agent_initials
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
       responses:
         '200':
           description: ''

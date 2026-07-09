@@ -667,6 +667,9 @@ pub const CARD_LIST: &str = "Examples:
   # List cards owned by a specific account
   golem-cli card list --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211
 
+  # List only environment-default and agent-initial account cards
+  golem-cli card list --include-environment-defaults --include-agent-initials
+
   # List cards in an agent's runtime wallet
   golem-cli card list --agent shopping-cart/123";
 

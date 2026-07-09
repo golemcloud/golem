@@ -14,7 +14,7 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
-use crate::services::card::CardService;
+use crate::services::card::{AccountCardFilter, CardService};
 use golem_common::model::account::AccountId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::recorded_http_api_request;
@@ -22,7 +22,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme};
 use poem_openapi::Object;
 use poem_openapi::OpenApi;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -61,15 +61,25 @@ impl CardsApi {
     async fn list_account_cards(
         &self,
         account_id: Path<AccountId>,
+        include_root: Query<Option<bool>>,
+        include_permission_shares: Query<Option<bool>>,
+        include_environment_defaults: Query<Option<bool>>,
+        include_agent_initials: Query<Option<bool>>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<StoredCard>>> {
         let record =
             recorded_http_api_request!("list_account_cards", account_id = account_id.0.to_string());
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let filter = AccountCardFilter {
+            root: include_root.0.unwrap_or(true),
+            permission_share: include_permission_shares.0.unwrap_or(true),
+            environment_default: include_environment_defaults.0.unwrap_or(true),
+            agent_initial: include_agent_initials.0.unwrap_or(true),
+        };
 
         let response = self
-            .list_account_cards_internal(account_id.0, auth)
+            .list_account_cards_internal(account_id.0, filter, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -79,11 +89,12 @@ impl CardsApi {
     async fn list_account_cards_internal(
         &self,
         account_id: AccountId,
+        filter: AccountCardFilter,
         auth: AuthCtx,
     ) -> ApiResult<Json<Vec<StoredCard>>> {
         Ok(Json(
             self.card_service
-                .list_account_cards(account_id, &auth)
+                .list_account_cards(account_id, filter, &auth)
                 .await?,
         ))
     }

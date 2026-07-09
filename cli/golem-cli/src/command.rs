@@ -2322,6 +2322,22 @@ pub mod card {
             /// List cards in an agent's wallet instead of account-owned cards. Activates the agent if not already active.
             #[arg(long, conflicts_with = "account_id")]
             agent: Option<RawAgentId>,
+
+            /// Include account root cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_root: bool,
+
+            /// Include permission-share cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_permission_shares: bool,
+
+            /// Include environment-default cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_environment_defaults: bool,
+
+            /// Include agent-initial cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_agent_initials: bool,
         },
 
         /// Get a card by ID.

@@ -346,6 +346,7 @@ impl From<CardError> for ApiError {
             }
             CardError::CannotRevokeSystemCard
             | CardError::CannotRevokePermissionShareCard
+            | CardError::CannotRevokeEnvironmentDefaultCard
             | CardError::CardOwnerNotFound(_)
             | CardError::Unauthorized(_) => Self::forbidden(api::error_code::AUTH_FORBIDDEN, error),
             CardError::InternalError(_) => Self::InternalError(Json(ErrorBody {
