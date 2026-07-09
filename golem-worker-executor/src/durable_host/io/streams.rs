@@ -115,6 +115,15 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
             end_http_request_if_closed(self, handle, &result.result).await?;
             result.result.map_err(StreamError::from)
+        } else if self.state.open_filesystem_input_streams.contains(&handle) {
+            self.observe_function_call("io::streams::input_stream", "read");
+            // File reads must not expose the transient "would block" state of the
+            // background read task: whether `read` returns data or an empty chunk
+            // depends on host scheduling, which would make the guest's read/poll
+            // loop non-deterministic between record and replay. Waiting for
+            // readiness first makes the returned chunks a pure function of the
+            // file contents.
+            HostInputStream::blocking_read(self.table(), self_, len).await
         } else {
             self.observe_function_call("io::streams::input_stream", "read");
             HostInputStream::read(self.table(), self_, len).await
@@ -228,6 +237,15 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
             end_http_request_if_closed(self, handle, &result.result).await?;
             result.result.map_err(StreamError::from)
+        } else if self
+            .state
+            .open_filesystem_input_streams
+            .contains(&self_.rep())
+        {
+            self.observe_function_call("io::streams::input_stream", "skip");
+            // Like `read`, file skips must wait for readiness so the skipped
+            // amount is deterministic across record and replay.
+            HostInputStream::blocking_skip(self.table(), self_, len).await
         } else {
             self.observe_function_call("io::streams::input_stream", "skip");
             HostInputStream::skip(self.table(), self_, len).await
@@ -291,6 +309,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<InputStream>) -> wasmtime::Result<()> {
         self.observe_function_call("io::streams::input_stream", "drop");
 
+        self.state.open_filesystem_input_streams.remove(&rep.rep());
+
         if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
             if let Some(state) = self.state.open_http_requests.get(&handle)
@@ -351,7 +371,24 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         } else {
             self.observe_function_call("io::streams::output_stream", "check_write");
             let stream_rep = self_.rep();
-            let result = HostOutputStream::check_write(self.table(), self_).await;
+            let result = if self
+                .state
+                .open_filesystem_output_streams
+                .contains_key(&stream_rep)
+            {
+                // File writes must not expose the transient "busy" state of the
+                // background write task: whether check_write returns 0 or the full
+                // budget depends on host scheduling, which would make the guest's
+                // check-write/poll loop non-deterministic between record and replay.
+                // Waiting for write readiness first makes the result deterministic.
+                self.table()
+                    .get_mut(&self_)?
+                    .write_ready()
+                    .await
+                    .map(|n| n as u64)
+            } else {
+                HostOutputStream::check_write(self.table(), self_).await
+            };
             if let Ok(permit) = result.as_ref() {
                 if *permit > 0 {
                     reconcile_pending_filesystem_stream_reservation(self, stream_rep).await;
