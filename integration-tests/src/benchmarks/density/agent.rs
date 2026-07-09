@@ -1707,6 +1707,21 @@ async fn run_resume_cell(
             outcome.catastrophic_ceiling_agents = Some(oplog_entries_per_agent);
             break 'ramp;
         }
+
+        let mut snapshot_event_log_guards = Vec::new();
+        if config.snapshotting {
+            for index in 0..prefill.min(3) {
+                let (component, parsed) = agent_for_index(config, index, components)?;
+                let agent_id = AgentId::from_agent_id(component.id, &parsed)
+                    .map_err(|err| anyhow::anyhow!(err))?;
+                info!(
+                    "Density-agent[{}]: streaming snapshot recovery events for warmed agent {index} ({agent_id})",
+                    config.cell_name()
+                );
+                snapshot_event_log_guards.push(user.log_output_scoped(&agent_id).await?);
+            }
+        }
+
         warm_resume_canary_agent(
             config,
             user,
@@ -1734,6 +1749,7 @@ async fn run_resume_cell(
             super::ceiling::ESCALATED_TIMEOUT,
         )
         .await;
+        drop(snapshot_event_log_guards);
 
         detector.set_elapsed_secs(started.elapsed().as_secs_f64());
         let attempt_refs: Vec<&AttemptOutcome> = resumed_batch.iter().map(|(_, a)| a).collect();
