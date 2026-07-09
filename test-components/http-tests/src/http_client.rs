@@ -48,6 +48,7 @@ async fn do_send_request() -> (u16, String) {
     let response = wasi_fetch::Client::new()
         .post(&format!("http://localhost:{port}/"))
         .header("X-Test", "test-header")
+        .header("Content-Length", "9")
         .body("test-body")
         .send()
         .await

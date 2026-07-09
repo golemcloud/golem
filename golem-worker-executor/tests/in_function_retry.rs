@@ -689,7 +689,7 @@ async fn start_status_code_retry_http_server(
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
 
-                let body_start = header_end + 4;
+                let body_start = header_end;
                 let mut body_bytes_read = data.len().saturating_sub(body_start);
                 while body_bytes_read < content_length {
                     match stream.read(&mut buf).await {
@@ -798,13 +798,13 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient");
+    let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "p3_terminal_post", data_value!())
         .await?;
 
     assert_eq!(
@@ -1110,6 +1110,156 @@ fn decoded_chunked_body_len(mut body: &[u8]) -> usize {
         result += size;
         body = &body[size + 2..];
     }
+}
+
+async fn start_request_trailer_echo_server() -> u16 {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+
+                let request = read_raw_http_request(&mut stream).await;
+                let trailer_present = request
+                    .windows(b"x-test-trailer: trailer-value".len())
+                    .any(|window| window.eq_ignore_ascii_case(b"x-test-trailer: trailer-value"));
+                let body = if trailer_present {
+                    "trailer-present"
+                } else {
+                    "trailer-missing"
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        }
+        .in_current_span(),
+    );
+
+    port
+}
+
+async fn start_request_body_len_echo_server() -> u16 {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+
+                let body_len = read_http_request_body_len(&mut stream).await;
+                let body = format!("received {body_len} body bytes");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        }
+        .in_current_span(),
+    );
+
+    port
+}
+
+async fn start_early_response_after_headers_server() -> u16 {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+
+                let mut data = Vec::new();
+                let mut buf = [0u8; 1024];
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => data.extend_from_slice(&buf[..n]),
+                        Err(_) => break,
+                    }
+                    if data.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+
+                let body = "early-response";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        }
+        .in_current_span(),
+    );
+
+    port
+}
+
+async fn read_raw_http_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    let mut data = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        match stream.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => data.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+
+        let data_str = String::from_utf8_lossy(&data);
+        if let Some(header_end) = data_str.find("\r\n\r\n") {
+            let headers = &data_str[..header_end];
+            let body_start = header_end + 4;
+            if let Some(cl_line) = headers
+                .lines()
+                .find(|line| line.to_lowercase().starts_with("content-length:"))
+            {
+                let content_length = cl_line
+                    .split(':')
+                    .nth(1)
+                    .unwrap()
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                if data.len() >= body_start + content_length {
+                    break;
+                }
+            } else if headers
+                .lines()
+                .any(|line| line.to_lowercase().contains("transfer-encoding: chunked"))
+            {
+                let body_data = &data[body_start..];
+                if body_data.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    data
 }
 
 /// Drives two different inline retry phases for a streaming POST body:
@@ -2117,32 +2267,16 @@ async fn http_write_zeroes_body_reconstruction(
 
 #[test]
 #[tracing::instrument]
-async fn http_no_output_stream_retry_when_subscribe_used(
+async fn p3_http_request_trailers_are_sent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
 
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(1),
-                max_delay: Duration::from_millis(5),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_secs(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    // Server drops first connection (triggers body write failure)
-    let (port, connection_counter) = start_body_dropping_http_server(1).await;
+    let port = start_request_trailer_echo_server().await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -2152,37 +2286,18 @@ async fn http_no_output_stream_retry_when_subscribe_used(
     env.insert("PORT".to_string(), port.to_string());
 
     let agent_id = agent_id!("HttpClient4");
-    let worker_id = executor
+    let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    // post_with_subscribe calls subscribe() on the output stream before writing,
-    // which sets output_stream_subscribed=true and disqualifies inline retry.
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "post_with_subscribe", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "put_with_p3_trailers", data_value!())
         .await?;
 
     let result_value = result.into_typed::<String>()?;
-
     assert!(
-        result_value.starts_with("200 "),
-        "Expected eventual success via trap+replay, got: {result_value:?}"
-    );
-
-    // Verify the server saw at least 2 connections (1 failed + 1 replay success)
-    let total_connections = connection_counter.load(Ordering::SeqCst);
-    assert!(
-        total_connections >= 2,
-        "Expected at least 2 connections (1 dropped + 1 replay), got {total_connections}"
-    );
-
-    // Verify NO in-function retry error entries in oplog
-    // (inline retry should have been disqualified by output_stream_subscribed)
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
-    assert_eq!(
-        retry_count, 0,
-        "Expected 0 in-function retry error entries (subscribe disqualifies inline retry)"
+        result_value.starts_with("200 trailer-present "),
+        "P3 request trailers must be preserved by client::send, got: {result_value:?}"
     );
 
     Ok(())
@@ -2190,32 +2305,16 @@ async fn http_no_output_stream_retry_when_subscribe_used(
 
 #[test]
 #[tracing::instrument]
-async fn http_no_retry_when_trailers_present(
+async fn p3_http_oversized_streaming_body_without_content_length_is_sent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
 
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(1),
-                max_delay: Duration::from_millis(5),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_secs(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    // Drop first connection — POST with trailers should NOT trigger inline retry
-    let (port, connection_counter) = start_failing_http_server_any_method(1).await;
+    let port = start_request_body_len_echo_server().await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -2225,36 +2324,109 @@ async fn http_no_retry_when_trailers_present(
     env.insert("PORT".to_string(), port.to_string());
 
     let agent_id = agent_id!("HttpClient4");
-    let worker_id = executor
+    let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    // post_with_trailers finishes the outgoing body with trailers,
-    // which sets has_outgoing_trailers=true and disqualifies inline retry.
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "post_with_trailers", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "put_with_p3_oversized_body",
+            data_value!(),
+        )
         .await?;
 
     let result_value = result.into_typed::<String>()?;
-
     assert!(
-        result_value.starts_with("200 "),
-        "Expected eventual success via trap+replay, got: {result_value:?}"
+        result_value.starts_with("200 received 2097152 body bytes "),
+        "P3 client::send must not reject an otherwise valid no-content-length streaming request body only because it is larger than the inline retry replay buffer; got: {result_value:?}"
     );
 
-    // Verify the server saw at least 2 connections (1 failed + 1 replay success)
-    let total_connections = connection_counter.load(Ordering::SeqCst);
-    assert!(
-        total_connections >= 2,
-        "Expected at least 2 connections (1 dropped + 1 replay), got {total_connections}"
-    );
+    Ok(())
+}
 
-    // Verify NO in-function retry error entries in oplog
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+#[test]
+#[tracing::instrument]
+async fn p3_http_small_open_streaming_body_can_receive_early_response(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+
+    let port = start_early_response_after_headers_server().await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let _worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "put_with_p3_small_body_open_until_response",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result.into_typed::<String>()?;
     assert_eq!(
-        retry_count, 0,
-        "Expected 0 in-function retry error entries (trailers disqualify inline retry)"
+        result_value, "completed(200)",
+        "P3 client::send must allow response headers to arrive before a no-content-length request body stream reaches EOF"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn p3_http_declared_small_open_streaming_body_can_receive_early_response(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+
+    let port = start_early_response_after_headers_server().await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let _worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "put_with_p3_declared_small_body_open_until_response",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result.into_typed::<String>()?;
+    assert_eq!(
+        result_value, "completed(200)",
+        "P3 client::send must allow response headers to arrive after the declared content-length has been written, even before the request body stream reaches EOF"
     );
 
     Ok(())

@@ -17,18 +17,20 @@ use crate::durable_host::concurrent::{
     LeaveIncompleteOnDrop, NotCancellable, finish_span_access, start_span_access,
 };
 use crate::durable_host::durability::{
-    DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
+    AsyncRetryDecision, ClassifiedHostError, DurabilityHost, DurableCallTrapContext,
+    HostFailureKind, InFunctionRetryHost, InFunctionRetryState, TaskRetryContext,
+    mark_durable_call_trap_context, try_trigger_host_trap_retry,
 };
 use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, wasi_http_view,
 };
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
 use futures::future::{Either, select};
-use golem_common::model::RetryContext;
 use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{
     P3HttpClientConsumeBody, P3HttpClientConsumeBodyChunk, P3HttpClientRequestBodyTransmission,
@@ -47,16 +49,22 @@ use golem_common::model::oplog::{
     HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
     OplogIndex,
 };
+use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryContext, RetryProperties};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderMap, HeaderName, HeaderValue};
+use http_body::Body as HttpBody;
+use http_body::Frame;
+use http_body::SizeHint;
 use http_body_util::BodyExt as _;
 use http_body_util::Empty;
 use http_body_util::combinators::UnsyncBoxBody;
 use std::collections::HashMap;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 use wasmtime::component::{
@@ -66,6 +74,7 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::TrappableError;
 use wasmtime_wasi_http::FieldMap;
+use wasmtime_wasi_http::P3PooledConnection;
 use wasmtime_wasi_http::p3::bindings::clocks::monotonic_clock::Duration;
 use wasmtime_wasi_http::p3::bindings::http::types::{
     ErrorCode, FieldName, FieldValue, Fields, Headers, Method, Request, RequestOptions, Response,
@@ -81,6 +90,8 @@ type RequestOptionsError = TrappableError<types::RequestOptionsError>;
 type HttpResult<T> = Result<T, HttpError>;
 type HeaderResult<T> = Result<T, HeaderError>;
 type RequestOptionsResult<T> = Result<T, RequestOptionsError>;
+
+const P3_T14_MAX_REPLAYABLE_REQUEST_BODY_BYTES: u64 = 1024 * 1024;
 
 impl<Ctx: WorkerCtx> client::Host for DurableP3View<'_, Ctx> {}
 
@@ -310,21 +321,233 @@ where
         )
     };
 
-    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-    let interrupt = store.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
-    });
-    let send = <WasiHttp as client::HostWithStore<U>>::send(&http_store, req);
-    let send_result = match select(Box::pin(send), interrupt).await {
-        Either::Left((result, _)) => result,
-        Either::Right((interrupt_kind, _)) => {
-            let error: anyhow::Error = interrupt_kind.into();
-            Err(HttpError::trap(wasmtime::Error::from_anyhow(error)))
+    let inline_retry_eligible =
+        inline_retry_eligible_for_method::<Ctx, U>(store, &serialized_request.method);
+    if !inline_retry_eligible {
+        let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+        let interrupt = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+        });
+        let send = <WasiHttp as client::HostWithStore<U>>::send(&http_store, req);
+        let send_result = match select(Box::pin(send), interrupt).await {
+            Either::Left((result, _)) => result,
+            Either::Right((interrupt_kind, _)) => {
+                let error: anyhow::Error = interrupt_kind.into();
+                Err(HttpError::trap(wasmtime::Error::from_anyhow(error)))
+            }
+        };
+
+        return finish_p3_send_result::<Ctx, U, P>(
+            store,
+            send_result,
+            handle,
+            span_id,
+            pending_transmission,
+            &retry_method,
+            &retry_uri,
+            &serialized_request.method,
+        )
+        .await;
+    }
+
+    let converted = match convert_physical_send_request::<Ctx, U>(store, req).await {
+        Ok(physical) => physical,
+        Err(PhysicalSendConversionError::Trap(error)) => {
+            return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                handle.trap(error),
+            )));
+        }
+        Err(PhysicalSendConversionError::HttpError(error)) => {
+            let _ = error
+                .final_transmission_tx
+                .send(Err(error.error_code.clone()));
+            let error_code = error.error_code;
+            let serialized_error = serialize_error_code(&error_code);
+            let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
+            handle
+                .complete_access(
+                    store,
+                    durable_worker_ctx::<Ctx, U>,
+                    HostResponseP3HttpClientSendResult { result },
+                )
+                .await
+                .map_err(HttpError::trap)?;
+            finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span_id)
+                .await
+                .map_err(HttpError::trap)?;
+            start_transmission_recording::<Ctx, U>(store, pending_transmission);
+            return Err(error_code.into());
+        }
+    };
+    let PhysicalSend::Replayable(physical) = converted;
+    let mut retry_state = InFunctionRetryState::new();
+    let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
+        store,
+        handle.start_index(),
+        RetryContext::http(&retry_method, &retry_uri),
+    )
+    .await;
+
+    let send_result = loop {
+        let interrupt = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+        });
+        let send = physical.attempt();
+        let attempt_result = match select(Box::pin(send), interrupt).await {
+            Either::Left((result, _)) => result,
+            Either::Right((interrupt_kind, _)) => {
+                let error: anyhow::Error = interrupt_kind.into();
+                return Err(HttpError::trap(wasmtime::Error::from_anyhow(error)));
+            }
+        };
+
+        match attempt_result {
+            Ok((response, io, pooled_connection)) => {
+                if inline_retry_eligible
+                    && let Some(policy) = matching_status_retry_policy(
+                        store,
+                        &mut retry_task_ctx,
+                        &retry_method,
+                        &retry_uri,
+                        response.status().as_u16(),
+                        &serialized_request.method,
+                    )
+                    .await
+                {
+                    let properties = http_retry_properties(
+                        store,
+                        &retry_method,
+                        &retry_uri,
+                        Some(response.status().as_u16()),
+                        "http-status",
+                        &serialized_request.method,
+                    );
+                    retry_task_ctx.retry_properties = properties.clone();
+                    match retry_state
+                        .decide_retry_for_named_policy(
+                            &mut retry_task_ctx,
+                            "http-status-retry",
+                            &properties,
+                            &policy,
+                        )
+                        .await
+                    {
+                        AsyncRetryDecision::RetryAfterDelay(delay) => {
+                            poison_p3_pooled_connection(&pooled_connection);
+                            drop(response);
+                            drop(io);
+                            physical.body.abandon_active_live_view();
+                            match physical.body.await_terminal().await {
+                                SharedRecordingBodyTerminal::Replayable => {
+                                    tokio::time::sleep(delay).await;
+                                    continue;
+                                }
+                                SharedRecordingBodyTerminal::ExceededCap
+                                | SharedRecordingBodyTerminal::BodyError => {
+                                    if let Err(err) = try_trigger_host_trap_retry(
+                                        &mut retry_task_ctx,
+                                        anyhow::Error::new(ClassifiedHostError {
+                                            kind: HostFailureKind::Transient,
+                                            message: "HTTP status matched retry policy but the request body could not be replayed in-function".to_string(),
+                                        }),
+                                        properties,
+                                    )
+                                    .await
+                                    {
+                                        return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                                            handle.trap(err),
+                                        )));
+                                    }
+                                    break Err(ErrorCode::InternalError(Some(
+                                        "request body could not be replayed in-function"
+                                            .to_string(),
+                                    )));
+                                }
+                            }
+                        }
+                        AsyncRetryDecision::FallBackToTrap => {
+                            let status = response.status().as_u16();
+                            let properties = http_retry_properties(
+                                store,
+                                &retry_method,
+                                &retry_uri,
+                                Some(status),
+                                "http-status",
+                                &serialized_request.method,
+                            );
+                            let failure = anyhow::Error::new(ClassifiedHostError {
+                                kind: HostFailureKind::Transient,
+                                message: format!(
+                                    "HTTP status {status} matched retry policy but exceeded the in-function retry delay threshold"
+                                ),
+                            });
+                            if let Err(err) = try_trigger_host_trap_retry(
+                                &mut retry_task_ctx,
+                                failure,
+                                properties,
+                            )
+                            .await
+                            {
+                                poison_p3_pooled_connection(&pooled_connection);
+                                return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                                    handle.trap(err),
+                                )));
+                            }
+                            break Ok((response, io));
+                        }
+                        AsyncRetryDecision::Exhausted => {
+                            break Ok((response, io));
+                        }
+                    }
+                } else {
+                    break Ok((response, io));
+                }
+            }
+            Err(error_code)
+                if inline_retry_eligible
+                    && classify_serializable_http_error_code(&serialize_error_code(
+                        &error_code,
+                    )) == HostFailureKind::Transient =>
+            {
+                let properties = http_retry_properties(
+                    store,
+                    &retry_method,
+                    &retry_uri,
+                    None,
+                    "transient",
+                    &serialized_request.method,
+                );
+                retry_task_ctx.retry_properties = properties.clone();
+                match retry_state
+                    .decide_retry_with_properties(&mut retry_task_ctx, "in-task", &properties)
+                    .await
+                {
+                    AsyncRetryDecision::RetryAfterDelay(delay)
+                        if physical.body.can_replay_after_send_failure() =>
+                    {
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    AsyncRetryDecision::RetryAfterDelay(_) => {
+                        break Err(error_code);
+                    }
+                    AsyncRetryDecision::FallBackToTrap | AsyncRetryDecision::Exhausted => {
+                        break Err(error_code);
+                    }
+                }
+            }
+            Err(error_code) => break Err(error_code),
         }
     };
 
     match send_result {
-        Ok(response) => {
+        Ok((http_response, io)) => {
+            let response = response_resource_from_http::<Ctx, U>(
+                store,
+                http_response,
+                io,
+                physical.final_transmission_tx,
+            )?;
             let result =
                 SerializableP3HttpClientSendResult::Success(serialize_response_headers::<Ctx, U>(
                     store,
@@ -359,30 +582,145 @@ where
             start_transmission_recording::<Ctx, U>(store, pending_transmission);
             Ok(response)
         }
+        Err(error_code) => {
+            let _ = physical.final_transmission_tx.send(Err(error_code.clone()));
+            let serialized_error = serialize_error_code(&error_code);
+
+            // Worker-level retry classification, mirroring the P2
+            // outgoing-handler path: a transient transport/protocol failure
+            // raises a retry trap here (the worker goes to `Retrying` per
+            // its retry policy and re-executes the send from the abandoned
+            // `Start` on replay) instead of surfacing as a guest-visible
+            // error value. Permanent failures — and transient ones whose
+            // retry budget is exhausted — fall through and are recorded and
+            // returned to the guest, which is also what a recorded error
+            // replays as.
+            if classify_serializable_http_error_code(&serialize_error_code(&error_code))
+                == HostFailureKind::Transient
+            {
+                let properties = http_retry_properties(
+                    store,
+                    &retry_method,
+                    &retry_uri,
+                    None,
+                    "transient",
+                    &serialized_request.method,
+                );
+                let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
+                    store,
+                    handle.start_index(),
+                    properties.clone(),
+                )
+                .await;
+                let failure = anyhow::Error::new(ClassifiedHostError {
+                    kind: HostFailureKind::Transient,
+                    message: error_code.to_string(),
+                });
+                try_trigger_host_trap_retry(&mut retry_task_ctx, failure, properties)
+                    .await
+                    .map_err(|err| {
+                        HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(err)))
+                    })?;
+            }
+
+            let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
+            handle
+                .complete_access(
+                    store,
+                    durable_worker_ctx::<Ctx, U>,
+                    HostResponseP3HttpClientSendResult { result },
+                )
+                .await
+                .map_err(HttpError::trap)?;
+            finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span_id)
+                .await
+                .map_err(HttpError::trap)?;
+            // Spawns the demand-gated transmission recorder at a
+            // deterministic point (right after the send `End` +
+            // `FinishSpan`, mirrored by the replay arm above). The inner
+            // send consumed the request even on failure, so a demanded
+            // transmission result — `Ok(())` from the dropped I/O wiring,
+            // or a deterministic body-validation error — still resolves.
+            start_transmission_recording::<Ctx, U>(store, pending_transmission);
+            Err(error_code.into())
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finish_p3_send_result<Ctx, U, P>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    send_result: HttpResult<Resource<Response>>,
+    mut handle: CallHandle<P3HttpClientSend, P>,
+    span_id: SpanId,
+    pending_transmission: Option<PendingHttpRequestBodyTransmission>,
+    retry_method: &str,
+    retry_uri: &str,
+    method: &SerializableHttpMethod,
+) -> HttpResult<Resource<Response>>
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+    P: DropPolicy,
+{
+    match send_result {
+        Ok(response) => {
+            let result =
+                SerializableP3HttpClientSendResult::Success(serialize_response_headers::<Ctx, U>(
+                    store,
+                    borrow_resource(&response),
+                )?);
+            handle
+                .complete_access(
+                    store,
+                    durable_worker_ctx::<Ctx, U>,
+                    HostResponseP3HttpClientSendResult { result },
+                )
+                .await
+                .map_err(HttpError::trap)?;
+            register_open_response::<Ctx, U>(
+                store,
+                &response,
+                OpenP3HttpResponseState {
+                    span_id,
+                    method: retry_method.to_string(),
+                    uri: retry_uri.to_string(),
+                    rebuild: None,
+                },
+            );
+            start_transmission_recording::<Ctx, U>(store, pending_transmission);
+            Ok(response)
+        }
         Err(error) => {
             if let Some(error_code) = error.downcast_ref() {
                 let serialized_error = serialize_error_code(error_code);
-
-                // Worker-level retry classification, mirroring the P2
-                // outgoing-handler path: a transient transport/protocol failure
-                // raises a retry trap here (the worker goes to `Retrying` per
-                // its retry policy and re-executes the send from the abandoned
-                // `Start` on replay) instead of surfacing as a guest-visible
-                // error value. Permanent failures — and transient ones whose
-                // retry budget is exhausted — fall through and are recorded and
-                // returned to the guest, which is also what a recorded error
-                // replays as.
-                let for_retry: Result<(), &ErrorCode> = Err(error_code);
-                handle
-                    .try_trigger_retry_access(
+                if classify_serializable_http_error_code(&serialized_error)
+                    == HostFailureKind::Transient
+                {
+                    let properties = http_retry_properties(
                         store,
-                        durable_worker_ctx::<Ctx, U>,
-                        &for_retry,
-                        |code| classify_serializable_http_error_code(&serialize_error_code(code)),
-                        RetryContext::http(&retry_method, &retry_uri),
+                        retry_method,
+                        retry_uri,
+                        None,
+                        "transient",
+                        method,
+                    );
+                    let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
+                        store,
+                        handle.start_index(),
+                        properties.clone(),
                     )
-                    .await
-                    .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))?;
+                    .await;
+                    let failure = anyhow::Error::new(ClassifiedHostError {
+                        kind: HostFailureKind::Transient,
+                        message: error_code.to_string(),
+                    });
+                    try_trigger_host_trap_retry(&mut retry_task_ctx, failure, properties)
+                        .await
+                        .map_err(|err| {
+                            HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(err)))
+                        })?;
+                }
 
                 let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
                 handle
@@ -396,22 +734,662 @@ where
                 finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span_id)
                     .await
                     .map_err(HttpError::trap)?;
-                // Spawns the demand-gated transmission recorder at a
-                // deterministic point (right after the send `End` +
-                // `FinishSpan`, mirrored by the replay arm above). The inner
-                // send consumed the request even on failure, so a demanded
-                // transmission result — `Ok(())` from the dropped I/O wiring,
-                // or a deterministic body-validation error — still resolves.
                 start_transmission_recording::<Ctx, U>(store, pending_transmission);
                 Err(error)
             } else {
-                // Trap path: the invocation is torn down and retried from the
-                // oplog, so the span is not finished here (no `FinishSpan` is
-                // recorded after an incomplete `Start`).
                 Err(HttpError::trap(wasmtime::Error::from_anyhow(
                     handle.trap(error),
                 )))
             }
+        }
+    }
+}
+
+struct PhysicalSendHttpError {
+    error_code: ErrorCode,
+    final_transmission_tx: oneshot::Sender<Result<(), ErrorCode>>,
+}
+
+enum PhysicalSendConversionError {
+    HttpError(PhysicalSendHttpError),
+    Trap(anyhow::Error),
+}
+
+enum PhysicalSend<Ctx: WorkerCtx> {
+    Replayable(PhysicalSendRequest<Ctx>),
+}
+
+fn poison_p3_pooled_connection(connection: &Option<P3PooledConnection>) {
+    if let Some(connection) = connection {
+        connection.poison();
+    }
+}
+
+struct PhysicalSendRequest<Ctx: WorkerCtx> {
+    pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+    method: http::Method,
+    uri: http::Uri,
+    version: http::Version,
+    headers: HeaderMap,
+    body: SharedRecordingBody,
+    options: Option<wasmtime_wasi_http::p3::RequestOptions>,
+    final_transmission_tx: oneshot::Sender<Result<(), ErrorCode>>,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
+    async fn attempt(
+        &self,
+    ) -> Result<
+        (
+            http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
+            Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+            Option<P3PooledConnection>,
+        ),
+        ErrorCode,
+    > {
+        let body = self.body.replayer().boxed_unsync();
+        let mut request = http::Request::builder()
+            .method(self.method.clone())
+            .uri(self.uri.clone())
+            .version(self.version)
+            .body(body)
+            .map_err(|err| ErrorCode::InternalError(Some(err.to_string())))?;
+        *request.headers_mut() = self.headers.clone();
+
+        match &self.pool {
+            Some(pool) => pool
+                .pooled_send_request_p3(request, self.options)
+                .await
+                .map(|(response, io, connection)| (response, io, Some(connection))),
+            None => match wasmtime_wasi_http::p3::default_send_request(request, self.options).await
+            {
+                Ok((response, io)) => Ok((
+                    response.map(http_body_util::BodyExt::boxed_unsync),
+                    Box::new(io) as Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+                    None,
+                )),
+                Err(error) => Err(error),
+            },
+        }
+    }
+}
+
+async fn convert_physical_send_request<Ctx, U>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    req: Resource<Request>,
+) -> Result<PhysicalSend<Ctx>, PhysicalSendConversionError>
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    let (final_transmission_tx, final_transmission_rx) = oneshot::channel();
+    let pool = store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        ctx.wasi_http.connection_pool.clone()
+    });
+    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+    let converted = http_store.with(|mut access| {
+        let request = access
+            .get()
+            .table
+            .delete(req)
+            .context("failed to delete p3 HTTP request from table")
+            .map_err(wasmtime::Error::from_anyhow)
+            .map_err(HttpError::trap)?;
+        let converted = request.into_http_with_getter(
+            access.as_context_mut(),
+            async move { final_transmission_rx.await.unwrap_or(Ok(())) },
+            wasi_http_view::<Ctx, U>,
+        )?;
+        HttpResult::Ok(converted)
+    });
+
+    let (http_request, options) = match converted {
+        Ok(converted) => converted,
+        Err(error) => {
+            if let Some(error_code) = error.downcast_ref().cloned() {
+                return Err(PhysicalSendConversionError::HttpError(
+                    PhysicalSendHttpError {
+                        error_code,
+                        final_transmission_tx,
+                    },
+                ));
+            }
+            return Err(PhysicalSendConversionError::Trap(anyhow::anyhow!(
+                "failed to convert p3 HTTP request: {error:?}"
+            )));
+        }
+    };
+
+    let options = options.as_deref().copied();
+    let (parts, body) = http_request.into_parts();
+    Ok(PhysicalSend::Replayable(PhysicalSendRequest {
+        pool,
+        method: parts.method,
+        uri: parts.uri,
+        version: parts.version,
+        headers: parts.headers,
+        body: SharedRecordingBody::new(body, P3_T14_MAX_REPLAYABLE_REQUEST_BODY_BYTES),
+        options,
+        final_transmission_tx,
+        _phantom: PhantomData,
+    }))
+}
+
+#[derive(Clone)]
+struct SharedRecordingBody {
+    state: Arc<Mutex<SharedRecordingBodyState>>,
+}
+
+struct SharedRecordingBodyState {
+    inner: Pin<Box<UnsyncBoxBody<Bytes, ErrorCode>>>,
+    recorded: Vec<RecordedRequestFrame>,
+    recorded_data_len: u64,
+    cap: u64,
+    terminal: bool,
+    exceeded_cap: bool,
+    body_error: Option<ErrorCode>,
+    active_live_view: bool,
+    live_polled: bool,
+    waker: Option<Waker>,
+}
+
+#[derive(Clone)]
+enum RecordedRequestFrame {
+    Data(Bytes),
+    Trailers(HeaderMap),
+}
+
+enum SharedRecordingBodyTerminal {
+    Replayable,
+    ExceededCap,
+    BodyError,
+}
+
+impl SharedRecordingBody {
+    fn new(body: UnsyncBoxBody<Bytes, ErrorCode>, cap: u64) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(SharedRecordingBodyState {
+                inner: Box::pin(body),
+                recorded: Vec::new(),
+                recorded_data_len: 0,
+                cap,
+                terminal: false,
+                exceeded_cap: false,
+                body_error: None,
+                active_live_view: false,
+                live_polled: false,
+                waker: None,
+            })),
+        }
+    }
+
+    fn replayer(&self) -> ReplayThenLiveRequestBody {
+        ReplayThenLiveRequestBody {
+            shared: self.clone(),
+            recorded_pos: 0,
+            live_claimed: false,
+        }
+    }
+
+    fn can_replay_after_send_failure(&self) -> bool {
+        let state = self
+            .state
+            .lock()
+            .expect("p3 shared request body mutex poisoned");
+        state.is_terminal_replayable() || state.is_unpulled()
+    }
+
+    fn abandon_active_live_view(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("p3 shared request body mutex poisoned");
+        state.active_live_view = false;
+        if let Some(waker) = state.waker.take() {
+            waker.wake();
+        }
+    }
+
+    async fn await_terminal(&self) -> SharedRecordingBodyTerminal {
+        futures::future::poll_fn(|cx| self.poll_terminal(cx)).await
+    }
+
+    fn poll_terminal(&self, cx: &mut Context<'_>) -> Poll<SharedRecordingBodyTerminal> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("p3 shared request body mutex poisoned");
+        if state.exceeded_cap {
+            return Poll::Ready(SharedRecordingBodyTerminal::ExceededCap);
+        }
+        if state.body_error.is_some() {
+            return Poll::Ready(SharedRecordingBodyTerminal::BodyError);
+        }
+        if state.terminal {
+            return Poll::Ready(SharedRecordingBodyTerminal::Replayable);
+        }
+        if state.active_live_view {
+            state.waker = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+
+        loop {
+            match state.inner.as_mut().poll_frame(cx) {
+                Poll::Ready(Some(Ok(frame))) => {
+                    state.live_polled = true;
+                    state.record_frame(frame);
+                }
+                Poll::Ready(Some(Err(error))) => {
+                    state.live_polled = true;
+                    state.body_error = Some(error);
+                    return Poll::Ready(SharedRecordingBodyTerminal::BodyError);
+                }
+                Poll::Ready(None) => {
+                    state.live_polled = true;
+                    state.terminal = true;
+                    return Poll::Ready(SharedRecordingBodyTerminal::Replayable);
+                }
+                Poll::Pending => {
+                    state.waker = Some(cx.waker().clone());
+                    return Poll::Pending;
+                }
+            }
+            if state.exceeded_cap {
+                return Poll::Ready(SharedRecordingBodyTerminal::ExceededCap);
+            }
+        }
+    }
+}
+
+impl SharedRecordingBodyState {
+    fn is_unpulled(&self) -> bool {
+        !self.live_polled
+            && self.recorded.is_empty()
+            && self.body_error.is_none()
+            && !self.terminal
+            && !self.exceeded_cap
+    }
+
+    fn is_terminal_replayable(&self) -> bool {
+        self.terminal && self.body_error.is_none() && !self.exceeded_cap
+    }
+
+    fn record_frame(&mut self, frame: Frame<Bytes>) {
+        match frame.into_data().map_err(Frame::into_trailers) {
+            Ok(data) => {
+                self.recorded_data_len = self.recorded_data_len.saturating_add(data.len() as u64);
+                if self.recorded_data_len > self.cap {
+                    self.exceeded_cap = true;
+                } else {
+                    self.recorded.push(RecordedRequestFrame::Data(data));
+                }
+            }
+            Err(Ok(trailers)) => self.recorded.push(RecordedRequestFrame::Trailers(trailers)),
+            Err(Err(_)) => {}
+        }
+    }
+}
+
+struct ReplayThenLiveRequestBody {
+    shared: SharedRecordingBody,
+    recorded_pos: usize,
+    live_claimed: bool,
+}
+
+impl Drop for ReplayThenLiveRequestBody {
+    fn drop(&mut self) {
+        if self.live_claimed {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .expect("p3 shared request body mutex poisoned");
+            state.active_live_view = false;
+            if let Some(waker) = state.waker.take() {
+                waker.wake();
+            }
+        }
+    }
+}
+
+impl HttpBody for ReplayThenLiveRequestBody {
+    type Data = Bytes;
+    type Error = ErrorCode;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        let this = self.as_mut().get_mut();
+        let shared = this.shared.clone();
+        let mut state = shared
+            .state
+            .lock()
+            .expect("p3 shared request body mutex poisoned");
+
+        if this.recorded_pos < state.recorded.len() {
+            let frame = match state.recorded[this.recorded_pos].clone() {
+                RecordedRequestFrame::Data(data) => Frame::data(data),
+                RecordedRequestFrame::Trailers(trailers) => Frame::trailers(trailers),
+            };
+            this.recorded_pos += 1;
+            return Poll::Ready(Some(Ok(frame)));
+        }
+        if let Some(error) = &state.body_error {
+            return Poll::Ready(Some(Err(error.clone())));
+        }
+        if state.terminal {
+            return Poll::Ready(None);
+        }
+        if !this.live_claimed {
+            assert!(
+                !state.active_live_view,
+                "only one p3 shared request body live view may be active"
+            );
+            state.active_live_view = true;
+            this.live_claimed = true;
+        }
+
+        match state.inner.as_mut().poll_frame(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                state.live_polled = true;
+                let frame = match frame.into_data().map_err(Frame::into_trailers) {
+                    Ok(data) => {
+                        state.recorded_data_len =
+                            state.recorded_data_len.saturating_add(data.len() as u64);
+                        if state.recorded_data_len > state.cap {
+                            state.exceeded_cap = true;
+                        } else {
+                            state
+                                .recorded
+                                .push(RecordedRequestFrame::Data(data.clone()));
+                            this.recorded_pos = state.recorded.len();
+                        }
+                        Frame::data(data)
+                    }
+                    Err(Ok(trailers)) => {
+                        state
+                            .recorded
+                            .push(RecordedRequestFrame::Trailers(trailers.clone()));
+                        this.recorded_pos = state.recorded.len();
+                        Frame::trailers(trailers)
+                    }
+                    Err(Err(_)) => return Poll::Ready(None),
+                };
+                if let Some(waker) = state.waker.take() {
+                    waker.wake();
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                state.live_polled = true;
+                state.body_error = Some(error.clone());
+                if let Some(waker) = state.waker.take() {
+                    waker.wake();
+                }
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                state.live_polled = true;
+                state.terminal = true;
+                if let Some(waker) = state.waker.take() {
+                    waker.wake();
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .expect("p3 shared request body mutex poisoned");
+        self.recorded_pos >= state.recorded.len() && state.terminal
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .expect("p3 shared request body mutex poisoned");
+        let prefix_len: u64 = state.recorded[self.recorded_pos..]
+            .iter()
+            .map(|frame| match frame {
+                RecordedRequestFrame::Data(data) => data.len() as u64,
+                RecordedRequestFrame::Trailers(_) => 0,
+            })
+            .sum();
+        let inner = state.inner.size_hint();
+        let mut hint = SizeHint::new();
+        hint.set_lower(prefix_len.saturating_add(inner.lower()));
+        if let Some(upper) = inner.upper() {
+            hint.set_upper(prefix_len.saturating_add(upper));
+        }
+        hint
+    }
+}
+
+fn response_resource_from_http<Ctx, U>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    response: http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
+    io: Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
+    final_transmission_tx: oneshot::Sender<Result<(), ErrorCode>>,
+) -> HttpResult<Resource<Response>>
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    let (parts, body) = response.into_parts();
+    let mut io = Box::into_pin(io);
+    let body = match io.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(result) => {
+            let _ = final_transmission_tx.send(result.clone());
+            body
+        }
+        Poll::Pending => {
+            let (io_result_tx, io_result_rx) = oneshot::channel();
+            let io_task = tokio::task::spawn(async move {
+                let result = io.await;
+                debug!(?result, "p3 HTTP send I/O future finished");
+                let _ = io_result_tx.send(result);
+            });
+            let io_guard = AbortOnDropIoTask(io_task);
+            tokio::task::spawn(async move {
+                let result = io_result_rx.await.unwrap_or(Ok(()));
+                let _ = final_transmission_tx.send(result);
+            });
+            BodyWithState {
+                body,
+                _state: io_guard,
+            }
+            .boxed_unsync()
+        }
+    };
+    let response = http::Response::from_parts(parts, body);
+    let (response, response_io) = wasmtime_wasi_http::p3::Response::from_http(response);
+    tokio::task::spawn(async move {
+        let result = response_io.await;
+        debug!(?result, "p3 HTTP response body I/O future finished");
+    });
+    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+    http_store.with(|mut access| {
+        access
+            .get()
+            .table
+            .push(response)
+            .context("failed to push p3 HTTP response to table")
+            .map_err(wasmtime::Error::from_anyhow)
+            .map_err(HttpError::trap)
+    })
+}
+
+struct BodyWithState<B, T> {
+    body: B,
+    _state: T,
+}
+
+impl<B, T> HttpBody for BodyWithState<B, T>
+where
+    B: HttpBody + Unpin,
+    T: Unpin,
+{
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.body).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.body.size_hint()
+    }
+}
+
+async fn make_p3_http_retry_task_context<Ctx, U>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    retry_point: OplogIndex,
+    mut retry_properties: RetryProperties,
+) -> TaskRetryContext<Ctx>
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    let (
+        environment_state_service,
+        environment_id,
+        default_retry_policy,
+        agent_config_retry_policies,
+        runtime_retry_policy_mutations,
+        max_in_function_retry_delay,
+        worker,
+    ) = store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        ctx.state.enrich_retry_properties(&mut retry_properties);
+        (
+            ctx.state.environment_state_service.clone(),
+            ctx.state.owned_agent_id.environment_id,
+            NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
+            ctx.state.agent_config_retry_policies(),
+            ctx.state.runtime_retry_policy_mutations.clone(),
+            ctx.state.config.max_in_function_retry_delay,
+            ctx.public_state.worker(),
+        )
+    });
+    let current_retry_policy_state = worker
+        .get_non_detached_last_known_status()
+        .await
+        .current_retry_state
+        .get(&retry_point)
+        .cloned();
+
+    TaskRetryContext {
+        retry_point,
+        environment_state_service,
+        environment_id,
+        default_retry_policy,
+        agent_config_retry_policies,
+        runtime_retry_policy_mutations,
+        max_in_function_retry_delay,
+        current_retry_policy_state,
+        retry_properties,
+        worker,
+    }
+}
+
+fn http_retry_properties<Ctx, U>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    method: &str,
+    uri: &str,
+    status_code: Option<u16>,
+    error_type: &str,
+    serialized_method: &SerializableHttpMethod,
+) -> RetryProperties
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    let mut properties = RetryContext::http_with_response(method, uri, status_code, error_type);
+    let effective_idempotence = store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        ctx.state.assume_idempotence || is_idempotent_http_method(serialized_method)
+    });
+    apply_method_idempotence(&mut properties, effective_idempotence);
+    properties
+}
+
+fn apply_method_idempotence(properties: &mut RetryProperties, is_idempotent: bool) {
+    properties.set("is-idempotent", PredicateValue::Boolean(is_idempotent));
+}
+
+fn inline_retry_eligible_for_method<Ctx, U>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    method: &SerializableHttpMethod,
+) -> bool
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        ctx.state.is_live()
+            && ctx.state.snapshotting_mode.is_none()
+            && ctx.state.persistence_level
+                != golem_common::model::oplog::PersistenceLevel::PersistNothing
+            && ctx.state.active_atomic_regions.is_empty()
+            && (ctx.state.assume_idempotence || is_idempotent_http_method(method))
+    })
+}
+
+async fn matching_status_retry_policy<Ctx, U>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    retry_ctx: &mut TaskRetryContext<Ctx>,
+    method: &str,
+    uri: &str,
+    status_code: u16,
+    serialized_method: &SerializableHttpMethod,
+) -> Option<NamedRetryPolicy>
+where
+    Ctx: WorkerCtx,
+    U: Send + 'static,
+{
+    let properties = http_retry_properties(
+        store,
+        method,
+        uri,
+        Some(status_code),
+        "http-status",
+        serialized_method,
+    );
+    let status_policies: Vec<NamedRetryPolicy> = retry_ctx
+        .named_retry_policies()
+        .await
+        .into_iter()
+        .filter(|policy| {
+            policy.predicate.references_property("status-code")
+                || policy.policy.references_property("status-code")
+        })
+        .collect();
+    match NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+        &status_policies,
+        &properties,
+    ) {
+        Ok(policy) => policy.cloned(),
+        Err(error) => {
+            tracing::warn!(?error, "Failed resolving p3 HTTP status retry policy");
+            None
         }
     }
 }
@@ -689,7 +1667,10 @@ async fn reissue_recorded_request<Ctx: WorkerCtx, U: 'static>(
     let options = options.as_deref().copied();
 
     let sent = match pool {
-        Some(pool) => pool.pooled_send_request_p3(http_request, options).await,
+        Some(pool) => pool
+            .pooled_send_request_p3(http_request, options)
+            .await
+            .map(|(response, io, _pooled_connection)| (response, io)),
         None => match wasmtime_wasi_http::p3::default_send_request(http_request, options).await {
             Ok((response, io)) => Ok((
                 response.map(http_body_util::BodyExt::boxed_unsync),

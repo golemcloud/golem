@@ -269,7 +269,8 @@ impl wasmtime_wasi_http::p3::WasiHttpHooks for DurableHttpHooks {
         Box::new(async move {
             match connection_pool {
                 Some(pool) => {
-                    let (response, io) = pool.pooled_send_request_p3(request, options).await?;
+                    let (response, io, _pooled_connection) =
+                        pool.pooled_send_request_p3(request, options).await?;
                     Ok((response, io))
                 }
                 None => {
