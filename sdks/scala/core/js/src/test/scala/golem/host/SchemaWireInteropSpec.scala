@@ -41,6 +41,9 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
   private val mdFull =
     MetadataEnvelope(Some("doc text"), List("a1", "a2"), List("ex1", "ex2"), Some("use X"), Some(Role.Multimodal))
   private val mdOther = MetadataEnvelope(Some("d2"), List("b"), Nil, None, Some(Role.Other("custom-role")))
+  private val mdUnstructuredText = MetadataEnvelope(role = Some(Role.UnstructuredText))
+  private val mdUnstructuredBinary = MetadataEnvelope(role = Some(Role.UnstructuredBinary))
+  private val mdOtherUnstructuredText = MetadataEnvelope(role = Some(Role.Other("unstructured-text")))
   private val md0     = MetadataEnvelope.empty
 
   // --- spec variations -----------------------------------------------------
@@ -221,6 +224,32 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
       },
       test("typed schema value round-trips Wit -> Js -> Wit (all cases)") {
         assertTrue(SchemaWireInterop.typedFromJs(SchemaWireInterop.typedToJs(typed)) == typed)
+      },
+      test("role tags round-trip without conflating dedicated and other roles") {
+        val graph = WitSchemaGraph(
+          Vector(
+            WitSchemaTypeNode(BoolType, mdUnstructuredText),
+            WitSchemaTypeNode(BoolType, mdUnstructuredBinary),
+            WitSchemaTypeNode(BoolType, mdOtherUnstructuredText)
+          ),
+          Vector.empty,
+          0
+        )
+        assertTrue(SchemaWireInterop.graphFromJs(SchemaWireInterop.graphToJs(graph)) == graph)
+      },
+      test("unknown JS role tags decode as open-registry Other roles") {
+        val unknownRole = js.Dynamic
+          .literal("tag" -> "future-role")
+          .asInstanceOf[golem.host.js.schema.JsRole]
+        val metadata = golem.host.js.schema.JsMetadataEnvelope(
+          js.undefined,
+          js.Array[String](),
+          js.Array[String](),
+          js.undefined,
+          unknownRole
+        )
+
+        assertTrue(SchemaWireInterop.metadataFromJs(metadata).role == Some(Role.Other("future-role")))
       },
       test("per-type-body round-trips individually") {
         val results = typeBodies.map { b =>

@@ -563,6 +563,8 @@ object SchemaModelSpec extends ZIOSpecDefault {
               NamedFieldType("pOut", SchemaType(PathType(PathSpec(PathDirection.Output, PathKind.Directory)))),
               NamedFieldType("pInOut", SchemaType(PathType(PathSpec(PathDirection.InOut, PathKind.Any)))),
               NamedFieldType("mm", t.bool, MetadataEnvelope(role = Some(Role.Multimodal))),
+              NamedFieldType("ut", t.bool, MetadataEnvelope(role = Some(Role.UnstructuredText))),
+              NamedFieldType("ub", t.bool, MetadataEnvelope(role = Some(Role.UnstructuredBinary))),
               NamedFieldType("other", t.bool, MetadataEnvelope(role = Some(Role.Other("custom")))),
               NamedFieldType("dep", t.bool, MetadataEnvelope(deprecated = Some("use something else")))
             )

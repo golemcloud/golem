@@ -23,8 +23,10 @@ package golem.schema
 sealed trait Role extends Product with Serializable
 
 object Role {
-  case object Multimodal               extends Role
-  final case class Other(name: String) extends Role
+  case object Multimodal                extends Role
+  case object UnstructuredText          extends Role
+  case object UnstructuredBinary        extends Role
+  final case class Other(name: String)  extends Role
 }
 
 /**

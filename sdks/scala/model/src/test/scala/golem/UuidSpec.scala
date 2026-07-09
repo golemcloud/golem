@@ -61,6 +61,24 @@ object UuidSpec extends ZIOSpecDefault {
         val result = Uuid.fromStandardString("")
         assertTrue(result.isLeft)
       }
+    ),
+    suite("random")(
+      test("generates a standard-format UUID that round-trips") {
+        val uuid   = Uuid.random()
+        val str    = Uuid.toStandardString(uuid)
+        val parsed = Uuid.fromStandardString(str)
+        assertTrue(
+          str.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+          parsed == Right(uuid)
+        )
+      },
+      test("generates RFC 4122 version-4 UUIDs") {
+        val samples = List.fill(100)(Uuid.toStandardString(Uuid.random()))
+        assertTrue(
+          samples.forall(_.charAt(14) == '4'),
+          samples.forall(uuid => "89ab".contains(uuid.charAt(19)))
+        )
+      }
     )
   )
 }
