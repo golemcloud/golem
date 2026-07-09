@@ -76,6 +76,9 @@ const SCALA_SOURCE_ROOT: &str = "src/main/scala";
 /// Fully-qualified package prefix of the static runtime types.
 const RUNTIME_PKG: &str = "_root_.golem.bridge.runtime";
 
+/// Fully-qualified package prefix of the Scala SDK types used by guest bridges.
+const GUEST_RUNTIME_PKG: &str = "_root_.golem";
+
 /// Root (un-rooted) package of the generated client types. The per-agent
 /// package segment (see [`ScalaBridgeGenerator::client_package_segment`]) is
 /// appended so that two generated SDKs placed on the same classpath cannot
@@ -142,6 +145,21 @@ const DATETIME: &str = "_root_.golem.bridge.runtime.Datetime";
 
 /// Fully-qualified runtime `Uuid` type (phantom ids).
 const UUID: &str = "_root_.golem.bridge.runtime.Uuid";
+
+const GUEST_SV: &str = "_root_.golem.schema.SchemaValue";
+const GUEST_CODEC: &str = "_root_.golem.runtime.rpc.SchemaRpcCodec";
+const GUEST_SCHEMA_RESULT: &str = "_root_.golem.schema.SchemaResult";
+const GUEST_SCHEMA_MAP_ENTRY: &str = "_root_.golem.schema.SchemaMapEntry";
+const GUEST_CLIENT_ERROR: &str = "_root_.scala.RuntimeException";
+const GUEST_SCHEMA_VALUE_TYPE: &str = "_root_.golem.schema.SchemaValue";
+const GUEST_AGENT_CONFIG_ENTRY: &str = "_root_.golem.config.ConfigOverride";
+const GUEST_REMOTE_AGENT_CLIENT: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
+const GUEST_CONFIGURATION: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
+const GUEST_RESOLVED_AGENT: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
+const GUEST_AGENT_ID: &str = "_root_.scala.Predef.String";
+const GUEST_GOLEM_SERVER: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
+const GUEST_DATETIME: &str = "_root_.golem.Datetime";
+const GUEST_UUID: &str = "_root_.golem.Uuid";
 
 /// Scala `Future`, `ExecutionContext`, `String`, `Unit`.
 const FUTURE: &str = "_root_.scala.concurrent.Future";
@@ -256,10 +274,16 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
 ];
 
 const RESERVED_GUEST_RUNTIME_TYPE_NAMES: &[&str] = &[
+    "SchemaValue",
+    "SchemaMapEntry",
+    "SchemaResult",
+    "Datetime",
+    "Uuid",
     "ClientError",
     "CancellationToken",
     "ConfigOverride",
     "RemoteAgentClient",
+    "ToolRpcClient",
 ];
 
 /// The `(case_name, payload_schema)` modality pairs of one multimodal set.
@@ -287,6 +311,7 @@ impl ScalaBridgeMode {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 struct ScalaRuntimeConfig {
+    mode: ScalaBridgeMode,
     runtime_pkg: &'static str,
     schema_value: &'static str,
     schema_value_codec: &'static str,
@@ -307,7 +332,8 @@ struct ScalaRuntimeConfig {
 impl ScalaRuntimeConfig {
     fn new(mode: ScalaBridgeMode) -> Self {
         match mode {
-            ScalaBridgeMode::ExternalRest | ScalaBridgeMode::GuestWasmRpc => Self {
+            ScalaBridgeMode::ExternalRest => Self {
+                mode,
                 runtime_pkg: RUNTIME_PKG,
                 schema_value: SV,
                 schema_value_codec: CODEC,
@@ -324,13 +350,31 @@ impl ScalaRuntimeConfig {
                 datetime: DATETIME,
                 uuid: UUID,
             },
+            ScalaBridgeMode::GuestWasmRpc => Self {
+                mode,
+                runtime_pkg: GUEST_RUNTIME_PKG,
+                schema_value: GUEST_SV,
+                schema_value_codec: GUEST_CODEC,
+                schema_result: GUEST_SCHEMA_RESULT,
+                schema_map_entry: GUEST_SCHEMA_MAP_ENTRY,
+                bridge_exception: GUEST_CLIENT_ERROR,
+                schema_value_type: GUEST_SCHEMA_VALUE_TYPE,
+                agent_config_entry: GUEST_AGENT_CONFIG_ENTRY,
+                bridge: GUEST_REMOTE_AGENT_CLIENT,
+                configuration: GUEST_CONFIGURATION,
+                resolved_agent: GUEST_RESOLVED_AGENT,
+                agent_id: GUEST_AGENT_ID,
+                golem_server: GUEST_GOLEM_SERVER,
+                datetime: GUEST_DATETIME,
+                uuid: GUEST_UUID,
+            },
         }
     }
 
     fn reserved_type_names(self) -> &'static [&'static str] {
-        match self.runtime_pkg {
-            RUNTIME_PKG => RESERVED_RUNTIME_TYPE_NAMES,
-            _ => &[],
+        match self.mode {
+            ScalaBridgeMode::ExternalRest => RESERVED_RUNTIME_TYPE_NAMES,
+            ScalaBridgeMode::GuestWasmRpc => RESERVED_GUEST_RUNTIME_TYPE_NAMES,
         }
     }
 }
@@ -402,14 +446,9 @@ impl ScalaBridgeGenerator {
         // `Multimodal<N>` names can be reserved in the walker below.
         let multimodals = collect_multimodals(&agent_type)?;
 
-        let mode_reserved = match mode {
-            ScalaBridgeMode::ExternalRest => &[][..],
-            ScalaBridgeMode::GuestWasmRpc => RESERVED_GUEST_RUNTIME_TYPE_NAMES,
-        };
         let reserved = runtime_config
             .reserved_type_names()
             .iter()
-            .chain(mode_reserved.iter())
             .map(|name| ScalaTypeName::Derived((*name).to_string()))
             .chain(std::iter::once(ScalaTypeName::Derived(client_object_name(
                 &agent_type,
@@ -2530,4 +2569,187 @@ fn write_dir(dir: &Dir<'_>, dest: &Utf8Path) -> anyhow::Result<()> {
         write_dir(sub, dest)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema};
+    use tempfile::TempDir;
+    use test_r::test;
+
+    #[test]
+    fn library_name_is_mode_separated() {
+        let agent_type = minimal_agent_type("AlphaAgent");
+
+        let external = ScalaBridgeGenerator::new_with_mode(
+            agent_type.clone(),
+            Utf8Path::new("."),
+            true,
+            ScalaBridgeMode::ExternalRest,
+        )
+        .unwrap();
+        let guest = ScalaBridgeGenerator::new_with_mode(
+            agent_type,
+            Utf8Path::new("."),
+            true,
+            ScalaBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        assert_eq!(external.library_name(), "alpha-agent-client");
+        assert_eq!(guest.library_name(), "alpha-agent-guest-client");
+    }
+
+    #[test]
+    fn guest_runtime_config_points_at_scala_sdk_types_and_reserves_guest_names() {
+        let runtime_config = ScalaRuntimeConfig::new(ScalaBridgeMode::GuestWasmRpc);
+
+        assert_eq!(runtime_config.runtime_pkg, "_root_.golem");
+        assert_eq!(
+            runtime_config.schema_value,
+            "_root_.golem.schema.SchemaValue"
+        );
+        assert_eq!(
+            runtime_config.schema_result,
+            "_root_.golem.schema.SchemaResult"
+        );
+        assert_eq!(
+            runtime_config.schema_map_entry,
+            "_root_.golem.schema.SchemaMapEntry"
+        );
+        assert_eq!(runtime_config.datetime, "_root_.golem.Datetime");
+        assert_eq!(runtime_config.uuid, "_root_.golem.Uuid");
+        assert!(
+            runtime_config
+                .reserved_type_names()
+                .contains(&"SchemaValue")
+        );
+        assert!(
+            runtime_config
+                .reserved_type_names()
+                .contains(&"RemoteAgentClient")
+        );
+        assert!(!runtime_config.reserved_type_names().contains(&"Bridge"));
+    }
+
+    #[test]
+    fn guest_runtime_config_does_not_reference_embedded_rest_runtime() {
+        let runtime_config = ScalaRuntimeConfig::new(ScalaBridgeMode::GuestWasmRpc);
+
+        for value in [
+            runtime_config.runtime_pkg,
+            runtime_config.schema_value,
+            runtime_config.schema_value_codec,
+            runtime_config.schema_result,
+            runtime_config.schema_map_entry,
+            runtime_config.bridge_exception,
+            runtime_config.schema_value_type,
+            runtime_config.agent_config_entry,
+            runtime_config.bridge,
+            runtime_config.configuration,
+            runtime_config.resolved_agent,
+            runtime_config.agent_id,
+            runtime_config.golem_server,
+            runtime_config.datetime,
+            runtime_config.uuid,
+        ] {
+            assert!(
+                !value.contains("golem.bridge.runtime"),
+                "guest runtime config must not reference embedded REST runtime: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_generation_preserves_jvm_runtime_project_shape() {
+        let dir = TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-client")).unwrap();
+        let mut generator = ScalaBridgeGenerator::new_with_mode(
+            minimal_agent_type("AlphaAgent"),
+            &target_path,
+            true,
+            ScalaBridgeMode::ExternalRest,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let build_sbt = std::fs::read_to_string(target_path.join("build.sbt")).unwrap();
+        assert!(build_sbt.contains("name               := \"alpha-agent-client\""));
+        assert!(build_sbt.contains("\"dev.zio\" %% \"zio-blocks-schema\""));
+        assert!(!build_sbt.contains("ScalaJSPlugin"));
+        assert!(!target_path.join("project/plugins.sbt").exists());
+        assert!(
+            target_path
+                .join("src/main/scala/golem/bridge/runtime/SchemaValue.scala")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn guest_generation_emits_scalajs_sdk_project_shape_without_embedded_runtime() {
+        let dir = TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut generator = ScalaBridgeGenerator::new_with_mode(
+            minimal_agent_type("AlphaAgent"),
+            &target_path,
+            true,
+            ScalaBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let build_sbt = std::fs::read_to_string(target_path.join("build.sbt")).unwrap();
+        assert!(build_sbt.contains("name                         := \"alpha-agent-guest-client\""));
+        assert!(build_sbt.contains(".enablePlugins(ScalaJSPlugin)"));
+        assert!(build_sbt.contains("ModuleKind.ESModule"));
+        assert!(build_sbt.contains("scalaJSUseMainModuleInitializer := false"));
+        assert!(build_sbt.contains("\"cloud.golem\" %%% \"golem-scala-core\""));
+        assert!(build_sbt.contains("\"cloud.golem\" %%% \"golem-scala-model\""));
+        assert!(!build_sbt.contains("zio-blocks-schema"));
+
+        let plugins_sbt = std::fs::read_to_string(target_path.join("project/plugins.sbt")).unwrap();
+        assert!(plugins_sbt.contains("org.scala-js"));
+        assert!(plugins_sbt.contains("sbt-scalajs"));
+
+        assert!(
+            !target_path
+                .join("src/main/scala/golem/bridge/runtime")
+                .exists()
+        );
+        let client_source = std::fs::read_to_string(
+            target_path
+                .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
+        )
+        .unwrap();
+        assert!(client_source.contains("package golem.bridge.client.alpha_agent"));
+        assert!(client_source.contains("object AlphaAgentClient"));
+    }
+
+    fn minimal_agent_type(type_name: &str) -> AgentTypeSchema {
+        AgentTypeSchema {
+            type_name: AgentTypeName(type_name.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Ephemeral,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
 }
