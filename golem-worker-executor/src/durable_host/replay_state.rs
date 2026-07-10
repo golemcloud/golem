@@ -114,6 +114,7 @@ impl ReplayState {
         }
         self.last_replayed_index.set(OplogIndex::NONE);
         self.last_replayed_non_hint_index.set(OplogIndex::NONE);
+        self.replay_buffer.clear();
         self.move_replay_idx(OplogIndex::INITIAL).await;
         self.skip_forward().await
     }
