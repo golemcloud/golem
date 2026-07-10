@@ -36,6 +36,8 @@ use golem_common::schema::tool::{CommandBody, CommandNode, Tool};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use std::collections::{BTreeMap, BTreeSet};
 
+const SCALA_NOTHING: &str = "_root_.scala.Nothing";
+
 #[derive(Clone)]
 struct ClientNode {
     index: usize,
@@ -259,7 +261,9 @@ impl ScalaToolBridgeGenerator {
     }
 
     fn write_decode_result_value_helper(&self, writer: &mut ScalaWriter) {
-        writer.line("private def decodeResultValue[T](__value: => T): _root_.scala.Either[_root_.golem.tool.ToolError[Nothing], T] =");
+        writer.line(format!(
+            "private def decodeResultValue[T](__value: => T): _root_.scala.Either[_root_.golem.tool.ToolError[{SCALA_NOTHING}], T] ="
+        ));
         writer.indent();
         writer.line("try _root_.scala.Right(__value)");
         writer.line("catch { case __e: _root_.scala.Throwable => _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(__e.getMessage)) }");
@@ -346,14 +350,17 @@ impl ScalaToolBridgeGenerator {
         };
         let ret_ty = self.return_type(body)?;
         let path_expr = self.command_path_expr(command_index)?;
+        let error_type = self.error_type_ref(command_index, body);
 
         writer.line(format!(
             "def {method_name}({}): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[{}], {ret_ty}]] = {{",
             params.join(", "),
-            self.error_type(command_index, body)
+            error_type,
         ));
         writer.indent();
-        writer.line("val __input: _root_.scala.Either[_root_.golem.tool.ToolError[Nothing], _root_.golem.schema.TypedSchemaValue] =");
+        writer.line(format!(
+            "val __input: _root_.scala.Either[_root_.golem.tool.ToolError[{SCALA_NOTHING}], _root_.golem.schema.TypedSchemaValue] ="
+        ));
         writer.indent();
         writer.line("try {");
         writer.indent();
@@ -407,12 +414,10 @@ impl ScalaToolBridgeGenerator {
                 "__input match {{ case _root_.scala.Left(__e) => _root_.scala.concurrent.Future.successful(_root_.scala.Left(__e)); case _root_.scala.Right(__record) => _root_.golem.tool.ToolClientRuntime.invokeAndAwaitInfallible(rpc, {path_expr}, __record, {stdin_expr}) }}"
             ))
         } else {
-            let error_type = self.error_type(command_index, body);
+            let error_type = self.error_type_ref(command_index, body);
+            let error_decoder = self.error_type_ref(command_index, body);
             Ok(format!(
-                "__input match {{ case _root_.scala.Left(__e) => _root_.scala.concurrent.Future.successful(_root_.scala.Left(__e)); case _root_.scala.Right(__record) => _root_.golem.tool.ToolClientRuntime.invokeAndAwait[{error_type}](rpc, {path_expr}, __record, {stdin_expr}, {}.decodeError) }}",
-                self.error_names
-                    .get(&command_index)
-                    .context("missing error enum")?
+                "__input match {{ case _root_.scala.Left(__e) => _root_.scala.concurrent.Future.successful(_root_.scala.Left(__e)); case _root_.scala.Right(__record) => _root_.golem.tool.ToolClientRuntime.invokeAndAwait[{error_type}](rpc, {path_expr}, __record, {stdin_expr}, {error_decoder}.decodeError) }}"
             ))
         }
     }
@@ -486,8 +491,9 @@ impl ScalaToolBridgeGenerator {
                 .body
                 .as_ref()
                 .context("error enum command has no body")?;
+            let qualified_error_name = self.client_type_ref(&error_name);
             writer.line(format!(
-                "sealed trait {error_name} extends Product with Serializable"
+                "sealed trait {error_name} extends _root_.scala.Product with _root_.scala.Serializable"
             ));
             writer.line(format!("object {error_name} {{"));
             writer.indent();
@@ -496,14 +502,16 @@ impl ScalaToolBridgeGenerator {
                 if let Some(payload) = &case.payload {
                     let typ = self.inner.type_reference(payload)?;
                     writer.line(format!(
-                        "final case class {variant}(value: {typ}) extends {error_name}"
+                        "final case class {variant}(value: {typ}) extends {qualified_error_name}"
                     ));
                 } else {
-                    writer.line(format!("case object {variant} extends {error_name}"));
+                    writer.line(format!(
+                        "case object {variant} extends {qualified_error_name}"
+                    ));
                 }
             }
             writer.blank();
-            self.error_decoder(writer, &error_name, body, &variants)?;
+            self.error_decoder(writer, &qualified_error_name, body, &variants)?;
             writer.dedent();
             writer.line("}");
             writer.blank();
@@ -514,12 +522,12 @@ impl ScalaToolBridgeGenerator {
     fn error_decoder(
         &mut self,
         writer: &mut ScalaWriter,
-        error_name: &str,
+        qualified_error_name: &str,
         body: &CommandBody,
         variants: &[String],
     ) -> anyhow::Result<()> {
         writer.line(format!(
-            "def decodeError(__value: _root_.golem.schema.TypedSchemaValue): _root_.scala.Either[_root_.scala.Predef.String, {error_name}] = {{"
+            "def decodeError(__value: _root_.golem.schema.TypedSchemaValue): _root_.scala.Either[_root_.scala.Predef.String, {qualified_error_name}] = {{"
         ));
         writer.indent();
         for (case, variant) in body.errors.iter().zip(variants) {
@@ -528,7 +536,7 @@ impl ScalaToolBridgeGenerator {
                 writer.line("try {");
                 writer.indent();
                 writer.line(format!(
-                    "return _root_.scala.Right({error_name}.{variant}({dec}))"
+                    "return _root_.scala.Right({qualified_error_name}.{variant}({dec}))"
                 ));
                 writer.dedent();
                 writer.line(format!(
@@ -537,7 +545,7 @@ impl ScalaToolBridgeGenerator {
             } else {
                 writer.line("__value.value match {");
                 writer.indent();
-                writer.line(format!("case _root_.golem.schema.SchemaValue.TupleValue(values) if values.isEmpty => return _root_.scala.Right({error_name}.{variant})"));
+                writer.line(format!("case _root_.golem.schema.SchemaValue.TupleValue(values) if values.isEmpty => return _root_.scala.Right({qualified_error_name}.{variant})"));
                 writer.line("case _ => ()");
                 writer.dedent();
                 writer.line("}");
@@ -570,14 +578,19 @@ impl ScalaToolBridgeGenerator {
         }
     }
 
-    fn error_type(&self, command_index: usize, body: &CommandBody) -> String {
+    fn client_type_ref(&self, name: &str) -> String {
+        format!("_root_.{}.{}", self.client_package(), name)
+    }
+
+    fn error_type_ref(&self, command_index: usize, body: &CommandBody) -> String {
         if body.errors.is_empty() {
-            "Nothing".to_string()
+            SCALA_NOTHING.to_string()
         } else {
-            self.error_names
+            let error_name = self
+                .error_names
                 .get(&command_index)
-                .expect("error enum name")
-                .clone()
+                .expect("error enum name");
+            self.client_type_ref(error_name)
         }
     }
 
@@ -1169,7 +1182,7 @@ mod tests {
             "sealed trait GrepError",
             "_root_.golem.runtime.tool.client.ToolRpcClient.transport(\"grep\")",
             "_root_.golem.schema.TypedSchemaValue(__schema, _root_.golem.schema.SchemaValue.RecordValue(__fields))",
-            "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[GrepError]",
+            "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[_root_.golem.bridge.client.grep.GrepError]",
             "_root_.golem.tool.ToolClientRuntime.invokeAndAwaitInfallible",
             "object Codecs",
         ] {
@@ -1415,6 +1428,93 @@ object OptionalStdoutCompileCheck {
         assert!(
             status.success(),
             "generated optional-stdout tool client did not compile in {target_path}"
+        );
+    }
+
+    #[test]
+    fn tool_generation_infallible_error_type_uses_scala_nothing_when_user_type_is_named_nothing() {
+        let mut tool = grep_tool();
+        let nothing_type = TypeId::from("nothing");
+        tool.commands.nodes[0].globals = Globals::default();
+        tool.commands.nodes[0].subcommands = vec![];
+        tool.commands.nodes[0].body = Some(CommandBody {
+            positionals: Positionals {
+                fixed: vec![positional(
+                    "value",
+                    SchemaType::ref_to(nothing_type.clone()),
+                )],
+                tail: None,
+            },
+            errors: vec![],
+            ..body()
+        });
+        tool.commands.nodes.truncate(1);
+        tool.schema = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: nothing_type,
+                name: Some("nothing".to_string()),
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "value".to_string(),
+                    body: SchemaType::string(),
+                    metadata: MetadataEnvelope::default(),
+                }]),
+            }],
+            root: SchemaType::record(vec![]),
+        };
+        validate_tool(&tool).unwrap();
+
+        let target_path = generate(tool, "grep-tool-guest-client");
+        let source = std::fs::read_to_string(
+            target_path.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
+        )
+        .unwrap();
+        assert!(
+            !source.contains("ToolError[Nothing]"),
+            "generated tool client should use _root_.scala.Nothing:\n{source}"
+        );
+        assert!(source.contains("ToolError[_root_.scala.Nothing]"));
+
+        let check_path =
+            target_path.join("src/main/scala/golem/bridge/client/grep/NothingCompileCheck.scala");
+        std::fs::write(
+            &check_path,
+            r#"package golem.bridge.client.grep
+
+object NothingCompileCheck {
+  private val rpc = new _root_.golem.tool.ToolRpcTransport {
+    def invokeAndAwait(
+      commandPath: _root_.scala.List[_root_.scala.Predef.String],
+      input: _root_.golem.schema.TypedSchemaValue,
+      stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream]
+    ): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolInvokeResult]] =
+      _root_.scala.concurrent.Future.successful(
+        _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None, _root_.scala.None))
+      )
+  }
+
+  private val client = new GrepClient(rpc, _root_.scala.collection.immutable.List())
+  val result: _root_.scala.concurrent.Future[
+    _root_.scala.Either[
+      _root_.golem.tool.ToolError[_root_.scala.Nothing],
+      _root_.scala.Unit
+    ]
+  ] = client.grep(Nothing("x"))
+}
+"#,
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("sbt")
+            .arg("--batch")
+            .arg("+compile")
+            .current_dir(&target_path)
+            .output()
+            .expect("failed to run sbt; is it installed?");
+        assert!(
+            output.status.success(),
+            "generated infallible tool client should use scala.Nothing, not a generated Nothing type, in {target_path}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

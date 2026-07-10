@@ -742,7 +742,7 @@ impl ScalaBridgeGenerator {
     }
 
     fn write_guest_unstructured_definitions(&self, writer: &mut ScalaWriter) {
-        writer.line("sealed trait UnstructuredText extends Product with Serializable");
+        writer.line("sealed trait UnstructuredText extends _root_.scala.Product with _root_.scala.Serializable");
         writer.line("object UnstructuredText {");
         writer.indent();
         writer.line("final case class Inline(value: _root_.scala.Predef.String, languageCode: _root_.scala.Option[_root_.scala.Predef.String]) extends UnstructuredText");
@@ -775,7 +775,7 @@ impl ScalaBridgeGenerator {
         writer.line("}");
         writer.blank();
 
-        writer.line("sealed trait UnstructuredBinary extends Product with Serializable");
+        writer.line("sealed trait UnstructuredBinary extends _root_.scala.Product with _root_.scala.Serializable");
         writer.line("object UnstructuredBinary {");
         writer.indent();
         writer.line("final case class Inline(bytes: _root_.scala.collection.immutable.Vector[_root_.scala.Byte], mimeType: _root_.scala.Option[_root_.scala.Predef.String]) extends UnstructuredBinary");
@@ -2163,7 +2163,7 @@ impl ScalaBridgeGenerator {
         body: impl FnOnce(&mut ScalaWriter, &Self) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         writer.line(format!(
-            "sealed trait {name} extends Product with Serializable"
+            "sealed trait {name} extends _root_.scala.Product with _root_.scala.Serializable"
         ));
         writer.line(format!("object {name} {{"));
         writer.indent();

@@ -8,6 +8,12 @@ use crate::app::{
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use golem_cli::versions;
+use golem_common::schema::SchemaType;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::tool::{
+    CommandBody, CommandTree, Doc, Formatter, Globals, Positional, Positionals,
+    ResultSpec as ToolResultSpec, Tool,
+};
 use indoc::{formatdoc, indoc};
 use serde_json::Value as JsonValue;
 use std::path::Path;
@@ -215,6 +221,160 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
         ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
+}
+
+#[test]
+async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let producer_wasm = placeholder_component_wasm(&ctx);
+    let producer_wasm = producer_wasm.to_str().unwrap();
+    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
+    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+
+    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
+
+    let agent_types: JsonValue = serde_json::from_str(
+        &fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let metadata = serde_json::json!({
+        "agentTypes": agent_types,
+        "tools": [echo_tool()]
+    });
+
+    let extracted_component_metadata_dir =
+        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
+    seed_extracted_metadata(
+        &ctx,
+        "app:producer",
+        &producer_final_wasm,
+        &serde_json::to_string(&metadata).unwrap(),
+    );
+    let consumer_final_wasm_hash =
+        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
+    let consumer_extracted_component_metadata =
+        format!("app:consumer-{consumer_final_wasm_hash}.json");
+    for component_name in ["app:producer", "app:consumer"] {
+        seed_extraction_marker(&ctx, component_name);
+    }
+
+    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
+    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: custom-scala-guest-bridge-order
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                componentWasm: {producer_wasm}
+                outputWasm: producer-final.wasm
+
+              app:consumer:
+                templates: scala
+                dir: consumer
+                dependencies:
+                  agents:
+                    - app:producer/BarAgent
+                  tools:
+                    - app:producer/echo
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/bar-agent-guest-client/build.sbt
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/bar-agent-guest-client/project/plugins.sbt
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/build.sbt
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/project/plugins.sbt
+                  - command: cp -p {producer_wasm} consumer.wasm
+                  - command: cp -p {producer_wasm} consumer-final.wasm
+                  - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
+
+            bridge:
+              scala:
+                internal:
+                  agents: BarAgent
+                  tools: echo
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/scala/internal/bar-agent-guest-client/build.sbt")
+            .exists()
+    );
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/build.sbt")
+            .exists()
+    );
+}
+
+fn echo_tool() -> Tool {
+    let doc = |summary: &str| Doc {
+        summary: summary.to_string(),
+        description: String::new(),
+        examples: vec![],
+    };
+    Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree {
+            nodes: vec![golem_common::schema::tool::CommandNode {
+                name: "echo".to_string(),
+                aliases: vec![],
+                doc: doc("echo"),
+                globals: Globals::default(),
+                subcommands: vec![],
+                body: Some(CommandBody {
+                    positionals: Positionals {
+                        fixed: vec![Positional {
+                            name: "message".to_string(),
+                            doc: doc("message"),
+                            value_name: None,
+                            type_: SchemaType::string(),
+                            default: None,
+                            required: true,
+                            accepts_stdio: false,
+                        }],
+                        tail: None,
+                    },
+                    options: vec![],
+                    flags: vec![],
+                    constraints: vec![],
+                    stdin: None,
+                    stdout: None,
+                    result: Some(ToolResultSpec {
+                        type_: SchemaType::string(),
+                        doc: doc("result"),
+                        formatters: vec![Formatter {
+                            name: "json".to_string(),
+                            doc: doc("json"),
+                        }],
+                        default_formatter: "json".to_string(),
+                    }),
+                    errors: vec![],
+                    annotations: None,
+                }),
+            }],
+        },
+        schema: SchemaGraph::empty(),
+    }
 }
 
 #[test]
