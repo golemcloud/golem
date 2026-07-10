@@ -496,6 +496,85 @@ async fn automatic_snapshot_periodic(
 
 #[test]
 #[tracing::instrument]
+async fn periodic_snapshot_recovery_survives_a_second_snapshot_generation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let snapshot_policy = SnapshotPolicy::Periodic {
+        period: Duration::from_secs(1),
+    };
+    let executor = start_with_snapshot_policy(deps, &context, snapshot_policy.clone()).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "periodic-two-generations");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..10 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let first_generation = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        first_generation
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_))),
+        "Expected a snapshot before the first restart"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(deps, &context, snapshot_policy.clone()).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    assert_eq!(result.into_return_value(), Some(Value::U32(10)));
+
+    for _ in 0..10 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let second_generation = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        second_generation
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .count()
+            >= 2,
+        "Expected a second snapshot generation before the second restart"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(deps, &context, snapshot_policy).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+
+    assert_eq!(result.into_return_value(), Some(Value::U32(20)));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn snapshot_based_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

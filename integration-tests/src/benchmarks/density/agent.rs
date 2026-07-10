@@ -1936,6 +1936,11 @@ async fn run_resume_cell(
             outcome.catastrophic_ceiling_agents = Some(observed_oplog_entries_coord);
             break 'ramp;
         }
+
+        // Cleanup runs through the executor, so it can race with archive transfers
+        // scheduled by the just-resumed workers. Restart after deletion to stop any
+        // in-process transfer before the next ramp reuses the same agent IDs.
+        probe.restart_executor().await?;
         outcome.cleanup_already_done = true;
     }
 

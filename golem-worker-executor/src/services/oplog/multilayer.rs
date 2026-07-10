@@ -32,12 +32,12 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
-use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
 use std::cmp::min;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -45,6 +45,10 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, Level, Span, debug, error, info, span, warn};
+
+type TransferFiber = Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>;
+type TransferFibers =
+    Arc<Mutex<HashMap<AgentId, Weak<Mutex<Option<tokio::task::JoinHandle<()>>>>>>>;
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
@@ -224,6 +228,7 @@ pub struct MultiLayerOplogService {
     pub lower: NEVec<Arc<dyn OplogArchiveService>>,
 
     oplogs: OpenOplogs,
+    transfer_fibers: TransferFibers,
 
     entry_count_limit: u64,
     max_operations_before_commit_ephemeral: u64,
@@ -240,6 +245,7 @@ impl MultiLayerOplogService {
             primary,
             lower,
             oplogs: OpenOplogs::new("multi-layer oplog"),
+            transfer_fibers: Arc::new(Mutex::new(HashMap::new())),
             entry_count_limit,
             max_operations_before_commit_ephemeral,
         }
@@ -267,6 +273,28 @@ impl MultiLayerOplogService {
         }
         Ok(ids)
     }
+
+    fn register_transfer(&self, agent_id: AgentId, transfer_fiber: &TransferFiber) {
+        self.transfer_fibers
+            .lock()
+            .unwrap()
+            .insert(agent_id, Arc::downgrade(transfer_fiber));
+    }
+
+    fn abort_transfer(&self, agent_id: &AgentId) {
+        let transfer_fiber = self
+            .transfer_fibers
+            .lock()
+            .unwrap()
+            .remove(agent_id)
+            .and_then(|transfer_fiber| transfer_fiber.upgrade());
+
+        if let Some(transfer_fiber) = transfer_fiber
+            && let Some(transfer_fiber) = transfer_fiber.lock().unwrap().take()
+        {
+            transfer_fiber.abort();
+        }
+    }
 }
 
 impl Clone for MultiLayerOplogService {
@@ -275,6 +303,7 @@ impl Clone for MultiLayerOplogService {
             primary: self.primary.clone(),
             lower: self.lower.clone(),
             oplogs: self.oplogs.clone(),
+            transfer_fibers: self.transfer_fibers.clone(),
             entry_count_limit: self.entry_count_limit,
             max_operations_before_commit_ephemeral: self.max_operations_before_commit_ephemeral,
         }
@@ -494,6 +523,7 @@ impl OplogService for MultiLayerOplogService {
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.abort_transfer(&owned_agent_id.agent_id);
         self.primary.delete(owned_agent_id, agent_mode).await;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
@@ -680,7 +710,7 @@ pub struct MultiLayerOplog {
     primary: Arc<dyn Oplog>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     multi_layer_oplog_service: MultiLayerOplogService,
-    transfer_fiber: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    transfer_fiber: TransferFiber,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     last_oplog_index: AtomicOplogIndex,
     last_transfer_point: AtomicOplogIndex,
@@ -747,6 +777,8 @@ impl MultiLayerOplog {
             close_fn: Some(close),
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
+        multi_layer_oplog_service
+            .register_transfer(owned_agent_id.agent_id.clone(), &result.transfer_fiber);
 
         result.set_background_transfer(tokio::spawn(Self::background_transfer(
             owned_agent_id,
@@ -938,7 +970,9 @@ impl Drop for MultiLayerOplog {
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        self.transfer_fiber.lock().unwrap().take().unwrap().abort();
+        if let Some(transfer_fiber) = self.transfer_fiber.lock().unwrap().take() {
+            transfer_fiber.abort();
+        }
     }
 }
 

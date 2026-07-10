@@ -1111,6 +1111,18 @@ mod test {
     }
 
     #[test]
+    async fn status_reattachment_keeps_latest_automatic_snapshot() {
+        let test_case = TestCase::builder(0)
+            .snapshot()
+            .grow_memory(1)
+            .snapshot()
+            .grow_memory(1)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
     async fn storage_usage_accumulated_from_deltas() {
         let test_case = TestCase::builder(0)
             .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
