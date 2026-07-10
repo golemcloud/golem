@@ -4,11 +4,6 @@ name: debug-jemalloc-profile-executor
 # jemalloc heap profiling enabled. The image is published under a distinct
 # suffix tag and is intended for short-lived EKS investigations only.
 on:
-  # Temporary branch trigger so GitHub detects and runs this workflow before it
-  # exists on the default branch. Remove before merging.
-  push:
-    branches:
-      - 1.5.x-cloud-benchmarks
   workflow_dispatch:
     inputs:
       image_name:
