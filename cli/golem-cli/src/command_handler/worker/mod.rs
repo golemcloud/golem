@@ -2264,7 +2264,7 @@ impl WorkerCommandHandler {
         Ok((workers, final_result_cursor))
     }
 
-    async fn component_by_agent_name_match(
+    pub(crate) async fn component_by_agent_name_match(
         &self,
         agent_name_match: &AgentNameMatch,
     ) -> anyhow::Result<(ComponentDto, RawAgentId)> {

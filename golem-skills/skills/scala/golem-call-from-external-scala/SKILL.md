@@ -14,7 +14,8 @@ Configure bridge generation in `golem.yaml`:
 ```yaml
 bridge:
   scala:
-    agents: "*"
+    external:
+      agents: "*"
 ```
 
 Or generate a bridge directly:
@@ -88,9 +89,11 @@ You can also generate a **TypeScript** or **Rust** bridge SDK for agents written
 ```yaml
 bridge:
   ts:
-    agents: "*"
+    external:
+      agents: "*"
   rust:
-    agents: "*"
+    external:
+      agents: "*"
 ```
 
 Then use the generated TypeScript or Rust client from your external application. See the `golem-call-from-external-ts` or `golem-call-from-external-rust` skills (available in TypeScript and Rust project templates) for details.

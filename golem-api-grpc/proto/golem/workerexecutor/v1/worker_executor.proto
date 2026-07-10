@@ -53,6 +53,7 @@ service WorkerExecutor {
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 
   rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
+  rpc GetAgentWallet(GetAgentWalletRequest) returns (GetAgentWalletResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
@@ -354,6 +355,27 @@ message ListDirectorySuccessResponse {
 
 message ListFileDataSuccessResponse {
   golem.worker.FileSystemNode file = 1;
+}
+
+message GetAgentWalletRequest {
+  golem.worker.AgentId agent_id = 1;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 2;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
+}
+
+message GetAgentWalletResponse {
+  oneof result {
+    GetAgentWalletSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetAgentWalletSuccess {
+  repeated bytes wallet_cards = 1;
 }
 
 message GetFileContentsRequest {

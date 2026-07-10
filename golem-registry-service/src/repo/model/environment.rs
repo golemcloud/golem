@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use crate::repo::model::card::CardRepoError;
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
+use chrono::{DateTime, Utc};
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountSummary;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationSummary;
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::card::CardId;
 use golem_common::model::diff::DIFF_MODEL_VERSION;
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{self};
@@ -27,7 +30,7 @@ use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentCurrentDeploymentView, EnvironmentId,
     EnvironmentName, EnvironmentRevision, EnvironmentSummary, EnvironmentWithDetails,
 };
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::{RepoError, SqlDateTime};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -41,7 +44,7 @@ pub enum EnvironmentRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarding!(EnvironmentRepoError, RepoError);
+error_forwarding!(EnvironmentRepoError, CardRepoError, RepoError);
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentExtRecord {
@@ -88,6 +91,66 @@ pub struct EnvironmentRevisionRecord {
     pub compatibility_check: bool,
     pub version_check: bool,
     pub security_overrides: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvironmentDefaultCardRef {
+    pub card_id: CardId,
+    pub environment_id: EnvironmentId,
+    pub account_email: AccountEmail,
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub system_card: bool,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct EnvironmentDefaultCardRefRow {
+    pub card_id: Option<Uuid>,
+    pub environment_id: Uuid,
+    pub account_email: String,
+    pub application_name: String,
+    pub environment_name: String,
+    pub card_created_at: Option<SqlDateTime>,
+    pub card_expires_at: Option<SqlDateTime>,
+    pub card_system_card: Option<bool>,
+}
+
+impl TryFrom<EnvironmentDefaultCardRefRow> for EnvironmentDefaultCardRef {
+    type Error = EnvironmentRepoError;
+
+    fn try_from(value: EnvironmentDefaultCardRefRow) -> Result<Self, Self::Error> {
+        let card_id = value.card_id.ok_or_else(|| {
+            EnvironmentRepoError::InternalError(anyhow!(
+                "Live environment {} has no environment default card id",
+                value.environment_id
+            ))
+        })?;
+        let created_at = value.card_created_at.ok_or_else(|| {
+            EnvironmentRepoError::InternalError(anyhow!(
+                "Environment default card {} is missing its card row",
+                card_id
+            ))
+        })?;
+        let system_card = value.card_system_card.ok_or_else(|| {
+            EnvironmentRepoError::InternalError(anyhow!(
+                "Environment default card {} is missing its card row",
+                card_id
+            ))
+        })?;
+
+        Ok(Self {
+            card_id: CardId(card_id),
+            environment_id: EnvironmentId(value.environment_id),
+            account_email: AccountEmail::new(value.account_email),
+            application_name: ApplicationName(value.application_name),
+            environment_name: EnvironmentName(value.environment_name),
+            created_at: created_at.into(),
+            expires_at: value.card_expires_at.map(Into::into),
+            system_card,
+        })
+    }
 }
 
 impl EnvironmentRevisionRecord {

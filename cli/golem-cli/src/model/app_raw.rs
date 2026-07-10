@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::BridgeMode;
 use crate::log::LogColorize;
 use crate::model::GuestLanguage;
 use crate::model::cascade::property::map::MapMergeMode;
@@ -248,7 +249,36 @@ impl Application {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentDependencies {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<ComponentDependencyReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ComponentDependencyReference>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ComponentDependencyReference {
+    Shortcut(String),
+    Structured(ComponentDependencyReferenceStruct),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentDependencyReferenceStruct {
+    pub component: String,
+    pub name: String,
+}
+
+impl ComponentDependencies {
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty() && self.tools.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
@@ -257,6 +287,8 @@ pub struct ComponentTemplate {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -290,6 +322,7 @@ impl ComponentTemplate {
         ComponentLayerProperties {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
+            dependencies: self.dependencies.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
@@ -319,6 +352,8 @@ pub struct Component {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -352,6 +387,7 @@ impl Component {
         ComponentLayerProperties {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
+            dependencies: self.dependencies.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
@@ -379,6 +415,8 @@ pub struct ComponentPreset {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -410,6 +448,7 @@ impl ComponentPreset {
         ComponentLayerProperties {
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
+            dependencies: self.dependencies,
             build_merge_mode: self.build_merge_mode,
             build: self.build,
             custom_commands: self.custom_commands,
@@ -773,6 +812,7 @@ pub struct ManifestInitialCardBound {
 pub struct ComponentLayerProperties {
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
+    pub dependencies: ComponentDependencies,
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
@@ -946,18 +986,92 @@ impl BridgeSdks {
         &self,
     ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
         self.for_all_languages().filter_map(|(lang, targets)| {
-            targets.and_then(|targets| (!targets.agents.is_empty()).then_some((lang, targets)))
+            targets.and_then(|targets| {
+                (targets
+                    .external
+                    .as_ref()
+                    .is_some_and(|external| !external.agents.is_empty())
+                    || targets
+                        .internal
+                        .as_ref()
+                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty()))
+                .then_some((lang, targets))
+            })
         })
+    }
+
+    pub fn for_all_used_modes(
+        &self,
+    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkInternalTargetsRef<'_>)> {
+        let mut result = Vec::new();
+        for (language, targets) in self.for_all_languages() {
+            if let Some(targets) = targets {
+                if let Some(external) = &targets.external
+                    && !external.agents.is_empty()
+                {
+                    result.push((
+                        language,
+                        BridgeMode::External,
+                        BridgeSdkInternalTargetsRef {
+                            agents: &external.agents,
+                            tools: None,
+                            output_dir: external.output_dir.as_ref(),
+                        },
+                    ));
+                }
+                if let Some(guest) = &targets.internal
+                    && (!guest.agents.is_empty() || !guest.tools.is_empty())
+                {
+                    result.push((
+                        language,
+                        BridgeMode::Guest,
+                        BridgeSdkInternalTargetsRef {
+                            agents: &guest.agents,
+                            tools: Some(&guest.tools),
+                            output_dir: guest.output_dir.as_ref(),
+                        },
+                    ));
+                }
+            }
+        }
+        result
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<BridgeSdkExternalTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal: Option<BridgeSdkInternalTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkExternalTargets {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub agents: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkInternalTargets {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub agents: LenientTokenList,
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub tools: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeSdkInternalTargetsRef<'a> {
+    pub agents: &'a LenientTokenList,
+    pub tools: Option<&'a LenientTokenList>,
+    pub output_dir: Option<&'a String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1273,6 +1387,7 @@ mod test {
                     default: is_default.then_some(Marker),
                     component_wasm,
                     output_wasm,
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
@@ -1335,6 +1450,7 @@ mod test {
                     templates,
                     component_wasm,
                     output_wasm,
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
@@ -1401,6 +1517,7 @@ mod test {
                     dir,
                     component_wasm,
                     output_wasm,
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
@@ -1703,8 +1820,31 @@ mod test {
     }
 
     fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
+        (
+            arb_opt(arb_bridge_sdk_external_targets()),
+            arb_opt(arb_bridge_sdk_internal_targets()),
+        )
+            .prop_map(|(external, internal)| BridgeSdkLanguageTargets { external, internal })
+            .boxed()
+    }
+
+    fn arb_bridge_sdk_external_targets() -> BoxedStrategy<BridgeSdkExternalTargets> {
         (arb_token_list_model(), arb_opt(arb_ident()))
-            .prop_map(|(agents, output_dir)| BridgeSdkLanguageTargets { agents, output_dir })
+            .prop_map(|(agents, output_dir)| BridgeSdkExternalTargets { agents, output_dir })
+            .boxed()
+    }
+
+    fn arb_bridge_sdk_internal_targets() -> BoxedStrategy<BridgeSdkInternalTargets> {
+        (
+            arb_token_list_model(),
+            arb_token_list_model(),
+            arb_opt(arb_ident()),
+        )
+            .prop_map(|(agents, tools, output_dir)| BridgeSdkInternalTargets {
+                agents,
+                tools,
+                output_dir,
+            })
             .boxed()
     }
 
@@ -2072,6 +2212,57 @@ mod test {
         };
 
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+    }
+
+    #[test]
+    fn bridge_rust_agents_keeps_parsing_as_external_bridge_targets() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                external:
+                  agents: CounterAgent
+                  outputDir: bridge/rust
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let rust = app.bridge.unwrap().rust.unwrap();
+        let external = rust.external.unwrap();
+
+        assert_eq!(external.agents.into_vec(), vec!["CounterAgent".to_string()]);
+        assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
+        assert!(rust.internal.is_none());
+    }
+
+    #[test]
+    fn bridge_rust_guest_parses_as_guest_bridge_targets() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                external:
+                  agents: ExternalAgent
+                  outputDir: bridge/rust
+                internal:
+                  agents:
+                    - GuestAgent
+                  outputDir: bridge/rust-guest
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let rust = app.bridge.unwrap().rust.unwrap();
+        let external = rust.external.unwrap();
+        let guest = rust.internal.unwrap();
+
+        assert_eq!(
+            external.agents.into_vec(),
+            vec!["ExternalAgent".to_string()]
+        );
+        assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
+        assert_eq!(guest.agents.into_vec(), vec!["GuestAgent".to_string()]);
+        assert_eq!(guest.output_dir.as_deref(), Some("bridge/rust-guest"));
     }
 
     #[test]

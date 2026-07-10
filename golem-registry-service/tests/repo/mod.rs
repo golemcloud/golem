@@ -15,7 +15,10 @@
 use crate::Tracing;
 use futures::FutureExt;
 use golem_common::model::account::AccountId;
-use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
+use golem_common::model::card::{
+    CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByEnvironmentDefault,
+};
+use golem_common::model::environment::EnvironmentId;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::agent_secret::AgentSecretRepo;
@@ -252,25 +255,45 @@ impl Deps {
             .await
             .unwrap()
             .unwrap();
+        let revision = EnvironmentRevisionRecord {
+            environment_id: new_repo_uuid(),
+            revision_id: 0,
+            name: format!("env-{}", new_repo_uuid()),
+            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+            compatibility_check: true,
+            version_check: true,
+            security_overrides: true,
+            hash: blake3::hash("test".as_bytes()).into(),
+        };
         let scoped = self
             .environment_repo
             .create(
                 parent_application_id,
-                EnvironmentRevisionRecord {
-                    environment_id: new_repo_uuid(),
-                    revision_id: 0,
-                    name: format!("env-{}", new_repo_uuid()),
-                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                    compatibility_check: true,
-                    version_check: true,
-                    security_overrides: true,
-                    hash: blake3::hash("test".as_bytes()).into(),
-                },
+                revision.clone(),
+                test_environment_default_card_record(revision.environment_id),
             )
             .await
             .unwrap();
         environment_ext(scoped, app.revision.name, app.account_id, app.account_email)
     }
+}
+
+pub fn test_environment_default_card_record(environment_id: Uuid) -> CardRecord {
+    CardRecord::creation(
+        CardId::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        false,
+        Some(CardManagedBy::EnvironmentDefault(
+            CardManagedByEnvironmentDefault {
+                environment_id: EnvironmentId(environment_id),
+            },
+        )),
+    )
 }
 
 fn application_ext(

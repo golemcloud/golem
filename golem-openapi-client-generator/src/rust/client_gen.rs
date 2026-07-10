@@ -1844,7 +1844,7 @@ pub fn client_gen(
         .to_case(Case::UpperCamel);
 
     let methods: Vec<Method> = trait_methods(&operations, prefix_length, ref_cache)
-        .map_err(|e| e.extend(format!("In Tag {}.", &name)))?;
+        .map_err(|e| e.extend(format!("In Tag {}.", name)))?;
 
     let common_error = methods.iter().map(|m| &m.errors).unique().count() == 1;
 

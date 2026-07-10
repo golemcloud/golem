@@ -395,13 +395,15 @@ Generate typed client SDKs for calling agents from external code. The `agents` f
 ```yaml
 bridge:
   ts:
-    agents: "*"                    # Generate for all agents
-    outputDir: ./bridge-sdk/ts     # Optional custom output directory
+    external:
+      agents: "*"                    # Generate for all agents
+      outputDir: ./bridge-sdk/ts     # Optional custom output directory
   rust:
-    agents:
-      - MyAgent                    # Agent type name
-      - my-app:billing             # Component name (all agents in that component)
-    outputDir: ./bridge-sdk/rust
+    external:
+      agents:
+        - MyAgent                    # Agent type name
+        - my-app:billing             # Component name (all agents in that component)
+      outputDir: ./bridge-sdk/rust
 ```
 
 ## Plugin Installations

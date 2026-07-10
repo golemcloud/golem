@@ -86,6 +86,49 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
     }
 }
 
+/// The generated expression building the invocation's input record. The fast
+/// path (no inherited prefix, root schema path) resolves the command's
+/// canonical input model once per method through a `OnceLock`; the general
+/// path recomputes it per call from the descriptor plus the inherited prefix.
+/// Record assembly itself is shared runtime code in `golem_rust::agentic`.
+fn input_build_expr(descriptor_fn_ident: &Ident, param_values: TokenStream) -> TokenStream {
+    quote! {
+        if __can_use_static_input_model {
+            static __GOLEM_TOOL_INPUT_MODEL: ::std::sync::OnceLock<
+                ::std::result::Result<golem_rust::agentic::CanonicalInputModel, ::std::string::String>
+            > =
+                ::std::sync::OnceLock::new();
+            let __model = __GOLEM_TOOL_INPUT_MODEL.get_or_init(|| {
+                let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
+                    .expect("tool descriptor build failed");
+                let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
+                    format!("invalid generated tool command path `{}`", __schema_path.join(" "))
+                })?;
+                __tool.canonical_input_model(__command_index)
+                    .map_err(|__err| __err.to_string())
+            }).as_ref().map_err(|__err| {
+                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.clone()))
+            })?;
+            golem_rust::agentic::build_canonical_input(__model, #param_values)
+                .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err)))?
+        } else {
+            let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
+                .expect("tool descriptor build failed");
+            let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
+                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
+                    format!("invalid generated tool command path `{}`", __schema_path.join(" "))
+                ))
+            })?;
+            golem_rust::agentic::build_canonical_input_with_prefix(
+                __tool.canonical_input_fields(__command_index),
+                &self.inherited_prefix,
+                #param_values,
+            )
+                .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err)))?
+        }
+    }
+}
+
 fn synthesize_method(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &str) -> TokenStream {
     if let Some(subtree) = &cmd.subtree {
         return synthesize_subtree_method(ir, cmd, subtree, tool_name, &[]);
@@ -123,6 +166,7 @@ fn synthesize_leaf_method(
     let result_ty = client_result_type(&cmd.output, has_stdout);
     let decode_result = decode_client_result(&cmd.output, has_stdout);
     let invoke = invoke_call(&cmd.output, stdin_expr);
+    let input_expr = input_build_expr(&descriptor_fn_ident, quote! { __golem_param_values });
 
     quote! {
         pub async fn #method_ident(&self, #(#input_args),*) -> #result_ty {
@@ -132,93 +176,8 @@ fn synthesize_leaf_method(
             let mut __command_path = self.command_path.clone();
             let mut __schema_path = self.schema_path.clone();
             #command_path_part
-            let __input = if __can_use_static_input_model {
-                static __GOLEM_TOOL_INPUT_MODEL: ::std::sync::OnceLock<
-                    ::std::result::Result<golem_rust::agentic::CanonicalInputModel, ::std::string::String>
-                > =
-                    ::std::sync::OnceLock::new();
-                let __model = __GOLEM_TOOL_INPUT_MODEL.get_or_init(|| {
-                    let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-                        .expect("tool descriptor build failed");
-                    let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
-                        format!("invalid generated tool command path `{}`", __schema_path.join(" "))
-                    })?;
-                    __tool.canonical_input_model(__command_index)
-                        .map_err(|__err| __err.to_string())
-                }).as_ref().map_err(|__err| {
-                    golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.clone()))
-                })?;
-                let __record_fields = if __model.fields.len() == __golem_param_values.len()
-                    && __model.fields.iter()
-                        .zip(__golem_param_values.iter())
-                        .all(|(__field, (__name, _))| __field.name.as_str() == *__name)
-                {
-                    __golem_param_values.into_iter().map(|(_, __value)| __value).collect()
-                } else {
-                    let mut __record_fields: ::std::vec::Vec<golem_rust::SchemaValue> =
-                        ::std::vec::Vec::with_capacity(__model.fields.len());
-                    for __field in __model.fields.iter() {
-                        let __value_index = __golem_param_values.iter()
-                            .rposition(|(__name, _)| *__name == __field.name.as_str())
-                            .ok_or_else(|| {
-                                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                                    format!("missing canonical tool input field `{}`", __field.name)
-                                ))
-                            })?;
-                        let (_, __value) = __golem_param_values.remove(__value_index);
-                        __record_fields.push(__value);
-                    }
-                    __record_fields
-                };
-                golem_rust::TypedSchemaValue::new(
-                    __model.record_schema.clone(),
-                    golem_rust::SchemaValue::Record { fields: __record_fields },
-                )
-            } else {
-                let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-                    .expect("tool descriptor build failed");
-                let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
-                    golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                        format!("invalid generated tool command path `{}`", __schema_path.join(" "))
-                    ))
-                })?;
-                let mut __canonical_fields: ::std::vec::Vec<golem_rust::agentic::CanonicalInputField> =
-                    self.inherited_prefix.iter().map(|__value| golem_rust::agentic::CanonicalInputField {
-                        name: __value.name.clone(),
-                        aliases: __value.aliases.clone(),
-                        schema: __value.schema.clone(),
-                    }).collect();
-                let __inherited_names: ::std::collections::BTreeSet<&str> = self.inherited_prefix.iter()
-                    .flat_map(|__value| ::std::iter::once(__value.name.as_str()).chain(__value.aliases.iter().map(::std::string::String::as_str)))
-                    .collect();
-                __canonical_fields.extend(
-                    __tool.canonical_input_fields(__command_index)
-                        .into_iter()
-                        .filter(|__field| {
-                            !__inherited_names.contains(__field.name.as_str())
-                                && !__field.aliases.iter().any(|__alias| __inherited_names.contains(__alias.as_str()))
-                        })
-                );
-                let __model = golem_rust::agentic::CanonicalInputModel::from_fields(__canonical_fields)
-                    .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.to_string())))?;
-                let mut __record_fields: ::std::vec::Vec<golem_rust::SchemaValue> =
-                    self.inherited_prefix.iter().map(|__value| __value.value.clone()).collect();
-                for __field in __model.fields.iter().skip(self.inherited_prefix.len()) {
-                    let __value_index = __golem_param_values.iter()
-                        .rposition(|(__name, _)| *__name == __field.name.as_str())
-                        .ok_or_else(|| {
-                        golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                            format!("missing canonical tool input field `{}`", __field.name)
-                        ))
-                    })?;
-                    let (_, __value) = __golem_param_values.remove(__value_index);
-                    __record_fields.push(__value);
-                }
-                golem_rust::TypedSchemaValue::new(
-                    __model.record_schema,
-                    golem_rust::SchemaValue::Record { fields: __record_fields },
-                )
-            };
+            let __input = #input_expr;
+
             let __result = #invoke?;
             #decode_result
         }
@@ -301,6 +260,7 @@ fn synthesize_leaf_method_dynamic(
     let result_ty = client_result_type(&cmd.output, has_stdout);
     let decode_result = decode_client_result(&cmd.output, has_stdout);
     let invoke = invoke_call(&cmd.output, stdin_expr);
+    let input_expr = input_build_expr(&descriptor_fn_ident, param_values.clone());
 
     quote! {
         pub async fn #method_ident(&self #input_args) -> #result_ty {
@@ -312,93 +272,8 @@ fn synthesize_leaf_method_dynamic(
             let mut __command_path = self.command_path.clone();
             let mut __schema_path = self.schema_path.clone();
             #command_path_part
-            let __input = if __can_use_static_input_model {
-                static __GOLEM_TOOL_INPUT_MODEL: ::std::sync::OnceLock<
-                    ::std::result::Result<golem_rust::agentic::CanonicalInputModel, ::std::string::String>
-                > =
-                    ::std::sync::OnceLock::new();
-                let __model = __GOLEM_TOOL_INPUT_MODEL.get_or_init(|| {
-                    let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-                        .expect("tool descriptor build failed");
-                    let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
-                        format!("invalid generated tool command path `{}`", __schema_path.join(" "))
-                    })?;
-                    __tool.canonical_input_model(__command_index)
-                        .map_err(|__err| __err.to_string())
-                }).as_ref().map_err(|__err| {
-                    golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.clone()))
-                })?;
-                let __record_fields = if __model.fields.len() == #param_values.len()
-                    && __model.fields.iter()
-                        .zip(#param_values.iter())
-                        .all(|(__field, (__name, _))| __field.name.as_str() == *__name)
-                {
-                    #param_values.into_iter().map(|(_, __value)| __value).collect()
-                } else {
-                    let mut __record_fields: ::std::vec::Vec<golem_rust::SchemaValue> =
-                        ::std::vec::Vec::with_capacity(__model.fields.len());
-                    for __field in __model.fields.iter() {
-                        let __value_index = #param_values.iter()
-                            .rposition(|(__name, _)| *__name == __field.name.as_str())
-                            .ok_or_else(|| {
-                                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                                    format!("missing canonical tool input field `{}`", __field.name)
-                                ))
-                            })?;
-                        let (_, __value) = #param_values.remove(__value_index);
-                        __record_fields.push(__value);
-                    }
-                    __record_fields
-                };
-                golem_rust::TypedSchemaValue::new(
-                    __model.record_schema.clone(),
-                    golem_rust::SchemaValue::Record { fields: __record_fields },
-                )
-            } else {
-                let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-                    .expect("tool descriptor build failed");
-                let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
-                    golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                        format!("invalid generated tool command path `{}`", __schema_path.join(" "))
-                    ))
-                })?;
-                let mut __canonical_fields: ::std::vec::Vec<golem_rust::agentic::CanonicalInputField> =
-                    self.inherited_prefix.iter().map(|__value| golem_rust::agentic::CanonicalInputField {
-                        name: __value.name.clone(),
-                        aliases: __value.aliases.clone(),
-                        schema: __value.schema.clone(),
-                    }).collect();
-                let __inherited_names: ::std::collections::BTreeSet<&str> = self.inherited_prefix.iter()
-                    .flat_map(|__value| ::std::iter::once(__value.name.as_str()).chain(__value.aliases.iter().map(::std::string::String::as_str)))
-                    .collect();
-                __canonical_fields.extend(
-                    __tool.canonical_input_fields(__command_index)
-                        .into_iter()
-                        .filter(|__field| {
-                            !__inherited_names.contains(__field.name.as_str())
-                                && !__field.aliases.iter().any(|__alias| __inherited_names.contains(__alias.as_str()))
-                        })
-                );
-                let __model = golem_rust::agentic::CanonicalInputModel::from_fields(__canonical_fields)
-                    .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.to_string())))?;
-                let mut __input: ::std::vec::Vec<golem_rust::SchemaValue> =
-                    self.inherited_prefix.iter().map(|__value| __value.value.clone()).collect();
-                for __field in __model.fields.iter().skip(self.inherited_prefix.len()) {
-                    let __value_index = #param_values.iter()
-                        .rposition(|(__name, _)| *__name == __field.name.as_str())
-                        .ok_or_else(|| {
-                        golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                            format!("missing canonical tool input field `{}`", __field.name)
-                        ))
-                    })?;
-                    let (_, __value) = #param_values.remove(__value_index);
-                    __input.push(__value);
-                }
-                golem_rust::TypedSchemaValue::new(
-                    __model.record_schema,
-                    golem_rust::SchemaValue::Record { fields: __input },
-                )
-            };
+            let __input = #input_expr;
+
             let __result = #invoke?;
             #decode_result
         }
@@ -1243,66 +1118,18 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
 
 fn decode_client_result(output: &ReturnType, has_stdout: bool) -> TokenStream {
     let (ok, _) = split_result(output);
-    let stdout_check = if has_stdout {
-        quote! {
-            let __stdout = __result.stdout.ok_or_else(|| {
-                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                    "tool result did not contain declared stdout stream".to_string()
-                ))
-            })?;
-        }
-    } else {
-        quote! {
-            if __result.stdout.is_some() {
-                return ::std::result::Result::Err(golem_rust::agentic::ToolError::Rpc(
-                    golem_rust::agentic::RpcError::Protocol(
-                        "tool result unexpectedly contained stdout stream".to_string()
-                    )
-                ));
-            }
-        }
-    };
-
     match (ok, has_stdout) {
         (Some(ok), true) => quote! {
-            #stdout_check
-            let __value = __result.result.ok_or_else(|| {
-                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                    "tool result did not contain a value".to_string()
-                ))
-            })?;
-            let __decoded = <#ok as golem_rust::FromSchema>::from_value(__value.value())
-                .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.to_string())))?;
-            ::std::result::Result::Ok((__decoded, __stdout))
+            golem_rust::agentic::decode_result_with_stdout::<#ok, _>(__result)
         },
         (None, true) => quote! {
-            #stdout_check
-            if __result.result.is_some() {
-                return ::std::result::Result::Err(golem_rust::agentic::ToolError::Rpc(
-                    golem_rust::agentic::RpcError::Protocol("tool result unexpectedly contained a value".to_string())
-                ));
-            }
-            ::std::result::Result::Ok(__stdout)
+            golem_rust::agentic::decode_result_stdout_only(__result)
         },
         (Some(ok), false) => quote! {
-            #stdout_check
-            let __value = __result.result.ok_or_else(|| {
-                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                    "tool result did not contain a value".to_string()
-                ))
-            })?;
-            let __decoded = <#ok as golem_rust::FromSchema>::from_value(__value.value())
-                .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.to_string())))?;
-            ::std::result::Result::Ok(__decoded)
+            golem_rust::agentic::decode_result_value::<#ok, _>(__result)
         },
         (None, false) => quote! {
-            #stdout_check
-            if __result.result.is_some() {
-                return ::std::result::Result::Err(golem_rust::agentic::ToolError::Rpc(
-                    golem_rust::agentic::RpcError::Protocol("tool result unexpectedly contained a value".to_string())
-                ));
-            }
-            ::std::result::Result::Ok(())
+            golem_rust::agentic::decode_result_empty(__result)
         },
     }
 }

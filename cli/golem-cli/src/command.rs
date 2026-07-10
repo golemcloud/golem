@@ -18,6 +18,7 @@ use crate::command::agent_type::AgentTypeSubcommand;
 use crate::command::api::ApiSubcommand;
 use crate::command::api::secret::SecretSubcommand;
 use crate::command::api_token::ApiTokenSubcommand;
+use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
@@ -875,6 +876,11 @@ pub enum GolemCliSubcommand {
     ApiToken {
         #[clap(subcommand)]
         subcommand: ApiTokenSubcommand,
+    },
+    /// Manage permission cards
+    Card {
+        #[clap(subcommand)]
+        subcommand: CardSubcommand,
     },
     /// Manage secrets
     Secret {
@@ -2295,6 +2301,57 @@ pub mod account {
         PermissionShare {
             #[command(subcommand)]
             subcommand: PermissionShareSubcommand,
+        },
+    }
+}
+
+pub mod card {
+    use crate::command::shared_args::AccountIdOptionalArg;
+    use crate::model::worker::RawAgentId;
+    use clap::Subcommand;
+    use golem_common::model::card::CardId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum CardSubcommand {
+        /// List cards owned by an account, or cards in an agent's wallet with --agent.
+        #[command(after_help = crate::command_examples::CARD_LIST)]
+        List {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// List cards in an agent's wallet instead of account-owned cards. Activates the agent if not already active.
+            #[arg(long, conflicts_with = "account_id")]
+            agent: Option<RawAgentId>,
+
+            /// Include account root cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_root: bool,
+
+            /// Include permission-share cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_permission_shares: bool,
+
+            /// Include environment-default cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_environment_defaults: bool,
+
+            /// Include agent-initial cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_agent_initials: bool,
+        },
+
+        /// Get a card by ID.
+        #[command(after_help = crate::command_examples::CARD_GET)]
+        Get {
+            /// Card ID.
+            card_id: CardId,
+        },
+
+        /// Revoke a card and all its descendants. DESTRUCTIVE.
+        #[command(after_help = crate::command_examples::CARD_REVOKE)]
+        Revoke {
+            /// Card ID to revoke.
+            card_id: CardId,
         },
     }
 }
