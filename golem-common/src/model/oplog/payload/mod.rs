@@ -590,7 +590,10 @@ pub mod host_functions {
         (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
-        (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate)
+        (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (FilesystemInputStreamRead => "filesystem::input_stream", "read", NoInput, StreamSkip),
+        (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
+        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite)
     }
 }
 

@@ -4826,6 +4826,12 @@ struct PrivateDurableWorkerState {
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
 
+    /// Tracks file-backed wasi input streams (created via read-via-stream). Reads on
+    /// these streams must wait for readiness before returning, otherwise the guest
+    /// could observe a scheduling-dependent number of empty reads, making its
+    /// read/poll loop non-deterministic between record and replay.
+    open_filesystem_input_streams: HashSet<u32>,
+
     /// Maps outgoing body rep → output stream rep, set during outgoing_body::write()
     /// before outgoing_handler::handle() is called. Used by handle() to populate
     /// output_stream_rep in HttpRequestState for streams created before dispatch.
@@ -5094,6 +5100,7 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
+            open_filesystem_input_streams: HashSet::new(),
             snapshotting_mode: None,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
