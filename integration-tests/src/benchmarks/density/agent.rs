@@ -1645,9 +1645,52 @@ fn coord_agents(coord: SampleCoord) -> Option<u32> {
 // ── Scenario 4: resume-under-saturation ──────────────────────────────────────
 
 /// Number of cheap host calls made by one warmup invocation in scenario 4.
-/// SnapshotCounter snapshots every 10 invocations, so this gives snapshots every
-/// 100k oplog-heavy host calls while keeping warmup request counts bounded.
+/// Used for snapshot-disabled agents and as the steady-state snapshot interval.
 const RESUME_HOST_CALLS_PER_WARMUP_INVOCATION: u32 = 10_000;
+
+const RESUME_HOST_CALLS_PER_SNAPSHOT_INTERVAL: u32 = 100_000;
+const RESUME_FIRST_SNAPSHOT_WARMUP_INVOCATIONS: u32 = 9;
+const RESUME_STEADY_SNAPSHOT_WARMUP_INVOCATIONS: u32 = 10;
+
+fn split_host_calls(total: u32, invocations: u32) -> Vec<u32> {
+    let invocations = invocations.min(total).max(1);
+    let base = total / invocations;
+    let remainder = total % invocations;
+
+    (0..invocations)
+        .map(|i| base + u32::from(i < remainder))
+        .collect()
+}
+
+fn resume_warmup_chunks(snapshotting: bool, requested_host_calls: u32) -> Vec<u32> {
+    if !snapshotting {
+        let mut remaining = requested_host_calls;
+        let mut chunks = Vec::new();
+        while remaining > 0 {
+            let chunk = remaining.min(RESUME_HOST_CALLS_PER_WARMUP_INVOCATION);
+            chunks.push(chunk);
+            remaining -= chunk;
+        }
+        return chunks;
+    }
+
+    let mut remaining = requested_host_calls;
+    let mut chunks = Vec::new();
+    let mut first_snapshot_interval = true;
+    while remaining > 0 {
+        let interval = remaining.min(RESUME_HOST_CALLS_PER_SNAPSHOT_INTERVAL);
+        let invocations = if first_snapshot_interval {
+            // Agent construction counts as the first invocation for every(10).
+            RESUME_FIRST_SNAPSHOT_WARMUP_INVOCATIONS
+        } else {
+            RESUME_STEADY_SNAPSHOT_WARMUP_INVOCATIONS
+        };
+        chunks.extend(split_host_calls(interval, invocations));
+        remaining -= interval;
+        first_snapshot_interval = false;
+    }
+    chunks
+}
 
 /// Scenario 4 (durable-only): each ramp target is an independent replay burst.
 /// The driver keeps the worker count fixed at `prefill_n`; each ramp target is
@@ -1685,14 +1728,10 @@ async fn run_resume_cell(
                     .expect("agent_for_index within warmup");
                 let component = component.clone();
                 async move {
-                    let mut remaining = requested_host_calls_per_agent;
-                    let mut attempts = Vec::with_capacity(
-                        requested_host_calls_per_agent
-                            .div_ceil(RESUME_HOST_CALLS_PER_WARMUP_INVOCATION)
-                            as usize,
-                    );
-                    while remaining > 0 {
-                        let chunk = remaining.min(RESUME_HOST_CALLS_PER_WARMUP_INVOCATION);
+                    let chunks =
+                        resume_warmup_chunks(config.snapshotting, requested_host_calls_per_agent);
+                    let mut attempts = Vec::with_capacity(chunks.len());
+                    for chunk in chunks {
                         attempts.push(
                             timed_invoke(
                                 user,
@@ -1704,7 +1743,6 @@ async fn run_resume_cell(
                             )
                             .await,
                         );
-                        remaining -= chunk;
                     }
                     (index, attempts)
                 }
@@ -2097,6 +2135,28 @@ mod tests {
             ramp: vec![100, 250, 500],
         };
         assert_eq!(load_count(&cell, 1000), 0);
+    }
+
+    #[test]
+    fn snapshot_resume_warmup_aligns_first_snapshot_after_100k_host_calls() {
+        let chunks = resume_warmup_chunks(true, 100_000);
+        assert_eq!(chunks.len(), 9);
+        assert_eq!(chunks.iter().sum::<u32>(), 100_000);
+    }
+
+    #[test]
+    fn snapshot_resume_warmup_aligns_final_partial_interval_to_snapshot() {
+        let chunks = resume_warmup_chunks(true, 170_000);
+        assert_eq!(chunks.len(), 19);
+        assert_eq!(chunks.iter().sum::<u32>(), 170_000);
+        assert_eq!(chunks[..9].iter().sum::<u32>(), 100_000);
+        assert_eq!(chunks[9..].iter().sum::<u32>(), 70_000);
+    }
+
+    #[test]
+    fn non_snapshot_resume_warmup_uses_fixed_chunks() {
+        let chunks = resume_warmup_chunks(false, 25_000);
+        assert_eq!(chunks, vec![10_000, 10_000, 5_000]);
     }
 
     #[test]
