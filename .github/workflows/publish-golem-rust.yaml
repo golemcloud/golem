@@ -31,6 +31,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.96.1
+        with:
+          components: rustfmt,clippy
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Publish crates
