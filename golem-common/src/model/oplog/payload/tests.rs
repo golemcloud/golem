@@ -22,26 +22,26 @@ use crate::model::oplog::types::{
     SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
     SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
-    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestOptions,
-    SerializableP3HttpScheme, SerializableP3IpAddress, SerializableP3IpSocketAddress,
-    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
-    SerializableResponseHeaders, SerializableStreamError,
+    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
+    SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpAddress,
+    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3TcpChunk,
+    SerializableP3UdpDatagram, SerializableResponseHeaders, SerializableStreamError,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
-    HostRequestP3HttpClientSend, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
-    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
-    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3FileSystemStat, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
-    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsTcpAcquire,
-    HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
-    HostResponseP3SocketsTcpSend, HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
-    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
-    host_functions,
+    HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
+    HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse, HostResponseKVDelete,
+    HostResponseKVGet, HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
+    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
+    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
 };
 use http::Version;
 use iso8601_timestamp as iso_ts;
@@ -456,6 +456,90 @@ fn p3_http_client_request_body_transmission_host_payload_pairs_roundtrip() {
             result: Err(SerializableHttpErrorCode::HttpRequestBodySize(Some(1024))),
         },
     );
+}
+
+#[test]
+fn p3_http_client_send_recorded_request_body_result_roundtrips() {
+    let request = HostRequestP3HttpClientSend {
+        request: SerializableP3HttpClientSend {
+            method: SerializableHttpMethod::Post,
+            scheme: Some(SerializableP3HttpScheme::Https),
+            authority: Some("example.com".to_string()),
+            path_with_query: Some("/upload".to_string()),
+            headers: HashMap::new(),
+            options: None,
+        },
+    };
+
+    // Recording reached its terminal frame before the send's End was appended:
+    // replay can trust the recorded frames as the complete request body.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
+        request.clone(),
+        HostResponseP3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
+                headers: SerializableResponseHeaders {
+                    status: 201,
+                    headers: HashMap::from([("etag".to_string(), vec![b"\"abc\"".to_vec()])]),
+                },
+                recording_complete_at_end: true,
+            },
+        },
+    );
+
+    // The request body was still streaming when End was appended: replay must
+    // treat the recording as potentially truncated.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
+        request,
+        HostResponseP3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
+                headers: SerializableResponseHeaders {
+                    status: 200,
+                    headers: HashMap::new(),
+                },
+                recording_complete_at_end: false,
+            },
+        },
+    );
+}
+
+#[test]
+fn p3_http_request_body_frame_host_request_roundtrips() {
+    // Frames are HostStreamFrame hint payloads, not host-call pairs, so they
+    // round-trip through the HostRequest binary codec directly.
+    let frames = vec![
+        SerializableP3HttpRequestBodyFrame::Data {
+            offset: 0,
+            bytes: b"first chunk".to_vec(),
+        },
+        SerializableP3HttpRequestBodyFrame::Data {
+            offset: u64::MAX,
+            bytes: Vec::new(),
+        },
+        SerializableP3HttpRequestBodyFrame::Trailers(None),
+        SerializableP3HttpRequestBodyFrame::Trailers(Some(HashMap::from([(
+            "grpc-status".to_string(),
+            vec![b"0".to_vec(), b"1".to_vec()],
+        )]))),
+        SerializableP3HttpRequestBodyFrame::End,
+        SerializableP3HttpRequestBodyFrame::Error(SerializableHttpErrorCode::ConnectionTerminated),
+        SerializableP3HttpRequestBodyFrame::Error(SerializableHttpErrorCode::InternalError(Some(
+            "guest body error".to_string(),
+        ))),
+    ];
+
+    for frame in frames {
+        let request = HostRequestP3HttpClientRequestBodyFrame {
+            frame: frame.clone(),
+        };
+        let payload: HostRequest = request.clone().into();
+        let bytes = desert_rust::serialize_to_byte_vec(&payload).unwrap();
+        let roundtrip: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(
+            HostRequestP3HttpClientRequestBodyFrame::try_from(roundtrip).unwrap(),
+            request,
+            "frame variant {frame:?} did not roundtrip"
+        );
+    }
 }
 
 #[test]

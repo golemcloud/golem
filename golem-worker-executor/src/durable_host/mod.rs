@@ -1478,11 +1478,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
                 Ok(begin_index)
             } else {
-                let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+                let scope_names = [HostFunctionName::Custom(
+                    "<scope:batched-write>".to_string(),
+                )];
                 let (begin_index, scope_handle) = self
                     .state
                     .replay_state
-                    .claim_scope_start(&scope_name, function_type)
+                    .claim_scope_start(&scope_names, function_type)
                     .await?;
                 // The begin-side completion / legality probe stays a non-consuming forward scan: it
                 // decides whether the scope is safe to continue replaying or must be retried *before*
@@ -1831,12 +1833,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // reading the scope `End` positionally. The handle is stored only when the transaction
             // continues replaying (not when recovery restarts it live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+            let scope_names = [HostFunctionName::Custom("<scope:transaction>".to_string())];
             let (scope_start_index, scope_handle) = self
                 .state
                 .replay_state
                 .claim_scope_start(
-                    &scope_name,
+                    &scope_names,
                     &DurableFunctionType::WriteRemoteTransaction(None),
                 )
                 .await?;

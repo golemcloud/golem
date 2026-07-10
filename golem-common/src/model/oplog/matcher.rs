@@ -440,6 +440,11 @@ impl PublicOplogEntry {
                     || Self::string_match("card-revoked", &[], query_path, query)
                     || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
             }
+            PublicOplogEntry::HostStreamFrame(params) => {
+                Self::string_match("hoststreamframe", &[], query_path, query)
+                    || Self::string_match("host-stream-frame", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.payload, &[], query_path, query)
+            }
         }
     }
 

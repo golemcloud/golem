@@ -37,7 +37,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
+use golem_common::model::invocation_context::{InvocationContextSpan, SpanId};
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
@@ -386,11 +386,13 @@ pub enum DropEvent {
         begin_index: OplogIndex,
         span_id: Option<SpanId>,
     },
-    /// A durable invocation-context span whose owning resource was dropped from a synchronous host
-    /// context (e.g. a p3 HTTP response dropped before its body was consumed). Finish it (durably)
-    /// from the next drain point; live writes the `FinishSpan` there and replay consumes it at the
-    /// same point, since drain points are deterministic replay points.
-    FinishSpan { span_id: SpanId },
+    /// An invocation-context span whose owning resource was dropped from a synchronous host
+    /// context (e.g. a p3 HTTP response dropped before its body was consumed). Finish it from the
+    /// next drain point. When `durable` (the span was replayed from a legacy positional
+    /// `StartSpan` entry), live writes the `FinishSpan` there and replay consumes it at the same
+    /// point, since drain points are deterministic replay points; otherwise the span is derived
+    /// (no span oplog entries exist) and is finished in memory only.
+    FinishSpan { span_id: SpanId, durable: bool },
 }
 
 struct AccessDropEventDrainGuard {
@@ -664,10 +666,15 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 }
             }
         }
-        DropEvent::FinishSpan { span_id } => {
-            ctx.finish_span(&span_id)
-                .await
-                .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
+        DropEvent::FinishSpan { span_id, durable } => {
+            if durable {
+                ctx.finish_span(&span_id)
+                    .await
+                    .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
+            } else {
+                finish_span_in_memory(ctx, &span_id)
+                    .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
+            }
         }
     }
     Ok(())
@@ -859,9 +866,18 @@ where
                     }
                 }
             }
-            DropEvent::FinishSpan { span_id } => {
+            DropEvent::FinishSpan { span_id, durable } => {
                 let span_id = span_id.clone();
-                if let Err(err) = finish_span_access(store, get_ctx, &span_id).await {
+                let durable = *durable;
+                let finish_result = if durable {
+                    finish_span_access(store, get_ctx, &span_id).await
+                } else {
+                    store.with(|mut access| {
+                        let ctx = get_ctx(access.data_mut());
+                        finish_span_in_memory(ctx, &span_id)
+                    })
+                };
+                if let Err(err) = finish_result {
                     if first_error.is_none() {
                         first_error = Some(TerminalCallError::new(
                             err,
@@ -1091,7 +1107,32 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     atomic_region_registration: Option<OplogIndex>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
+    claim_options: AccessClaimOptions,
     _phantom: PhantomData<(Pair, P)>,
+}
+
+/// Options that make the durable records of a concurrent accessor call claim-safe on replay.
+///
+/// Accessor host calls run concurrently, so their oplog `Start` entries are appended in
+/// scheduling order, which replay does not reproduce. Calls whose identity (function name +
+/// durable function type) is shared by concurrent siblings need extra identity to be paired with
+/// their own records instead of a sibling's:
+///
+/// - `scope_discriminator` is appended to the batched-write scope `Start`'s synthetic function
+///   name (`<scope:batched-write:DISCRIMINATOR>`), so the replayed call claims exactly its own
+///   scope. It must be a deterministic function of state that is identical on the live and replay
+///   paths (e.g. a hash of the recorded request, or the `Start` index of an already-claimed
+///   related call). Replay falls back to the plain legacy name for oplogs recorded before the
+///   discriminator existed.
+/// - `request_identity` is the [`HostRequest`] value the live path persists in the call's
+///   `Start` entry; when set, the replay claim also requires the recorded request payload to
+///   match it (by value, never by serialized bytes — payloads can contain `HashMap`s whose byte
+///   order is process-random), disambiguating concurrent top-level calls that differ only in
+///   their request.
+#[derive(Default)]
+pub(crate) struct AccessClaimOptions {
+    pub(crate) scope_discriminator: Option<String>,
+    pub(crate) request_identity: Option<HostRequest>,
 }
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
@@ -1392,6 +1433,31 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
+        Self::start_access_with_options(
+            store,
+            get_ctx,
+            function_type,
+            AccessClaimOptions::default(),
+            build_request,
+        )
+        .await
+    }
+
+    /// [`Self::start_access_with`] with explicit [`AccessClaimOptions`], for calls whose durable
+    /// records need extra identity to be claim-safe under concurrent siblings on replay.
+    pub(crate) async fn start_access_with_options<T, D, Ctx, F>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+        build_request: F,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
         if !is_accessor_supported_function_type(&function_type) {
             return Err(WorkerExecutorError::runtime(format!(
                 "p3 accessor durable call path currently supports only ReadLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
@@ -1399,7 +1465,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         }
         let prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type)
+            Self::prepare_access_start(ctx, function_type, claim_options)
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(
             prepared.atomic_region_registration,
@@ -1436,6 +1502,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     fn prepare_access_start<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
     ) -> Result<PreparedAccessStart<Pair, P, Ctx>, WorkerExecutorError> {
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
         if !is_accessor_supported_function_type(&function_type) {
@@ -1499,6 +1566,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             },
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
             cleanup_sink,
+            claim_options,
             _phantom: PhantomData,
         })
     }
@@ -1646,18 +1714,64 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     },
                 ));
             }
-            let replay = prepared
-                .replay_state
-                .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, retry.function_type())
-                .await
-                .map_err(|err| {
-                    (
-                        err,
-                        AccessStartCleanup {
-                            atomic_region_registration: prepared.atomic_region_registration,
-                        },
-                    )
-                })?;
+            // A call owned by another durable record (its own opened scope, or the parent
+            // encoded in the function type) is claimed by identity: accessor host calls run
+            // concurrently, so owned `Start`s (e.g. per-chunk children of overlapping
+            // consume-body scopes, or call `Start`s under sibling batched-write scopes) are not
+            // appended in deterministic guest-initiation order and cannot be claimed
+            // positionally. When the caller supplied a request identity, the claim additionally
+            // requires the recorded request payload to match, disambiguating concurrent calls
+            // whose durable identity is otherwise shared (e.g. parallel P3 HTTP sends).
+            let claim_result = match (
+                execution_scope.parent_start_index,
+                prepared.claim_options.request_identity.as_ref(),
+            ) {
+                (Some(parent_start_index), Some(expected_request)) => {
+                    prepared
+                        .replay_state
+                        .claim_owned_concurrent_start_matching_request(
+                            &Pair::HOST_FUNCTION_NAME,
+                            retry.function_type(),
+                            parent_start_index,
+                            expected_request,
+                        )
+                        .await
+                }
+                (Some(parent_start_index), None) => {
+                    prepared
+                        .replay_state
+                        .claim_owned_concurrent_start(
+                            &Pair::HOST_FUNCTION_NAME,
+                            retry.function_type(),
+                            parent_start_index,
+                        )
+                        .await
+                }
+                (None, Some(expected_request)) => {
+                    prepared
+                        .replay_state
+                        .claim_concurrent_start_matching_request(
+                            &Pair::HOST_FUNCTION_NAME,
+                            retry.function_type(),
+                            expected_request,
+                        )
+                        .await
+                }
+                (None, None) => {
+                    prepared
+                        .replay_state
+                        .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, retry.function_type())
+                        .await
+                }
+            };
+            let replay = claim_result.map_err(|err| {
+                (
+                    err,
+                    AccessStartCleanup {
+                        atomic_region_registration: prepared.atomic_region_registration,
+                    },
+                )
+            })?;
             let start_idx = replay.start_idx();
             Ok(ExecutedAccessStart {
                 begin_index: scope_start
@@ -1682,11 +1796,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         prepared: &PreparedAccessStart<Pair, P, Ctx>,
     ) -> Result<AccessOpenedScope, (WorkerExecutorError, AccessStartCleanup)> {
         let function_type = prepared.retry.function_type().clone();
+        // A caller-supplied discriminator makes the synthetic scope name unique among concurrent
+        // siblings, so the replay claim below pairs the call with exactly its own recorded scope
+        // (and with it the correct incomplete-scope detection). Without one, concurrent scopes of
+        // the same durable function type are interchangeable at claim time.
+        let scope_name = match &prepared.claim_options.scope_discriminator {
+            Some(discriminator) => {
+                HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
+            }
+            None => HostFunctionName::Custom("<scope:batched-write>".to_string()),
+        };
         if prepared.is_live {
             let entry = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
-                function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+                function_name: scope_name,
                 request: None,
                 durable_function_type: function_type,
             };
@@ -1701,10 +1825,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 switched_to_live: false,
             })
         } else {
-            let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+            // The plain legacy name is accepted as fallback for oplogs recorded before the
+            // discriminator existed (those recordings are ambiguous among concurrent siblings
+            // anyway; matches are claimed in oplog order).
+            let mut scope_names = vec![scope_name];
+            if prepared.claim_options.scope_discriminator.is_some() {
+                scope_names.push(HostFunctionName::Custom(
+                    "<scope:batched-write>".to_string(),
+                ));
+            }
             let (begin_index, replay_handle) = prepared
                 .replay_state
-                .claim_scope_start(&scope_name, &function_type)
+                .claim_scope_start(&scope_names, &function_type)
                 .await
                 .map_err(|err| {
                     (
@@ -2984,96 +3116,91 @@ where
     }
 }
 
-/// Accessor counterpart of `DurableWorkerCtx::start_child_span` with the current span as parent
-/// and without activation: starts a (durable) invocation-context span. On the live path the span
-/// is created in the in-memory invocation context and a positional `StartSpan` entry is appended;
-/// on replay the next `StartSpan` entry is consumed and the recorded span (same span id and start
-/// timestamp) is reconstructed, so trace identifiers derived from it are deterministic.
+/// Legacy-oplog fallback for the p3 HTTP send span: consumes a positional `StartSpan` entry at
+/// the replay cursor head, if one is there, and reconstructs the recorded span (same span id and
+/// start timestamp, recorded attributes) in the in-memory invocation context with the current
+/// span as parent. Returns `None` — consuming nothing — when the head is any other entry.
 ///
-/// Like the P2 path this is a *positional* oplog entry: callers must write and consume it at the
-/// same point relative to their other durable records on both paths. This is only sound while the
-/// caller's whole entry sequence around the span cannot interleave with sibling host calls'
-/// entries: accessor host calls run concurrently and this append has await points, so two
-/// overlapping calls that both write a `StartSpan` can interleave their entries live and then
-/// consume each other's `StartSpan` on replay (wrong span id, or an unexpected-oplog-entry
-/// failure). Until span entries are keyed to their owning call (or appended atomically with its
-/// `Start`), callers accept that limitation for concurrent use.
-pub(crate) async fn start_span_access<T, D, Ctx>(
+/// Oplogs written since the send span became *derived* (computed from the send's own host-call
+/// `Start` index, with no separate span entries) never contain a `StartSpan` at this position, so
+/// this only fires for oplogs recorded by older executors. For those, positional consumption is
+/// exactly how the entry was consumed before — best-effort for old *concurrent* recordings, which
+/// never carried owner identity in the first place.
+pub(crate) async fn try_replay_recorded_start_span_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    initial_attributes: &[(String, AttributeValue)],
-) -> Result<SpanId, WorkerExecutorError>
+) -> Result<Option<SpanId>, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (is_live, worker, replay_state) = store.with(|mut access| {
+    let replay_state = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
-        (
-            ctx.state.is_live(),
-            ctx.public_state.worker(),
-            ctx.state.replay_state.clone(),
-        )
+        ctx.state.replay_state.clone()
     });
 
-    if is_live {
-        let (entry, span_id) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            let parent = ctx.state.current_span_id.clone();
-            let span = ctx
-                .state
-                .invocation_context
-                .start_span(&parent, None)
-                .map_err(WorkerExecutorError::runtime)?;
-            for (name, value) in initial_attributes {
-                span.set_attribute(name.clone(), value.clone());
-            }
-            let entry = OplogEntry::StartSpan {
-                timestamp: span.start().unwrap_or(Timestamp::now_utc()),
-                span_id: span.span_id().clone(),
-                parent: Some(parent),
-                linked_context_id: None,
-                attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
-            };
-            Ok::<_, WorkerExecutorError>((entry, span.span_id().clone()))
+    let consumed = replay_state
+        .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
+        .await?;
+    let Some((
+        _,
+        OplogEntry::StartSpan {
+            timestamp,
+            span_id,
+            attributes,
+            ..
+        },
+    )) = consumed
+    else {
+        return Ok(None);
+    };
+
+    store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        let parent = ctx.state.current_span_id.clone();
+        let parent_span = ctx.state.invocation_context.get(&parent).map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "parent span {parent} missing during StartSpan replay: {err}"
+            ))
         })?;
-        worker.add_to_oplog(entry).await;
-        Ok(span_id)
-    } else {
-        let (_, entry) = crate::get_oplog_entry!(replay_state, OplogEntry::StartSpan)?;
-        let (timestamp, span_id) = match entry {
-            OplogEntry::StartSpan {
-                timestamp, span_id, ..
-            } => (timestamp, span_id),
-            other => {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "StartSpan",
-                    format!("{other:?}"),
-                ));
-            }
-        };
-        store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            let parent = ctx.state.current_span_id.clone();
-            let parent_span = ctx.state.invocation_context.get(&parent).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "parent span {parent} missing during StartSpan replay: {err}"
-                ))
-            })?;
-            let span = InvocationContextSpan::local()
-                .with_span_id(span_id.clone())
-                .with_start(timestamp)
-                .with_parent(parent_span)
-                .build();
-            for (name, value) in initial_attributes {
-                span.set_attribute(name.clone(), value.clone());
-            }
-            ctx.state.invocation_context.add_span(span);
-            Ok::<_, WorkerExecutorError>(())
+        let span = InvocationContextSpan::local()
+            .with_span_id(span_id.clone())
+            .with_start(timestamp)
+            .with_parent(parent_span)
+            .with_attributes(attributes.0.clone())
+            .build();
+        ctx.state.invocation_context.add_span(span);
+        Ok::<_, WorkerExecutorError>(())
+    })?;
+    Ok(Some(span_id))
+}
+
+/// Finishes a span in the in-memory invocation context only, without writing or consuming any
+/// oplog entry: pops the current-span pointer if it points at this span, then marks the span
+/// finished. This is the non-durable half of [`finish_span_access`], used directly for spans
+/// whose identity is derived from durable records (no `StartSpan`/`FinishSpan` entries exist).
+pub(crate) fn finish_span_in_memory<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    span_id: &SpanId,
+) -> Result<(), WorkerExecutorError> {
+    if &ctx.state.current_span_id == span_id {
+        let span = ctx.state.invocation_context.get(span_id).map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "span {span_id} missing during finish_span replay: {err}"
+            ))
         })?;
-        Ok(span_id)
+        ctx.state.current_span_id = span
+            .parent()
+            .map(|p| p.span_id().clone())
+            .unwrap_or_else(|| ctx.state.invocation_context.root.span_id().clone());
     }
+    let _ = ctx
+        .state
+        .invocation_context
+        .finish_span(span_id)
+        .map_err(WorkerExecutorError::runtime);
+    Ok(())
 }
 
 pub(crate) async fn finish_span_access<T, D, Ctx>(
@@ -3105,23 +3232,7 @@ where
 
     store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
-        if &ctx.state.current_span_id == span_id {
-            let span = ctx.state.invocation_context.get(span_id).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "span {span_id} missing during finish_span replay: {err}"
-                ))
-            })?;
-            ctx.state.current_span_id = span
-                .parent()
-                .map(|p| p.span_id().clone())
-                .unwrap_or_else(|| ctx.state.invocation_context.root.span_id().clone());
-        }
-        let _ = ctx
-            .state
-            .invocation_context
-            .finish_span(span_id)
-            .map_err(WorkerExecutorError::runtime);
-        Ok(())
+        finish_span_in_memory(ctx, span_id)
     })
 }
 

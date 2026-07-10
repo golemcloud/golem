@@ -21,8 +21,8 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
+    NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
@@ -450,6 +450,35 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     card_id: card_id.into(),
                 })
             }
+            PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+                timestamp,
+                parent_start_index,
+                kind,
+                payload,
+            }) => Self::HostStreamFrame(oplog::HostStreamFrameParameters {
+                timestamp: timestamp.into(),
+                parent_start_index: parent_start_index.into(),
+                kind: kind.into(),
+                payload: encode_public_typed_schema_value(payload),
+            }),
+        }
+    }
+}
+
+impl From<golem_common::model::oplog::HostStreamKind> for oplog::HostStreamKind {
+    fn from(value: golem_common::model::oplog::HostStreamKind) -> Self {
+        match value {
+            golem_common::model::oplog::HostStreamKind::P3HttpRequestBody => {
+                Self::P3HttpRequestBody
+            }
+        }
+    }
+}
+
+impl From<oplog::HostStreamKind> for golem_common::model::oplog::HostStreamKind {
+    fn from(value: oplog::HostStreamKind) -> Self {
+        match value {
+            oplog::HostStreamKind::P3HttpRequestBody => Self::P3HttpRequestBody,
         }
     }
 }
@@ -1198,6 +1227,14 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 card_id: params.card_id.into(),
             }),
+            oplog::OplogEntry::HostStreamFrame(params) => Ok(Self::HostStreamFrame {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                parent_start_index: golem_common::base_model::OplogIndex::from_u64(
+                    params.parent_start_index,
+                ),
+                kind: params.kind.into(),
+                payload: oplog_payload_from_wit(params.payload),
+            }),
         }
     }
 }
@@ -1723,6 +1760,17 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     card_id: card_id.into(),
                 }))
             }
+            M::HostStreamFrame {
+                timestamp,
+                parent_start_index,
+                kind,
+                payload,
+            } => Ok(Self::HostStreamFrame(oplog::RawHostStreamFrameParameters {
+                timestamp: timestamp.into(),
+                parent_start_index: parent_start_index.into(),
+                kind: kind.into(),
+                payload: oplog_payload_to_wit(payload)?,
+            })),
             M::CreateResource {
                 timestamp,
                 id,

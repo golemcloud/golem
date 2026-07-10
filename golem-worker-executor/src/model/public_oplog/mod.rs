@@ -29,11 +29,12 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -884,6 +885,25 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
                     timestamp,
                     card_id,
+                }))
+            }
+            OplogEntry::HostStreamFrame {
+                timestamp,
+                parent_start_index,
+                kind,
+                payload,
+            } => {
+                let host_request: HostRequest = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, payload)
+                    .await?;
+
+                Ok(PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+                    timestamp,
+                    parent_start_index,
+                    kind,
+                    payload: host_request
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
                 }))
             }
         }

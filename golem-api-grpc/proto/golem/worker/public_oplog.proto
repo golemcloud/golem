@@ -68,7 +68,14 @@ message OplogEntry {
     EndParameters End = 45;
     CancelledParameters Cancelled = 46;
     CardRevokedParameters CardRevoked = 47;
+    HostStreamFrameParameters HostStreamFrame = 48;
   }
+}
+
+// Identifies which host-owned stream a HostStreamFrame oplog entry belongs to.
+enum HostStreamKind {
+  // A frame of the outgoing request body of a P3 HTTP client send.
+  HOST_STREAM_KIND_P3_HTTP_REQUEST_BODY = 0;
 }
 
 message WrappedFunctionType {
@@ -279,6 +286,15 @@ message RemoveRetryPolicyParameters {
 message CardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
+}
+
+// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+// attached to the durable host call identified by its Start entry's index.
+message HostStreamFrameParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 parent_start_index = 2;
+  HostStreamKind kind = 3;
+  golem.schema.TypedSchemaValue payload = 4;
 }
 
 message EndAtomicRegionParameters {

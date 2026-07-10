@@ -32,9 +32,9 @@ use crate::model::oplog::types::{
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
     SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
-    SerializableP3HttpConsumeBodyResult, SerializableP3IpAddresses,
-    SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
-    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
+    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
+    SerializableP3IpAddresses, SerializableP3IpNameLookupError, SerializableP3TcpChunk,
+    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError,
 };
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
@@ -256,6 +256,13 @@ oplog_payload! {
         },
         P3HttpClientSend {
             request: SerializableP3HttpClientSend
+        },
+        /// Payload of a `HostStreamFrame` hint oplog entry recording one frame of a
+        /// P3 HTTP outgoing request body. Not a host-call request: these frames are
+        /// persisted as standalone hint entries under the send's `Start`, never as a
+        /// `Start`/`End` payload pair.
+        P3HttpClientRequestBodyFrame {
+            frame: SerializableP3HttpRequestBodyFrame
         },
     }
 }

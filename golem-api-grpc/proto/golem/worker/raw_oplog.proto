@@ -60,6 +60,7 @@ message RawOplogEntry {
     RawEndParameters end = 44;
     RawCancelledParameters cancelled = 45;
     RawCardRevokedParameters card_revoked = 46;
+    RawHostStreamFrameParameters host_stream_frame = 47;
   }
 }
 
@@ -314,6 +315,14 @@ message RawRemoveRetryPolicyParameters {
 
 message RawCardRevokedParameters {
   golem.common.UUID card_id = 1;
+}
+
+// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+// attached to the durable host call identified by its Start entry's index.
+message RawHostStreamFrameParameters {
+  uint64 parent_start_index = 1;
+  HostStreamKind kind = 2;
+  RawOplogPayload payload = 3;
 }
 
 message RawOplogEntryWithIndex {

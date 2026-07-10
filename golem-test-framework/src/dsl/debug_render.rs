@@ -471,6 +471,21 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
         }
+        PublicOplogEntry::HostStreamFrame(params) => {
+            let _ = writeln!(result, "HOST STREAM FRAME");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}parent start index: {}",
+                &params.parent_start_index
+            );
+            let _ = writeln!(result, "{pad}kind:              {:?}", &params.kind);
+            let _ = writeln!(
+                result,
+                "{pad}payload:           {}",
+                typed_schema_value_to_string(&params.payload)
+            );
+        }
     }
 
     result

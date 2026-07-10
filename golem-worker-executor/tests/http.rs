@@ -366,6 +366,104 @@ async fn http_client_using_reqwest_async_parallel(
     Ok(())
 }
 
+/// Regression test for G35/T48: concurrent HTTP sends interleave their durable
+/// records in the oplog in network/scheduling order, so an executor restart
+/// must replay them claim-based rather than positionally. Runs an invocation
+/// with many parallel outgoing requests, restarts the executor (forcing a full
+/// oplog replay of the interleaved records), and runs a fresh invocation on
+/// the recovered worker.
+#[test]
+#[tracing::instrument]
+async fn http_client_using_reqwest_async_parallel_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_body_clone = captured_body.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/post-example",
+                post(move |headers: HeaderMap, body: Bytes| async move {
+                    let header = headers
+                        .get("X-Test")
+                        .map(|h| h.to_str().unwrap().to_string())
+                        .unwrap_or("no X-Test header".to_string());
+                    let body = String::from_utf8(body.to_vec()).unwrap();
+                    {
+                        let mut capture = captured_body_clone.lock().unwrap();
+                        capture.push(body.clone());
+                    }
+                    format!(
+                        "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
+                    )
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient3");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "run_parallel", data_value!(16u16))
+        .await?;
+    let return_value = result.into_return_value().expect("Expected a return value");
+    let SchemaValue::List { elements: lst } = &return_value else {
+        panic!("Expected List, got {return_value:?}")
+    };
+    assert_eq!(lst.len(), 16);
+    assert_eq!(captured_body.lock().unwrap().len(), 16);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    // The fresh invocation first forces a full replay of the previous
+    // invocation's interleaved concurrent-send records, then runs live.
+    let result2 = executor
+        .invoke_and_await_agent(&component, &agent_id, "run_parallel", data_value!(16u16))
+        .await?;
+    let return_value2 = result2
+        .into_return_value()
+        .expect("Expected a return value");
+    let SchemaValue::List { elements: lst2 } = &return_value2 else {
+        panic!("Expected List, got {return_value2:?}")
+    };
+    assert_eq!(lst2.len(), 16);
+    // The replayed sends must be served from the oplog, not re-issued: only
+    // the fresh invocation's 16 requests reach the server.
+    assert_eq!(captured_body.lock().unwrap().len(), 32);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn outgoing_http_contains_trace_context_headers(

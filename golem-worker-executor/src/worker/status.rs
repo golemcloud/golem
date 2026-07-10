@@ -524,6 +524,7 @@ fn calculate_latest_worker_status(
             OplogEntry::Snapshot { .. } => {}
             OplogEntry::OplogProcessorCheckpoint { .. } => {}
             OplogEntry::CardRevoked { .. } => {}
+            OplogEntry::HostStreamFrame { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }

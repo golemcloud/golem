@@ -1446,6 +1446,22 @@ pub struct SerializableP3HttpRequestOptions {
 pub enum SerializableP3HttpClientSendResult {
     Success(SerializableResponseHeaders),
     HttpError(SerializableHttpErrorCode),
+    /// Like `Success`, but marks that the outgoing request body was durably
+    /// recorded as `HostStreamFrame` hint entries under the send's `Start`
+    /// (see [`SerializableP3HttpRequestBodyFrame`]), so an interrupted
+    /// response-body stream can be rebuilt after a restart by re-issuing the
+    /// request with the recorded body. Sends recorded before frame recording
+    /// existed replay as plain `Success` and fall back to head-based body
+    /// detection.
+    SuccessWithRecordedRequestBody {
+        headers: SerializableResponseHeaders,
+        /// Whether the recording had already reached its terminal frame when
+        /// the send's `End` was appended. When `false`, the request body was
+        /// still streaming at that point, so replay must treat the recording
+        /// as potentially truncated and be prepared to resume it from the
+        /// replayed guest body.
+        recording_complete_at_end: bool,
+    },
 }
 
 /// Terminal of a p3 response `consume-body` — the End payload of the
@@ -1498,6 +1514,46 @@ pub enum SerializableP3HttpBodyChunk {
     Data(Vec<u8>),
     End,
     Cancelled,
+}
+
+/// One persisted unit of a P3 HTTP *outgoing request* body stream.
+///
+/// The request body produced by the guest is recorded frame-by-frame as
+/// `HostStreamFrame` *hint* oplog entries referencing the send's host-call
+/// `Start` (the outgoing mirror of [`SerializableP3HttpBodyChunk`], which uses
+/// child durable calls instead): every guest-produced data frame becomes a
+/// `Data` frame and trailers become a `Trailers` frame, each persisted before
+/// the frame is released to the wire. A single terminal frame — `End` for a
+/// cleanly finished body or `Error` for a guest-side body failure — closes the
+/// recorded stream. Because the entries are hints, the replay cursor skips
+/// them; consumers find them by scanning the oplog for `HostStreamFrame`
+/// entries whose `parent_start_index` matches the send's `Start`. The recorded
+/// frames are what in-function retry and post-restart rebuild replay to
+/// re-issue the request with a byte-identical body, streaming from the oplog
+/// so the body is never buffered whole in memory.
+///
+/// `Data` frames carry the byte `offset` of the frame's first byte within the
+/// logical request-body byte stream. A send whose recording was left truncated
+/// by a crash resumes recording under the same `Start` index after replay, so
+/// a second recorded sequence can follow the first run's truncated one. The
+/// guest's body production is deterministic, so every such sequence is a
+/// prefix of the same byte stream: consumers merge sequences by offset (a
+/// frame restarting at an already-covered offset re-covers known bytes)
+/// instead of concatenating them.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpRequestBodyFrame {
+    Data { offset: u64, bytes: Vec<u8> },
+    Trailers(Option<HashMap<String, Vec<Vec<u8>>>>),
+    End,
+    Error(SerializableHttpErrorCode),
 }
 
 /// One persisted unit of a P3 TCP socket receive stream.

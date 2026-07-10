@@ -428,6 +428,16 @@ pub enum LogLevel {
     Critical,
 }
 
+/// Identifies which host-owned stream a `HostStreamFrame` oplog entry belongs
+/// to. The kind determines how the entry's payload is interpreted.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+pub enum HostStreamKind {
+    /// A frame of the outgoing request body of a P3 HTTP `client::send`; the
+    /// payload is a `SerializableP3HttpRequestBodyFrame`.
+    P3HttpRequestBody,
+}
+
 #[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 pub enum PersistenceLevel {

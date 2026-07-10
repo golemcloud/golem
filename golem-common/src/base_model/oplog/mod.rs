@@ -679,5 +679,29 @@ oplog_entry! {
         public {
             card_id: Uuid,
         }
+    },
+    /// A durably recorded frame of a host-owned stream (e.g. the outgoing request body of a
+    /// P3 HTTP `client::send`), attached to the durable host call identified by
+    /// `parent_start_index` (its `Start` entry's index). `kind` selects which of the owning
+    /// call's streams the frame belongs to and determines how `payload` is interpreted.
+    ///
+    /// Frames are hints: the replay cursor skips them, they take part in no `Start`/terminal
+    /// pairing or claim resolution, and interrupted recordings need no closing entry. Consumers
+    /// find a stream's frames by scanning the oplog for `HostStreamFrame` entries with a matching
+    /// `parent_start_index` and `kind`.
+    HostStreamFrame {
+        hint: true
+        wit_raw_type: "raw-host-stream-frame-parameters"
+        wit_public_type: "host-stream-frame-parameters"
+        raw {
+            parent_start_index: OplogIndex,
+            kind: HostStreamKind,
+            payload: payload::OplogPayload<payload::HostRequest>,
+        }
+        public {
+            parent_start_index: OplogIndex,
+            kind: HostStreamKind,
+            payload: TypedSchemaValue,
+        }
     }
 }

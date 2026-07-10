@@ -42,16 +42,17 @@ use crate::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
-    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel,
-    ReadOnlyViolationError,
+    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
+    PersistenceLevel, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -808,6 +809,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     card_id: params.card_id.ok_or("Missing card_id field")?.into(),
                 }))
             }
+            oplog_entry::Entry::HostStreamFrame(params) => {
+                Ok(PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    parent_start_index: crate::base_model::OplogIndex::from_u64(
+                        params.parent_start_index,
+                    ),
+                    kind: host_stream_kind_from_proto(params.kind)?,
+                    payload: params.payload.ok_or("Missing payload field")?.try_into()?,
+                }))
+            }
         }
     }
 }
@@ -1335,6 +1346,18 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CardRevokedParameters {
                             timestamp: Some(params.timestamp.into()),
                             card_id: Some(params.card_id.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::HostStreamFrame(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::HostStreamFrame(
+                        golem_api_grpc::proto::golem::worker::HostStreamFrameParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            parent_start_index: params.parent_start_index.as_u64(),
+                            kind: host_stream_kind_to_proto(params.kind) as i32,
+                            payload: Some(params.payload.into()),
                         },
                     )),
                 }
@@ -2511,6 +2534,17 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 timestamp: p.timestamp,
                 card_id: p.card_id,
             }),
+            // The concrete payload type cannot be recovered from the rendered schema value
+            // (there is no owning function name to key it on), so it is preserved as a
+            // `Custom` host request.
+            PublicOplogEntry::HostStreamFrame(p) => Ok(OplogEntry::HostStreamFrame {
+                timestamp: p.timestamp,
+                parent_start_index: p.parent_start_index,
+                kind: p.kind,
+                payload: OplogPayload::Inline(Box::new(
+                    crate::model::oplog::payload::HostRequest::from(p.payload),
+                )),
+            }),
         }
     }
 }
@@ -2876,8 +2910,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
             RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
             RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
-            RawGrowMemoryParameters, RawJumpParameters, RawLogParameters,
-            RawOplogProcessorCheckpointParameters, RawOplogRegion,
+            RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
+            RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
             RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSetSpanAttributeParameters,
@@ -3229,6 +3263,16 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     card_id: Some(card_id.into()),
                 })
             }
+            OplogEntry::HostStreamFrame {
+                parent_start_index,
+                kind,
+                payload,
+                ..
+            } => Entry::HostStreamFrame(RawHostStreamFrameParameters {
+                parent_start_index: parent_start_index.as_u64(),
+                kind: host_stream_kind_to_proto(kind) as i32,
+                payload: Some(oplog_payload_to_proto(payload)?),
+            }),
         };
 
         Ok(golem_api_grpc::proto::golem::worker::RawOplogEntry {
@@ -3649,7 +3693,32 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 timestamp,
                 card_id: p.card_id.ok_or("Missing card_id")?.into(),
             }),
+            Entry::HostStreamFrame(p) => Ok(OplogEntry::HostStreamFrame {
+                timestamp,
+                parent_start_index: crate::base_model::OplogIndex::from_u64(p.parent_start_index),
+                kind: host_stream_kind_from_proto(p.kind)?,
+                payload: oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?,
+            }),
         }
+    }
+}
+
+fn host_stream_kind_to_proto(
+    kind: HostStreamKind,
+) -> golem_api_grpc::proto::golem::worker::HostStreamKind {
+    match kind {
+        HostStreamKind::P3HttpRequestBody => {
+            golem_api_grpc::proto::golem::worker::HostStreamKind::P3HttpRequestBody
+        }
+    }
+}
+
+fn host_stream_kind_from_proto(kind: i32) -> Result<HostStreamKind, String> {
+    match golem_api_grpc::proto::golem::worker::HostStreamKind::try_from(kind) {
+        Ok(golem_api_grpc::proto::golem::worker::HostStreamKind::P3HttpRequestBody) => {
+            Ok(HostStreamKind::P3HttpRequestBody)
+        }
+        Err(_) => Err(format!("Invalid host stream kind: {kind}")),
     }
 }
 

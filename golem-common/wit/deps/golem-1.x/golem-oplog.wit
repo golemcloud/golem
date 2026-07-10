@@ -210,6 +210,23 @@ interface oplog {
         card-id: uuid,
     }
 
+    /// Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
+    /// The kind determines how the entry's payload is interpreted.
+    enum host-stream-kind {
+        /// A frame of the outgoing request body of a P3 HTTP client send.
+        p3-http-request-body,
+    }
+
+    /// Parameters for a host-stream-frame oplog entry: a durably recorded frame of a
+    /// host-owned stream (e.g. the outgoing request body of a P3 HTTP client send),
+    /// attached to the durable host call identified by its start entry's index.
+    record host-stream-frame-parameters {
+        timestamp: datetime,
+        parent-start-index: oplog-index,
+        kind: host-stream-kind,
+        payload: typed-schema-value,
+    }
+
     record end-atomic-region-parameters {
         timestamp: datetime,
         begin-index: oplog-index
@@ -522,6 +539,15 @@ interface oplog {
         partial: option<oplog-payload>,
     }
 
+    /// Parameters for a host-stream-frame oplog entry, with the frame payload in raw
+    /// (possibly externally stored) form.
+    record raw-host-stream-frame-parameters {
+        timestamp: datetime,
+        parent-start-index: oplog-index,
+        kind: host-stream-kind,
+        payload: oplog-payload,
+    }
+
     record raw-agent-invocation-started-parameters {
         timestamp: datetime,
         idempotency-key: string,
@@ -724,7 +750,10 @@ interface oplog {
         /// Removes a named retry policy by name
         remove-retry-policy(remove-retry-policy-parameters),
         /// Records that a permission card used by the agent has been revoked
-        card-revoked(card-revoked-parameters)
+        card-revoked(card-revoked-parameters),
+        /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+        /// attached to the durable host call identified by its start entry's index
+        host-stream-frame(raw-host-stream-frame-parameters)
     }
 
     variant public-oplog-entry {
@@ -820,7 +849,10 @@ interface oplog {
         /// Removes a named retry policy by name
         remove-retry-policy(remove-retry-policy-parameters),
         /// Records that a permission card used by the agent has been revoked
-        card-revoked(card-revoked-parameters)
+        card-revoked(card-revoked-parameters),
+        /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+        /// attached to the durable host call identified by its start entry's index
+        host-stream-frame(host-stream-frame-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads
