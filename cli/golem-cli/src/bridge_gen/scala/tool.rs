@@ -1335,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_generation_result_decoding_cross_compiles() {
+    fn tool_generation_result_decoding_compiles() {
         let mut tool = grep_tool();
         tool.commands.nodes[0].globals = Globals::default();
         tool.commands.nodes[0].subcommands = vec![];
@@ -1362,15 +1362,15 @@ mod tests {
         let target_path = generate(tool, "grep-tool-guest-client");
         let status = std::process::Command::new("sbt")
             .arg("--batch")
-            .arg("+compile")
+            .arg("compile")
             .current_dir(&target_path)
             .status()
             .expect("failed to run sbt; is it installed?");
-        assert!(status.success(), "sbt +compile failed in {target_path}");
+        assert!(status.success(), "sbt compile failed in {target_path}");
     }
 
     #[test]
-    fn tool_generation_optional_stdout_cross_compiles_as_optional_result() {
+    fn tool_generation_optional_stdout_compiles_as_optional_result() {
         let mut tool = grep_tool();
         tool.commands.nodes[0].globals = Globals::default();
         tool.commands.nodes[0].subcommands = vec![];
@@ -1419,7 +1419,7 @@ object OptionalStdoutCompileCheck {
 
         let status = std::process::Command::new("sbt")
             .arg("--batch")
-            .arg("+compile")
+            .arg("compile")
             .current_dir(&target_path)
             .status()
             .expect("failed to run sbt; is it installed?");
@@ -1504,7 +1504,7 @@ object NothingCompileCheck {
 
         let output = std::process::Command::new("sbt")
             .arg("--batch")
-            .arg("+compile")
+            .arg("compile")
             .current_dir(&target_path)
             .output()
             .expect("failed to run sbt; is it installed?");

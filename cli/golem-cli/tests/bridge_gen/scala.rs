@@ -73,24 +73,24 @@ impl GeneratedPackage {
     }
 }
 
-fn cross_compile(package_dir: &Utf8Path) {
+fn compile(package_dir: &Utf8Path) {
     let output = std::process::Command::new("sbt")
         .arg("--batch")
-        .arg("+compile")
+        .arg("compile")
         .current_dir(package_dir)
         .output()
         .expect("failed to run sbt; is it installed?");
     assert!(
         output.status.success(),
-        "sbt +compile failed in {package_dir}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        "sbt compile failed in {package_dir}\n--- stdout ---\n{}\n--- stderr ---\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
 
-fn cross_compile_guest_if_enabled(package_dir: &Utf8Path) {
+fn compile_guest_if_enabled(package_dir: &Utf8Path) {
     if std::env::var_os("GOLEM_SCALA_GUEST_BRIDGE_COMPILE").is_some() {
-        cross_compile(package_dir);
+        compile(package_dir);
     }
 }
 
@@ -290,11 +290,10 @@ fn scala_single_agent() -> GeneratedPackage {
     GeneratedPackage::new(single_agent_wrapper_types()[0].clone())
 }
 
-/// Generates a single agent bridge and cross-compiles it with sbt against
-/// Scala 2.13 and Scala 3.
+/// Generates a single agent bridge and compiles it with Scala 3.
 #[test]
-fn single_agent_cross_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPackage) {
-    cross_compile(pkg.package_dir().as_path());
+fn single_agent_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPackage) {
+    compile(pkg.package_dir().as_path());
 }
 
 /// The generated project lays out the static runtime and the per-agent client
@@ -342,7 +341,8 @@ fn generated_project_layout_is_correct() {
     assert!(client_source.contains("\"CounterAgent\""));
 
     let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
-    assert!(build_sbt.contains("crossScalaVersions"));
+    assert!(build_sbt.contains("scalaVersion := \"3.8.2\""));
+    assert!(!build_sbt.contains("crossScalaVersions"));
     assert!(build_sbt.contains("counter-agent-client"));
 }
 
@@ -429,7 +429,7 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(build_sbt.contains("ModuleKind.ESModule"));
     assert!(dir.join("project/plugins.sbt").exists());
 
-    cross_compile_guest_if_enabled(dir.as_path());
+    compile_guest_if_enabled(dir.as_path());
 }
 
 /// Ephemeral guest agents omit the parameter-addressable `get` constructor, but
@@ -465,7 +465,7 @@ fn guest_ephemeral_agent_omits_get_and_returns_either_constructors() {
     assert!(client_source.contains("_root_.scala.Either"));
     assert!(client_source.contains("EphemeralAgentRemote"));
 
-    cross_compile_guest_if_enabled(dir.as_path());
+    compile_guest_if_enabled(dir.as_path());
 }
 
 /// Generates a bridge for an agent with rich named types (record, enum,
@@ -678,7 +678,7 @@ fn ephemeral_agent_omits_get_constructor() {
     // A Unit-returning method's apply yields Future[Unit].
     assert!(client.contains("def apply(): _root_.scala.concurrent.Future[_root_.scala.Unit]"));
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Generated codecs reject malformed wire shapes on the negative path: a
@@ -686,7 +686,7 @@ fn ephemeral_agent_omits_get_constructor() {
 /// payload, and an invalid (surrogate) `char` on encode. (The runtime-only
 /// strictness — option object shape, UUID half ranges, strict case-index
 /// parsing — lives in the hand-written runtime sources, which the sbt
-/// cross-compile only type-checks rather than executes.)
+/// compile only type-checks rather than executes.)
 #[test]
 fn codecs_reject_malformed_wire_shapes() {
     let pkg = GeneratedPackage::new(agent(
@@ -731,15 +731,15 @@ fn codecs_reject_malformed_wire_shapes() {
     assert!(client.contains("Unexpected payload for payload-less variant case"));
 
     // The generated strictness paths (char encode, unit-result and variant
-    // payload checks) must also compile on both Scala versions.
-    cross_compile(pkg.package_dir().as_path());
+    // payload checks) must also compile.
+    compile(pkg.package_dir().as_path());
 }
 
-/// The bridge for an agent with rich named types cross-compiles with sbt.
+/// The bridge for an agent with rich named types compiles with sbt.
 #[test]
-fn multi_agent_named_types_cross_compiles() {
+fn multi_agent_named_types_compiles() {
     let pkg = GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone());
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Method names that are Scala keywords, and constructor/method parameters that
@@ -789,6 +789,8 @@ fn client_surface_handles_reserved_and_keyword_names() {
                 ],
                 None,
             ),
+            method("macro", vec![], None),
+            method("forSome", vec![], None),
         ],
         vec![],
         AgentMode::Durable,
@@ -830,7 +832,7 @@ fn client_surface_handles_reserved_and_keyword_names() {
     assert!(client.contains("p_2: _root_.scala.Predef.String"));
     assert!(client.contains("t0_2: _root_.scala.Predef.String"));
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Generated named-type members (record/flag fields, variant/enum/union cases)
@@ -913,7 +915,7 @@ fn named_type_members_avoid_reserved_member_names() {
         )
     );
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Identifier uniqueness is computed on the semantic Scala symbol (backticks
@@ -962,12 +964,16 @@ fn keywords_are_backtick_escaped() {
     // Scala 3 soft keywords are escaped defensively.
     assert!(is_scala_keyword("using"));
     assert!(is_scala_keyword("inline"));
+    assert!(is_scala_keyword("forSome"));
+    assert!(is_scala_keyword("macro"));
     assert!(!is_scala_keyword("foo"));
 
     assert_eq!(escape_scala_ident("type"), "`type`");
     assert_eq!(escape_scala_ident("match"), "`match`");
     assert_eq!(escape_scala_ident("enum"), "`enum`");
     assert_eq!(escape_scala_ident("using"), "`using`");
+    assert_eq!(escape_scala_ident("forSome"), "`forSome`");
+    assert_eq!(escape_scala_ident("macro"), "`macro`");
 }
 
 #[test]
@@ -1089,9 +1095,9 @@ fn uuid_ref_is_remapped_through_the_walker() {
 /// modality and a `List[Multimodal<N>]` parameter / return type, decoded
 /// through the generated list codec. Structurally identical modality sets used
 /// by multiple methods collapse to a single generated type, and the result
-/// cross-compiles on both Scala versions.
+/// compiles.
 #[test]
-fn multimodal_input_and_output_cross_compiles() {
+fn multimodal_input_and_output_compiles() {
     let parts = || {
         vec![
             variant_case("text", Some(SchemaType::string())),
@@ -1176,7 +1182,7 @@ fn multimodal_input_and_output_cross_compiles() {
         )
     );
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// A durable agent that declares local config overrides gets the
@@ -1184,10 +1190,9 @@ fn multimodal_input_and_output_cross_compiles() {
 /// constructor variants (mirroring the Scala SDK's RPC clients), each taking an
 /// `Option[T] = None` per declared override and building the
 /// `List[AgentConfigEntry]` from the supplied values. The plain constructors
-/// pass an empty config list, and the result cross-compiles on both Scala
-/// versions.
+/// pass an empty config list, and the result compiles.
 #[test]
-fn local_config_overrides_cross_compiles() {
+fn local_config_overrides_compile() {
     let pkg = GeneratedPackage::new({
         let mut at = agent(
             "ConfigAgent",
@@ -1234,7 +1239,7 @@ fn local_config_overrides_cross_compiles() {
         "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, phantomId, _root_.scala.collection.immutable.List()).map"
     ));
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// An ephemeral agent with local config overrides omits the parameter-
@@ -1328,7 +1333,7 @@ fn guest_tool_generation_emits_client_tree_and_runtime_boundary() {
     assert!(build_sbt.contains("scalaJSUseMainModuleInitializer := false"));
     assert!(dir.join("project/plugins.sbt").exists());
 
-    cross_compile_guest_if_enabled(dir.as_path());
+    compile_guest_if_enabled(dir.as_path());
 }
 
 /// Tool guest clients reserve Scala keywords, universal members, helper names,
@@ -1397,7 +1402,7 @@ fn guest_tool_generation_handles_keywords_and_collisions() {
     assert!(source.contains("final case class Type"));
     assert!(source.contains("case object Type_2"));
 
-    cross_compile_guest_if_enabled(dir.as_path());
+    compile_guest_if_enabled(dir.as_path());
 }
 
 #[test]
@@ -1443,7 +1448,7 @@ fn guest_tool_error_decoder_return_type_uses_error_trait_when_variant_shadows_na
     assert!(source.contains("_root_.golem.bridge.client.grep.GrepError.GrepError"));
     assert!(source.contains("_root_.golem.bridge.client.grep.GrepError.Io"));
 
-    cross_compile(dir.as_path());
+    compile(dir.as_path());
 }
 
 #[test]
@@ -1479,5 +1484,5 @@ fn guest_tool_error_trait_parents_do_not_resolve_to_generated_user_types() {
     let pkg = GeneratedToolPackage::new(tool);
     let dir = pkg.package_dir();
 
-    cross_compile(dir.as_path());
+    compile(dir.as_path());
 }

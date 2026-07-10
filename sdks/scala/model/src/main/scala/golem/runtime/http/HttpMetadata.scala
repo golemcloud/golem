@@ -17,8 +17,8 @@
 package golem.runtime.http
 
 /**
- * Pure Scala model types for HTTP route metadata. These are cross-compiled (JVM
- * + JS, Scala 2 + 3) and have no JS dependency.
+ * Pure Scala model types for HTTP route metadata. These are cross-compiled for
+ * JVM and Scala.js and have no JS dependency.
  */
 
 sealed trait PathSegment extends Product with Serializable

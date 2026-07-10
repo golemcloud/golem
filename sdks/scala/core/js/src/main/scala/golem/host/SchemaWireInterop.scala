@@ -117,10 +117,10 @@ object SchemaWireInterop {
 
   private def roleToJs(r: Role): JsRole =
     r match {
-      case Role.Multimodal          => JsRole.multimodal
-      case Role.UnstructuredText    => JsRole.unstructuredText
-      case Role.UnstructuredBinary  => JsRole.unstructuredBinary
-      case Role.Other(name)         => JsRole.other(name)
+      case Role.Multimodal         => JsRole.multimodal
+      case Role.UnstructuredText   => JsRole.unstructuredText
+      case Role.UnstructuredBinary => JsRole.unstructuredBinary
+      case Role.Other(name)        => JsRole.other(name)
     }
 
   private def roleFromJs(j: JsRole): Role =

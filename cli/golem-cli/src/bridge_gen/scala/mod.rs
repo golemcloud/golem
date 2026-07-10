@@ -29,8 +29,7 @@
 //! published runtime library later.
 //!
 //! The generated project depends only on the JDK (`java.net.http`) and a
-//! hand-rolled JSON model, has no third-party dependencies, and cross-compiles
-//! against Scala 2.13 and Scala 3.
+//! hand-rolled JSON model and targets Scala 3.
 
 #[allow(clippy::module_inception)]
 pub mod scala;
@@ -214,9 +213,9 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
 /// Member names a generated named type cannot use for a case-class field or a
 /// companion case object / case class, because they would clash with (or fail
 /// to override) a synthesized case-class member or an inherited
-/// `Product`/`Object`/`Any` member. The set is the union of the names rejected
-/// by the Scala 2.13 and Scala 3 compilers (verified against both for arbitrary
-/// field types): the no-arg `Object`/`Any` members `toString`/`hashCode`/`##`/
+/// `Product`/`Object`/`Any` member. The set contains names rejected by the
+/// Scala 3 compiler for arbitrary field types: the no-arg `Object`/`Any`
+/// members `toString`/`hashCode`/`##`/
 /// `getClass`/`notify`/`notifyAll`/`wait`/`clone`/`finalize` and the no-arg
 /// `Product` members `productArity`/`productPrefix`/`productIterator`/
 /// `productElementNames`. (Arg-taking members such as `equals`, `canEqual`,
@@ -595,14 +594,12 @@ impl ScalaBridgeGenerator {
 
                 lazy val root = (project in file("."))
                   .settings(
-                    name               := "{name}",
-                    scalaVersion       := "{scala3}",
-                    crossScalaVersions := Seq("{scala2}", "{scala3}"),
+                    name         := "{name}",
+                    scalaVersion := "{scala3}",
                     libraryDependencies += "dev.zio" %% "zio-blocks-schema" % "{zio_blocks}"
                   )
                 "#,
                 name = self.library_name(),
-                scala2 = scala_dep::SCALA_2_VERSION,
                 scala3 = scala_dep::SCALA_VERSION,
                 zio_blocks = scala_dep::ZIO_BLOCKS_VERSION,
             },
@@ -617,13 +614,9 @@ impl ScalaBridgeGenerator {
                   .settings(
                     name                         := "{name}",
                     scalaVersion                 := "{scala3}",
-                    crossScalaVersions           := Seq("{scala2}", "{scala3}"),
                     scalaJSUseMainModuleInitializer := false,
                     scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.ESModule)),
-                    scalacOptions ++= (CrossVersion.partialVersion(scalaVersion.value) match {{
-                      case Some((3, _)) => Seq("-experimental")
-                      case _            => Nil
-                    }}),
+                    scalacOptions += "-experimental",
                     libraryDependencies ++= Seq(
                       "cloud.golem" %%% "golem-scala-core"  % "{sdk_version}",
                       "cloud.golem" %%% "golem-scala-model" % "{sdk_version}"
@@ -631,7 +624,6 @@ impl ScalaBridgeGenerator {
                   )
                 "#,
                 name = self.library_name(),
-                scala2 = scala_dep::SCALA_2_VERSION,
                 scala3 = scala_dep::SCALA_VERSION,
                 sdk_version = sdk_overrides()?.scala_sdk_dep(),
             },
@@ -2054,8 +2046,7 @@ impl ScalaBridgeGenerator {
             if !is_named_composite(resolved) {
                 // Non-composite named defs (aliases to scalars / lists / …) are
                 // inlined at their use sites by `type_reference`, so no Scala
-                // definition is emitted. Scala 2.13 has no top-level `type`
-                // aliases, so inlining keeps the cross-build simple.
+                // definition is emitted.
                 continue;
             }
             self.write_type_definition(writer, name_str, resolved)?;
@@ -3364,7 +3355,7 @@ mod tests {
         generator.generate().unwrap();
 
         let build_sbt = std::fs::read_to_string(target_path.join("build.sbt")).unwrap();
-        assert!(build_sbt.contains("name               := \"alpha-agent-client\""));
+        assert!(build_sbt.contains("name         := \"alpha-agent-client\""));
         assert!(build_sbt.contains("\"dev.zio\" %% \"zio-blocks-schema\""));
         assert!(!build_sbt.contains("ScalaJSPlugin"));
         assert!(!target_path.join("project/plugins.sbt").exists());

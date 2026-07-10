@@ -57,7 +57,7 @@ private[golem] object SchemaRpcCodec {
 
   def schemaGraphFromJson(graphJson: String): SchemaGraph = {
     val graph = js.JSON.parse(graphJson).asInstanceOf[js.Dynamic]
-    val defs = opt(graph, "defs")
+    val defs  = opt(graph, "defs")
       .map(array(_).map { d =>
         string(d, "id") -> SchemaTypeDef(schemaType(required(d, "body")), optString(d, "name"))
       })
@@ -73,15 +73,15 @@ private[golem] object SchemaRpcCodec {
   private def required(value: js.Dynamic, name: String): js.Dynamic =
     opt(value, name).getOrElse(throw new RuntimeException(s"Missing schema graph JSON field '$name'"))
 
-  private def string(value: js.Dynamic, name: String): String = required(value, name).asInstanceOf[String]
+  private def string(value: js.Dynamic, name: String): String            = required(value, name).asInstanceOf[String]
   private def optString(value: js.Dynamic, name: String): Option[String] = opt(value, name).map(_.asInstanceOf[String])
-  private def int(value: js.Dynamic, name: String): Int = required(value, name).asInstanceOf[Double].toInt
-  private def longValue(value: js.Dynamic): Long =
+  private def int(value: js.Dynamic, name: String): Int                  = required(value, name).asInstanceOf[Double].toInt
+  private def longValue(value: js.Dynamic): Long                         =
     if (js.typeOf(value.asInstanceOf[js.Any]) == "string") BigInt(value.asInstanceOf[String]).toLong
     else value.asInstanceOf[Double].toLong
   private def optInt(value: js.Dynamic, name: String): Option[Int] = opt(value, name).map(_.asInstanceOf[Double].toInt)
-  private def array(value: js.Dynamic): List[js.Dynamic] = value.asInstanceOf[js.Array[js.Dynamic]].toList
-  private def stringArray(value: js.Dynamic): List[String] = value.asInstanceOf[js.Array[String]].toList
+  private def array(value: js.Dynamic): List[js.Dynamic]           = value.asInstanceOf[js.Array[js.Dynamic]].toList
+  private def stringArray(value: js.Dynamic): List[String]         = value.asInstanceOf[js.Array[String]].toList
 
   private def metadataFrom(value: js.Dynamic): MetadataEnvelope =
     metadata(opt(value, "metadata"))
@@ -102,53 +102,58 @@ private[golem] object SchemaRpcCodec {
     case "other"               => Role.Other(string(value, "value"))
     case "unstructured-text"   => Role.UnstructuredText
     case "unstructured-binary" => Role.UnstructuredBinary
-    case other                  => Role.Other(other)
+    case other                 => Role.Other(other)
   }
 
   private def schemaType(value: js.Dynamic): SchemaType = {
-    lazy val bodyOpt = opt(value, "value")
-    val meta         = metadata(bodyOpt.flatMap(v => opt(v, "metadata")).orElse(opt(value, "metadata")))
+    lazy val bodyOpt     = opt(value, "value")
+    val meta             = metadata(bodyOpt.flatMap(v => opt(v, "metadata")).orElse(opt(value, "metadata")))
     def body: js.Dynamic = required(value, "value")
     SchemaType(
       string(value, "kind") match {
-        case "ref"       => SchemaTypeBody.RefType(string(body, "id"))
-        case "bool"      => SchemaTypeBody.BoolType
-        case "s8"        => SchemaTypeBody.S8Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "s16"       => SchemaTypeBody.S16Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "s32"       => SchemaTypeBody.S32Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "s64"       => SchemaTypeBody.S64Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "u8"        => SchemaTypeBody.U8Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "u16"       => SchemaTypeBody.U16Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "u32"       => SchemaTypeBody.U32Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "u64"       => SchemaTypeBody.U64Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "f32"       => SchemaTypeBody.F32Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "f64"       => SchemaTypeBody.F64Type(opt(body, "restrictions").flatMap(numericRestrictions))
-        case "char"      => SchemaTypeBody.CharType
-        case "string"    => SchemaTypeBody.StringType
-        case "record"    => SchemaTypeBody.RecordType(array(required(body, "fields")).map(namedField))
-        case "variant"   => SchemaTypeBody.VariantType(array(required(body, "cases")).map(variantCase))
-        case "enum"      => SchemaTypeBody.EnumType(stringArray(required(body, "cases")))
-        case "flags"     => SchemaTypeBody.FlagsType(stringArray(required(body, "flags")))
-        case "tuple"     => SchemaTypeBody.TupleType(array(required(body, "elements")).map(schemaType))
-        case "list"      => SchemaTypeBody.ListType(schemaType(required(body, "element")))
+        case "ref"        => SchemaTypeBody.RefType(string(body, "id"))
+        case "bool"       => SchemaTypeBody.BoolType
+        case "s8"         => SchemaTypeBody.S8Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "s16"        => SchemaTypeBody.S16Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "s32"        => SchemaTypeBody.S32Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "s64"        => SchemaTypeBody.S64Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "u8"         => SchemaTypeBody.U8Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "u16"        => SchemaTypeBody.U16Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "u32"        => SchemaTypeBody.U32Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "u64"        => SchemaTypeBody.U64Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "f32"        => SchemaTypeBody.F32Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "f64"        => SchemaTypeBody.F64Type(opt(body, "restrictions").flatMap(numericRestrictions))
+        case "char"       => SchemaTypeBody.CharType
+        case "string"     => SchemaTypeBody.StringType
+        case "record"     => SchemaTypeBody.RecordType(array(required(body, "fields")).map(namedField))
+        case "variant"    => SchemaTypeBody.VariantType(array(required(body, "cases")).map(variantCase))
+        case "enum"       => SchemaTypeBody.EnumType(stringArray(required(body, "cases")))
+        case "flags"      => SchemaTypeBody.FlagsType(stringArray(required(body, "flags")))
+        case "tuple"      => SchemaTypeBody.TupleType(array(required(body, "elements")).map(schemaType))
+        case "list"       => SchemaTypeBody.ListType(schemaType(required(body, "element")))
         case "fixed-list" =>
           SchemaTypeBody.FixedListType(schemaType(required(body, "element")), int(body, "length"))
-        case "map"      => SchemaTypeBody.MapType(schemaType(required(body, "key")), schemaType(required(body, "value")))
-        case "option"   => SchemaTypeBody.OptionType(schemaType(required(body, "inner")))
-        case "result"   => SchemaTypeBody.ResultType(opt(required(body, "spec"), "ok").map(schemaType), opt(required(body, "spec"), "err").map(schemaType))
-        case "text"     => SchemaTypeBody.TextType(textRestrictions(required(body, "restrictions")))
-        case "binary"   => SchemaTypeBody.BinaryType(binaryRestrictions(required(body, "restrictions")))
-        case "path"     => SchemaTypeBody.PathType(pathSpec(required(body, "spec")))
-        case "url"      => SchemaTypeBody.UrlType(urlRestrictions(required(body, "restrictions")))
-        case "datetime" => SchemaTypeBody.DatetimeType
-        case "duration" => SchemaTypeBody.DurationType
-        case "quantity" => SchemaTypeBody.QuantityType(quantitySpec(required(body, "spec")))
-        case "union"    => SchemaTypeBody.UnionType(array(required(required(body, "spec"), "branches")).map(unionBranch))
-        case "secret"   => SchemaTypeBody.SecretType(secretSpec(required(body, "spec")))
-        case "quota-token" => SchemaTypeBody.QuotaTokenType(QuotaTokenSpec(optString(required(body, "spec"), "resourceName")))
-        case "future"      => SchemaTypeBody.FutureType(opt(body, "inner").map(schemaType))
-        case "stream"      => SchemaTypeBody.StreamType(opt(body, "inner").map(schemaType))
-        case other         => throw new RuntimeException(s"Unknown schema type kind '$other'")
+        case "map"    => SchemaTypeBody.MapType(schemaType(required(body, "key")), schemaType(required(body, "value")))
+        case "option" => SchemaTypeBody.OptionType(schemaType(required(body, "inner")))
+        case "result" =>
+          SchemaTypeBody.ResultType(
+            opt(required(body, "spec"), "ok").map(schemaType),
+            opt(required(body, "spec"), "err").map(schemaType)
+          )
+        case "text"        => SchemaTypeBody.TextType(textRestrictions(required(body, "restrictions")))
+        case "binary"      => SchemaTypeBody.BinaryType(binaryRestrictions(required(body, "restrictions")))
+        case "path"        => SchemaTypeBody.PathType(pathSpec(required(body, "spec")))
+        case "url"         => SchemaTypeBody.UrlType(urlRestrictions(required(body, "restrictions")))
+        case "datetime"    => SchemaTypeBody.DatetimeType
+        case "duration"    => SchemaTypeBody.DurationType
+        case "quantity"    => SchemaTypeBody.QuantityType(quantitySpec(required(body, "spec")))
+        case "union"       => SchemaTypeBody.UnionType(array(required(required(body, "spec"), "branches")).map(unionBranch))
+        case "secret"      => SchemaTypeBody.SecretType(secretSpec(required(body, "spec")))
+        case "quota-token" =>
+          SchemaTypeBody.QuotaTokenType(QuotaTokenSpec(optString(required(body, "spec"), "resourceName")))
+        case "future" => SchemaTypeBody.FutureType(opt(body, "inner").map(schemaType))
+        case "stream" => SchemaTypeBody.StreamType(opt(body, "inner").map(schemaType))
+        case other    => throw new RuntimeException(s"Unknown schema type kind '$other'")
       },
       meta
     )
@@ -161,17 +166,26 @@ private[golem] object SchemaRpcCodec {
     VariantCaseType(string(value, "name"), opt(value, "payload").map(schemaType), metadataFrom(value))
 
   private def numericRestrictions(value: js.Dynamic): Option[NumericRestrictions] =
-    NumericRestrictions(opt(value, "min").map(numericBound), opt(value, "max").map(numericBound), optString(value, "unit")).normalize
+    NumericRestrictions(
+      opt(value, "min").map(numericBound),
+      opt(value, "max").map(numericBound),
+      optString(value, "unit")
+    ).normalize
 
   private def numericBound(value: js.Dynamic): NumericBound = string(value, "kind") match {
     case "signed"     => NumericBound.Signed(longValue(required(value, "value")))
     case "unsigned"   => NumericBound.Unsigned(longValue(required(value, "value")))
     case "float-bits" => NumericBound.FloatBits(longValue(required(value, "value")))
-    case other         => throw new RuntimeException(s"Unknown numeric bound kind '$other'")
+    case other        => throw new RuntimeException(s"Unknown numeric bound kind '$other'")
   }
 
   private def textRestrictions(value: js.Dynamic): TextRestrictions =
-    TextRestrictions(opt(value, "languages").map(stringArray), optInt(value, "minLength"), optInt(value, "maxLength"), optString(value, "regex"))
+    TextRestrictions(
+      opt(value, "languages").map(stringArray),
+      optInt(value, "minLength"),
+      optInt(value, "maxLength"),
+      optString(value, "regex")
+    )
 
   private def binaryRestrictions(value: js.Dynamic): BinaryRestrictions =
     BinaryRestrictions(opt(value, "mimeTypes").map(stringArray), optInt(value, "minBytes"), optInt(value, "maxBytes"))
@@ -181,15 +195,20 @@ private[golem] object SchemaRpcCodec {
       case "input"  => PathDirection.Input
       case "output" => PathDirection.Output
       case "in-out" => PathDirection.InOut
-      case other     => throw new RuntimeException(s"Unknown path direction '$other'")
+      case other    => throw new RuntimeException(s"Unknown path direction '$other'")
     }
     val kind = string(value, "kind") match {
       case "file"      => PathKind.File
       case "directory" => PathKind.Directory
       case "any"       => PathKind.Any
-      case other        => throw new RuntimeException(s"Unknown path kind '$other'")
+      case other       => throw new RuntimeException(s"Unknown path kind '$other'")
     }
-    PathSpec(direction, kind, opt(value, "allowedMimeTypes").map(stringArray), opt(value, "allowedExtensions").map(stringArray))
+    PathSpec(
+      direction,
+      kind,
+      opt(value, "allowedMimeTypes").map(stringArray),
+      opt(value, "allowedExtensions").map(stringArray)
+    )
   }
 
   private def urlRestrictions(value: js.Dynamic): UrlRestrictions =
@@ -199,10 +218,20 @@ private[golem] object SchemaRpcCodec {
     QuantityValue(longValue(required(value, "mantissa")), int(value, "scale"), string(value, "unit"))
 
   private def quantitySpec(value: js.Dynamic): QuantitySpec =
-    QuantitySpec(string(value, "baseUnit"), opt(value, "allowedSuffixes").map(stringArray).getOrElse(Nil), opt(value, "min").map(quantityValue), opt(value, "max").map(quantityValue))
+    QuantitySpec(
+      string(value, "baseUnit"),
+      opt(value, "allowedSuffixes").map(stringArray).getOrElse(Nil),
+      opt(value, "min").map(quantityValue),
+      opt(value, "max").map(quantityValue)
+    )
 
   private def unionBranch(value: js.Dynamic): UnionBranch =
-    UnionBranch(string(value, "tag"), schemaType(required(value, "body")), discriminatorRule(required(value, "discriminator")), metadataFrom(value))
+    UnionBranch(
+      string(value, "tag"),
+      schemaType(required(value, "body")),
+      discriminatorRule(required(value, "discriminator")),
+      metadataFrom(value)
+    )
 
   private def discriminatorRule(value: js.Dynamic): DiscriminatorRule = string(value, "rule") match {
     case "prefix"       => DiscriminatorRule.Prefix(string(required(value, "value"), "prefix"))
@@ -217,7 +246,10 @@ private[golem] object SchemaRpcCodec {
   }
 
   private def secretSpec(value: js.Dynamic): SecretSpec =
-    SecretSpec(opt(value, "inner").map(schemaType).getOrElse(SchemaType(SchemaTypeBody.StringType)), optString(value, "category"))
+    SecretSpec(
+      opt(value, "inner").map(schemaType).getOrElse(SchemaType(SchemaTypeBody.StringType)),
+      optString(value, "category")
+    )
 
   def encodeValue(value: SchemaValue): JsSchemaValueTree =
     SchemaWireInterop.valueTreeToJs(SchemaWire.schemaValueToWit(value))

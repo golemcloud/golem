@@ -40,11 +40,11 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
 
   private val mdFull =
     MetadataEnvelope(Some("doc text"), List("a1", "a2"), List("ex1", "ex2"), Some("use X"), Some(Role.Multimodal))
-  private val mdOther = MetadataEnvelope(Some("d2"), List("b"), Nil, None, Some(Role.Other("custom-role")))
-  private val mdUnstructuredText = MetadataEnvelope(role = Some(Role.UnstructuredText))
-  private val mdUnstructuredBinary = MetadataEnvelope(role = Some(Role.UnstructuredBinary))
+  private val mdOther                 = MetadataEnvelope(Some("d2"), List("b"), Nil, None, Some(Role.Other("custom-role")))
+  private val mdUnstructuredText      = MetadataEnvelope(role = Some(Role.UnstructuredText))
+  private val mdUnstructuredBinary    = MetadataEnvelope(role = Some(Role.UnstructuredBinary))
   private val mdOtherUnstructuredText = MetadataEnvelope(role = Some(Role.Other("unstructured-text")))
-  private val md0     = MetadataEnvelope.empty
+  private val md0                     = MetadataEnvelope.empty
 
   // --- spec variations -----------------------------------------------------
 

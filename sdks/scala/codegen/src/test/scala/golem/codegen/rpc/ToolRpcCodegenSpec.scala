@@ -327,7 +327,9 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(!content.contains("def grand():"))
   }
 
-  test("grandchild wrappers keep child root-global aliases when the child global was already inherited by another surface") {
+  test(
+    "grandchild wrappers keep child root-global aliases when the child global was already inherited by another surface"
+  ) {
     val source =
       """package example
         |
