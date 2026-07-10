@@ -539,9 +539,7 @@ impl ScalaToolBridgeGenerator {
                     "return _root_.scala.Right({qualified_error_name}.{variant}({dec}))"
                 ));
                 writer.dedent();
-                writer.line(format!(
-                    "}} catch {{ case _: _root_.scala.Throwable => () }}"
-                ));
+                writer.line("} catch { case _: _root_.scala.Throwable => () }");
             } else {
                 writer.line("__value.value match {");
                 writer.indent();

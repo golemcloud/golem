@@ -82,6 +82,43 @@ Generated Scala bridge clients follow the same conventions as agent-to-agent RPC
 - Methods returning a result are exposed as `Future[T]`.
 - Fire-and-forget and scheduled methods return `Future[Unit]`.
 
+## Generate Scala Internal Clients for Component-to-Component Calls
+
+When one Golem component needs to call another agent or tool from Scala code, generate an **internal** Scala client instead of an external REST bridge:
+
+```yaml
+bridge:
+  scala:
+    internal:
+      agents:
+        - CounterAgent
+      tools:
+        - echo
+      outputDir: ./bridge-sdk/scala/internal   # Optional custom output directory
+```
+
+The `internal` mode generates client code that is linked into a Golem component. It does not generate a standalone JVM REST client, and it does not generate a component by itself.
+
+Re-running `golem build` generates one Scala.js sbt project per selected internal dependency:
+
+- agent clients use `<agent-name>-guest-client/`, for example `counter-agent-guest-client/`;
+- tool clients use `<tool-name>-tool-guest-client/`, for example `echo-tool-guest-client/`.
+
+With no custom `outputDir`, generated internal clients are written under `golem-temp/bridge-sdk/scala/internal/`. With `outputDir`, they are written directly under that directory.
+
+Each generated internal client project is a Scala.js library. Its `build.sbt` enables `ScalaJSPlugin`, sets `ModuleKind.ESModule`, and depends on the Scala SDK artifacts:
+
+```scala
+libraryDependencies ++= Seq(
+  "cloud.golem" %%% "golem-scala-core"  % "<golem-scala-version>",
+  "cloud.golem" %%% "golem-scala-model" % "<golem-scala-version>"
+)
+```
+
+Add the generated project as a dependency of the Scala component that performs the call, then import the generated client package from that component. Do not add `agent_guest.wasm` or extra linker settings to the generated internal client project; those belong to the consuming Scala component build/injection flow, while the client project itself is just a Scala.js library.
+
+Internal clients use SDK-side types such as `golem.schema.SchemaValue` and `golem.Datetime`. Do not mix them with the external REST bridge runtime types under `golem.bridge.runtime`, which have a separate wire model.
+
 ## Using a Generated TypeScript or Rust Bridge
 
 You can also generate a **TypeScript** or **Rust** bridge SDK for agents written in Scala. The bridge target language is independent of the agent's source language:

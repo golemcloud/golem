@@ -947,7 +947,7 @@ impl TextOutput for PublicOplogEntry {
                 ));
                 logln(format!(
                     "{pad}level:             {}",
-                    format_id(&format!("{:?}", &params.persistence_level))
+                    format_id(&format!("{:?}", params.persistence_level))
                 ));
             }
             PublicOplogEntry::BeginRemoteTransaction(params) => {
