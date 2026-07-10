@@ -75,6 +75,10 @@
         "$ref": "#/definitions/environment"
       }
     },
+    "version": {
+      "$ref": "#/definitions/appVersionSource",
+      "description": "Application-wide default version source, overridable per environment."
+    },
     "bridge": {
       "$ref": "#/definitions/bridgeSdks"
     },
@@ -935,6 +939,10 @@
         },
         "deployment": {
           "$ref": "#/definitions/deploymentOptions"
+        },
+        "version": {
+          "$ref": "#/definitions/appVersionSourceOverride",
+          "description": "Per-environment override, layered over the application-wide version source."
         }
       }
     },
@@ -1049,6 +1057,172 @@
           "type": "boolean"
         }
       }
+    },
+    "appVersionSource": {
+      "description": "How the logical version attached to a deployment is computed: a literal version string, or a git/env source.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Literal version string."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "$ref": "#/definitions/gitVersionSource"
+            }
+          },
+          "required": [
+            "git"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "env": {
+              "type": "string",
+              "description": "Name of the environment variable to read the version from."
+            }
+          },
+          "required": [
+            "env"
+          ]
+        }
+      ]
+    },
+    "gitVersionSource": {
+      "description": "Git version source: either hash mode (hashOnly) or tag mode (the tag options); the two are mutually exclusive.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hashOnly"
+          ],
+          "properties": {
+            "hashOnly": {
+              "const": true,
+              "description": "Use the short commit hash as the version, ignoring tags."
+            },
+            "allowDirty": {
+              "type": "boolean",
+              "description": "Allow deploying with a dirty working tree, appending a '-dirty' marker. Default: false."
+            },
+            "staticFallback": {
+              "type": "string",
+              "description": "Static version used when git cannot supply one (no git, no repo). Absent means those cases are errors."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tagPattern"
+          ],
+          "properties": {
+            "tagPattern": {
+              "type": "string",
+              "description": "Only consider tags matching this glob (git describe --match); use '*' for all tags."
+            },
+            "commitInfo": {
+              "type": "boolean",
+              "description": "Append '-<commits-since-tag>-g<hash>' when HEAD is past the tag. Default: true."
+            },
+            "hashFallback": {
+              "type": "boolean",
+              "description": "When no matching tag is found, use the short commit hash instead of staticFallback. Default: false."
+            },
+            "allowDirty": {
+              "type": "boolean",
+              "description": "Allow deploying with a dirty working tree, appending a '-dirty' marker. Default: false."
+            },
+            "staticFallback": {
+              "type": "string",
+              "description": "Static version used when git cannot supply one (no git, no repo, or no tag without hashFallback). Absent means those cases are errors."
+            }
+          }
+        }
+      ]
+    },
+    "appVersionSourceOverride": {
+      "description": "Per-environment version override: same shapes as the root version, with all fields optional.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Literal version string."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "$ref": "#/definitions/gitVersionSourceOverride"
+            }
+          },
+          "required": [
+            "git"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "env": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "env"
+          ]
+        }
+      ]
+    },
+    "gitVersionSourceOverride": {
+      "description": "Git version override: hash mode (hashOnly) or a partial tag-mode override (tagPattern optional).",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hashOnly"
+          ],
+          "properties": {
+            "hashOnly": {
+              "const": true
+            },
+            "allowDirty": {
+              "type": "boolean"
+            },
+            "staticFallback": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tagPattern": {
+              "type": "string"
+            },
+            "commitInfo": {
+              "type": "boolean"
+            },
+            "hashFallback": {
+              "type": "boolean"
+            },
+            "allowDirty": {
+              "type": "boolean"
+            },
+            "staticFallback": {
+              "type": "string"
+            }
+          }
+        }
+      ]
     },
     "buildCommand": {
       "oneOf": [

@@ -114,6 +114,7 @@ environments:
 | `componentPresets` | string or string[] | Preset name(s) to activate |
 | `cli` | object | CLI behavior overrides (see below) |
 | `deployment` | object | Deployment option overrides (see below) |
+| `version` | object or string | Per-environment version override — see `golem-deployment-version` |
 
 ### Server options
 
@@ -142,7 +143,7 @@ environments:
     server: local
     deployment:
       compatibilityCheck: false      # Skip component compatibility checks
-      versionCheck: false            # Skip version mismatch checks
+      versionCheck: false            # Enforce unique deploy versions; false = allow re-use (default)
       securityOverrides: true        # Allow security config overrides
 ```
 
@@ -395,5 +396,6 @@ golem -L component list                    # Use built-in "local" profile
 
 - Load `golem-edit-manifest` for the complete manifest field reference
 - Load `golem-deploy` for deployment commands and flags
+- Load `golem-deployment-version` for per-environment `version:` overrides and the `versionCheck` uniqueness policy
 - Load `golem-add-env-vars` for environment variable configuration details
 - Load `golem-add-initial-files` for initial filesystem configuration
