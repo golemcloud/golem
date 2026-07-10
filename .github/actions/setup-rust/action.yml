@@ -41,6 +41,7 @@ runs:
         rustup toolchain install "${{ inputs.rust-toolchain }}" --profile minimal --no-self-update
         rustup default "${{ inputs.rust-toolchain }}"
         rustup component add rustfmt clippy
+        rustup target add wasm32-wasip2
         for target in ${{ inputs.rust-targets }}; do
           rustup target add "$target"
         done
