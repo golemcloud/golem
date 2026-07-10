@@ -13,10 +13,13 @@
 // limitations under the License.
 
 use super::model::environment::{EnvironmentRepoError, EnvironmentWithDetailsRecord};
+use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
+use crate::repo::model::card::CardRecord;
 pub use crate::repo::model::environment::{
-    EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
-    EnvironmentScopedExtRevisionRecord, EnvironmentScopedRecord,
+    EnvironmentDefaultCardRef, EnvironmentDefaultCardRefRow, EnvironmentExtRecord,
+    EnvironmentExtRevisionRecord, EnvironmentRevisionRecord, EnvironmentScopedExtRevisionRecord,
+    EnvironmentScopedRecord,
 };
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
 use crate::repo::registry_change::{
@@ -146,14 +149,26 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
+        default_card: CardRecord,
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError>;
 
     async fn create_with_plugin_grants(
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
+        default_card: CardRecord,
         plugin_grants: Vec<EnvironmentPluginGrantRecord>,
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError>;
+
+    async fn list_default_card_refs_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<EnvironmentDefaultCardRef>, EnvironmentRepoError>;
+
+    async fn get_default_card_ref_by_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> Result<Option<EnvironmentDefaultCardRef>, EnvironmentRepoError>;
 
     async fn update(
         &self,
@@ -237,9 +252,10 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
+        default_card: CardRecord,
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.repo
-            .create(application_id, revision)
+            .create(application_id, revision, default_card)
             .instrument(Self::span_app_id(application_id))
             .await
     }
@@ -248,12 +264,33 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
+        default_card: CardRecord,
         plugin_grants: Vec<EnvironmentPluginGrantRecord>,
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         let span = Self::span_app_id(application_id);
         self.repo
-            .create_with_plugin_grants(application_id, revision, plugin_grants)
+            .create_with_plugin_grants(application_id, revision, default_card, plugin_grants)
             .instrument(span)
+            .await
+    }
+
+    async fn list_default_card_refs_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<EnvironmentDefaultCardRef>, EnvironmentRepoError> {
+        self.repo
+            .list_default_card_refs_by_account(account_id)
+            .instrument(info_span!(SPAN_NAME, account_id = %account_id))
+            .await
+    }
+
+    async fn get_default_card_ref_by_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> Result<Option<EnvironmentDefaultCardRef>, EnvironmentRepoError> {
+        self.repo
+            .get_default_card_ref_by_environment(environment_id)
+            .instrument(Self::span_env(environment_id))
             .await
     }
 
@@ -486,19 +523,94 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         Ok(result)
     }
 
+    async fn list_default_card_refs_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<EnvironmentDefaultCardRef>, EnvironmentRepoError> {
+        let rows: Vec<EnvironmentDefaultCardRefRow> = self
+            .with_ro("list_default_card_refs_by_account")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT e.environment_default_card_id AS card_id,
+                           e.environment_id,
+                           a.email AS account_email,
+                           ap.name AS application_name,
+                           er.name AS environment_name,
+                           c.created_at AS card_created_at,
+                           c.expires_at AS card_expires_at,
+                           c.system_card AS card_system_card
+                    FROM environments e
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    LEFT JOIN cards c ON c.card_id = e.environment_default_card_id
+                    WHERE ap.account_id = $1
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
+                    ORDER BY e.created_at, e.environment_id
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        rows.into_iter()
+            .map(EnvironmentDefaultCardRef::try_from)
+            .collect()
+    }
+
+    async fn get_default_card_ref_by_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> Result<Option<EnvironmentDefaultCardRef>, EnvironmentRepoError> {
+        let row: Option<EnvironmentDefaultCardRefRow> = self
+            .with_ro("get_default_card_ref_by_environment")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT e.environment_default_card_id AS card_id,
+                           e.environment_id,
+                           a.email AS account_email,
+                           ap.name AS application_name,
+                           er.name AS environment_name,
+                           c.created_at AS card_created_at,
+                           c.expires_at AS card_expires_at,
+                           c.system_card AS card_system_card
+                    FROM environments e
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    LEFT JOIN cards c ON c.card_id = e.environment_default_card_id
+                    WHERE e.environment_id = $1
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
+
+        row.map(EnvironmentDefaultCardRef::try_from).transpose()
+    }
+
     async fn create(
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
+        default_card: CardRecord,
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
         self.with_tx_err("create", |tx| async move {
+            let default_card = DbCardRepo::<PostgresPool>::create_in_tx(tx, default_card).await?;
             let environment_record: EnvironmentScopedRecord = tx.fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO environments
-                      (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                      (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id, environment_default_card_id)
                     VALUES
-                      ($1, $2, $3, $4, $4, NULL, $5, 0)
+                      ($1, $2, $3, $4, $4, NULL, $5, 0, $6)
                     RETURNING
                       environment_id,
                       name,
@@ -518,6 +630,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(application_id)
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
+                    .bind(default_card.card_id)
             ).await
             .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?;
 
@@ -538,15 +651,17 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
+        default_card: CardRecord,
         plugin_grants: Vec<EnvironmentPluginGrantRecord>,
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("create_with_plugin_grants", |tx| async move {
+            let default_card = DbCardRepo::<PostgresPool>::create_in_tx(tx, default_card).await?;
             let environment_record: EnvironmentScopedRecord = tx.fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO environments
-                      (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                      (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id, environment_default_card_id)
                     VALUES
-                      ($1, $2, $3, $4, $4, NULL, $5, 0)
+                      ($1, $2, $3, $4, $4, NULL, $5, 0, $6)
                     RETURNING
                       environment_id,
                       name,
@@ -566,6 +681,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(application_id)
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
+                    .bind(default_card.card_id)
             ).await
             .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?;
 

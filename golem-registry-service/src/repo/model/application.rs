@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use crate::repo::model::card::CardRepoError;
 use golem_common::error_forwarding;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{Application, ApplicationId, ApplicationName};
@@ -31,7 +32,7 @@ pub enum ApplicationRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarding!(ApplicationRepoError, RepoError);
+error_forwarding!(ApplicationRepoError, CardRepoError, RepoError);
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ApplicationRecord {

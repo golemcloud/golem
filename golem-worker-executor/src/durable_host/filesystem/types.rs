@@ -51,7 +51,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Resource<InputStream>, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "read_via_stream");
-        HostDescriptor::read_via_stream(&mut self.as_wasi_view().filesystem(), self_, offset)
+        let stream =
+            HostDescriptor::read_via_stream(&mut self.as_wasi_view().filesystem(), self_, offset)?;
+        self.state
+            .open_filesystem_input_streams
+            .insert(stream.rep());
+        Ok(stream)
     }
 
     fn write_via_stream(

@@ -117,8 +117,8 @@ use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
-    AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, RetryContext,
-    RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
+    AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    PendingCardEventRef, RetryContext, RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
 use golem_common::resource_runtime::Uri;
@@ -707,6 +707,43 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.agent_wallet_cards.values().cloned().collect()
     }
 
+    pub(crate) async fn active_agent_wallet_cards_snapshot(
+        &mut self,
+    ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
+        self.process_pending_replay_events().await?;
+        self.public_state.worker().reattach_worker_status().await;
+        self.check_post_replay_wallet_liveness().await?;
+        self.drain_card_events_at_boundary().await?;
+        let pending_revoked_cards = self
+            .pending_card_events_at_boundary()
+            .await?
+            .into_iter()
+            .filter_map(|pending_event| match pending_event.event {
+                QueuedCardEvent::Revoke(event) => Some(event.card_id),
+                QueuedCardEvent::Install(_) => None,
+            })
+            .collect::<HashSet<_>>();
+        let wallet = self
+            .agent_wallet_cards_snapshot()
+            .into_iter()
+            .filter(|card| !pending_revoked_cards.contains(&card.card_id()))
+            .collect::<Vec<_>>();
+        if wallet.is_empty() {
+            return Ok(wallet);
+        }
+
+        let card_states = self
+            .state
+            .card_service
+            .check_cards(wallet.iter().map(StoredCard::card_id).collect())
+            .await?;
+
+        Ok(wallet
+            .into_iter()
+            .filter(|card| matches!(card_states.get(&card.card_id()), Some(CardState::Live(_))))
+            .collect())
+    }
+
     fn rederive_agent_effective_surface_from_wallet(&mut self) {
         self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
             let context = agent_monomorphization_context(
@@ -728,14 +765,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        while let Some(pending_event) = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await
-            .pending_card_events
-            .first()
-        {
+        while let Some(pending_event) = self.pending_card_events_at_boundary().await?.first() {
             match &pending_event.event {
                 QueuedCardEvent::Revoke(event) => {
                     let card_id = event.card_id;
@@ -757,6 +787,56 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         self.remove_expired_cards().await;
         Ok(())
+    }
+
+    async fn pending_card_events_at_boundary(
+        &self,
+    ) -> Result<Vec<PendingCardEventRef>, WorkerExecutorError> {
+        let status = self
+            .public_state
+            .worker()
+            .get_non_detached_last_known_status()
+            .await;
+        let mut pending_events = status.pending_card_events;
+        let last_status_idx = status.oplog_idx;
+        let oplog = self.public_state.worker().oplog();
+        let current_idx = oplog.current_oplog_index().await;
+
+        if current_idx > last_status_idx {
+            let entries = oplog
+                .read_many(
+                    last_status_idx.next(),
+                    current_idx.as_u64() - last_status_idx.as_u64(),
+                )
+                .await;
+
+            for (oplog_index, entry) in entries {
+                match entry {
+                    OplogEntry::CardEventQueued { timestamp, event } => {
+                        pending_events.push(PendingCardEventRef {
+                            timestamp,
+                            oplog_index,
+                            event,
+                        });
+                    }
+                    OplogEntry::CardInstalled {
+                        queued_event_index: Some(queued_event_index),
+                        ..
+                    }
+                    | OplogEntry::CardInstallFailed {
+                        queued_event_index, ..
+                    }
+                    | OplogEntry::CardRevoked {
+                        queued_event_index, ..
+                    } => {
+                        pending_events.retain(|event| event.oplog_index != queued_event_index);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(pending_events)
     }
 
     pub(crate) async fn apply_card_install(
@@ -4746,6 +4826,12 @@ struct PrivateDurableWorkerState {
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
 
+    /// Tracks file-backed wasi input streams (created via read-via-stream). Reads on
+    /// these streams must wait for readiness before returning, otherwise the guest
+    /// could observe a scheduling-dependent number of empty reads, making its
+    /// read/poll loop non-deterministic between record and replay.
+    open_filesystem_input_streams: HashSet<u32>,
+
     /// Maps outgoing body rep → output stream rep, set during outgoing_body::write()
     /// before outgoing_handler::handle() is called. Used by handle() to populate
     /// output_stream_rep in HttpRequestState for streams created before dispatch.
@@ -5014,6 +5100,7 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
+            open_filesystem_input_streams: HashSet::new(),
             snapshotting_mode: None,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,

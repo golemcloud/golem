@@ -18,10 +18,10 @@ use anyhow::bail;
 use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentSecretsClientLive,
     AgentTypesClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
-    ApplicationClientLive, ComponentClientLive, DeploymentClientLive, EnvironmentClientLive,
-    HealthCheckClientLive, LoginClientLive, McpDeploymentClientLive, MeClientLive,
-    PermissionSharesClientLive, PluginClientLive, ResourcesClientLive, RetryPoliciesClientLive,
-    TokenClientLive, WorkerClientLive,
+    ApplicationClientLive, CardClientLive, ComponentClientLive, DeploymentClientLive,
+    EnvironmentClientLive, HealthCheckClientLive, LoginClientLive, McpDeploymentClientLive,
+    MeClientLive, PermissionSharesClientLive, PluginClientLive, ResourcesClientLive,
+    RetryPoliciesClientLive, TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::base_model::api;
@@ -263,6 +263,7 @@ pub struct GolemClients {
     pub api_domain: ApiDomainClientLive,
     pub api_security: ApiSecurityClientLive,
     pub application: ApplicationClientLive,
+    pub card: CardClientLive,
     pub component: ComponentClientLive,
     pub component_healthcheck: HealthCheckClientLive,
     pub deployment: DeploymentClientLive,
@@ -372,6 +373,9 @@ impl GolemClients {
                 context: registry_context(),
             },
             application: ApplicationClientLive {
+                context: registry_context(),
+            },
+            card: CardClientLive {
                 context: registry_context(),
             },
             component: ComponentClientLive {

@@ -424,6 +424,16 @@ impl PermissionShareService {
             .collect()
     }
 
+    pub async fn target_account_email(
+        &self,
+        permission_share_id: PermissionShareId,
+    ) -> Result<AccountEmail, PermissionShareError> {
+        Ok(self
+            .get_record_by_id(permission_share_id)
+            .await?
+            .target_account_email())
+    }
+
     async fn get_account(
         &self,
         account_id: AccountId,
