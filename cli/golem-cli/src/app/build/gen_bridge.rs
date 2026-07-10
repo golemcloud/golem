@@ -5,8 +5,8 @@ use crate::app::context::BuildContext;
 use crate::bridge_gen::moonbit::MoonBitBridgeGenerator;
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
 use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode};
-use crate::bridge_gen::scala::ScalaBridgeGenerator;
 use crate::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
+use crate::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode};
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
 use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::command::GolemCliCommand;
@@ -710,7 +710,9 @@ fn supported_dependency_guest_bridge_target_language(
     language: GuestLanguage,
 ) -> bool {
     match dependency {
-        ComponentDependency::Agent { .. } => matches!(language, GuestLanguage::Rust),
+        ComponentDependency::Agent { .. } => {
+            matches!(language, GuestLanguage::Rust | GuestLanguage::Scala)
+        }
         ComponentDependency::Tool { .. } => {
             matches!(language, GuestLanguage::Rust | GuestLanguage::Scala)
         }
@@ -847,7 +849,20 @@ async fn gen_bridge_sdk_target(
                             TypeScriptBridgeGenerator::new(agent_type, &output_dir, false)?,
                         ),
                         (GuestLanguage::Scala, BridgeMode::External) => {
-                            Box::new(ScalaBridgeGenerator::new(agent_type, &output_dir, false)?)
+                            Box::new(ScalaBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                false,
+                                ScalaBridgeMode::ExternalRest,
+                            )?)
+                        }
+                        (GuestLanguage::Scala, BridgeMode::Guest) => {
+                            Box::new(ScalaBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                false,
+                                ScalaBridgeMode::GuestWasmRpc,
+                            )?)
                         }
                         (GuestLanguage::MoonBit, BridgeMode::External) => {
                             Box::new(MoonBitBridgeGenerator::new(agent_type, &output_dir, false)?)
@@ -947,7 +962,10 @@ pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> 
 
         if !matches!(target.kind, BridgeSdkTargetKind::Tool(_))
             && target.bridge_mode == BridgeMode::Guest
-            && target.target_language != GuestLanguage::Rust
+            && !matches!(
+                target.target_language,
+                GuestLanguage::Rust | GuestLanguage::Scala
+            )
         {
             bail!(
                 "internal bridge mode is not supported for {} yet",
@@ -1009,11 +1027,7 @@ mod tests {
 
     #[test]
     fn validate_supported_bridge_targets_rejects_unsupported_guest_languages() {
-        for unsupported_language in [
-            GuestLanguage::TypeScript,
-            GuestLanguage::Scala,
-            GuestLanguage::MoonBit,
-        ] {
+        for unsupported_language in [GuestLanguage::TypeScript, GuestLanguage::MoonBit] {
             let targets = vec![bridge_sdk_target_with_mode(
                 "AlphaAgent",
                 unsupported_language,
@@ -1037,6 +1051,18 @@ mod tests {
         let targets = vec![bridge_sdk_target_with_mode(
             "AlphaAgent",
             GuestLanguage::Rust,
+            BridgeMode::Guest,
+            tempdir().unwrap().path().join("bridge/alpha-guest-client"),
+        )];
+
+        validate_supported_bridge_targets(&targets).unwrap();
+    }
+
+    #[test]
+    fn validate_supported_bridge_targets_accepts_scala_agent_guest_targets() {
+        let targets = vec![bridge_sdk_target_with_mode(
+            "AlphaAgent",
+            GuestLanguage::Scala,
             BridgeMode::Guest,
             tempdir().unwrap().path().join("bridge/alpha-guest-client"),
         )];
@@ -1082,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_guest_bridge_support_allows_scala_only_for_tools() {
+    fn dependency_guest_bridge_support_allows_scala_for_agents_and_tools() {
         let component_name = ComponentName("component".to_string());
         let agent_dependency = ComponentDependency::Agent {
             component_name: component_name.clone(),
@@ -1097,7 +1123,7 @@ mod tests {
             &agent_dependency,
             GuestLanguage::Rust
         ));
-        assert!(!supported_dependency_guest_bridge_target_language(
+        assert!(supported_dependency_guest_bridge_target_language(
             &agent_dependency,
             GuestLanguage::Scala
         ));

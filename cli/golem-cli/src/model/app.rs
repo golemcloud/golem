@@ -3316,7 +3316,11 @@ mod app_builder {
                             for (target_language, sdk_targets) in
                                 self.bridge_sdks.value.for_all_languages()
                             {
-                                if target_language != crate::model::GuestLanguage::Rust
+                                if !matches!(
+                                    target_language,
+                                    crate::model::GuestLanguage::Rust
+                                        | crate::model::GuestLanguage::Scala
+                                )
                                     && sdk_targets.is_some_and(|targets| targets.internal.is_some())
                                 {
                                     validation.with_context(
@@ -4607,6 +4611,45 @@ mod test {
             errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
             "unexpected error: {}",
             errors[0]
+        );
+    }
+
+    #[test]
+    fn scala_guest_bridge_mode_is_accepted() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              scala:
+                internal:
+                  agents: SomeAgent
+                  outputDir: bridge/scala-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        let agent_type_name = parse_agent_type_name("SomeAgent");
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &agent_type_name,
+                crate::model::GuestLanguage::Scala,
+                BridgeMode::Guest
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge/scala-guest")
+                .join(bridge_client_directory_name(
+                    &agent_type_name,
+                    BridgeMode::Guest
+                ))
         );
     }
 
