@@ -114,7 +114,6 @@ impl ReplayState {
         }
         self.last_replayed_index.set(OplogIndex::NONE);
         self.last_replayed_non_hint_index.set(OplogIndex::NONE);
-        self.replay_buffer.clear();
         self.move_replay_idx(OplogIndex::INITIAL).await;
         self.skip_forward().await
     }
@@ -396,6 +395,15 @@ impl ReplayState {
                 .await
                 .into_iter()
                 .collect();
+
+            if self
+                .replay_buffer
+                .front()
+                .map(|(idx, _)| *idx != read_idx)
+                .unwrap_or(true)
+            {
+                self.replay_buffer = self.read_oplog(read_idx, 1).await.into_iter().collect();
+            }
         }
 
         let oplog_entry = if let Some((idx, oplog_entry)) = self.replay_buffer.pop_front()
@@ -697,4 +705,119 @@ pub enum OplogEntryLookupResult {
     NotFound {
         violates_for_all: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::oplog::CommitLevel;
+    use async_trait::async_trait;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::{PayloadId, RawOplogPayload};
+    use golem_common::model::{AgentId, Timestamp};
+    use std::collections::BTreeMap;
+    use std::fmt::{Debug, Formatter};
+    use std::time::Duration;
+    use test_r::test;
+
+    struct SparseBatchOplog;
+
+    impl Debug for SparseBatchOplog {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("SparseBatchOplog").finish()
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for SparseBatchOplog {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+            unimplemented!()
+        }
+
+        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+            unimplemented!()
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            OplogIndex::from_u64(3)
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            None
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            unimplemented!()
+        }
+
+        async fn read(&self, _oplog_index: OplogIndex) -> OplogEntry {
+            OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+            }
+        }
+
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            let entry = OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+            };
+            if n == 1 || oplog_index == OplogIndex::INITIAL.next() {
+                BTreeMap::from([(oplog_index, entry)])
+            } else {
+                BTreeMap::from([(oplog_index.next(), entry)])
+            }
+        }
+
+        async fn length(&self) -> u64 {
+            3
+        }
+
+        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
+            unimplemented!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unimplemented!()
+        }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    async fn replay_reads_sparse_batch_entries_individually() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "test".to_string(),
+        };
+        let mut state = ReplayState::new(
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id),
+            Arc::new(SparseBatchOplog),
+            DeletedRegions::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            state.get_oplog_entry().await.unwrap().1,
+            OplogEntry::NoOp { .. }
+        ));
+        assert!(matches!(
+            state.get_oplog_entry().await.unwrap().1,
+            OplogEntry::NoOp { .. }
+        ));
+    }
 }
