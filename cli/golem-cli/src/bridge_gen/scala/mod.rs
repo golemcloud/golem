@@ -35,6 +35,7 @@
 #[allow(clippy::module_inception)]
 pub mod scala;
 pub mod scala_writer;
+pub mod tool;
 pub mod type_name;
 
 pub use type_name::{RemappedType, ScalaTypeName};
@@ -444,6 +445,37 @@ impl ScalaBridgeGenerator {
         testing: bool,
         mode: ScalaBridgeMode,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            mode,
+            std::iter::empty::<String>(),
+        )
+    }
+
+    pub(crate) fn new_guest_with_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        extra_reserved_names: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            ScalaBridgeMode::GuestWasmRpc,
+            extra_reserved_names,
+        )
+    }
+
+    fn new_with_mode_and_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: ScalaBridgeMode,
+        extra_reserved_names: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
         let same_language = agent_type.source_language.eq_ignore_ascii_case("scala");
         let runtime_config = ScalaRuntimeConfig::new(mode);
 
@@ -472,7 +504,8 @@ impl ScalaBridgeGenerator {
                 multimodals
                     .iter()
                     .map(|(_, name)| ScalaTypeName::Derived(name.clone())),
-            );
+            )
+            .chain(extra_reserved_names.into_iter().map(ScalaTypeName::Derived));
         let type_naming =
             TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved)?;
 
@@ -587,6 +620,10 @@ impl ScalaBridgeGenerator {
                     crossScalaVersions           := Seq("{scala2}", "{scala3}"),
                     scalaJSUseMainModuleInitializer := false,
                     scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.ESModule)),
+                    scalacOptions ++= (CrossVersion.partialVersion(scalaVersion.value) match {{
+                      case Some((3, _)) => Seq("-experimental")
+                      case _            => Nil
+                    }}),
                     libraryDependencies ++= Seq(
                       "cloud.golem" %%% "golem-scala-core"  % "{sdk_version}",
                       "cloud.golem" %%% "golem-scala-model" % "{sdk_version}"
