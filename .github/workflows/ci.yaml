@@ -104,6 +104,13 @@ jobs:
         with:
           use-cache: 'false'
           install-cargo-binstall: 'true'
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
