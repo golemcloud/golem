@@ -43,4 +43,5 @@ pub use envelope::*;
 pub use monomorphization::*;
 pub use parsing::*;
 pub use pattern::*;
+pub use rendering::permission_class_metadata;
 pub use types::*;

@@ -23,6 +23,13 @@ use uuid::Uuid;
 
 newtype_uuid!(CardId, wit_name: "card-id", wit_owner: "golem:core@2.0.0/types");
 
+#[cfg(feature = "full")]
+impl From<CardId> for golem_schema::schema::wit::wire::CardId {
+    fn from(card_id: CardId) -> Self {
+        card_id.0.into()
+    }
+}
+
 declare_revision!(CardRevision);
 
 declare_structs! {

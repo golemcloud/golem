@@ -23,6 +23,7 @@ use super::owner::{
 };
 use super::pattern::{
     PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
+    RenderedPermissionFields,
 };
 use super::recipient::{PolymorphicRecipientPattern, RecipientPattern};
 
@@ -44,6 +45,26 @@ pub fn render_permission(permission: &PermissionPattern) -> Result<String, Strin
     card_permission_classes!(render_case)
 }
 
+pub fn render_permission_fields(
+    permission: &PermissionPattern,
+) -> Result<RenderedPermissionFields, String> {
+    macro_rules! render_case {
+        ($($variant:ident: $class:ty,)+) => {
+            match permission {
+                $(PermissionPattern::$variant(pattern) => render_class_permission_fields(
+                    <$class as PermissionClass>::NAME,
+                    &pattern.owner,
+                    &pattern.recipient,
+                    pattern.verb.as_ref(),
+                    &pattern.resource,
+                ),)+
+            }
+        };
+    }
+
+    card_permission_classes!(render_case)
+}
+
 pub fn render_polymorphic_permission(
     permission: &PolymorphicPermissionPattern,
 ) -> Result<String, String> {
@@ -51,6 +72,26 @@ pub fn render_polymorphic_permission(
         ($($variant:ident: $class:ty,)+) => {
             match permission {
                 $(PolymorphicPermissionPattern::$variant(pattern) => render_class_permission(
+                    <$class as PermissionClass>::NAME,
+                    &pattern.owner,
+                    &pattern.recipient,
+                    pattern.verb.as_ref(),
+                    &pattern.resource,
+                ),)+
+            }
+        };
+    }
+
+    card_permission_classes!(render_case)
+}
+
+pub fn render_polymorphic_permission_fields(
+    permission: &PolymorphicPermissionPattern,
+) -> Result<RenderedPermissionFields, String> {
+    macro_rules! render_case {
+        ($($variant:ident: $class:ty,)+) => {
+            match permission {
+                $(PolymorphicPermissionPattern::$variant(pattern) => render_class_permission_fields(
                     <$class as PermissionClass>::NAME,
                     &pattern.owner,
                     &pattern.recipient,
@@ -97,16 +138,36 @@ where
     Verb: RenderFragment,
     Resource: RenderFragment,
 {
+    let fields = render_class_permission_fields(class_name, owner, recipient, verb, resource)?;
     Ok(format!(
         "{}({}) @ {} : {} : {}",
-        class_name,
-        owner.render_fragment()?,
-        recipient.render_fragment()?,
-        verb.map(RenderFragment::render_fragment)
+        fields.class, fields.owner, fields.recipient, fields.verb, fields.resource,
+    ))
+}
+
+fn render_class_permission_fields<Owner, Recipient, Verb, Resource>(
+    class_name: &'static str,
+    owner: &Owner,
+    recipient: &Recipient,
+    verb: Option<&Verb>,
+    resource: &Resource,
+) -> Result<RenderedPermissionFields, String>
+where
+    Owner: RenderFragment,
+    Recipient: RenderFragment,
+    Verb: RenderFragment,
+    Resource: RenderFragment,
+{
+    Ok(RenderedPermissionFields {
+        class: class_name,
+        owner: owner.render_fragment()?,
+        recipient: recipient.render_fragment()?,
+        verb: verb
+            .map(RenderFragment::render_fragment)
             .transpose()?
             .unwrap_or_else(|| "*".to_string()),
-        resource.render_fragment()?,
-    ))
+        resource: resource.render_fragment()?,
+    })
 }
 
 trait RenderFragment {
@@ -513,6 +574,25 @@ impl RenderFragment for RecipientPattern {
     }
 }
 
+trait VerbNames {
+    const NAMES: &'static [&'static str];
+}
+
+pub fn permission_class_metadata() -> Vec<PermissionClassMetadata> {
+    macro_rules! metadata_case {
+        ($($variant:ident: $class:ty,)+) => {
+            vec![$(
+                PermissionClassMetadata {
+                    class_name: <$class as PermissionClass>::NAME,
+                    verbs: <<$class as PermissionClass>::Verb as VerbNames>::NAMES,
+                },
+            )+]
+        };
+    }
+
+    card_permission_classes!(metadata_case)
+}
+
 macro_rules! render_verb {
     ($ty:ty { $($variant:ident => $name:literal),+ $(,)? }) => {
         impl RenderFragment for $ty {
@@ -521,6 +601,10 @@ macro_rules! render_verb {
                     $(Self::$variant => $name,)+
                 }.to_string())
             }
+        }
+
+        impl VerbNames for $ty {
+            const NAMES: &'static [&'static str] = &[$($name,)+];
         }
     };
 }

@@ -731,3 +731,13 @@ impl From<uuid::Uuid> for wire::Uuid {
         }
     }
 }
+
+#[cfg(any(
+    all(feature = "guest", not(feature = "host")),
+    all(feature = "host", not(feature = "guest"))
+))]
+impl From<uuid::Uuid> for wire::CardId {
+    fn from(uuid: uuid::Uuid) -> Self {
+        Self { uuid: uuid.into() }
+    }
+}

@@ -131,6 +131,12 @@ macro_rules! card_permission_classes {
 
 pub(crate) use card_permission_classes;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PermissionClassMetadata {
+    pub class_name: &'static str,
+    pub verbs: &'static [&'static str],
+}
+
 #[cfg(feature = "full")]
 pub trait VerbPattern:
     Debug
