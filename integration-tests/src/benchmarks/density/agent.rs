@@ -1778,20 +1778,33 @@ async fn run_resume_cell(
             "Density-agent[{}]: reviving {prefill} warmed agents concurrently after {requested_host_calls_per_agent} requested host calls each (observed max oplog last-index {observed_oplog_entries_per_agent})",
             config.cell_name()
         );
-        let resumed_batch = invoke_agent_indices(
-            config,
-            user,
-            components,
-            (0..prefill).collect(),
-            "increment",
-            data_value!(),
-            super::ceiling::ESCALATED_TIMEOUT,
-        )
-        .await;
-        if let Some((receiver, abort_tx)) = snapshot_event_capture.as_mut() {
-            observe_snapshot_recovery_event(config, 0, receiver).await;
+        let resumed_batch = if let Some((receiver, abort_tx)) = snapshot_event_capture.as_mut() {
+            let (resumed_batch, ()) = tokio::join!(
+                invoke_agent_indices(
+                    config,
+                    user,
+                    components,
+                    (0..prefill).collect(),
+                    "increment",
+                    data_value!(),
+                    super::ceiling::ESCALATED_TIMEOUT,
+                ),
+                observe_snapshot_recovery_event(config, 0, receiver),
+            );
             let _ = abort_tx.take().map(|tx| tx.send(()));
-        }
+            resumed_batch
+        } else {
+            invoke_agent_indices(
+                config,
+                user,
+                components,
+                (0..prefill).collect(),
+                "increment",
+                data_value!(),
+                super::ceiling::ESCALATED_TIMEOUT,
+            )
+            .await
+        };
 
         detector.set_elapsed_secs(started.elapsed().as_secs_f64());
         let attempt_refs: Vec<&AttemptOutcome> = resumed_batch.iter().map(|(_, a)| a).collect();
@@ -1909,49 +1922,74 @@ async fn observe_snapshot_recovery_event(
     receiver: &mut UnboundedReceiver<Option<LogEvent>>,
 ) {
     let deadline = Instant::now() + SNAPSHOT_EVENT_OBSERVATION_BUDGET;
+    let mut seen_events = 0u64;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             warn!(
-                "Density-agent[{}]: no snapshot recovery event observed for sampled warmed agent {index}",
-                config.cell_name()
+                "Density-agent[{}]: no snapshot recovery event observed for sampled warmed agent {index}; seen {seen_events} other event(s)",
+                config.cell_name(),
             );
             return;
         }
 
         match tokio::time::timeout(remaining, receiver.recv()).await {
-            Ok(Some(Some(event))) => match AgentEvent::try_from(event) {
-                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
-                    info!(
-                        "Density-agent[{}]: sampled warmed agent {index} snapshot recovery succeeded from {snapshot_index}",
-                        config.cell_name()
-                    );
-                    return;
+            Ok(Some(Some(event))) => {
+                seen_events += 1;
+                match AgentEvent::try_from(event) {
+                    Ok(event @ AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                        info!(
+                            "Density-agent[{}]: sampled warmed agent {index} event #{seen_events}: {event:?}",
+                            config.cell_name(),
+                        );
+                        info!(
+                            "Density-agent[{}]: sampled warmed agent {index} snapshot recovery succeeded from {snapshot_index}",
+                            config.cell_name()
+                        );
+                        return;
+                    }
+                    Ok(
+                        ref event @ AgentEvent::SnapshotRecoveryFailed {
+                            snapshot_index,
+                            ref error,
+                            ..
+                        },
+                    ) => {
+                        warn!(
+                            "Density-agent[{}]: sampled warmed agent {index} event #{seen_events}: {event:?}",
+                            config.cell_name(),
+                        );
+                        warn!(
+                            "Density-agent[{}]: sampled warmed agent {index} snapshot recovery failed from {snapshot_index}: {error}",
+                            config.cell_name()
+                        );
+                        return;
+                    }
+                    Ok(event) => {
+                        info!(
+                            "Density-agent[{}]: sampled warmed agent {index} event #{seen_events}: {event:?}",
+                            config.cell_name(),
+                        );
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Density-agent[{}]: sampled warmed agent {index} event #{seen_events} could not be decoded: {error}",
+                            config.cell_name(),
+                        );
+                    }
                 }
-                Ok(AgentEvent::SnapshotRecoveryFailed {
-                    snapshot_index,
-                    error,
-                    ..
-                }) => {
-                    warn!(
-                        "Density-agent[{}]: sampled warmed agent {index} snapshot recovery failed from {snapshot_index}: {error}",
-                        config.cell_name()
-                    );
-                    return;
-                }
-                _ => {}
-            },
+            }
             Ok(Some(None)) | Ok(None) => {
                 warn!(
-                    "Density-agent[{}]: snapshot event stream ended before recovery event for sampled warmed agent {index}",
-                    config.cell_name()
+                    "Density-agent[{}]: snapshot event stream ended before recovery event for sampled warmed agent {index}; seen {seen_events} other event(s)",
+                    config.cell_name(),
                 );
                 return;
             }
             Err(_) => {
                 warn!(
-                    "Density-agent[{}]: timed out waiting for snapshot recovery event for sampled warmed agent {index}",
-                    config.cell_name()
+                    "Density-agent[{}]: timed out waiting for snapshot recovery event for sampled warmed agent {index}; seen {seen_events} other event(s)",
+                    config.cell_name(),
                 );
                 return;
             }
