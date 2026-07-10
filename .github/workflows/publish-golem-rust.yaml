@@ -30,7 +30,7 @@ jobs:
           save-if: false
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.1
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Publish crates

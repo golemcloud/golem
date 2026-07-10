@@ -26,7 +26,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,7 +59,10 @@ pub struct ReplayState {
     last_replayed_non_hint_index: AtomicOplogIndex,
     internal: Arc<RwLock<InternalReplayState>>,
     has_seen_logs: Arc<AtomicBool>,
+    replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
 }
+
+const REPLAY_READ_CHUNK_SIZE: u64 = 1024;
 
 #[derive(Debug, Clone)]
 struct InternalReplayState {
@@ -92,6 +95,7 @@ impl ReplayState {
                 pending_replay_events: Vec::new(),
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
+            replay_buffer: VecDeque::new(),
         };
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
         result.skip_forward().await?;
@@ -260,11 +264,23 @@ impl ReplayState {
 
             Ok(Some((read_idx, entry)))
         } else {
+            self.rewind_replay_buffer(read_idx, entry);
             self.last_replayed_index.set(saved_replay_idx);
             let mut internal = self.internal.write().await;
             internal.next_skipped_region = saved_next_skipped_region;
 
             Ok(None)
+        }
+    }
+
+    fn rewind_replay_buffer(&mut self, idx: OplogIndex, entry: OplogEntry) {
+        if self
+            .replay_buffer
+            .front()
+            .map(|(front_idx, _)| *front_idx != idx)
+            .unwrap_or(true)
+        {
+            self.replay_buffer.push_front((idx, entry));
         }
     }
 
@@ -300,6 +316,7 @@ impl ReplayState {
                     // We've found the first non-hint entry after the first read one,
                     // so we move everything back the last position (saved_replay_idx), including
                     // possibly skipped regions.
+                    self.rewind_replay_buffer(saved_replay_idx.next(), entry);
                     self.last_replayed_index.set(saved_replay_idx);
                     let mut internal = self.internal.write().await;
                     // TODO: cache the last hint entry to avoid reading it again
@@ -354,8 +371,35 @@ impl ReplayState {
     async fn internal_get_next_oplog_entry(&mut self) -> Result<OplogEntry, WorkerExecutorError> {
         let read_idx = self.last_replayed_index.get().next();
 
-        let oplog_entries = self.read_oplog(read_idx, 1).await;
-        let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
+        while self
+            .replay_buffer
+            .front()
+            .map(|(idx, _)| *idx < read_idx)
+            .unwrap_or(false)
+        {
+            self.replay_buffer.pop_front();
+        }
+
+        if self
+            .replay_buffer
+            .front()
+            .map(|(idx, _)| *idx > read_idx)
+            .unwrap_or(false)
+        {
+            self.replay_buffer.clear();
+        }
+
+        if self.replay_buffer.is_empty() {
+            self.replay_buffer = self
+                .read_oplog(read_idx, REPLAY_READ_CHUNK_SIZE)
+                .await
+                .into_iter()
+                .collect();
+        }
+
+        let oplog_entry = if let Some((idx, oplog_entry)) = self.replay_buffer.pop_front()
+            && idx == read_idx
+        {
             oplog_entry
         } else {
             // Use `unexpected_oplog_entry` so the typing survives the wasmtime
@@ -430,6 +474,14 @@ impl ReplayState {
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         self.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region().await;
+        while self
+            .replay_buffer
+            .front()
+            .map(|(idx, _)| *idx <= self.last_replayed_index.get())
+            .unwrap_or(false)
+        {
+            self.replay_buffer.pop_front();
+        }
     }
 
     pub async fn lookup_oplog_entry(
@@ -473,13 +525,11 @@ impl ReplayState {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
 
-        const CHUNK_SIZE: u64 = 1024;
-
         let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
         let mut violation = false;
 
         while start < replay_target {
-            let entries = self.read_oplog(start, CHUNK_SIZE).await;
+            let entries = self.read_oplog(start, REPLAY_READ_CHUNK_SIZE).await;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()

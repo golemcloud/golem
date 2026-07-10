@@ -47,7 +47,7 @@ jobs:
           security find-identity -v -p codesigning || echo "No identities found"
 
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ inputs.rust_target }}
+        run: rustup toolchain install 1.96.1 --profile minimal --no-self-update && rustup default 1.96.1 && rustup target add ${{ inputs.rust_target }}
 
       - name: Build hello-world test binary
         run: |

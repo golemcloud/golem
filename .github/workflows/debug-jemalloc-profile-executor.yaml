@@ -12,9 +12,13 @@ on:
   workflow_dispatch:
     inputs:
       image_name:
-        description: 'Docker Hub image name'
+        description: 'Docker Hub worker-executor image name'
         required: true
         default: 'golemservices/golem-worker-executor'
+      worker_service_image_name:
+        description: 'Docker Hub worker-service image name'
+        required: true
+        default: 'golemservices/golem-worker-service'
       tag_suffix:
         description: 'Suffix appended to the <short-sha> image tag'
         required: true
@@ -55,16 +59,18 @@ jobs:
 
       - run: cargo install cross
 
-      - name: Build worker-executor
+      - name: Build worker-executor and worker-service
         env:
           PLATFORM_OVERRIDE: linux/arm64
         run: |
           cross build -p golem-worker-executor --no-default-features --features jemalloc-prof --release --target "${RUST_TARGET}"
+          cross build -p golem-worker-service --release --target "${RUST_TARGET}"
 
       - name: Package target binary
         run: |
           mkdir -p package
-          tar cvf "package/${RUST_TARGET}.tar" "target/${RUST_TARGET}/release/worker-executor"
+          tar cvf "package/worker-executor-${RUST_TARGET}.tar" "target/${RUST_TARGET}/release/worker-executor"
+          tar cvf "package/worker-service-${RUST_TARGET}.tar" "target/${RUST_TARGET}/release/golem-worker-service"
 
       - uses: actions/upload-artifact@v6
         with:
@@ -107,10 +113,12 @@ jobs:
       - name: Compute image tag
         env:
           INPUT_IMAGE_NAME: ${{ github.event.inputs.image_name || 'golemservices/golem-worker-executor' }}
+          INPUT_WORKER_SERVICE_IMAGE_NAME: ${{ github.event.inputs.worker_service_image_name || 'golemservices/golem-worker-service' }}
           INPUT_TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || 'jemalloc-profile' }}
         run: |
           SHORT=$(git rev-parse --short=7 HEAD)
           echo "IMAGE_NAME=${INPUT_IMAGE_NAME}" >> $GITHUB_ENV
+          echo "WORKER_SERVICE_IMAGE_NAME=${INPUT_WORKER_SERVICE_IMAGE_NAME}" >> $GITHUB_ENV
           echo "IMAGE_TAG=${SHORT}-${INPUT_TAG_SUFFIX}" >> $GITHUB_ENV
 
       - name: Build and push profiling image
@@ -122,11 +130,21 @@ jobs:
           platforms: linux/arm64
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
+      - name: Build and push worker-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./golem-worker-service/docker/Dockerfile
+          push: true
+          platforms: linux/arm64
+          tags: ${{ env.WORKER_SERVICE_IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
       - name: Report
         env:
           LG_PROF_SAMPLE: ${{ github.event.inputs.lg_prof_sample || '21' }}
         run: |
           echo "Pushed ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          echo "Pushed ${{ env.WORKER_SERVICE_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "Recommended pod env:"
           echo "MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:${LG_PROF_SAMPLE},prof_prefix:/heap/worker-executor"
           echo "Mount a writable /heap volume, then dump with: kubectl exec <pod> -- kill -USR2 1"

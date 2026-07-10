@@ -7,6 +7,9 @@ inputs:
   rust-targets:
     description: 'Additional Rust targets to add (space-separated)'
     default: ''
+  rust-toolchain:
+    description: 'Rust toolchain to install and use'
+    default: '1.96.1'
   use-cache:
     description: 'Whether to use Swatinem/rust-cache'
     default: 'true'
@@ -35,7 +38,8 @@ runs:
     - name: Setup Rust
       shell: bash
       run: |
-        rustup update stable --no-self-update && rustup default stable
+        rustup toolchain install "${{ inputs.rust-toolchain }}" --profile minimal --no-self-update
+        rustup default "${{ inputs.rust-toolchain }}"
         for target in ${{ inputs.rust-targets }}; do
           rustup target add "$target"
         done

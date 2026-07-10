@@ -575,7 +575,7 @@ jobs:
           cache-all-crates: true
           save-if: false
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.1
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust
