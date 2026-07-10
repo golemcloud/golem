@@ -36,6 +36,7 @@ use std::fmt;
 pub enum HostManagedKind {
     Secret,
     QuotaToken,
+    PermissionCard,
 }
 
 impl HostManagedKind {
@@ -44,6 +45,7 @@ impl HostManagedKind {
         match ty {
             SchemaType::Secret { .. } => Some(Self::Secret),
             SchemaType::QuotaToken { .. } => Some(Self::QuotaToken),
+            SchemaType::PermissionCard { .. } => Some(Self::PermissionCard),
             _ => None,
         }
     }
@@ -54,6 +56,7 @@ impl HostManagedKind {
         match value {
             SchemaValue::Secret(_) => Some(Self::Secret),
             SchemaValue::QuotaToken(_) => Some(Self::QuotaToken),
+            SchemaValue::PermissionCard(_) => Some(Self::PermissionCard),
             _ => None,
         }
     }
@@ -63,6 +66,7 @@ impl HostManagedKind {
         match self {
             Self::Secret => "secret",
             Self::QuotaToken => "quota-token",
+            Self::PermissionCard => "permission-card",
         }
     }
 
@@ -72,6 +76,7 @@ impl HostManagedKind {
         match self {
             Self::Secret => "<redacted: secret>",
             Self::QuotaToken => "<redacted: quota-token>",
+            Self::PermissionCard => "<redacted: permission-card>",
         }
     }
 }

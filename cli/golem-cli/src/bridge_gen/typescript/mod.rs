@@ -1652,6 +1652,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 anyhow::bail!(
@@ -1866,6 +1867,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 anyhow::bail!(
@@ -2140,6 +2142,7 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Quantity { .. }
                     | SchemaType::Secret { .. }
                     | SchemaType::QuotaToken { .. }
+                    | SchemaType::PermissionCard { .. }
                     | SchemaType::Future { .. }
                     | SchemaType::Stream { .. } => Err(anyhow!(
                         "Cannot emit TypeScript type reference for unsupported schema variant: {typ:?}"
@@ -2288,6 +2291,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => Err(anyhow!(
                 "Cannot emit TypeScript type definition for unsupported schema variant: {typ:?}"

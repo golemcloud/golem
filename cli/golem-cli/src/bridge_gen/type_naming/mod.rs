@@ -469,7 +469,8 @@ impl<TN: TypeName> TypeNaming<TN> {
                 | SchemaType::Duration { .. }
                 | SchemaType::Quantity { .. }
                 | SchemaType::Secret { .. }
-                | SchemaType::QuotaToken { .. } => {
+                | SchemaType::QuotaToken { .. }
+                | SchemaType::PermissionCard { .. } => {
                     // NOP
                 }
                 // `Ref` was already unwrapped by `resolve_for_walk_owned`;

@@ -779,6 +779,12 @@ impl PublicOplogEntry {
             SchemaValue::QuotaToken(payload) => {
                 Self::string_match(&payload.resource_name, path_stack, query_path, query)
             }
+            SchemaValue::PermissionCard(payload) => {
+                Self::string_match(&payload.card_id.to_string(), path_stack, query_path, query)
+                    || payload.parent_ids.iter().any(|parent_id| {
+                        Self::string_match(&parent_id.to_string(), path_stack, query_path, query)
+                    })
+            }
         }
     }
 }

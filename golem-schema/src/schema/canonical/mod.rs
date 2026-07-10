@@ -31,6 +31,7 @@ pub mod datetime;
 pub mod duration;
 pub mod error;
 pub mod path;
+pub mod permission_card;
 pub mod quantity;
 pub mod quota_token;
 pub mod secret;

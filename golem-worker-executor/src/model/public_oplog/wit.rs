@@ -47,8 +47,8 @@ use golem_common::schema::{
     SchemaValue, TypedSchemaValue, redact_host_managed_typed_value, redact_host_managed_value,
 };
 use golem_schema::schema::wit::{
-    QuotaTokenHandleDropper, SecretHandleDropper, decode_value, encode_typed, encode_value,
-    reject_quota_handles_in_value_tree, wire,
+    PermissionCardHandleDropper, QuotaTokenHandleDropper, SecretHandleDropper, decode_value,
+    encode_typed, encode_value, reject_quota_handles_in_value_tree, wire,
 };
 
 /// Encode a public-oplog [`TypedSchemaValue`] into the `golem:core@2.0.0` WIT
@@ -146,7 +146,7 @@ fn card_install_failure_from_wit(value: oplog::CardInstallFailure) -> CardInstal
 /// the first error is surfaced, so a handle in a later entry cannot leak when an
 /// earlier entry is rejected.
 pub(crate) fn reject_quota_handles_in_oplog_entries<
-    D: QuotaTokenHandleDropper + SecretHandleDropper,
+    D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
 >(
     entries: Vec<(u64, oplog::OplogEntry)>,
     dropper: &mut D,

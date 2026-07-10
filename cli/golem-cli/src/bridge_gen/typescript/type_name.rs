@@ -118,6 +118,7 @@ impl TypeName for TypeScriptTypeName {
             | SchemaType::Union { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => false,
         }

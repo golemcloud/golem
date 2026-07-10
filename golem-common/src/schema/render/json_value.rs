@@ -179,6 +179,9 @@ fn encode(
         (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(p)) => {
             canonical::quota_token::to_json(p).map_err(RenderError::from)
         }
+        (SchemaType::PermissionCard { .. }, SchemaValue::PermissionCard(p)) => {
+            canonical::permission_card::to_json(p).map_err(RenderError::from)
+        }
 
         (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {
             if fields.len() != vs.len() {
@@ -586,6 +589,10 @@ fn from_json_body(
         SchemaType::QuotaToken { .. } => {
             let p = canonical::quota_token::from_json(json)?;
             Ok(SchemaValue::QuotaToken(p))
+        }
+        SchemaType::PermissionCard { .. } => {
+            let p = canonical::permission_card::from_json(json)?;
+            Ok(SchemaValue::PermissionCard(p))
         }
 
         SchemaType::Record { fields, .. } => {
@@ -1055,6 +1062,7 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::Union { .. } => "union",
         SchemaType::Secret { .. } => "secret",
         SchemaType::QuotaToken { .. } => "quota-token",
+        SchemaType::PermissionCard { .. } => "permission-card",
         SchemaType::Future { .. } => "future",
         SchemaType::Stream { .. } => "stream",
     }
@@ -1095,6 +1103,7 @@ fn value_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Union(_) => "union",
         SchemaValue::Secret(_) => "secret",
         SchemaValue::QuotaToken(_) => "quota-token",
+        SchemaValue::PermissionCard(_) => "permission-card",
     }
 }
 

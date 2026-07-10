@@ -17,8 +17,8 @@ use chrono::DateTime;
 use golem_common::schema::agent::NamedField;
 use golem_common::schema::canonical::{
     binary as canon_binary, datetime as canon_datetime, duration as canon_duration,
-    path as canon_path, quantity as canon_quantity, quota_token as canon_quota_token,
-    secret as canon_secret, text as canon_text, url as canon_url,
+    path as canon_path, permission_card as canon_permission_card, quantity as canon_quantity,
+    quota_token as canon_quota_token, secret as canon_secret, text as canon_text, url as canon_url,
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{
@@ -280,6 +280,16 @@ fn parse_cm_value_inner<D: Dialect>(
             let payload = canon_quota_token::from_text(&s)
                 .map_err(|e| perr(lexer.position(), &format!("invalid quota-token value: {e}")))?;
             Ok(SchemaValue::QuotaToken(payload))
+        }
+        SchemaType::PermissionCard { .. } => {
+            let s = parse_rich_constructor(lexer, "PermissionCard")?;
+            let payload = canon_permission_card::from_text(&s).map_err(|e| {
+                perr(
+                    lexer.position(),
+                    &format!("invalid permission-card value: {e}"),
+                )
+            })?;
+            Ok(SchemaValue::PermissionCard(payload))
         }
         SchemaType::Union { spec, .. } => parse_union::<D>(lexer, graph, spec),
         SchemaType::FixedList {

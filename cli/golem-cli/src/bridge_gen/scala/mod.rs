@@ -1831,6 +1831,7 @@ impl ScalaBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!("Cannot encode unsupported schema variant in the Scala bridge: {resolved:?}")
@@ -1956,6 +1957,7 @@ impl ScalaBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!("Cannot decode unsupported schema variant in the Scala bridge: {resolved:?}")
@@ -2148,6 +2150,7 @@ impl ScalaBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => bail!(
                 "Cannot emit Scala type reference for unsupported schema variant: {resolved:?}"

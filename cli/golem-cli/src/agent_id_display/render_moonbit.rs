@@ -346,6 +346,7 @@ fn render_type_moonbit_inner(
         SchemaType::Quantity { .. } => "quantity".to_string(),
         SchemaType::Secret { .. } => "secret".to_string(),
         SchemaType::QuotaToken { .. } => "quota-token".to_string(),
+        SchemaType::PermissionCard { .. } => "permission-card".to_string(),
         SchemaType::Union { spec, .. } => {
             let inner = spec
                 .branches

@@ -52,20 +52,23 @@ pub use encode::{
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use decode::{
-    decode_typed_rejecting_quota_with, decode_typed_rejecting_secret_with,
+    decode_typed_rejecting_permission_card_with, decode_typed_rejecting_quota_with,
+    decode_typed_rejecting_secret_with, decode_value_rejecting_permission_card_with,
     decode_value_rejecting_quota_with, decode_value_rejecting_secret_with, decode_value_with,
-    reject_quota_handles_in_value_tree, reject_secret_handles_in_value_tree,
+    reject_permission_card_handles_in_value_tree, reject_quota_handles_in_value_tree,
+    reject_secret_handles_in_value_tree,
 };
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use encode::encode_value_with;
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use host_support::{
+    PermissionCardHandleDropper, PermissionCardHandleRep, PermissionCardResolver,
     QuotaTokenHandleDropper, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleDropper,
     SecretHandleRep, SecretResolver,
 };
 
 #[cfg(all(feature = "guest", not(feature = "host")))]
-pub use guest_support::{GuestQuotaTokenHandle, GuestSecretHandle};
+pub use guest_support::{GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle};
 
 /// Host-side bridge for the opaque `golem:core/types.quota-token` resource.
 ///
@@ -77,7 +80,9 @@ pub use guest_support::{GuestQuotaTokenHandle, GuestSecretHandle};
 /// [`QuotaTokenResolver`] trait at the value-tree boundary.
 #[cfg(all(feature = "host", not(feature = "guest")))]
 mod host_support {
-    use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
+    use crate::schema::schema_value::{
+        PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
+    };
     use wasmtime::component::Resource;
 
     /// Opaque host representation backing the `quota-token` WIT resource.
@@ -244,6 +249,104 @@ mod host_support {
             }
         }
     }
+
+    /// Opaque host representation backing the `permission-card` WIT resource.
+    ///
+    /// The boxed payload is owned and interpreted solely by the embedder; this
+    /// crate only moves the handle in and out of the resource table. The payload
+    /// is intentionally private so embedders go through [`Self::new`],
+    /// [`Self::downcast_ref`], and [`Self::downcast_mut`] rather than touching
+    /// the erased box directly.
+    pub struct PermissionCardHandleRep {
+        payload: Box<dyn std::any::Any + Send + Sync>,
+    }
+
+    impl PermissionCardHandleRep {
+        pub fn new(payload: impl std::any::Any + Send + Sync) -> Self {
+            Self {
+                payload: Box::new(payload),
+            }
+        }
+
+        pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+            self.payload.downcast_ref::<T>()
+        }
+
+        pub fn downcast_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
+            self.payload.downcast_mut::<T>()
+        }
+
+        /// Consume the handle, returning the owned payload if it has the
+        /// expected type. On a type mismatch the handle is returned unchanged in
+        /// the `Err` so the caller can recover or drop it.
+        pub fn into_payload<T: std::any::Any>(self) -> Result<T, Self> {
+            match self.payload.downcast::<T>() {
+                Ok(boxed) => Ok(*boxed),
+                Err(payload) => Err(Self { payload }),
+            }
+        }
+    }
+
+    /// Boundary bridge between owned `permission-card` handles carried inside a
+    /// `schema-value-tree` and the trusted host snapshot.
+    ///
+    /// Implemented by the embedder that owns the resource table. The codec calls
+    /// these hooks while lifting/lowering value trees so that the snapshot never
+    /// crosses the WASM boundary as forgeable data. Only `card_id` is
+    /// authoritative; the other snapshot fields are trusted cache verified
+    /// against the card store.
+    pub trait PermissionCardResolver {
+        type Error: std::fmt::Display;
+
+        /// Consume an owned handle lifted from a value tree and return its
+        /// trusted snapshot.
+        ///
+        /// The handle is always removed from the resource table: implementations
+        /// must delete the entry on every path for a valid handle, including
+        /// when extracting the snapshot afterwards fails. The codec gives up
+        /// ownership of the handle when calling this, so it cannot clean up a
+        /// handle that an `Err` return leaves behind in the table.
+        fn snapshot_permission_card_handle(
+            &mut self,
+            handle: Resource<PermissionCardHandleRep>,
+        ) -> Result<PermissionCardValuePayload, Self::Error>;
+
+        /// Materialize a fresh owned handle from a trusted snapshot so it can be
+        /// lowered to a guest.
+        ///
+        /// On `Err`, implementations must not leave a newly created handle or
+        /// resource-table entry behind: the codec only tracks handles that were
+        /// returned to it, so it cannot clean up an entry abandoned by a failed
+        /// call.
+        fn permission_card_handle_from_snapshot(
+            &mut self,
+            snapshot: &PermissionCardValuePayload,
+        ) -> Result<Resource<PermissionCardHandleRep>, Self::Error>;
+
+        /// Drop an owned handle without snapshotting it. Used to release handles
+        /// that are left unconsumed when decoding fails partway through a tree.
+        fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>);
+    }
+
+    /// Minimal capability needed to clean up owned `permission-card` handles at
+    /// boundaries that reject permission-card transport.
+    ///
+    /// Reject paths never snapshot or mint handles; they only need to delete a
+    /// handle that the guest already transferred into the resource table. This
+    /// is a strictly smaller capability than [`PermissionCardResolver`], so
+    /// callers that lack a full resolver can still drain handles. Every
+    /// [`PermissionCardResolver`] is a `PermissionCardHandleDropper` via the
+    /// blanket impl below.
+    pub trait PermissionCardHandleDropper {
+        /// Delete an owned handle from the resource table without inspecting it.
+        fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>);
+    }
+
+    impl<R: PermissionCardResolver> PermissionCardHandleDropper for R {
+        fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>) {
+            PermissionCardResolver::drop_permission_card_handle(self, handle)
+        }
+    }
 }
 
 /// Guest-side carrier for the opaque, owned `golem:core/types.quota-token`
@@ -262,7 +365,7 @@ mod guest_support {
     use super::wire;
     use crate::schema::conversion::{FromSchema, FromSchemaError, IntoSchema, SchemaBuilder};
     use crate::schema::metadata::TypeId;
-    use crate::schema::schema_type::{QuotaTokenSpec, SchemaType};
+    use crate::schema::schema_type::{PermissionCardSpec, QuotaTokenSpec, SchemaType};
     use crate::schema::schema_value::SchemaValue;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -481,6 +584,118 @@ mod guest_support {
                     "secret",
                     format!("{other:?}"),
                     "Secret",
+                )),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct GuestPermissionCardHandle {
+        inner: Rc<RefCell<Option<wire::PermissionCard>>>,
+    }
+
+    // The methods below expose the affine owned handle so the codec (this
+    // crate) and the SDK wrappers (`golem-rust`, a separate crate) can move it
+    // through encode/decode and call borrowing permission operations on it.
+    // They have to stay `pub` because they cross that crate boundary, but they
+    // are not a supported guest API: a guest that calls `take`/`new`/`with_handle`
+    // could move the underlying `wire::PermissionCard` resource around outside
+    // the take-once cell and defeat the affine/unforgeable guarantee. They are
+    // hidden from the documented surface (`#[doc(hidden)]`) to discourage that;
+    // genuine forgery is only possible through wit-bindgen's own hidden resource
+    // handle accessors, which are outside this crate's control.
+    impl GuestPermissionCardHandle {
+        /// Wrap a freshly received owned handle in a take-once cell.
+        #[doc(hidden)]
+        pub fn new(handle: wire::PermissionCard) -> Self {
+            Self {
+                inner: Rc::new(RefCell::new(Some(handle))),
+            }
+        }
+
+        /// Take the owned handle out of the cell. Returns `None` if it was
+        /// already transferred (consumed) by a previous encode.
+        #[doc(hidden)]
+        pub fn take(&self) -> Option<wire::PermissionCard> {
+            self.inner.borrow_mut().take()
+        }
+
+        /// Whether the handle is still present (not yet transferred).
+        #[doc(hidden)]
+        pub fn is_present(&self) -> bool {
+            self.inner.borrow().is_some()
+        }
+
+        /// Run `f` with a shared reference to the owned handle, if it is still
+        /// present.
+        #[doc(hidden)]
+        pub fn with_handle<R>(&self, f: impl FnOnce(&wire::PermissionCard) -> R) -> Option<R> {
+            self.inner.borrow().as_ref().map(f)
+        }
+
+        /// Identity of the shared cell, used to detect the same card appearing
+        /// more than once in a single value tree.
+        #[doc(hidden)]
+        pub fn cell_id(&self) -> *const () {
+            Rc::as_ptr(&self.inner).cast()
+        }
+    }
+
+    impl std::fmt::Debug for GuestPermissionCardHandle {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let state = if self.is_present() {
+                "present"
+            } else {
+                "consumed"
+            };
+            write!(f, "GuestPermissionCardHandle(<{state}>)")
+        }
+    }
+
+    impl PartialEq for GuestPermissionCardHandle {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.inner, &other.inner)
+        }
+    }
+
+    impl serde::Serialize for GuestPermissionCardHandle {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom(
+                "permission-card handles cannot be serialized; transfer them through a WIT schema-value-tree",
+            ))
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for GuestPermissionCardHandle {
+        fn deserialize<D: serde::Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+            Err(serde::de::Error::custom(
+                "permission-card handles cannot be deserialized or forged from data",
+            ))
+        }
+    }
+
+    impl IntoSchema for GuestPermissionCardHandle {
+        fn type_id() -> TypeId {
+            TypeId::new("golem.core.PermissionCard")
+        }
+
+        fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+            SchemaType::permission_card(PermissionCardSpec::default())
+        }
+
+        fn to_value(&self) -> SchemaValue {
+            SchemaValue::PermissionCard(self.clone())
+        }
+    }
+
+    impl FromSchema for GuestPermissionCardHandle {
+        fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+            match value {
+                SchemaValue::PermissionCard(h) => Ok(h.clone()),
+                other => Err(FromSchemaError::shape_mismatch(
+                    "permission-card",
+                    format!("{other:?}"),
+                    "PermissionCard",
                 )),
             }
         }
