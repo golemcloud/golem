@@ -30,7 +30,8 @@ use crate::model::app::{
     ComponentPresetSelector, ResolvedLocalServer, WithSource,
 };
 use crate::model::app_raw::{
-    BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker, Server,
+    AppVersionSource, BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker,
+    Server,
 };
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
@@ -68,6 +69,7 @@ pub struct Context {
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<SelectedManifestEnvironment>,
     manifest_environment_deployment_options: Option<DeploymentOptions>,
+    manifest_version_source: Option<AppVersionSource>,
     manifest_local_server: Option<ResolvedLocalServer>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
@@ -222,6 +224,20 @@ impl Context {
             }
         });
 
+        let manifest_version_source = {
+            let env_override = manifest_environment
+                .as_ref()
+                .and_then(|env| env.environment.version.clone());
+            let app_default = application_preload
+                .as_ref()
+                .and_then(|preload| preload.version.as_ref().map(|ws| ws.value.clone()));
+            match (env_override, app_default) {
+                (Some(env), root) => Some(env.resolve_over(root).map_err(|err| anyhow!(err))?),
+                (None, Some(app)) => Some(app),
+                (None, None) => None,
+            }
+        };
+
         let use_cloud_profile_for_env = manifest_environment
             .as_ref()
             .map(|env| {
@@ -326,6 +342,7 @@ impl Context {
             environment_reference,
             manifest_environment,
             manifest_environment_deployment_options,
+            manifest_version_source,
             manifest_local_server,
             yes,
             dev_mode: global_flags.dev_mode,
@@ -413,6 +430,11 @@ impl Context {
     pub fn manifest_environment_deployment_options(&self) -> Option<&DeploymentOptions> {
         self.log_context_selection_once();
         self.manifest_environment_deployment_options.as_ref()
+    }
+
+    pub fn manifest_version_source(&self) -> Option<&AppVersionSource> {
+        self.log_context_selection_once();
+        self.manifest_version_source.as_ref()
     }
 
     pub fn manifest_local_server(&self) -> Option<&ResolvedLocalServer> {
