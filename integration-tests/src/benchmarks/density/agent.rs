@@ -1816,7 +1816,7 @@ async fn run_resume_cell(
             "Density-agent[{}]: reviving {prefill} warmed agents concurrently after {requested_host_calls_per_agent} requested host calls each (observed max oplog last-index {observed_oplog_entries_per_agent})",
             config.cell_name()
         );
-        let resumed_batch = if let Some((receiver, abort_tx)) = snapshot_event_capture.as_mut() {
+        let resumed_batch = if let Some(snapshot_event_capture) = snapshot_event_capture.take() {
             let (resumed_batch, ()) = tokio::join!(
                 invoke_agent_indices(
                     config,
@@ -1827,9 +1827,14 @@ async fn run_resume_cell(
                     data_value!(),
                     super::ceiling::ESCALATED_TIMEOUT,
                 ),
-                observe_snapshot_recovery_event(config, 0, receiver),
+                observe_snapshot_recovery_event(
+                    config,
+                    user,
+                    components,
+                    0,
+                    snapshot_event_capture
+                ),
             );
-            let _ = abort_tx.take().map(|tx| tx.send(()));
             resumed_batch
         } else {
             invoke_agent_indices(
@@ -1956,11 +1961,17 @@ async fn start_snapshot_event_capture(
 
 async fn observe_snapshot_recovery_event(
     config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
     index: u32,
-    receiver: &mut UnboundedReceiver<Option<LogEvent>>,
+    capture: SnapshotEventCapture,
 ) {
+    const SNAPSHOT_EVENT_STREAM_RECONNECTS: u32 = 2;
+
     let deadline = Instant::now() + SNAPSHOT_EVENT_OBSERVATION_BUDGET;
     let mut seen_events = 0u64;
+    let mut stream_attempts = 1u32;
+    let (mut receiver, mut abort_tx) = capture;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -2018,6 +2029,21 @@ async fn observe_snapshot_recovery_event(
                 }
             }
             Ok(Some(None)) | Ok(None) => {
+                if stream_attempts <= SNAPSHOT_EVENT_STREAM_RECONNECTS {
+                    let _ = abort_tx.take().map(|tx| tx.send(()));
+                    stream_attempts += 1;
+                    warn!(
+                        "Density-agent[{}]: snapshot event stream ended before recovery event for sampled warmed agent {index}; seen {seen_events} other event(s); reconnecting (attempt {stream_attempts})",
+                        config.cell_name(),
+                    );
+                    if let Some((new_receiver, new_abort_tx)) =
+                        start_snapshot_event_capture(config, user, components, index).await
+                    {
+                        receiver = new_receiver;
+                        abort_tx = new_abort_tx;
+                        continue;
+                    }
+                }
                 warn!(
                     "Density-agent[{}]: snapshot event stream ended before recovery event for sampled warmed agent {index}; seen {seen_events} other event(s)",
                     config.cell_name(),
