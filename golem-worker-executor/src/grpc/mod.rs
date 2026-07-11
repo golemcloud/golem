@@ -1303,7 +1303,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
-            let worker = Worker::get_or_create_suspended(
+            let event_service = Worker::get_or_create_suspended(
                 self,
                 &owned_agent_id,
                 None,
@@ -1313,8 +1313,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &InvocationContextStack::fresh(),
                 principal,
             )
-            .await?;
-            let event_service = worker.event_service();
+            .await?
+            .event_service();
 
             let receiver = event_service.receiver();
 

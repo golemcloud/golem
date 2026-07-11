@@ -1652,8 +1652,6 @@ const RESUME_HOST_CALLS_PER_WARMUP_INVOCATION: u32 = 10_000;
 const RESUME_HOST_CALLS_PER_SNAPSHOT_INTERVAL: u32 = 100_000;
 const RESUME_FIRST_SNAPSHOT_WARMUP_INVOCATIONS: u32 = 9;
 const RESUME_STEADY_SNAPSHOT_WARMUP_INVOCATIONS: u32 = 10;
-const RESUME_MAX_OPLOG_LAST_INDEX_SPREAD: u64 = 10;
-const RESUME_OPLOG_OUTLIER_LOG_LIMIT: usize = 6;
 
 fn split_host_calls(total: u32, invocations: u32) -> Vec<u32> {
     let invocations = invocations.min(total).max(1);
@@ -1778,18 +1776,10 @@ async fn run_resume_cell(
             "Density-agent[{}]: warmed {prefill} agents with {requested_host_calls_per_agent} requested host calls each; observed oplog last-index range {min_observed}..={observed_oplog_entries_per_agent}",
             config.cell_name(),
         );
-        let observed_spread = observed_oplog_entries_per_agent - min_observed;
-        if observed_spread > RESUME_MAX_OPLOG_LAST_INDEX_SPREAD {
-            log_resume_oplog_outliers(config, user, components, &oplog_last_indices).await?;
+        if min_observed != observed_oplog_entries_per_agent {
             anyhow::bail!(
                 "resume target {requested_host_calls_per_agent} requested host calls produced inconsistent oplog last-index range {min_observed}..={observed_oplog_entries_per_agent} across warmed agents"
             );
-        } else if observed_spread > 0 {
-            warn!(
-                "Density-agent[{}]: tolerated oplog last-index spread {observed_spread} for resume target {requested_host_calls_per_agent}; using max {observed_oplog_entries_per_agent}",
-                config.cell_name(),
-            );
-            log_resume_oplog_outliers(config, user, components, &oplog_last_indices).await?;
         }
 
         if config.snapshotting {
@@ -2116,48 +2106,6 @@ async fn collect_resume_oplog_last_indices(
         .await;
 
     indices.into_iter().collect()
-}
-
-async fn log_resume_oplog_outliers(
-    config: &CellConfig,
-    user: &TestUserContext<BenchmarkTestDependencies>,
-    components: &[ComponentDto],
-    oplog_last_indices: &[u64],
-) -> anyhow::Result<()> {
-    let min_observed = oplog_last_indices.iter().copied().min().unwrap_or(0);
-    let max_observed = oplog_last_indices.iter().copied().max().unwrap_or(0);
-    let mut logged = 0usize;
-
-    for (index, last_index) in oplog_last_indices.iter().copied().enumerate() {
-        if last_index != min_observed && last_index != max_observed {
-            continue;
-        }
-        if logged >= RESUME_OPLOG_OUTLIER_LOG_LIMIT {
-            break;
-        }
-
-        let index = index as u32;
-        let (component, parsed) = agent_for_index(config, index, components)?;
-        let agent_id =
-            AgentId::from_agent_id(component.id, &parsed).map_err(|err| anyhow::anyhow!(err))?;
-        let snapshot_entries = user.search_oplog(&agent_id, "snapshot").await?;
-        let snapshot_indices: Vec<_> = snapshot_entries
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::Snapshot(_) => Some(entry.oplog_index),
-                _ => None,
-            })
-            .collect();
-
-        warn!(
-            "Density-agent[{}]: oplog last-index outlier agent {index} ({agent_id}) last-index {last_index}, snapshots {:?}",
-            config.cell_name(),
-            snapshot_indices,
-        );
-        logged += 1;
-    }
-
-    Ok(())
 }
 
 async fn assert_sampled_resume_snapshots_present(
