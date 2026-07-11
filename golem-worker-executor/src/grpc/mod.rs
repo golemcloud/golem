@@ -1321,9 +1321,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             info!("Client connected");
             record_new_grpc_api_active_stream();
 
-            Ok(Response::new(WorkerEventStream::new_with_keepalive(
-                receiver, worker,
-            )))
+            Ok(Response::new(WorkerEventStream::new(receiver)))
         } else {
             // We don't want 'connect' to resume interrupted workers
             Err(WorkerExecutorError::Interrupted {
@@ -3048,24 +3046,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 pub struct WorkerEventStream {
     inner:
         Pin<Box<dyn Stream<Item = Result<InternalWorkerEvent, BroadcastStreamRecvError>> + Send>>,
-    _keepalive: Option<Arc<dyn Send + Sync>>,
 }
 
 impl WorkerEventStream {
     pub fn new(receiver: WorkerEventReceiver) -> Self {
         WorkerEventStream {
             inner: Box::pin(receiver.to_stream()),
-            _keepalive: None,
-        }
-    }
-
-    pub fn new_with_keepalive(
-        receiver: WorkerEventReceiver,
-        keepalive: Arc<dyn Send + Sync>,
-    ) -> Self {
-        WorkerEventStream {
-            inner: Box::pin(receiver.to_stream()),
-            _keepalive: Some(keepalive),
         }
     }
 }
@@ -3074,7 +3060,7 @@ impl Stream for WorkerEventStream {
     type Item = Result<golem::worker::LogEvent, Status>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let WorkerEventStream { inner, .. } = self.get_mut();
+        let WorkerEventStream { inner } = self.get_mut();
         match inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
                 Poll::Ready(Some(Ok(AgentEvent::from(event).try_into().unwrap())))
