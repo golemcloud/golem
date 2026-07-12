@@ -58,8 +58,11 @@ pub trait HttpClient4 {
     /// in the tests using it), then echoes the response.
     async fn post_with_p3_large_streamed_body(&self) -> String;
 
-    /// Sends a GET, then reads the response body.
-    async fn get_with_body_skip(&self) -> String;
+    /// Sends a GET carrying an explicit `Range` header, then reads the
+    /// response body in chunks. A guest-set `Range` header disqualifies
+    /// response-body resume, so a mid-body failure must recover via
+    /// trap+replay instead.
+    async fn get_with_range_header(&self) -> String;
 
     /// Sends a buffered POST with a retry policy that retries HTTP 500 responses.
     async fn post_with_status_retry_policy(&self) -> String;
@@ -159,8 +162,8 @@ impl HttpClient4 for HttpClient4Impl {
         do_post_with_p3_streamed_body(16, 128 * 1024).await
     }
 
-    async fn get_with_body_skip(&self) -> String {
-        do_get_request().await
+    async fn get_with_range_header(&self) -> String {
+        do_get_chunked_read_with_range().await
     }
 
     async fn post_with_status_retry_policy(&self) -> String {
@@ -837,6 +840,25 @@ async fn do_get_chunked_read() -> String {
 
     let response = wasi_fetch::Client::new()
         .get(&format!("http://localhost:{port}/"))
+        .send()
+        .await
+        .expect("Request failed");
+
+    let status = response.status().as_u16();
+    let mut stream = response.into_body();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.chunk().await {
+        body.extend_from_slice(&chunk);
+    }
+    format!("{status} {}", String::from_utf8_lossy(&body))
+}
+
+async fn do_get_chunked_read_with_range() -> String {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let response = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/"))
+        .header("Range", "bytes=0-")
         .send()
         .await
         .expect("Request failed");

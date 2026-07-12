@@ -2434,7 +2434,7 @@ async fn p3_http_declared_small_open_streaming_body_can_receive_early_response(
 
 #[test]
 #[tracing::instrument]
-async fn http_no_resuming_response_body_retry_when_body_skip_used(
+async fn http_no_resume_when_request_had_range_header(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -2458,10 +2458,9 @@ async fn http_no_resuming_response_body_retry_when_body_skip_used(
 
     let executor = start_with_overrides(deps, &context, overrides).await?;
 
-    // Server sends 2048-byte body. First connection sends 1024 bytes then drops.
-    // The guest reads first 256, skips 256, then tries to read more — which will fail.
-    // Response-body resumption should be disqualified because blocking_skip was
-    // used.
+    // Server sends a 2048-byte body. The first connection ignores the guest's
+    // Range header, sends 1024 bytes with a 200 status, then drops mid-body.
+    // Later connections honor Range with a 206.
     let (port, connection_counter, range_counter) =
         start_partial_response_http_server(1, 1024, 2048, 200, 200, true).await;
 
@@ -2473,38 +2472,70 @@ async fn http_no_resuming_response_body_retry_when_body_skip_used(
     env.insert("PORT".to_string(), port.to_string());
 
     let agent_id = agent_id!("HttpClient4");
-    let _worker_id = executor
+    let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    // get_with_body_skip reads 256 bytes, skips 256, then reads remaining.
-    // The skip sets had_body_skip=true, disqualifying response-body resumption.
+    // get_with_range_header sends a GET with a guest-set `Range: bytes=0-`
+    // header. The pre-existing Range header disqualifies response-body
+    // resumption (composing range semantics on top of the guest's own range
+    // is not supported), so the mid-body failure must recover via worker-level
+    // trap+replay: the recorded send (200 head) replays, and the incomplete
+    // consume-body scope re-issues the guest's exact recorded request — its
+    // own Range header included — streaming the fresh body under the recorded
+    // 200 head.
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_with_body_skip", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_with_range_header",
+            data_value!(),
+        )
         .await?;
 
     let result_value = result.into_typed::<String>()?;
 
-    // Should eventually succeed (via trap+replay, not response-body-resumption
-    // inline retry)
+    // The recorded 200 head stays authoritative; the full body arrives via
+    // the re-issued request.
     assert!(
         result_value.starts_with("200 "),
-        "Expected eventual success, got: {result_value:?}"
+        "Expected the recorded 200 head with the full body, got: {result_value:?}"
     );
 
-    // Verify the server saw at least 2 connections (1 partial + 1 replay success)
+    // Verify the server saw at least 2 connections (1 partial + 1 re-issued success)
     let total_connections = connection_counter.load(Ordering::SeqCst);
     assert!(
         total_connections >= 2,
-        "Expected at least 2 connections (1 partial + 1 replay), got {total_connections}"
+        "Expected at least 2 connections (1 partial + 1 re-issue), got {total_connections}"
     );
 
-    // Response-body resumption should be disqualified by had_body_skip, so the
-    // recovery request must not use a Range header.
+    // Every successful connection carries exactly the guest's own Range
+    // header (the failing first connection is not counted by the server).
+    // A resume attempt would not change this count, so the counters alone
+    // cannot distinguish resume from replay — the oplog assertions below do.
     let range_requests = range_counter.load(Ordering::SeqCst);
+    let successful_connections = total_connections - 1;
     assert_eq!(
-        range_requests, 0,
-        "Expected 0 range requests (body skip must disqualify response-body resumption), got {range_requests}"
+        range_requests, successful_connections,
+        "Expected the guest's own ranged request on each successful connection ({successful_connections}), got {range_requests}"
+    );
+
+    // No response-body-resume in-function retry may be charged: the refusal
+    // happens before the retry budget is consulted...
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert_eq!(
+        retry_count, 0,
+        "Expected no in-function retry error entries (resume must be refused before charging the budget), got {retry_count}"
+    );
+
+    // ...and the failure must instead surface as a worker-level retry trap
+    // (the transient body-transfer error recorded in the oplog).
+    let trap_count =
+        count_oplog_errors_containing(&executor, &worker_id, "HttpProtocolError").await?;
+    assert!(
+        trap_count >= 1,
+        "Expected the body-read failure to recover via a worker-level retry trap, got {trap_count} matching error entries"
     );
 
     Ok(())

@@ -1869,7 +1869,7 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
 ///
 /// Expected format: `bytes <start>-<end>/<total>` or `bytes <start>-<end>/*`
 /// Returns the start position if successfully parsed.
-fn parse_content_range_start(value: &str) -> Option<u64> {
+pub(crate) fn parse_content_range_start(value: &str) -> Option<u64> {
     let rest = value.strip_prefix("bytes ")?;
     let dash_pos = rest.find('-')?;
     rest[..dash_pos].parse::<u64>().ok()
