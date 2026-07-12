@@ -81,6 +81,7 @@ pub(all) struct ToolResultInfo {
 pub(all) struct ToolErrorCaseInfo {
   name : String
   payload : ParamType?
+  payload_label : String?
   kind : String
   exit_code : String?
   description : String
@@ -819,8 +820,8 @@ fn parse_error_cases(
   }
   let result : Array[ToolErrorCaseInfo] = []
   for c in constrs {
-    let payload : ParamType? = match c.args {
-      None => None
+    let (payload, payload_label) : (ParamType?, String?) = match c.args {
+      None => (None, None)
       Some(ps) => {
         let a = ps.to_array()
         if a.length() > 1 {
@@ -829,9 +830,9 @@ fn parse_error_cases(
           )
         }
         if a.length() == 0 {
-          None
+          (None, None)
         } else {
-          Some(tool_type(a[0].ty))
+          (Some(tool_type(a[0].ty)), a[0].label.map(label => label.name))
         }
       }
     }
@@ -903,6 +904,7 @@ fn parse_error_cases(
     result.push({
       name: c.name.name,
       payload,
+      payload_label,
       kind,
       exit_code,
       description: tool_doc(c.doc),

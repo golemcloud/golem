@@ -166,6 +166,24 @@ test "typed raise and suberror variants" {
     tools[0].commands[0].errors[0].payload,
     content="Some(Simple(\"String\"))",
   )
+  debug_inspect(tools[0].commands[0].errors[0].payload_label, content="None")
+}
+
+///|
+test "labelled tool error payload" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|pub fn Runner::run() -> Result[String, RunError] { Err(Broken(message="x")) }
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Broken(message~ : String)
+    #|}
+  let tools = @lib.parse_tools([("tool.mbt", source)])
+  debug_inspect(
+    tools[0].commands[0].errors[0].payload_label,
+    content="Some(\"message\")",
+  )
 }
 
 ///|

@@ -189,8 +189,12 @@ test "custom tool errors encode the declared case payload" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
   )
-  assert_true(generated.contains("Broken(payload)"))
-  assert_true(generated.contains("try_into_typed_schema_value(payload)"))
+  assert_true(generated.contains("impl @tool.ToolErrorSchema for RunError"))
+  assert_true(generated.contains("with to_error_payload_value"))
+  assert_true(
+    generated.contains("try_into_typed_schema_value(__golem_payload)"),
+  )
+  assert_true(generated.contains("RunError::to_error_payload_value(error)"))
 }
 
 ///|
@@ -206,8 +210,64 @@ test "raised custom tool errors encode the declared case payload" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
   )
-  assert_true(generated.contains("Broken(payload)"))
-  assert_true(generated.contains("try_into_typed_schema_value(payload)"))
+  assert_true(generated.contains("Broken(payload) => Err(Broken(payload))"))
+  assert_true(
+    generated.contains("try_into_typed_schema_value(__golem_payload)"),
+  )
+  assert_true(generated.contains("RunError::to_error_payload_value(error)"))
+}
+
+///|
+test "tool error schemas are reusable across descriptors and typed clients" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|pub fn Runner::first() -> Result[String, RunError] { Err(Broken("boom")) }
+    #|pub fn Runner::second() -> Result[String, RunError] { Err(NotFound) }
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Broken(String)
+    #|  #derive.error(kind="usage-error", exit_code="4")
+    #|  NotFound
+    #|}
+  let tools = @lib.parse_tools([("runner.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_eq(
+    registration.split("impl @tool.ToolErrorSchema for RunError").count() - 1,
+    3,
+  )
+  assert_true(registration.contains("with error_cases"))
+  assert_true(registration.contains("payload: None"))
+  assert_true(registration.contains("exit_code: 4"))
+  assert_true(registration.contains("try_into_typed_schema_value(())"))
+  assert_true(registration.contains("with from_error_payload_value"))
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_true(clients.contains("invoke_and_await_tool_error"))
+  assert_false(clients.contains("__golem_tool_decode_error"))
+}
+
+///|
+test "tool error schemas preserve labelled payload constructors" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|pub fn Runner::run() -> Result[String, RunError] { Err(Broken(message="boom")) }
+    #|pub fn Runner::raised() -> String raise RunError { raise Broken(message="boom") }
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Broken(message~ : String)
+    #|}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  assert_true(generated.contains("Broken(message~)"))
+  assert_true(generated.contains("try_into_typed_schema_value(message)"))
+  assert_true(generated.contains("Broken(message=__golem_payload)"))
+  assert_true(generated.contains("Broken(message~) => Err(Broken(message~))"))
 }
 
 ///|

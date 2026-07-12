@@ -180,6 +180,20 @@ pub(all) struct ErrorCaseDef {
 }
 
 ///|
+/// Describes and converts a typed custom tool error. Implementations are
+/// generated for error enums referenced by tool commands.
+pub(open) trait ToolErrorSchema {
+  fn error_cases() -> Result[Array[ErrorCaseDef], ToolBuildError]
+  fn to_error_payload_value(Self) -> Result[@model.TypedSchemaValue, String]
+  fn from_error_payload_value(@model.TypedSchemaValue) -> Result[Self, String]
+}
+
+///|
+pub fn ToolBuildError::schema_model(message : String) -> ToolBuildError {
+  SchemaModelError(message)
+}
+
+///|
 pub fn ToolDef::tool_name(self : ToolDef) -> Result[String, ToolBuildError] {
   match self.commands.get(0) {
     Some(root) => Ok(root.name)

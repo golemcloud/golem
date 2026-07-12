@@ -1151,9 +1151,9 @@ fn emit_result(command : ToolCommandInfo) -> String {
 }
 
 ///|
-fn emit_errors(command : ToolCommandInfo) -> String {
+fn emit_error_cases(errors : Array[ToolErrorCaseInfo]) -> String {
   "[" +
-  command.errors
+  errors
   .map(error => {
     let exit = error.exit_code.unwrap_or(
       if error.kind.has_prefix("usage") {
@@ -1184,6 +1184,17 @@ fn emit_errors(command : ToolCommandInfo) -> String {
   })
   .join(", ") +
   "]"
+}
+
+///|
+fn emit_errors(command : ToolCommandInfo) -> String {
+  match command.error_type {
+    Some(error_type) =>
+      "(match " +
+      emit_type(error_type) +
+      "::error_cases() { Ok(__golem_errors) => __golem_errors\nErr(__golem_error) => raise __golem_error })"
+    None => "[]"
+  }
 }
 
 ///|
@@ -1615,27 +1626,31 @@ fn emit_invocation_value(value : String) -> String {
 
 ///|
 fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String {
-  let arms = command.errors.map(error => {
-    let pattern = match error.payload {
-      Some(_) => error.name + "(payload)"
-      None => error.name
-    }
-    let payload = if error.payload is Some(_) { "payload" } else { "()" }
-    pattern +
-    " => {\nlet payload = @schema.try_into_typed_schema_value(" +
-    payload +
-    ") catch { encode_error => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error.to_string())) }\nlet payload = @model.typed_schema_value_to_wit(payload) catch { encode_error => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error.to_string())) }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
-  })
-  "match " + error_value + " {\n" + arms.join("\n") + "\n}"
+  let error_type = command.error_type.map(emit_type).unwrap()
+  "{\nlet payload = match " +
+  error_type +
+  "::to_error_payload_value(" +
+  error_value +
+  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @model.typed_schema_value_to_wit(payload) catch { encode_error => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error.to_string())) }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
 }
 
 ///|
 fn emit_raised_error_capture(command : ToolCommandInfo) -> String {
   command.errors
   .map(error => {
-    match error.payload {
-      Some(_) => error.name + "(payload) => Err(" + error.name + "(payload))"
-      None => error.name + " => Err(" + error.name + ")"
+    match (error.payload, error.payload_label) {
+      (Some(_), Some(label)) =>
+        error.name +
+        "(" +
+        label +
+        "~) => Err(" +
+        error.name +
+        "(" +
+        label +
+        "~))"
+      (Some(_), None) =>
+        error.name + "(payload) => Err(" + error.name + "(payload))"
+      (None, _) => error.name + " => Err(" + error.name + ")"
     }
   })
   .join("\n")
@@ -1774,6 +1789,84 @@ fn emit_invoker(
 }
 
 ///|
+fn emit_tool_error_schema(
+  buf : StringBuilder,
+  error_type : ParamType,
+  errors : Array[ToolErrorCaseInfo],
+) -> Unit {
+  let type_name = emit_type(error_type)
+  buf.write_string(
+    "///|\npub impl @tool.ToolErrorSchema for " +
+    type_name +
+    " with error_cases() {\n  try {\n    Ok(" +
+    emit_error_cases(errors) +
+    ")\n  } catch { __golem_error => Err(@tool.ToolBuildError::schema_model(__golem_error.to_string())) }\n}\n\n",
+  )
+  buf.write_string(
+    "///|\npub impl @tool.ToolErrorSchema for " +
+    type_name +
+    " with to_error_payload_value(self) {\n  match self {\n",
+  )
+  for error in errors {
+    let (pattern, payload) = match (error.payload, error.payload_label) {
+      (Some(_), Some(label)) => (error.name + "(" + label + "~)", label)
+      (Some(_), None) => (error.name + "(__golem_payload)", "__golem_payload")
+      (None, _) => (error.name, "()")
+    }
+    buf.write_string(
+      "    " +
+      pattern +
+      " => try { Ok(@schema.try_into_typed_schema_value(" +
+      payload +
+      ")) } catch { __golem_error => Err(__golem_error.to_string()) }\n",
+    )
+  }
+  buf.write_string("  }\n}\n\n")
+  buf.write_string(
+    "///|\npub impl @tool.ToolErrorSchema for " +
+    type_name +
+    " with from_error_payload_value(__golem_value) {\n",
+  )
+  for error in errors {
+    let payload_type = error.payload.map(emit_type).unwrap_or("Unit")
+    let error_value = match (error.payload, error.payload_label) {
+      (Some(_), Some(label)) => error.name + "(" + label + "=__golem_payload)"
+      (Some(_), None) => error.name + "(__golem_payload)"
+      (None, _) => error.name
+    }
+    buf.write_string(
+      "  let __golem_decoded : " +
+      payload_type +
+      "? = try { Some(@schema.from_value_as(__golem_value.value)) } catch { _ => None }\n  if __golem_decoded is Some(__golem_payload) { return Ok(" +
+      error_value +
+      ") }\n",
+    )
+  }
+  buf.write_string(
+    "  Err(\"remote tool error payload did not match any declared error case\")\n}\n\n",
+  )
+}
+
+///|
+fn emit_tool_error_schemas(
+  buf : StringBuilder,
+  tools : Array[ToolInfo],
+) -> Unit {
+  let emitted : Map[String, Unit] = {}
+  for tool in tools {
+    for command in tool.commands {
+      if command.error_type is Some(error_type) {
+        let type_name = emit_type(error_type)
+        if !emitted.contains(type_name) {
+          emitted[type_name] = ()
+          emit_tool_error_schema(buf, error_type, command.errors)
+        }
+      }
+    }
+  }
+}
+
+///|
 pub fn generate_tool_registration(
   tools : Array[ToolInfo],
 ) -> @list.List[@syntax.Impl] raise ToolEmitError {
@@ -1783,6 +1876,7 @@ pub fn generate_tool_registration(
     validate_sibling_commands(tool)
   }
   let buf = StringBuilder::new()
+  emit_tool_error_schemas(buf, tools)
   for tool in tools {
     emit_descriptor(buf, tool, tools)
   }
@@ -1867,44 +1961,6 @@ fn wrapper_name(root : ToolInfo, path : Array[String]) -> String {
 }
 
 ///|
-fn error_decoder_name(receiver : String, command : ToolCommandInfo) -> String {
-  "__golem_tool_decode_error_" + receiver + "_" + command.source_name
-}
-
-///|
-fn emit_error_decoder(
-  buf : StringBuilder,
-  receiver : String,
-  command : ToolCommandInfo,
-) -> Unit {
-  guard command.error_type is Some(error_type) else { return }
-  buf.write_string(
-    "///|\nfn " +
-    error_decoder_name(receiver, command) +
-    "(__golem_value : @model.TypedSchemaValue) -> Result[" +
-    emit_type(error_type) +
-    ", String] {\n",
-  )
-  for error in command.errors {
-    let payload_type = error.payload.map(emit_type).unwrap_or("Unit")
-    let error_value = match error.payload {
-      Some(_) => error.name + "(__golem_payload)"
-      None => error.name
-    }
-    buf.write_string(
-      "  let __golem_decoded : " +
-      payload_type +
-      "? = try { Some(@schema.from_value_as(__golem_value.value)) } catch { _ => None }\n  if __golem_decoded is Some(__golem_payload) { return Ok(" +
-      error_value +
-      ") }\n",
-    )
-  }
-  buf.write_string(
-    "  Err(\"remote tool error payload did not match any declared error case\")\n}\n\n",
-  )
-}
-
-///|
 fn emit_tool_client_method(
   buf : StringBuilder,
   root : ToolInfo,
@@ -1923,7 +1979,6 @@ fn emit_tool_client_method(
     .join(", ")
   let error = command.error_type.map(emit_type).unwrap_or("@tool.NoToolError")
   let success = command.success_type.map(emit_type).unwrap_or("Unit")
-  emit_error_decoder(buf, receiver, command)
   buf.write_string(
     "///|\npub fn " +
     receiver +
@@ -1966,7 +2021,7 @@ fn emit_tool_client_method(
     "  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch { __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error))) }\n",
   )
   let invoke = if command.error_type is Some(_) {
-    "self.client.invoke_and_await"
+    "self.client.invoke_and_await_tool_error"
   } else {
     "self.client.invoke_and_await_no_tool_error"
   }
@@ -1977,11 +2032,6 @@ fn emit_tool_client_method(
     emit_strings(path) +
     ", __golem_input, " +
     stdin +
-    (if command.error_type is Some(_) {
-      ", " + error_decoder_name(receiver, command)
-    } else {
-      ""
-    }) +
     ") {\n    Err(__golem_error) => Err(__golem_error)\n    Ok(__golem_result) => @tool." +
     (if is_unit(command.success_type) {
       "decode_result_empty"

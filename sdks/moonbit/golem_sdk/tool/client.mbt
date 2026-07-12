@@ -58,6 +58,16 @@ pub fn[E : @schema.FromSchema] ToolClient::invoke_and_await_payload_error(
 }
 
 ///|
+pub fn[E : ToolErrorSchema] ToolClient::invoke_and_await_tool_error(
+  self : ToolClient,
+  command_path : Array[String],
+  input : @model.TypedSchemaValue,
+  stdin : @streams.InputStream?,
+) -> Result[InvocationResult, ToolError[E]] {
+  invoke_and_await_tool_error(self.rpc, command_path, input, stdin)
+}
+
+///|
 pub fn ToolClient::invoke_and_await_no_tool_error(
   self : ToolClient,
   command_path : Array[String],
@@ -94,6 +104,18 @@ pub fn[E : @schema.FromSchema] invoke_and_await_payload_error(
   stdin : @streams.InputStream?,
 ) -> Result[InvocationResult, ToolError[E]] {
   invoke_and_await(rpc, command_path, input, stdin, decode_custom_tool_error)
+}
+
+///|
+pub fn[E : ToolErrorSchema] invoke_and_await_tool_error(
+  rpc : @toolHost.ToolRpc,
+  command_path : Array[String],
+  input : @model.TypedSchemaValue,
+  stdin : @streams.InputStream?,
+) -> Result[InvocationResult, ToolError[E]] {
+  invoke_and_await(rpc, command_path, input, stdin, fn(value) {
+    E::from_error_payload_value(value)
+  })
 }
 
 ///|

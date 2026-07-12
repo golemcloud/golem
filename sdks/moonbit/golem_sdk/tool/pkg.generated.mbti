@@ -13,7 +13,7 @@ import {
 // Values
 pub fn build_canonical_input(CanonicalInputModel, Array[(String, @schema_model.SchemaValue)]) -> @schema_model.TypedSchemaValue raise ToolBuildError
 
-pub fn[T : @schema.FromSchema] decode_canonical_field(Array[CanonicalInputValue], String, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(Array[CanonicalInputValue], String, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
 pub fn decode_canonical_input(ToolDef, Int, @types.TypedSchemaValue, String) -> Array[CanonicalInputValue] raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
@@ -60,6 +60,8 @@ pub fn[E] invoke_and_await(@host.ToolRpc, Array[String], @schema_model.TypedSche
 pub fn invoke_and_await_no_tool_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[NoToolError]]
 
 pub fn[E : @schema.FromSchema] invoke_and_await_payload_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[E]]
+
+pub fn[E : ToolErrorSchema] invoke_and_await_tool_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[E]]
 
 pub fn invoke_registered_subtool(String, Array[String], Array[CanonicalInputValue], @streams.InputStream?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
@@ -111,6 +113,7 @@ pub suberror ToolBuildError {
   ValueIsTypeMismatch(String)
   UnresolvedValueIsLiteral(String)
 } derive(Eq, @debug.Debug)
+pub fn ToolBuildError::schema_model(String) -> Self
 
 // Types and methods
 pub(all) struct CanonicalInputField {
@@ -282,6 +285,7 @@ pub fn ToolClient::drop(Self) -> Unit
 pub fn[E] ToolClient::invoke_and_await(Self, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[InvocationResult, ToolError[E]]
 pub fn ToolClient::invoke_and_await_no_tool_error(Self, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[NoToolError]]
 pub fn[E : @schema.FromSchema] ToolClient::invoke_and_await_payload_error(Self, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[E]]
+pub fn[E : ToolErrorSchema] ToolClient::invoke_and_await_tool_error(Self, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[E]]
 pub fn ToolClient::new(String) -> Self
 
 pub(all) struct ToolDef {
@@ -320,4 +324,9 @@ pub(all) struct ValueIsRefDef {
 // Type aliases
 
 // Traits
+pub(open) trait ToolErrorSchema {
+  fn error_cases() -> Result[Array[ErrorCaseDef], ToolBuildError]
+  fn to_error_payload_value(Self) -> Result[@schema_model.TypedSchemaValue, String]
+  fn from_error_payload_value(@schema_model.TypedSchemaValue) -> Result[Self, String]
+}
 

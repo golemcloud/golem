@@ -247,14 +247,14 @@ pub(all) struct ToolArgInfo {
   name : String?
   scope : String?
   kind : String?
-  short : String?
+  short : Char?
   aliases : Array[String]
   env : String?
   required : Bool?
   negatable : Bool?
   optional_scalar : Bool?
   repeatable : String?
-  delim : String?
+  delim : Char?
   defaults : Array[String]
   separator : String?
   verbatim : Bool?
@@ -310,6 +310,7 @@ pub(all) struct ToolConstraintInfo {
 pub(all) struct ToolErrorCaseInfo {
   name : String
   payload : ParamType?
+  payload_label : String?
   kind : String
   exit_code : String?
   description : String
@@ -341,7 +342,10 @@ pub fn ToolInfo::wire_name(Self) -> String
 
 pub(all) enum ToolParamType {
   Public(ParamType)
+  LabelledPublic(ParamType)
+  QuestionOptionalPublic(ParamType)
   Hidden(ToolHiddenType)
+  LabelledHidden(ToolHiddenType)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ToolResultInfo {
