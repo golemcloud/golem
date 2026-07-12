@@ -286,11 +286,9 @@ pub fn parse_agent_id_params(
                 input, graph, fields,
             )
         }
-        SourceLanguage::Kotlin => {
-            parse_common::parse_input_schema_params::<parse_kotlin::KotlinDialect>(
-                input, graph, fields,
-            )
-        }
+        SourceLanguage::Kotlin => parse_common::parse_input_schema_params::<
+            parse_kotlin::KotlinDialect,
+        >(input, graph, fields),
         SourceLanguage::MoonBit => parse_common::parse_input_schema_params::<
             parse_moonbit::MoonBitDialect,
         >(input, graph, fields),

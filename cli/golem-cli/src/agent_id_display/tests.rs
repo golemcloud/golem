@@ -894,7 +894,10 @@ fn kotlin_tuple_pair_and_triple() {
     let pair = SchemaValue::Tuple {
         elements: vec![SchemaValue::U32(1), SchemaValue::String("x".into())],
     };
-    assert_eq!(kotlin_render(pair.clone(), pair_ty.clone()), "Pair(1, \"x\")");
+    assert_eq!(
+        kotlin_render(pair.clone(), pair_ty.clone()),
+        "Pair(1, \"x\")"
+    );
     kotlin_round_trip(pair, pair_ty);
 
     let triple_ty = SchemaType::tuple(vec![
@@ -903,7 +906,11 @@ fn kotlin_tuple_pair_and_triple() {
         SchemaType::u32(),
     ]);
     let triple = SchemaValue::Tuple {
-        elements: vec![SchemaValue::U32(1), SchemaValue::U32(2), SchemaValue::U32(3)],
+        elements: vec![
+            SchemaValue::U32(1),
+            SchemaValue::U32(2),
+            SchemaValue::U32(3),
+        ],
     };
     assert_eq!(
         kotlin_render(triple.clone(), triple_ty.clone()),

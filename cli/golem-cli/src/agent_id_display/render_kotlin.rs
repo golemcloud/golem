@@ -266,7 +266,12 @@ fn render_cm_value_inner(
     }
 }
 
-fn render_tuple(buf: &mut String, graph: &SchemaGraph, elements: &[SchemaType], vs: &[SchemaValue]) {
+fn render_tuple(
+    buf: &mut String,
+    graph: &SchemaGraph,
+    elements: &[SchemaType],
+    vs: &[SchemaValue],
+) {
     match elements.len() {
         2 => {
             buf.push_str("Pair(");
@@ -398,9 +403,7 @@ fn render_type_kotlin_inner(
             render_type_tuple_kotlin(graph, elements, prefer_name)
         }
         SchemaType::Record { fields, .. } => render_type_record_kotlin(graph, fields, prefer_name),
-        SchemaType::Variant { cases, .. } => {
-            render_type_variant_kotlin(graph, cases, prefer_name)
-        }
+        SchemaType::Variant { cases, .. } => render_type_variant_kotlin(graph, cases, prefer_name),
         SchemaType::Enum { cases, .. } => render_type_enum_kotlin(cases),
         SchemaType::Flags { flags, .. } => render_type_flags_kotlin(flags),
         SchemaType::Text { .. } => "text".to_string(),
