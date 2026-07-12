@@ -258,6 +258,7 @@ impl SecretCommandHandler {
                     GuestLanguage::Rust => SourceLanguage::Rust,
                     GuestLanguage::TypeScript => SourceLanguage::TypeScript,
                     GuestLanguage::Scala => SourceLanguage::Scala,
+                    GuestLanguage::Kotlin => SourceLanguage::Kotlin,
                     GuestLanguage::MoonBit => SourceLanguage::MoonBit,
                 };
             }

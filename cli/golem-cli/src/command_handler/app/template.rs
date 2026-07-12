@@ -820,6 +820,18 @@ impl TemplateHandler {
                     },
                 });
             }
+            GuestLanguage::Kotlin => {
+                let target_root = application_path.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: application_path.join("build.gradle.kts"),
+                    target: target_root.join("build.gradle.kts"),
+                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: application_path.join("src"),
+                    target: target_root.join("src"),
+                });
+            }
             GuestLanguage::MoonBit => {
                 let target_root = application_path.join(new_component_dir);
 
