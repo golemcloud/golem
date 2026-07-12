@@ -28,11 +28,16 @@ pub trait HttpClient4 {
     /// Sends a GET request and reads the response body in chunks.
     async fn get_and_read_body_chunked(&self) -> String;
 
-    /// Sends a POST with a body composed of: 4 bytes "HEAD", then 1024 zero bytes,
-    /// then 1024 bytes of 0xAB.
+    /// Sends a buffered POST with a body composed of: 4 bytes "HEAD", then 1024
+    /// zero bytes, then 1024 bytes of 0xAB. The name is historical (the body was
+    /// once produced with the wasip2 `output-stream::write-zeroes` API); the body
+    /// layout is kept so server-side validation of the exact bytes still applies.
     async fn post_with_write_zeroes(&self) -> String;
 
-    /// Sends a POST with a large body.
+    /// Sends a buffered POST with a large multi-chunk body. The name is
+    /// historical (the writes were once interleaved with wasip2
+    /// `output-stream::subscribe` polling); it now only exercises the plain
+    /// large-body path.
     async fn post_with_subscribe(&self) -> String;
 
     /// Sends a POST request and finishes the body with trailers.
@@ -40,6 +45,18 @@ pub trait HttpClient4 {
 
     /// Sends a raw wasip3 PUT request and finishes the body with trailers.
     async fn put_with_p3_trailers(&self) -> String;
+
+    /// Sends a raw wasip3 POST request and finishes the body with trailers.
+    async fn post_with_p3_trailers(&self) -> String;
+
+    /// Sends a raw wasip3 POST streaming a deterministic multi-chunk body via
+    /// `wit_stream` (no declared content-length), then echoes the response.
+    async fn post_with_p3_streamed_body(&self) -> String;
+
+    /// Sends a raw wasip3 POST streaming a deterministic multi-megabyte body
+    /// via `wit_stream` (each chunk larger than the oplog inline payload limit
+    /// in the tests using it), then echoes the response.
+    async fn post_with_p3_large_streamed_body(&self) -> String;
 
     /// Sends a GET, then reads the response body.
     async fn get_with_body_skip(&self) -> String;
@@ -128,6 +145,18 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn put_with_p3_trailers(&self) -> String {
         do_put_with_p3_trailers().await
+    }
+
+    async fn post_with_p3_trailers(&self) -> String {
+        do_post_with_p3_trailers().await
+    }
+
+    async fn post_with_p3_streamed_body(&self) -> String {
+        do_post_with_p3_streamed_body(8, 8 * 1024).await
+    }
+
+    async fn post_with_p3_large_streamed_body(&self) -> String {
+        do_post_with_p3_streamed_body(16, 128 * 1024).await
     }
 
     async fn get_with_body_skip(&self) -> String {
@@ -346,6 +375,150 @@ async fn do_put_with_p3_trailers() -> String {
             )])
             .unwrap();
             let _ = trailers_tx.write(Ok(Some(trailers))).await;
+        },
+    )
+        .join()
+        .await;
+
+    let response = send_result.expect("Request failed");
+    let status = response.get_status_code();
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut body_bytes = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(n) => {
+                body_bytes.extend_from_slice(&buffer[..n]);
+                buffer.clear();
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("response body read was cancelled"),
+        }
+    }
+    drop(body);
+    trailers.await.expect("response trailers failed");
+    response_done_tx
+        .write(Ok(()))
+        .await
+        .expect("failed to acknowledge response body");
+    format!(
+        "{status} {} transmit={transmit_result:?}",
+        String::from_utf8_lossy(&body_bytes)
+    )
+}
+
+async fn do_post_with_p3_trailers() -> String {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let headers = types::Fields::from_list(&[
+        ("x-test".to_string(), b"test-header".to_vec()),
+        ("trailer".to_string(), b"x-test-trailer".to_vec()),
+    ])
+    .unwrap();
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+
+    let (send_result, transmit_result, ()) = (
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            let remaining = body_tx.write_all(b"test-body".to_vec()).await;
+            assert!(remaining.is_empty());
+            drop(body_tx);
+            let trailers = types::Fields::from_list(&[(
+                "x-test-trailer".to_string(),
+                b"trailer-value".to_vec(),
+            )])
+            .unwrap();
+            let _ = trailers_tx.write(Ok(Some(trailers))).await;
+        },
+    )
+        .join()
+        .await;
+
+    let response = send_result.expect("Request failed");
+    let status = response.get_status_code();
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut body_bytes = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(n) => {
+                body_bytes.extend_from_slice(&buffer[..n]);
+                buffer.clear();
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("response body read was cancelled"),
+        }
+    }
+    drop(body);
+    trailers.await.expect("response trailers failed");
+    response_done_tx
+        .write(Ok(()))
+        .await
+        .expect("failed to acknowledge response body");
+    format!(
+        "{status} {} transmit={transmit_result:?}",
+        String::from_utf8_lossy(&body_bytes)
+    )
+}
+
+/// Streams `chunk_count` chunks of `chunk_len` bytes each, where byte `j` of
+/// chunk `i` is `(i * 31 + j) % 251`. The worker-executor tests reconstruct
+/// the same sequence to assert the server received the body byte-identically.
+async fn do_post_with_p3_streamed_body(chunk_count: usize, chunk_len: usize) -> String {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let headers =
+        types::Fields::from_list(&[("x-test".to_string(), b"streamed-body".to_vec())]).unwrap();
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+
+    let (send_result, transmit_result, ()) = (
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            for i in 0..chunk_count {
+                let chunk: Vec<u8> = (0..chunk_len)
+                    .map(|j| ((i * 31 + j) % 251) as u8)
+                    .collect();
+                let remaining = body_tx.write_all(chunk).await;
+                assert!(remaining.is_empty(), "request body receiver closed early");
+            }
+            drop(body_tx);
+            let _ = trailers_tx.write(Ok(None)).await;
         },
     )
         .join()

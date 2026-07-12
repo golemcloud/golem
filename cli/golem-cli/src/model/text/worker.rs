@@ -944,7 +944,7 @@ impl TextView for PublicOplogEntry {
                 ));
                 logln(format!(
                     "{pad}level:             {}",
-                    format_id(&format!("{:?}", &params.persistence_level))
+                    format_id(&format!("{:?}", params.persistence_level))
                 ));
             }
             PublicOplogEntry::BeginRemoteTransaction(params) => {
@@ -1069,6 +1069,25 @@ impl TextView for PublicOplogEntry {
                 logln(format!(
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
+                ));
+            }
+            PublicOplogEntry::HostStreamFrame(params) => {
+                logln(format_message_highlight("HOST STREAM FRAME"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}parent start index: {}",
+                    params.parent_start_index
+                ));
+                logln(format!(
+                    "{pad}kind:              {}",
+                    format_id(&format!("{:?}", params.kind))
+                ));
+                logln(format!(
+                    "{pad}payload:           {}",
+                    typed_schema_value_to_string(&params.payload)
                 ));
             }
         }

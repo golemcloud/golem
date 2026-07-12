@@ -1073,7 +1073,7 @@ impl WorkerApi {
                     api::error_code::COMPONENT_NOT_FOUND,
                     golem_common::safe(format!(
                         "Couldn't retrieve the component: {}. error: {}",
-                        &component_id,
+                        component_id,
                         error.to_safe_string()
                     )),
                 )

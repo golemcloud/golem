@@ -322,7 +322,7 @@ async fn http_client_using_reqwest_async_parallel(
 
     let return_value = result.into_return_value().expect("Expected a return value");
     let SchemaValue::List { elements: lst } = &return_value else {
-        panic!("Expected List, got {:?}", &return_value)
+        panic!("Expected List, got {:?}", return_value)
     };
     assert_eq!(lst.len(), 32);
     assert_eq!(

@@ -4503,6 +4503,161 @@ async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
     Ok(())
 }
 
+/// Interrupting an agent mid-response-stream and resuming it forces the
+/// restart rebuild gate to reissue the recorded P3 send to continue the
+/// response stream; the reissued request must carry the recorded request body
+/// byte-identically instead of an empty-body reissue.
+#[test]
+#[tracing::instrument]
+async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let request_bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let request_bodies_clone = request_bodies.clone();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/",
+                post(move |body: Bytes| {
+                    let request_bodies = request_bodies_clone.clone();
+                    let signal_tx = signal_tx.clone();
+                    async move {
+                        let is_first = {
+                            let mut bodies = request_bodies.lock().unwrap();
+                            bodies.push(body.to_vec());
+                            bodies.len() == 1
+                        };
+                        let stream = stream::iter(0..100)
+                            .throttle(Duration::from_millis(20))
+                            .map(move |i| {
+                                if is_first && i == 50 {
+                                    let _ = signal_tx.send(());
+                                }
+                                Ok::<Bytes, BoxError>(Bytes::from(vec![b'x'; 1024]))
+                            });
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/octet-stream")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    let key = IdempotencyKey::fresh();
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let key_clone = key.clone();
+    let _handle = spawn(
+        async move {
+            let _ = executor_clone
+                .invoke_and_await_agent_with_key(
+                    &component_clone,
+                    &agent_id_clone,
+                    &key_clone,
+                    "post_with_p3_streamed_body",
+                    data_value!(),
+                )
+                .await;
+        }
+        .in_current_span(),
+    );
+
+    signal_rx.recv().await.unwrap();
+
+    executor.interrupt(&worker_id).await?;
+
+    drain_connection(rx).await;
+
+    executor.resume(&worker_id, false).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(5))
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_with_p3_streamed_body",
+            data_value!(),
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    let result_value = result.into_typed::<String>()?;
+    assert!(
+        result_value.starts_with("200 "),
+        "Expected a successful 200 response after resume, got: {}",
+        &result_value[..result_value.len().min(64)]
+    );
+
+    // post_with_p3_streamed_body streams 8 chunks of 8 KiB where byte j of
+    // chunk i is (i * 31 + j) % 251
+    let expected_body: Vec<u8> = {
+        let mut body = Vec::with_capacity(8 * 8 * 1024);
+        for i in 0..8usize {
+            body.extend((0..8 * 1024usize).map(|j| ((i * 31 + j) % 251) as u8));
+        }
+        body
+    };
+    let request_bodies = request_bodies.lock().unwrap();
+    assert_eq!(
+        request_bodies.len(),
+        2,
+        "Expected exactly 2 requests (initial attempt + post-resume reissue)"
+    );
+    assert_eq!(
+        request_bodies[0], expected_body,
+        "The initial attempt must upload the full body"
+    );
+    assert_eq!(
+        request_bodies[1], expected_body,
+        "The rebuilt send must reissue the recorded request body byte-identically, not an empty body"
+    );
+
+    Ok(())
+}
+
 /// Reproducer for the FutureTrailers non-durable bug (oplog mismatch).
 ///
 /// This test exercises the exact bug mechanism identified in Step 13 of the investigation:

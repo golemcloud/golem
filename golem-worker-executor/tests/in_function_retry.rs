@@ -2509,3 +2509,400 @@ async fn http_no_resuming_response_body_retry_when_body_skip_used(
 
     Ok(())
 }
+
+/// Reconstructs the deterministic body streamed by the test component's
+/// `post_with_p3_streamed_body` / `post_with_p3_large_streamed_body` exports:
+/// `chunk_count` chunks of `chunk_len` bytes, where byte `j` of chunk `i` is
+/// `(i * 31 + j) % 251`.
+fn streamed_upload_expected_body(chunk_count: usize, chunk_len: usize) -> Vec<u8> {
+    let mut body = Vec::with_capacity(chunk_count * chunk_len);
+    for i in 0..chunk_count {
+        body.extend((0..chunk_len).map(|j| ((i * 31 + j) % 251) as u8));
+    }
+    body
+}
+
+/// Starts a raw TCP server for streamed-upload retry tests. On the first
+/// `fail_count` connections it reads a small amount (the headers, possibly
+/// with some body bytes) then drops the connection mid-upload. On subsequent
+/// connections it reads the full request (content-length or chunked-encoded,
+/// accepting optional trailers after the terminal chunk), records the raw
+/// request bytes, and responds 200 echoing the decoded body size.
+/// Returns `(port, connection_counter, recorded_raw_requests)`; only the
+/// fully-read (non-dropped) requests are recorded.
+async fn start_streamed_upload_recording_server(
+    fail_count: usize,
+) -> (u16, Arc<AtomicUsize>, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let recorded: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded_clone = recorded.clone();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let n = counter_clone.fetch_add(1, Ordering::SeqCst);
+                if n < fail_count {
+                    // Read a small amount then drop, failing the upload mid-stream.
+                    let mut buf = [0u8; 512];
+                    let _ = stream.read(&mut buf).await;
+                    drop(stream);
+                } else {
+                    let data = read_raw_http_request(&mut stream).await;
+
+                    let header_end_pos = String::from_utf8_lossy(&data)
+                        .find("\r\n\r\n")
+                        .map(|p| p + 4)
+                        .unwrap_or(data.len());
+                    let headers_str = String::from_utf8_lossy(&data[..header_end_pos]);
+                    let is_chunked = headers_str
+                        .to_lowercase()
+                        .contains("transfer-encoding: chunked");
+                    let raw_body = &data[header_end_pos..];
+                    let request_body: Vec<u8> = if is_chunked {
+                        decode_chunked_body(raw_body)
+                    } else {
+                        raw_body.to_vec()
+                    };
+
+                    recorded_clone.lock().unwrap().push(data);
+
+                    let body = format!("received {} bytes", request_body.len());
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body,
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    (port, counter, recorded)
+}
+
+/// Decodes the body of a recorded raw HTTP request (chunked-aware).
+fn recorded_request_decoded_body(raw: &[u8]) -> Vec<u8> {
+    let header_end_pos = String::from_utf8_lossy(raw)
+        .find("\r\n\r\n")
+        .map(|p| p + 4)
+        .unwrap_or(raw.len());
+    let headers_str = String::from_utf8_lossy(&raw[..header_end_pos]);
+    let is_chunked = headers_str
+        .to_lowercase()
+        .contains("transfer-encoding: chunked");
+    let raw_body = &raw[header_end_pos..];
+    if is_chunked {
+        decode_chunked_body(raw_body)
+    } else {
+        raw_body.to_vec()
+    }
+}
+
+/// Counts regular files under `dir`, recursively. Returns 0 if `dir` does not exist.
+fn count_files_recursively(dir: &std::path::Path) -> usize {
+    let mut count = 0;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            count += count_files_recursively(&path);
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_streamed_upload_inline_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let (port, connection_counter, recorded_requests) =
+        start_streamed_upload_recording_server(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_p3_streamed_body",
+            data_value!(),
+        )
+        .await?;
+    let result_value = result.into_typed::<String>()?;
+
+    // post_with_p3_streamed_body streams 8 chunks of 8 KiB
+    let expected_body = streamed_upload_expected_body(8, 8 * 1024);
+    assert!(
+        result_value.starts_with(&format!("200 received {} bytes", expected_body.len())),
+        "Expected a successful 200 response echoing the full body size, got: {result_value:?}"
+    );
+
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert_eq!(
+        total_connections, 2,
+        "Expected exactly 2 connections (1 dropped mid-upload + 1 successful retry)"
+    );
+
+    {
+        let recorded = recorded_requests.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "Expected exactly one fully-received request"
+        );
+        let resent_body = recorded_request_decoded_body(&recorded[0]);
+        assert_eq!(
+            resent_body, expected_body,
+            "The retried request must carry the full recorded body byte-identically"
+        );
+    }
+
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert!(
+        retry_count > 0,
+        "Expected at least 1 in-function retry error entry in oplog, got {retry_count}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_large_streamed_upload_inline_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+            // Force recorded request-body frames out of the inline oplog
+            // representation so the resend proves oplog-payload (blob storage)
+            // backed, bounded-memory replay.
+            config.oplog.max_payload_size = 4096;
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let (port, connection_counter, recorded_requests) =
+        start_streamed_upload_recording_server(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let _worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_p3_large_streamed_body",
+            data_value!(),
+        )
+        .await?;
+    let result_value = result.into_typed::<String>()?;
+
+    // post_with_p3_large_streamed_body streams 16 chunks of 128 KiB (2 MiB)
+    let expected_body = streamed_upload_expected_body(16, 128 * 1024);
+    assert!(
+        result_value.starts_with(&format!("200 received {} bytes", expected_body.len())),
+        "Expected a successful 200 response echoing the full body size, got: {result_value:?}"
+    );
+
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert_eq!(
+        total_connections, 2,
+        "Expected exactly 2 connections (1 dropped mid-upload + 1 successful retry)"
+    );
+
+    {
+        let recorded = recorded_requests.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "Expected exactly one fully-received request"
+        );
+        let resent_body = recorded_request_decoded_body(&recorded[0]);
+        assert_eq!(
+            resent_body.len(),
+            expected_body.len(),
+            "The retried request must resend the full body"
+        );
+        assert_eq!(
+            resent_body, expected_body,
+            "The retried request must carry the full recorded body byte-identically"
+        );
+    }
+
+    // With max_payload_size lowered to 4 KiB, the recorded body frames must
+    // have been uploaded to blob storage rather than stored inline.
+    let payload_root = deps
+        .blob_storage_root()
+        .join("oplog_payload")
+        .join("durable")
+        .join(context.default_environment_id.to_string());
+    let payload_files = count_files_recursively(&payload_root);
+    assert!(
+        payload_files > 0,
+        "Expected recorded request-body chunks to be routed through blob storage under {payload_root:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_retry_resends_trailers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let (port, connection_counter, recorded_requests) =
+        start_streamed_upload_recording_server(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let _worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_p3_trailers",
+            data_value!(),
+        )
+        .await?;
+    let result_value = result.into_typed::<String>()?;
+
+    assert!(
+        result_value.starts_with("200 received 9 bytes"),
+        "Expected a successful 200 response echoing the body size, got: {result_value:?}"
+    );
+
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert_eq!(
+        total_connections, 2,
+        "Expected exactly 2 connections (1 dropped mid-upload + 1 successful retry)"
+    );
+
+    {
+        let recorded = recorded_requests.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "Expected exactly one fully-received request"
+        );
+        let raw = &recorded[0];
+
+        let body = recorded_request_decoded_body(raw);
+        assert_eq!(
+            body, b"test-body",
+            "The retried request must carry the recorded body"
+        );
+
+        let trailer = b"x-test-trailer: trailer-value";
+        let trailer_present = raw
+            .windows(trailer.len())
+            .any(|window| window.eq_ignore_ascii_case(trailer));
+        assert!(
+            trailer_present,
+            "The retried request must resend the recorded trailers; raw request:\n{}",
+            String::from_utf8_lossy(raw)
+        );
+    }
+
+    Ok(())
+}
