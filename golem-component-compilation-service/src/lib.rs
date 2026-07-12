@@ -172,6 +172,11 @@ fn create_wasmtime_config(engine_config: &config::EngineConfig) -> wasmtime::Con
 
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    // Required to precompile native WasmGC agent components (e.g. Kotlin/Wasm). Mirrors
+    // golem-worker-executor's create_wasmtime_config.
+    config.wasm_gc(true);
+    config.wasm_function_references(true);
+    config.wasm_exceptions(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(WasmBacktraceDetails::Enable);

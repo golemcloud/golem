@@ -466,6 +466,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         config.wasm_multi_value(true);
         config.wasm_component_model(true);
+        // Required to run native Kotlin/Wasm (WasmGC) agent components. All three are mandatory:
+        // the component fails to parse without any one of them. These proposals are additive
+        // (existing Rust/JS components do not use them) and deterministic (no oplog-replay impact).
+        config.wasm_gc(true);
+        config.wasm_function_references(true);
+        config.wasm_exceptions(true);
         config.epoch_interruption(true);
         config.consume_fuel(true);
         config.wasm_backtrace_details(WasmBacktraceDetails::Enable);

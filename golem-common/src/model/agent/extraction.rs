@@ -134,6 +134,11 @@ async fn extract_component_metadata_impl(
     let mut config = wasmtime::Config::default();
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    // Required to statically extract agent types from native WasmGC agent components (e.g.
+    // Kotlin/Wasm). Mirrors golem-worker-executor's create_wasmtime_config.
+    config.wasm_gc(true);
+    config.wasm_function_references(true);
+    config.wasm_exceptions(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
