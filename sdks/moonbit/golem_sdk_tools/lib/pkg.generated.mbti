@@ -38,6 +38,10 @@ pub fn generate_multimodal_impls(Array[MultimodalEnumInfo], type_id_prefix? : St
 
 pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
 
+pub fn generate_tool_client_code(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
+
+pub fn generate_tool_registration(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
+
 pub fn generate_value_type_impls(Array[ValueTypeInfo], type_id_prefix? : String) -> @list.List[@syntax.Impl]
 
 pub fn is_config_type(ParamType) -> Bool
@@ -49,6 +53,8 @@ pub fn is_principal_type(ParamType) -> Bool
 pub fn is_rpc_incompatible_type(ParamType) -> Bool
 
 pub fn is_secret_type(ParamType) -> Bool
+
+pub fn moonbit_name_to_kebab_case(String) -> String
 
 pub fn param_type_to_type_string(ParamType) -> String
 
@@ -67,6 +73,8 @@ pub fn parse_path_and_query(String) -> (Array[PathSegmentInfo], Array[QueryVarIn
 pub fn parse_path_only(String) -> Array[PathSegmentInfo] raise HttpPathParseError
 
 pub fn parse_pkg_exports(String) -> Array[String]
+
+pub fn parse_tools(Array[(String, String)]) -> Array[ToolInfo] raise ToolParseError
 
 pub fn parse_value_types(Array[(String, String)]) -> Array[ValueTypeInfo] raise AgentParseError
 
@@ -90,6 +98,8 @@ pub fn validate_http_routes(Array[AgentInfo]) -> Unit raise AgentParseError
 
 pub fn visible_params(Array[(String, ParamType)]) -> Array[(String, ParamType)]
 
+pub fn wire_to_pascal_case(String) -> String
+
 // Errors
 pub suberror AgentParseError {
   AgentParseError(String)
@@ -97,6 +107,14 @@ pub suberror AgentParseError {
 
 pub suberror HttpPathParseError {
   HttpPathParseError(String)
+} derive(@debug.Debug)
+
+pub suberror ToolEmitError {
+  ToolEmitError(String)
+} derive(Eq, @debug.Debug)
+
+pub suberror ToolParseError {
+  ToolParseError(String)
 } derive(@debug.Debug)
 
 // Types and methods
@@ -222,6 +240,114 @@ pub(all) struct ReadOnlyInfo {
 pub(all) enum SystemVariableKind {
   AgentType
   AgentVersion
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolArgInfo {
+  source_param : String
+  name : String?
+  scope : String?
+  kind : String?
+  short : String?
+  aliases : Array[String]
+  env : String?
+  required : Bool?
+  negatable : Bool?
+  optional_scalar : Bool?
+  repeatable : String?
+  delim : String?
+  defaults : Array[String]
+  separator : String?
+  verbatim : Bool?
+  accepts_stdio : Bool?
+  regex : String?
+  min_length : String?
+  max_length : String?
+  direction : String?
+  mimes : Array[String]
+  schemes : Array[String]
+  min : String?
+  max : String?
+  bounds : String?
+  unit : String?
+  doc : String?
+  value_name : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolCommandInfo {
+  source_name : String
+  name : String
+  aliases : Array[String]
+  subtree : String?
+  read_only : Bool?
+  destructive : Bool?
+  idempotent : Bool?
+  open_world : Bool?
+  params : Array[(String, ToolParamType)]
+  args : Array[ToolArgInfo]
+  success_type : ParamType?
+  error_type : ParamType?
+  error_via_result : Bool
+  errors : Array[ToolErrorCaseInfo]
+  result : ToolResultInfo?
+  constraints : Array[ToolConstraintInfo]
+  examples : Array[ToolExample]
+  description : String
+  is_root : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolConstraintInfo {
+  kind : String
+  refs : Array[String]
+  lhs : Array[String]
+  rhs : Array[String]
+  lhs_quant : String?
+  rhs_quant : String?
+  lhs_value_is : Array[String]
+  rhs_value_is : Array[String]
+  value_is : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolErrorCaseInfo {
+  name : String
+  payload : ParamType?
+  kind : String
+  exit_code : String?
+  description : String
+  examples : Array[ToolExample]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolExample {
+  body : String
+  title : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ToolHiddenType {
+  Principal
+  InputStream
+  OutputStream
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolInfo {
+  source_name : String
+  name : String
+  version : String?
+  description : String
+  examples : Array[ToolExample]
+  commands : Array[ToolCommandInfo]
+  mut root_command : Int?
+} derive(Eq, @debug.Debug)
+pub fn ToolInfo::client_pascal_case(Self) -> String
+pub fn ToolInfo::wire_name(Self) -> String
+
+pub(all) enum ToolParamType {
+  Public(ParamType)
+  Hidden(ToolHiddenType)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolResultInfo {
+  formatters : Array[String]
+  options : Array[(String, String)]
+  defaults : Array[String]
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ValueTypeInfo {

@@ -1,0 +1,17 @@
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/common" @agentCommon,
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/common" @toolCommon,
+  "golemcloud/golem_sdk/interface/golem/tool/host" @toolHost,
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model" @model,
+  "moonbitlang/core/strconv",
+}
+
+import {
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model" @model,
+} for "test"
+
+warnings = "-44"

@@ -1,0 +1,323 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/tool"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/host",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn build_canonical_input(CanonicalInputModel, Array[(String, @schema_model.SchemaValue)]) -> @schema_model.TypedSchemaValue raise ToolBuildError
+
+pub fn[T : @schema.FromSchema] decode_canonical_field(Array[CanonicalInputValue], String, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn decode_canonical_input(ToolDef, Int, @types.TypedSchemaValue, String) -> Array[CanonicalInputValue] raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn decode_invocation_input(@types.TypedSchemaValue, Int, String) -> Array[@schema_model.SchemaValue] raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn[E] decode_result_empty(InvocationResult) -> Result[Unit, ToolError[E]]
+
+pub fn[E] decode_result_stdout_only(InvocationResult) -> Result[@streams.OutputStream, ToolError[E]]
+
+pub fn[T : @schema.FromSchema, E] decode_result_value(InvocationResult) -> Result[T, ToolError[E]]
+
+pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(InvocationResult) -> Result[(T, @streams.OutputStream), ToolError[E]]
+
+pub fn discover_tools() -> Array[@golemcloud/golem_sdk/interface/golem/tool/common.Tool]
+
+pub fn encode_invocation_input(@schema_model.SchemaGraph, Array[@schema_model.SchemaValue]) -> @schema_model.TypedSchemaValue
+
+pub fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn[E] expect_no_stdout(@streams.OutputStream?) -> Result[Unit, ToolError[E]]
+
+pub fn[E] expect_no_value(@schema_model.TypedSchemaValue?) -> Result[Unit, ToolError[E]]
+
+pub fn[E] expect_stdout(@streams.OutputStream?) -> Result[@streams.OutputStream, ToolError[E]]
+
+pub fn[E] expect_value(@schema_model.TypedSchemaValue?) -> Result[@schema_model.TypedSchemaValue, ToolError[E]]
+
+pub fn forward_canonical_input(Array[CanonicalInputValue], ToolDef, Int) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+
+pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub fn invocation_result_stdout(@streams.OutputStream) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @streams.OutputStream) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub fn[E] invoke_and_await(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[InvocationResult, ToolError[E]]
+
+pub fn invoke_and_await_no_tool_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[NoToolError]]
+
+pub fn[E : @schema.FromSchema] invoke_and_await_payload_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[E]]
+
+pub fn invoke_registered_subtool(String, Array[String], Array[CanonicalInputValue], @streams.InputStream?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+
+pub fn invoke_registered_tool(String, Array[String], @types.TypedSchemaValue, @streams.InputStream?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+
+pub fn literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) -> @schema_model.SchemaValue raise ToolBuildError
+
+pub fn refine_numeric(@schema_model.SchemaGraph, String?, String?, String?) -> @schema_model.SchemaGraph raise ToolBuildError
+
+pub fn refine_path(@schema_model.SchemaGraph, @types.PathDirection?, @types.PathKind?, Array[String]?) -> @schema_model.SchemaGraph raise ToolBuildError
+
+pub fn refine_text(@schema_model.SchemaGraph, String?, UInt?, UInt?) -> @schema_model.SchemaGraph raise ToolBuildError
+
+pub fn refine_url(@schema_model.SchemaGraph, Array[String]?) -> @schema_model.SchemaGraph raise ToolBuildError
+
+pub fn register_tool_def(ToolDef) -> Unit raise ToolBuildError
+
+pub fn register_tool_def_invoker(ToolDef, (Array[String], @types.TypedSchemaValue, @streams.InputStream?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
+
+pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise ToolBuildError
+
+pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, (Array[String], @types.TypedSchemaValue, @streams.InputStream?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
+
+pub fn render_argument_help(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String], String) -> Result[String, ToolBuildError]
+
+pub fn render_help(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String]) -> Result[String, ToolBuildError]
+
+pub fn resolve_command_path(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String]) -> Result[Int, ToolBuildError]
+
+pub fn tool_name(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Result[String, ToolBuildError]
+
+pub fn[E] tool_protocol_error(String) -> ToolError[E]
+
+pub fn value_is_literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) -> @schema_model.SchemaValue raise ToolBuildError
+
+// Errors
+pub suberror ToolBuildError {
+  EmptyCommandTree
+  CommandNotFound(String)
+  InvalidCommandTree(String)
+  SubtreeRootNameMismatch(String, String)
+  InheritedGlobalConflict(String, String)
+  MissingCanonicalInputField(String)
+  SchemaModelError(String)
+  LiteralTypeMismatch(String)
+  InvalidLiteral(String)
+  RefinementTypeMismatch(String, String)
+  InvalidNumericBound(String)
+  ValueIsTypeMismatch(String)
+  UnresolvedValueIsLiteral(String)
+} derive(Eq, @debug.Debug)
+
+// Types and methods
+pub(all) struct CanonicalInputField {
+  name : String
+  aliases : Array[String]
+  type_ : @schema_model.SchemaGraph
+} derive(Eq)
+
+pub(all) struct CanonicalInputModel {
+  fields : Array[CanonicalInputField]
+  record_graph : @schema_model.SchemaGraph
+} derive(Eq)
+
+pub(all) struct CanonicalInputValue {
+  name : String
+  aliases : Array[String]
+  type_ : @schema_model.SchemaGraph
+  value : @schema_model.SchemaValue
+} derive(Eq)
+
+pub(all) struct CommandBodyDef {
+  positionals : PositionalsDef
+  options : Array[OptionSpecDef]
+  flags : Array[@golemcloud/golem_sdk/interface/golem/tool/common.FlagSpec]
+  constraints : Array[ConstraintDef]
+  stdin : @golemcloud/golem_sdk/interface/golem/tool/common.StreamSpec?
+  stdout : @golemcloud/golem_sdk/interface/golem/tool/common.StreamSpec?
+  result : ResultSpecDef?
+  errors : Array[ErrorCaseDef]
+  annotations : @golemcloud/golem_sdk/interface/golem/tool/common.CommandAnnotations?
+}
+
+pub(all) struct CommandNodeDef {
+  name : String
+  aliases : Array[String]
+  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  globals : GlobalsDef
+  subcommands : Array[Int]
+  body : CommandBodyDef?
+}
+
+pub(all) enum ConstraintDef {
+  RequiresAll(Array[RefDef])
+  AllOrNone(Array[RefDef])
+  RequiresAny(Array[RefDef])
+  MutexGroups(Array[RefGroupDef])
+  Implies(ImpliesDef)
+  Forbids(ForbidsDef)
+}
+
+pub(all) struct ErrorCaseDef {
+  name : String
+  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  kind : @golemcloud/golem_sdk/interface/golem/tool/common.ErrorKind
+  exit_code : Byte
+  payload : @schema_model.SchemaGraph?
+}
+
+pub(all) struct ForbidsDef {
+  lhs_quant : @golemcloud/golem_sdk/interface/golem/tool/common.Quantifier
+  lhs : Array[RefDef]
+  rhs : Array[RefDef]
+}
+
+pub(all) struct GlobalsDef {
+  options : Array[OptionSpecDef]
+  flags : Array[@golemcloud/golem_sdk/interface/golem/tool/common.FlagSpec]
+}
+
+pub(all) struct ImpliesDef {
+  lhs_quant : @golemcloud/golem_sdk/interface/golem/tool/common.Quantifier
+  lhs : Array[RefDef]
+  rhs_quant : @golemcloud/golem_sdk/interface/golem/tool/common.Quantifier
+  rhs : Array[RefDef]
+}
+
+pub(all) struct InvocationResult {
+  result : @schema_model.TypedSchemaValue?
+  stdout : @streams.OutputStream?
+}
+
+pub(all) enum NoToolError {
+}
+
+pub(all) enum OptionShapeDef {
+  Scalar(@schema_model.SchemaGraph)
+  OptionalScalar(@schema_model.SchemaGraph)
+  RepeatableList(RepeatableListShapeDef)
+  RepeatableMap(RepeatableMapShapeDef)
+}
+
+pub(all) struct OptionSpecDef {
+  long : String
+  short : Char?
+  aliases : Array[String]
+  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  value_name : String?
+  shape : OptionShapeDef
+  default : @schema_model.SchemaValue?
+  required : Bool
+  env_var : String?
+}
+
+pub(all) struct PositionalDef {
+  name : String
+  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  value_name : String?
+  type_ : @schema_model.SchemaGraph
+  default : @schema_model.SchemaValue?
+  required : Bool
+  accepts_stdio : Bool
+}
+
+pub(all) struct PositionalsDef {
+  fixed : Array[PositionalDef]
+  tail : TailPositionalDef?
+}
+
+pub(all) enum RefDef {
+  Present(String)
+  ValueIs(ValueIsRefDef)
+}
+
+pub(all) struct RefGroupDef {
+  refs : Array[RefDef]
+}
+
+pub(all) struct RepeatableListShapeDef {
+  repetition : @golemcloud/golem_sdk/interface/golem/tool/common.Repetition
+  item_type : @schema_model.SchemaGraph
+}
+
+pub(all) struct RepeatableMapShapeDef {
+  repetition : @golemcloud/golem_sdk/interface/golem/tool/common.Repetition
+  map_type : @schema_model.SchemaGraph
+  duplicate_key_policy : @golemcloud/golem_sdk/interface/golem/tool/common.DuplicateKeyPolicy
+}
+
+pub(all) struct ResultSpecDef {
+  type_ : @schema_model.SchemaGraph
+  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  formatters : Array[@golemcloud/golem_sdk/interface/golem/tool/common.Formatter]
+  default_formatter : String
+}
+
+pub(all) enum RpcError {
+  Protocol(String)
+  Denied(String)
+  NotFound(String)
+  RemoteInternal(String)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct TailPositionalDef {
+  name : String
+  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  value_name : String?
+  item_type : @schema_model.SchemaGraph
+  min : UInt
+  max : UInt?
+  separator : String?
+  verbatim : Bool
+  accepts_stdio : Bool
+}
+
+pub(all) struct ToolClient {
+  rpc : @host.ToolRpc
+}
+pub fn ToolClient::drop(Self) -> Unit
+pub fn[E] ToolClient::invoke_and_await(Self, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[InvocationResult, ToolError[E]]
+pub fn ToolClient::invoke_and_await_no_tool_error(Self, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[NoToolError]]
+pub fn[E : @schema.FromSchema] ToolClient::invoke_and_await_payload_error(Self, Array[String], @schema_model.TypedSchemaValue, @streams.InputStream?) -> Result[InvocationResult, ToolError[E]]
+pub fn ToolClient::new(String) -> Self
+
+pub(all) struct ToolDef {
+  version : String
+  commands : Array[CommandNodeDef]
+}
+pub fn ToolDef::canonical_input_fields(Self, Int) -> Array[CanonicalInputField] raise ToolBuildError
+pub fn ToolDef::canonical_input_model(Self, Int) -> CanonicalInputModel raise ToolBuildError
+pub fn ToolDef::command_index_by_path(Self, Array[String]) -> Int?
+pub fn ToolDef::graft_subtree(Self, Self, String, GlobalsDef, String?, @golemcloud/golem_sdk/interface/golem/tool/common.Doc?, Array[String]?) -> Self raise ToolBuildError
+pub fn ToolDef::normalize_inherited_globals(Self) -> Self raise ToolBuildError
+pub fn ToolDef::to_tool(Self) -> @golemcloud/golem_sdk/interface/golem/tool/common.Tool raise ToolBuildError
+pub fn ToolDef::tool_name(Self) -> Result[String, ToolBuildError]
+
+pub(all) enum ToolError[E] {
+  Rpc(RpcError)
+  Tool(E)
+}
+
+pub(all) enum ToolLiteral {
+  Scalar(String)
+  List(Array[String])
+  Map(Array[(String, String)])
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ValueIsLiteralDef {
+  Resolved(@schema_model.SchemaValue)
+  Deferred(ToolLiteral)
+}
+
+pub(all) struct ValueIsRefDef {
+  name : String
+  value : ValueIsLiteralDef
+}
+
+// Type aliases
+
+// Traits
+
