@@ -8142,5 +8142,5 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
         ])
         .await;
     assert!(sample_read_shared.success_or_dump());
-    assert!(sample_read_shared.stdout_contains("class SampleAgent"));
+    assert!(sample_read_shared.stdout_contains("export const SampleAgent = defineAgent"));
 }

@@ -1,8 +1,8 @@
 import * as v from 'valibot';
 import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-// The same durable counter as the default template, but authored with Valibot
-// schemas instead of Zod. The fluent SDK accepts any Standard Schema vendor, so
+// A durable counter authored with Valibot schemas instead of Zod. The fluent SDK
+// accepts any Standard Schema vendor, so
 // `v.string()` / `v.number()` / `v.void()` drop straight into the contract.
 export const CounterValibot = defineAgent({
   name: 'CounterValibot',

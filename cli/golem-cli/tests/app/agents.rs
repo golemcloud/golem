@@ -1227,25 +1227,6 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
 // (post type extraction). This test ensures such issues are caught automatically
 // and act as a regression-test.
 //
-// TODO(recursive-agent-types): this test currently fails at `golem deploy` with a
-// Rust stack overflow ("fatal runtime error: stack overflow") in golem-cli, NOT in
-// the SDK or the fixture. The fixture's `Tree` type (test-data/ts-code-first-snippets/
-// model.ts) is recursive (`Tree = z.lazy(() => z.object({ label, children:
-// z.array(Tree) }))`). The fluent SDK now supports recursive schemas end-to-end: it
-// emits a correct flat WIT agent-type (schema-graph `defs` + `ref` nodes), and
-// `golem build` extracts it cleanly (verified in isolation with a minimal recursive
-// `Tree` agent). The overflow is in golem-cli's DEPLOY-time processing of a recursive
-// agent-type schema — reproduced isolated, localized to the component metadata step
-// (`command_handler/component/mod.rs::diffable_local_component`, around
-// "Adding metadata to components" / "Calculating hash for component binary"). The
-// root cause is a ref-resolving / hash / serialize walk over the agent-type schema
-// that lacks cycle detection on `ref` nodes (golem-cli / golem-common, shared
-// wire-sensitive code) — a latent gap the fluent SDK's runtime schema-graph now
-// exposes (the decorator/typegen path represented recursion differently).
-// Fix: add cycle detection to that deploy-time schema walk. After it's fixed, the
-// goldenfile must also be regenerated (fluent's schema output differs structurally
-// from the decorator-era golden): `UPDATE_GOLDENFILES=1` /
-// `cargo make cli-integration-tests-update-golden-files`.
 #[test]
 async fn test_ts_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
@@ -1344,13 +1325,13 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funOptional",
         &[
-            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case0", value: "foo"}"#,
             r#"{a: "foo"}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "UnionType2", value: "foo"}"#,
+            r#"{tag: "case1", value: "foo"}"#,
         ],
     )
     .await;
@@ -1373,35 +1354,35 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     // function with a very complex object
     let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "case1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}
     "#;
 
     run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
 
     // union type that has anonymous terms
-    run_and_assert(
-        &ctx,
-        "funUnionType",
-        &[r#"{tag: "UnionType2", value: "foo"}"#],
-    )
-    .await;
+    run_and_assert(&ctx, "funUnionType", &[r#"{tag: "case1", value: "foo"}"#]).await;
 
     // A complex union type
     run_and_assert(
         &ctx,
         "funUnionComplexType",
-        &[r#"{tag: "UnionComplexType2", value: "foo"}"#],
+        &[r#"{tag: "case1", value: "foo"}"#],
     )
     .await;
 
     // Union that includes literals and boolean (string literal input)
-    run_and_assert(&ctx, "funUnionWithLiterals", &[r#"{tag: "lit1"}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funUnionWithLiterals",
+        &[r#"{tag: "case0", value: "lit1"}"#],
+    )
+    .await;
 
     // Union that includes literals and boolean (boolean input)
     run_and_assert(
         &ctx,
         "funUnionWithLiterals",
-        &[r#"{tag: "UnionWithLiterals1", value: true}"#],
+        &[r#"{tag: "case3", value: true}"#],
     )
     .await;
 
@@ -1451,7 +1432,12 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     assert!(outputs.success_or_dump());
 
     // A tagged union
-    run_and_assert(&ctx, "funTaggedUnion", &[r#"{tag: "a", value: "foo"}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funTaggedUnion",
+        &[r#"{tag: "case0", value: {tag: "a", val: "foo"}}"#],
+    )
+    .await;
 
     assert!(outputs.success_or_dump());
 
@@ -1480,23 +1466,38 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funUndefinedReturn", &[r#""foo""#]).await;
 
     // A function with result type
-    run_and_assert(&ctx, "funResultExact", &[r#"{ok: "foo"}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funResultExact",
+        &[r#"{tag: "case0", value: {tag: "ok", value: "foo"}}"#],
+    )
+    .await;
 
     // A function with (untagged) result-like type - but not result
     run_and_assert(&ctx, "funEitherOptional", &[r#"{ok: "foo", err: null}"#]).await;
 
     // Functions using the builtin result type
-    run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{ok: null}"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{ok: {}}"#]).await;
     run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{error: "foo"}"#]).await;
 
     run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{ok: "foo"}"#]).await;
-    run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{error: null}"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{error: {}}"#]).await;
 
     run_and_assert(&ctx, "funBuiltinResultSN", &[r#"{ok: "yay"}"#]).await;
     run_and_assert(&ctx, "funBuiltinResultSN", &[r#"{error: 42}"#]).await;
 
-    run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{error: null}"#]).await;
-    run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{ok: null}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funResultLikeWithVoid",
+        &[r#"{tag: "case1", value: {tag: "err", errVal: {}}}"#],
+    )
+    .await;
+    run_and_assert(
+        &ctx,
+        "funResultLikeWithVoid",
+        &[r#"{tag: "case0", value: {tag: "ok", okVal: {}}}"#],
+    )
+    .await;
 
     // An arrow function
     run_and_assert(&ctx, "funArrowSync", &[r#""foo""#]).await;
@@ -1506,9 +1507,9 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funAll",
         &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}"#,
-            r#"{tag: "UnionType2", value: "foo"}"#,
-            r#"{tag: "UnionComplexType2", value: "foo"}"#,
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "case1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}"#,
+            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case1", value: "foo"}"#,
             r#"42"#,
             r#""foo""#,
             r#"true"#,
@@ -1517,16 +1518,16 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             r#"["foo", 42, true]"#,
             r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
             r#"{a: "foo", b: 42, c: true}"#,
-            r#"{tag: "okay", value: "foo"}"#,
+            r#"{tag: "case0", value: {tag: "okay", value: "foo"}}"#,
             r#"{ok: "foo", err: "foo"}"#,
-            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case0", value: "foo"}"#,
             r#"{a: "foo"}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "UnionType2", value: "foo"}"#,
-            r#"{tag: "a", value: "foo"}"#
+            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case0", value: {tag: "a", val: "foo"}}"#
         ],
     )
         .await;

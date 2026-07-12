@@ -67,7 +67,7 @@ export declare namespace StandardSchemaV1 {
 
 export function isStandardSchema(value: unknown): value is StandardSchemaV1 {
   return (
-    typeof value === 'object' &&
+    (typeof value === 'object' || typeof value === 'function') &&
     value !== null &&
     '~standard' in value &&
     typeof (value as StandardSchemaV1)['~standard'] === 'object'

@@ -1,8 +1,8 @@
 import { type } from 'arktype';
 import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-// The same durable counter as the default template, but authored with ArkType
-// schemas instead of Zod. The fluent SDK accepts any Standard Schema vendor, so
+// A durable counter authored with ArkType schemas instead of Zod. The fluent SDK
+// accepts any Standard Schema vendor, so
 // `type('string')` / `type('number')` drop straight into the contract.
 //
 // ArkType has no first-class `void`, so `reset` returns the reset value (0)

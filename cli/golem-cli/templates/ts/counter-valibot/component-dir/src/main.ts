@@ -1,1 +1,1 @@
-import './counter-agent.js';
+import './counter-valibot-agent.js';

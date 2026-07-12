@@ -27,18 +27,7 @@ import '../src/fluent/schema/valibot';
 import '../src/fluent/schema/arktype';
 import '../src/fluent/schema/effect';
 
-// ArkType's `type(...)` is itself a *callable function* (it carries `~standard`
-// and `.internal`), but the adapter dispatches only on object Standard Schema
-// values. The arktype entry point therefore exposes an object-form Standard
-// Schema: a plain object carrying the same `~standard` props plus the `.internal`
-// node tree the walker reads. We reproduce that thin facade here.
-const ark = (def: unknown) => {
-  const t = arkType(def as never) as unknown as {
-    '~standard': unknown;
-    internal: unknown;
-  };
-  return { '~standard': t['~standard'], internal: t.internal };
-};
+const ark = (def: unknown) => arkType(def as never);
 
 // ============================================================
 // Valibot (vendor '~standard'.vendor === 'valibot')
