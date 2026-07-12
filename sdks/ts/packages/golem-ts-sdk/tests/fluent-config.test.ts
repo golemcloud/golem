@@ -146,6 +146,18 @@ describe('fluent agent config (single-record + s.secret marker)', () => {
     expect(declarations[0].graph.root.body.tag).toBe('list');
   });
 
+  it('preserves null when decoding a nullable config leaf', () => {
+    const [declaration] = compileConfig({ label: z.string().nullable() });
+    expect(declaration.codec.fromValue(declaration.codec.toValue(null))).toBeNull();
+  });
+
+  it('preserves null when decoding a nullable object-valued config field', () => {
+    const declarations = compileConfig({ group: z.object({ label: z.string() }).nullable() });
+    expect(declarations).toHaveLength(1);
+    expect(declarations[0].path).toEqual(['group']);
+    expect(declarations[0].codec.fromValue(declarations[0].codec.toValue(null))).toBeNull();
+  });
+
   it('Secret.toJSON throws so secrets never leak through serialization', () => {
     const [secretDecl] = compileConfig({ apiKey: s.secret(z.string()) });
     const handle = new Secret(secretDecl);
@@ -206,6 +218,20 @@ describe('fluent agent config (single-record + s.secret marker)', () => {
     expect(group.optional).toBe(true);
     // Only the non-optional child `a` gates the group's presence.
     expect(group.requiredKeys).toEqual(['a']);
+  });
+
+  it('distinguishes an absent optional group from a present required nullable child', () => {
+    const spec = {
+      group: z.object({ label: z.string().nullable() }).optional(),
+    };
+    const tree = compileConfigTree(spec);
+    const group = tree.children[0] as ConfigGroupNode;
+    expect(group.requiredKeys).toEqual(['label']);
+
+    const [declaration] = compileConfig(spec);
+    expect(declaration.required).toBe(true);
+    expect(declaration.codec.fromValue({ tag: 'option', value: undefined })).toBeUndefined();
+    expect(declaration.codec.fromValue(declaration.codec.toValue(null))).toBeNull();
   });
 
   it('an ALL-optional group has no required children (always present)', () => {

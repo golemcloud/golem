@@ -219,15 +219,18 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
   if (OPTIONAL.has(kind)) {
     const innerCodec = recurse(inner);
     const root: SchemaType = t.option(innerCodec.graph.root);
+    const noneValue = kind === 'nullable' ? null : undefined;
+    const isNone = (value: unknown) =>
+      value === noneValue ||
+      ((value === null || value === undefined) && innerCodec.graph.root.body.tag !== 'option');
     const optionCodec: FluentCodec = {
       graph: { defs: innerCodec.graph.defs, root },
+      optionKind: kind as 'optional' | 'nullable',
       toValue: (value) =>
-        value === undefined || value === null
-          ? v.option(undefined)
-          : v.option(innerCodec.toValue(value)),
+        isNone(value) ? v.option(undefined) : v.option(innerCodec.toValue(value)),
       fromValue: (sv) => {
         const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
-        return opt === undefined ? undefined : innerCodec.fromValue(opt);
+        return opt === undefined ? noneValue : innerCodec.fromValue(opt);
       },
     };
     // An OPTIONAL object group (`z.object({...}).optional()`): still round-trips
@@ -235,7 +238,7 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
     // object's per-field codecs so the config surface can descend it into
     // per-leaf declarations, and flag it optional so descended leaves are
     // declared as `option<leaf>` (safe unset reads) with required-child presence.
-    if (innerCodec.fields !== undefined) {
+    if (kind === 'optional' && innerCodec.fields !== undefined) {
       return { ...optionCodec, fields: innerCodec.fields, optionalGroup: true };
     }
     return optionCodec;

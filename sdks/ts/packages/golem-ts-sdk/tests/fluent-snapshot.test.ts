@@ -27,6 +27,51 @@ async function initiate(name: string): Promise<Resolved> {
 
 const jsonOf = (data: Uint8Array) => JSON.parse(new TextDecoder().decode(data));
 
+function snapshotStateTypeChecks(): void {
+  defineAgent({
+    name: 'SnapshotTypeCompatible',
+    id: {},
+    snapshotting: { state: z.object({ count: z.number() }) },
+    methods: {},
+  }).implement({
+    init: () => ({ count: 0, transient: true }),
+    methods: {},
+  });
+
+  defineAgent({
+    name: 'SnapshotTypeMissingField',
+    id: {},
+    snapshotting: { state: z.object({ count: z.number() }) },
+    methods: {},
+  }).implement({
+    // @ts-expect-error snapshot state schema requires a numeric `count` field
+    init: () => ({}),
+    methods: {},
+  });
+
+  defineAgent({
+    name: 'SnapshotTypeWrongField',
+    id: {},
+    snapshotting: { state: z.object({ count: z.number() }) },
+    methods: {},
+  }).implement({
+    // @ts-expect-error snapshot state schema requires `count` to be a number
+    init: () => ({ count: 'zero' }),
+    methods: {},
+  });
+
+  defineAgent({
+    name: 'SnapshotBarePolicyUnconstrained',
+    id: {},
+    snapshotting: 'default',
+    methods: {},
+  }).implement({
+    init: () => ({ arbitrary: true }),
+    methods: {},
+  });
+}
+void snapshotStateTypeChecks;
+
 // ── Typed state: only the schema fields are persisted ──────────────────────────
 defineAgent({
   name: 'SnapTypedCounter',

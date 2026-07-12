@@ -79,28 +79,44 @@ export const PollerAgentImpl = PollerAgent.implement({
 });
 ```
 
-## Cancellation via State Flag
+## Cancellation
 
-The fluent RPC client exposes only `.schedule()` — there is no
-`.scheduleCancelable()` / `CancellationToken` variant. To stop a self-scheduling
-loop, keep a boolean flag in state; the next scheduled `poll` checks it and exits
-early without rescheduling:
+`.schedule()` returns a `CancellationToken`. Keep it when the pending invocation
+must be canceled immediately, and call `.cancel()` before its scheduled time.
+For a recurring loop, also keep a boolean flag in state so a `poll` that has
+already started exits without rescheduling:
 
 ```typescript
+import type { CancellationToken } from '@golemcloud/golem-ts-sdk';
+
 export const PollerAgentImpl = PollerAgent.implement({
-    init: ({ id }) => ({ name: id.name, cancelled: false }),
+    init: ({ id }) => ({
+        name: id.name,
+        cancelled: false,
+        pending: undefined as CancellationToken | undefined,
+    }),
     methods: {
         poll() {
             if (this.cancelled) return; // stop the loop
             doWork();
-            scheduleNext(this.name, 60n);
+            const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+            this.pending = clientFor(PollerAgent)({ name: this.name }).poll.schedule({
+                seconds: nowSecs + 60n,
+                nanoseconds: 0,
+            });
         },
         cancel() {
             this.cancelled = true;
+            this.pending?.cancel();
+            this.pending = undefined;
         },
     },
 });
 ```
+
+Do not include `pending` in a typed snapshot schema: it is a live host resource,
+not ordinary serializable state. The boolean flag remains the durable source of
+truth across snapshots and restarts.
 
 ### Cancellation from the CLI
 

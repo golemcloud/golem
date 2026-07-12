@@ -156,6 +156,10 @@ export function registerAgentType(
   metadata: AgentMetadataSpec = {},
 ): RegisteredAgent {
   const className = new AgentClassName(name);
+  if (AgentTypeRegistry.exists(className)) {
+    throw new Error(`Agent "${name}" is already registered`);
+  }
+  AgentTypeRegistry.beginRegistration(className);
 
   // Declaration order (Object.keys) is the single authoritative field order; it
   // drives both the AgentType named-field list and the value record codec.
@@ -204,7 +208,7 @@ export function registerAgentType(
   const configDeclarations = collectConfigLeaves(configTree);
 
   const agentType = assembleAgentType(name, idCodecs, methodCodecs, configDeclarations, metadata);
-  AgentTypeRegistry.register(className, agentType);
+  AgentTypeRegistry.completeRegistration(className, agentType);
 
   const snap = metadata.snapshotting;
   const snapshotStateSchema =
@@ -678,6 +682,9 @@ export function registerAgentInitiator(
   reg: RegisteredAgent,
   impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
 ): void {
+  if (AgentInitiatorRegistry.exists(reg.name)) {
+    throw new Error(`Agent "${reg.name}" already has an implementation`);
+  }
   AgentInitiatorRegistry.register(reg.className, {
     async initiate(constructorInput: SchemaValue, principal: HostPrincipal) {
       let idRecord: Record<string, unknown>;

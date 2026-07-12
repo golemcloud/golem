@@ -123,7 +123,7 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
     expect(at.methods[0].httpEndpoint).toEqual([]);
   });
 
-  it('throws on a malformed mount route', () => {
+  it('defers an error for a malformed mount route', () => {
     expect(() =>
       defineAgent({
         name: 'httpBadRoute',
@@ -131,10 +131,11 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
         http: { path: 'counters/{name}' }, // missing leading slash
         methods: { ping: method({ input: {}, returns: z.string() }) },
       }),
-    ).toThrow(/HTTP mount/);
+    ).not.toThrow();
+    expect(get('httpBadRoute')).toBeUndefined();
   });
 
-  it('throws when a mount path variable is not an id field', () => {
+  it('defers an error when a mount path variable is not an id field', () => {
     expect(() =>
       defineAgent({
         name: 'httpBadMountVar',
@@ -142,10 +143,11 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
         http: { path: '/c/{missing}' },
         methods: { ping: method({ input: {}, returns: z.string() }) },
       }),
-    ).toThrow(/path variable "missing"/);
+    ).not.toThrow();
+    expect(get('httpBadMountVar')).toBeUndefined();
   });
 
-  it('throws when an endpoint variable is not a method parameter', () => {
+  it('defers an error when an endpoint variable is not a method parameter', () => {
     expect(() =>
       defineAgent({
         name: 'httpBadEndpointVar',
@@ -161,11 +163,13 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
           }),
         },
       }),
-    ).toThrow(/path variable "ghost"/);
+    ).not.toThrow();
+    expect(get('httpBadEndpointVar')).toBeUndefined();
   });
 
-  it('throws when a method declares endpoints but the agent has no mount', () => {
+  it('defers an error when a method declares endpoints but the agent has no mount', () => {
     expect(() =>
+      // @ts-expect-error intentionally bypass the compile-time gate to test runtime validation
       defineAgent({
         name: 'httpNoMount',
         id: { name: z.string() },
@@ -173,6 +177,7 @@ describe('fluent agent HTTP routing (Phase 6)', () => {
           look: method({ input: {}, returns: z.string(), http: http.get('/look') }),
         },
       }),
-    ).toThrow(/no HTTP mount/);
+    ).not.toThrow();
+    expect(get('httpNoMount')).toBeUndefined();
   });
 });

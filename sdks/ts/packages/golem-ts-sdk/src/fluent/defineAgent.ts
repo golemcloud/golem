@@ -19,7 +19,8 @@
 // (Zod / Valibot / ArkType / Effect Schema). No Effect runtime.
 
 import { StandardSchemaV1 } from './schema/standardSchema';
-import { InputRecord, MethodSpec } from './method';
+import { MethodSpec } from './method';
+import type { InputRecord, MethodHasHttpOf } from './method';
 import { ParsedAgentId } from '../agentId';
 import { Principal } from '../principal';
 import { Uuid } from '../uuid';
@@ -29,11 +30,18 @@ import { HttpMountSpec } from './http';
 import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
 import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
 import type { Secret } from './secret';
+import { AgentTypeRegistry } from '../internal/registry/agentTypeRegistry';
 
 export type { ConfigSpec } from './config';
 
 export type IdRecord = Record<string, StandardSchemaV1>;
-export type MethodsRecord = Record<string, MethodSpec>;
+export type MethodsRecord = Record<string, MethodSpec<InputRecord, unknown, boolean>>;
+
+type MethodsHaveHttp<Methods extends MethodsRecord> = true extends {
+  [K in keyof Methods]: MethodHasHttpOf<Methods[K]>;
+}[keyof Methods]
+  ? true
+  : false;
 
 /**
  * Recover the field-schema record of an OBJECT schema, or `never` for a
@@ -103,7 +111,7 @@ type InferRecord<R extends Record<string, StandardSchemaV1>> = {
 
 /** The handler signature inferred for a method spec (no-arg when input is empty). */
 type HandlerFor<M> =
-  M extends MethodSpec<infer Input, infer Output>
+  M extends MethodSpec<infer Input, infer Output, boolean>
     ? keyof Input extends never
       ? () => Output | Promise<Output>
       : (input: InferRecord<Input>) => Output | Promise<Output>
@@ -162,6 +170,7 @@ export interface AgentDefinition<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
 > {
   readonly name: string;
   readonly id: Id;
@@ -169,7 +178,9 @@ export interface AgentDefinition<
   /** The agent's config schema (used by `clientFor` to encode config overrides). */
   readonly config?: Config;
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
-  implement<State extends object>(impl: AgentImplementation<Id, Methods, Config, State>): AgentImpl;
+  implement<State extends object & StandardSchemaV1.InferOutput<StateSchema>>(
+    impl: AgentImplementation<Id, Methods, Config, State>,
+  ): AgentImpl;
 }
 
 /**
@@ -192,16 +203,15 @@ export type SnapshotPolicy =
  * `this` are serialized (typed + scoped), fixing over-broad snapshots. For fully
  * custom serialization supply `snapshot: { save, load }` on `implement(...)`.
  */
-export type SnapshottingSpec =
+export type SnapshottingSpec<StateSchema extends StandardSchemaV1 = StandardSchemaV1> =
   | SnapshotPolicy
-  | { policy?: SnapshotPolicy; state: StandardSchemaV1 };
+  | { policy?: SnapshotPolicy; state: StateSchema };
 
-export interface AgentSpec<
+interface AgentSpecBase<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
-  MV extends string = keyof Id & string,
-  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
 > {
   /** The wire-level agent type name. */
   name: string;
@@ -220,7 +230,7 @@ export interface AgentSpec<
    */
   dependencies?: AgentDefinition<any, any>[];
   /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
-  snapshotting?: SnapshottingSpec;
+  snapshotting?: SnapshottingSpec<StateSchema>;
   /**
    * Named config fields, one Standard Schema value each. Mark a field with
    * `s.secret(inner)` to declare it to the host as `secret<inner>`; any other
@@ -228,24 +238,33 @@ export interface AgentSpec<
    * `this.config` / `InitContext.config` via {@link ConfigView}.
    */
   config?: Config;
-  /**
-   * HTTP mount for the agent: a path prefix (`{var}` template or path-segment
-   * builders) plus optional auth / CORS / webhook-suffix. Surfaced as
-   * `agent-type.http-mount`.
-   *
-   * Type-level constraints (literal `http.mount('/…')` call shapes only):
-   * - Every id-record field must be covered by a `{var}` in the mount path, and
-   *   every mount `{var}` must be an id field — enforced via
-   *   {@link MountSpecCovering}.
-   * - Every `{var}` in the optional `webhookSuffix` must be an id field —
-   *   enforced via {@link WebhookVarsValid}.
-   *
-   * Plain object-literal / segment-array forms (which carry no phantom brand)
-   * skip these gates and are validated only by the runtime checks in
-   * `runtime.ts`.
-   */
-  http?: MountSpecCovering<Id, MV, WV> & WebhookVarsValid<Id, WV>;
 }
+
+/**
+ * HTTP mount for the agent: required when any method declares HTTP endpoints,
+ * and optional otherwise. Literal `http.mount('/…')` calls additionally verify
+ * that mount variables cover the id record and webhook variables name valid id
+ * fields. Plain object-literal / segment-array forms defer those checks to the
+ * runtime validation in `runtime.ts`.
+ */
+type AgentHttpSpec<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  MV extends string,
+  WV extends string,
+> =
+  MethodsHaveHttp<Methods> extends true
+    ? { http: MountSpecCovering<Id, MV, WV> & WebhookVarsValid<Id, WV> }
+    : { http?: MountSpecCovering<Id, MV, WV> & WebhookVarsValid<Id, WV> };
+
+export type AgentSpec<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+> = AgentSpecBase<Id, Methods, Config, StateSchema> & AgentHttpSpec<Id, Methods, MV, WV>;
 
 /**
  * Define an agent. Registers the agent's `AgentType` metadata immediately (so
@@ -277,31 +296,61 @@ export function defineAgent<
   Config extends ConfigSpec = {},
   MV extends string = keyof Id & string,
   WV extends string = never,
->(spec: AgentSpec<Id, Methods, Config, MV, WV>): AgentDefinition<Id, Methods, Config> {
-  const registered: RegisteredAgent = registerAgentType(spec.name, spec.id, spec.methods, {
-    description: spec.description,
-    promptHint: spec.promptHint,
-    mode: spec.mode,
-    dependencies: (spec.dependencies ?? []).map((d) => d.name),
-    snapshotting: spec.snapshotting,
-    config: spec.config,
-    // The branded `MountSpecCovering<…>` type is a compile-time gate only; strip
-    // the phantom brands back to the wide registration-side `HttpMountSpec`.
-    http: spec.http as HttpMountSpec | undefined,
-  });
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema>,
+): AgentDefinition<Id, Methods, Config, StateSchema> {
+  const name = spec.name;
+  let registered: RegisteredAgent | undefined;
+  try {
+    registered = registerAgentType(name, spec.id, spec.methods, {
+      description: spec.description,
+      promptHint: spec.promptHint,
+      mode: spec.mode,
+      dependencies: (spec.dependencies ?? []).map((d) => d.name),
+      snapshotting: spec.snapshotting,
+      config: spec.config,
+      // The branded `MountSpecCovering<…>` type is a compile-time gate only; strip
+      // the phantom brands back to the wide registration-side `HttpMountSpec`.
+      http: spec.http as HttpMountSpec | undefined,
+    });
+  } catch (error) {
+    AgentTypeRegistry.recordRegistrationError(
+      name,
+      `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let implemented = false;
   return {
-    name: spec.name,
+    name,
     id: spec.id,
     methods: spec.methods,
     // Expose the config schema on the def so `clientFor` can encode config
     // overrides for RPC (config-on-RPC); undefined when the agent has no config.
     config: spec.config,
     implement(impl) {
-      registerAgentInitiator(
-        registered,
-        impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
-      );
-      return { name: spec.name };
+      if (implemented) {
+        AgentTypeRegistry.recordRegistrationError(
+          name,
+          'Implementation failed: implement() was called more than once for this definition',
+        );
+        return { name };
+      }
+      implemented = true;
+      if (registered) {
+        try {
+          registerAgentInitiator(
+            registered,
+            impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
+          );
+        } catch (error) {
+          AgentTypeRegistry.recordRegistrationError(
+            name,
+            `Implementation failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return { name };
     },
   };
 }

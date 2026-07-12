@@ -50,7 +50,9 @@ call throws a `RemoteCallError`.
 ## Phantom Agents
 
 `clientFor(Def)` accepts an optional second `phantomId` argument to address a
-specific phantom instance that shares the same id record. See the
+specific phantom instance that shares the same id record. To create a fresh
+phantom, call `clientFor(Def).newPhantom(id)`; the returned details contain the
+typed client and generated `phantomId`, which can be saved and reused. See the
 `golem-multi-instance-agent-ts` skill.
 
 ## Cross-Component RPC

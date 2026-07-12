@@ -13,7 +13,8 @@ A **scheduled invocation** enqueues a method call on the target agent to be exec
 
 Every method on a `clientFor(...)` RPC client has a `.schedule()` variant that
 takes a `Datetime` as the first argument, followed by the method's input record
-(omit the input for methods declared with `input: {}`):
+(omit the input for methods declared with `input: {}`). It returns a
+`CancellationToken`; ignore the token when cancellation is not needed.
 
 ```typescript
 import { clientFor } from '@golemcloud/golem-ts-sdk';
@@ -49,15 +50,15 @@ type, import it as `import type { Datetime } from 'golem:agent/host@2.0.0'`.
 
 ## Cancellation
 
-Use `.scheduleCancelable(at, input)` instead of `.schedule(...)` — it returns a `CancellationToken`; call `.cancel()` on it any time before the scheduled time to cancel the invocation:
+Keep the `CancellationToken` returned by `.schedule(at, input)` and call `.cancel()` any time before the scheduled time to cancel the invocation:
 
 ```typescript
-const token = counter.increment.scheduleCancelable({ seconds: nowSecs + 60n, nanoseconds: 0 });
+const token = counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
 // …later, if the run is no longer wanted:
 token.cancel();
 ```
 
-(To cancel an in-flight — not scheduled — RPC call, use `.abortable(signal, input)` and abort the `AbortSignal`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem agent invocation cancel` — see `golem-cancel-queued-invocation`.)
+(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem agent invocation cancel` — see `golem-cancel-queued-invocation`.)
 
 ## Use Cases
 

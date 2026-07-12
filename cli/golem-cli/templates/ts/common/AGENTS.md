@@ -254,7 +254,7 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-`clientFor(Def)` returns a factory; call it with an id record to get a typed proxy. `await client.m(input)` invokes and awaits; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later.
+`clientFor(Def)` returns a factory; call it with an id record to get a typed proxy, or use `factory.newPhantom(id)` to create a phantom and return `{ client, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
 
 ```typescript
 import { clientFor } from '@golemcloud/golem-ts-sdk';

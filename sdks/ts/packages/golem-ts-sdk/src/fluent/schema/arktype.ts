@@ -217,7 +217,10 @@ function walkUnion(node: Node, reg: RecursionRegistry): FluentCodec {
   const emptyBranches = branches.filter((b) => b.kind === 'unit' && isEmptyBranch(b));
   const realBranches = branches.filter((b) => !(b.kind === 'unit' && isEmptyBranch(b)));
   if (emptyBranches.length >= 1 && realBranches.length === 1) {
-    return optionCodec(walkNode(realBranches[0], reg));
+    const hasNull = emptyBranches.some((b) => unitValueOf(b) === null);
+    const hasUndefined = emptyBranches.some((b) => unitValueOf(b) === undefined);
+    const mode = hasNull && hasUndefined ? 'nullish' : hasNull ? 'nullable' : 'optional';
+    return optionCodec(walkNode(realBranches[0], reg), mode);
   }
 
   // String-literal enum: every branch is a string `unit`.
@@ -339,22 +342,30 @@ function walkStructure(node: Node, reg: RecursionRegistry): FluentCodec {
   };
 }
 
-/** Wrap a codec in `option<inner>` for ArkType optional object properties. */
-function optionCodec(innerCodec: FluentCodec): FluentCodec {
+/** Wrap a codec in `option<inner>`, preserving its JavaScript empty-value convention. */
+function optionCodec(
+  innerCodec: FluentCodec,
+  mode: 'optional' | 'nullable' | 'nullish' = 'optional',
+): FluentCodec {
+  const noneValue = mode === 'nullable' ? null : undefined;
+  const isNone =
+    mode === 'nullish'
+      ? (value: unknown) => value === undefined || value === null
+      : (value: unknown) =>
+          value === noneValue ||
+          ((value === null || value === undefined) && innerCodec.graph.root.body.tag !== 'option');
   const wrapped: FluentCodec = {
     graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
-    toValue: (value) =>
-      value === undefined || value === null
-        ? v.option(undefined)
-        : v.option(innerCodec.toValue(value)),
+    optionKind: mode,
+    toValue: (value) => (isNone(value) ? v.option(undefined) : v.option(innerCodec.toValue(value))),
     fromValue: (sv) => {
       const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
-      return opt === undefined ? undefined : innerCodec.fromValue(opt);
+      return opt === undefined ? noneValue : innerCodec.fromValue(opt);
     },
   };
   // An OPTIONAL object group: expose the inner object's per-field codecs (so the
   // config surface can descend it) and flag it optional. See zod.ts.
-  if (innerCodec.fields !== undefined) {
+  if (mode !== 'nullable' && innerCodec.fields !== undefined) {
     return { ...wrapped, fields: innerCodec.fields, optionalGroup: true };
   }
   return wrapped;

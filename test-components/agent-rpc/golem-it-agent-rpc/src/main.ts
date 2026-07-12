@@ -222,7 +222,10 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
             setTimeout(() => controller.abort('cancelled by test'), 100);
 
             try {
-                await counter.slowIncBy.abortable(controller.signal, { value: 1, delayMs: 5000 });
+                await counter.slowIncBy(
+                    { value: 1, delayMs: 5000 },
+                    { signal: controller.signal },
+                );
                 return 'unexpected:completed';
             } catch (e: any) {
                 if (e === 'cancelled by test' || e?.name === 'AbortError') {
@@ -241,7 +244,7 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
             const controller = new AbortController();
 
             // Completes quickly.
-            await counter.incBy.abortable(controller.signal, { value: 5 });
+            await counter.incBy({ value: 5 }, { signal: controller.signal });
 
             // Abort after completion — a no-op.
             controller.abort('late abort');
@@ -273,7 +276,7 @@ export const TsCancelCallerAgentImpl = TsCancelCallerAgent.implement({
             const timer = setTimeout(() => controller.abort('cancelled by test'), delayMs);
 
             try {
-                await blocker.doBlock.abortable(controller.signal);
+                await blocker.doBlock({ signal: controller.signal });
                 this.lastOutcome = 'unexpected:completed';
             } catch (e: any) {
                 if (e === 'cancelled by test' || e?.name === 'AbortError') {

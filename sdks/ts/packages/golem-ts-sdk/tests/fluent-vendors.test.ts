@@ -74,6 +74,14 @@ describe('fluent Valibot walker', () => {
     const nul = compileSchema(vb.nullable(vb.string()));
     expect(nul.graph.root.body.tag).toBe('option');
     expect(nul.fromValue(nul.toValue('x'))).toBe('x');
+    expect(nul.fromValue(nul.toValue(null))).toBeNull();
+
+    const nullish = compileSchema(vb.nullish(vb.string()));
+    expect(nullish.fromValue(nullish.toValue(null))).toBeUndefined();
+
+    const nested = compileSchema(vb.optional(vb.nullable(vb.string())));
+    expect(nested.fromValue(nested.toValue(undefined))).toBeUndefined();
+    expect(nested.fromValue(nested.toValue(null))).toBeNull();
   });
 
   it('maps arrays element-wise', () => {
@@ -192,6 +200,10 @@ describe('fluent ArkType walker', () => {
     const nul = compileSchema(ark('number | null'));
     expect(nul.graph.root.body.tag).toBe('option');
     expect(nul.fromValue(nul.toValue(3))).toBe(3);
+    expect(nul.fromValue(nul.toValue(null))).toBeNull();
+
+    const nullish = compileSchema(ark('number | null | undefined'));
+    expect(nullish.fromValue(nullish.toValue(null))).toBeUndefined();
   });
 
   it('maps arrays element-wise', () => {
@@ -304,6 +316,10 @@ describe('fluent Effect Schema walker', () => {
     const nul = compileSchema(std(Schema.NullOr(Schema.String)));
     expect(nul.graph.root.body.tag).toBe('option');
     expect(nul.fromValue(nul.toValue('x'))).toBe('x');
+    expect(nul.fromValue(nul.toValue(null))).toBeNull();
+
+    const nullish = compileSchema(std(Schema.Union(Schema.String, Schema.Null, Schema.Undefined)));
+    expect(nullish.fromValue(nullish.toValue(null))).toBeUndefined();
   });
 
   it('maps arrays element-wise', () => {

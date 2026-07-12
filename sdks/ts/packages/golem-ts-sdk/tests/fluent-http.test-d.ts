@@ -27,7 +27,9 @@
 import { z } from 'zod';
 import { defineAgent } from '../src/fluent/defineAgent';
 import { method } from '../src/fluent/method';
+import type { MethodSpec } from '../src/fluent/method';
 import * as http from '../src/fluent/http';
+import type { HttpEndpointSpec } from '../src/fluent/http';
 import { s } from '../src/fluent/schema/markers';
 import type { BindableKeys } from '../src/fluent/httpTypes';
 
@@ -235,6 +237,77 @@ void defineAgent({
   name: 'M_NoHttp',
   id: { name: z.string(), id: z.string() },
   methods: { op: method({ input: {}, returns: z.string() }) },
+});
+
+// Positive — MethodSpec is an exported structural contract, so an exact
+// method-shaped value with no endpoint does not require a mount.
+const structuralMethodWithoutHttp = {
+  input: {},
+  returns: z.string(),
+};
+void defineAgent({
+  name: 'M_StructuralMethodWithoutHttp',
+  id: {},
+  methods: { op: structuralMethodWithoutHttp },
+});
+
+// Positive — explicitly annotating the exported structural contract does not
+// declare an endpoint when its optional `http` field is omitted.
+const annotatedStructuralMethodWithoutHttp: MethodSpec<{}, string> = {
+  input: {},
+  returns: z.string(),
+};
+void defineAgent({
+  name: 'M_AnnotatedStructuralMethodWithoutHttp',
+  id: {},
+  methods: { op: annotatedStructuralMethodWithoutHttp },
+});
+
+// Positive — selecting the single-endpoint overload's endpoint type explicitly
+// still does not declare an endpoint when the optional `http` field is omitted.
+const explicitSingleEndpointTypeWithoutHttp = method<{}, string, HttpEndpointSpec<never>>({
+  input: {},
+  returns: z.string(),
+});
+void defineAgent({
+  name: 'M_ExplicitSingleEndpointTypeWithoutHttp',
+  id: {},
+  methods: { op: explicitSingleEndpointTypeWithoutHttp },
+});
+
+// Negative — the final visible method shape declares an endpoint even when it
+// was added by spreading a method() value that originally had no endpoint.
+const spreadMethodWithHttp = {
+  ...method({ input: {}, returns: z.string() }),
+  http: http.get('/op'),
+};
+// @ts-expect-error the spread-added endpoint requires an agent-level mount
+void defineAgent({
+  name: 'M_SpreadEndpointWithoutMount',
+  id: {},
+  methods: { op: spreadMethodWithHttp },
+});
+
+// Positive — the final visible method shape has no endpoint after overriding
+// an endpoint-bearing method's `http` field with undefined.
+const spreadMethodWithHttpRemoved = {
+  ...method({ input: {}, returns: z.string(), http: http.get('/op') }),
+  http: undefined,
+};
+void defineAgent({
+  name: 'M_SpreadEndpointRemovedWithoutMount',
+  id: {},
+  methods: { op: spreadMethodWithHttpRemoved },
+});
+
+// Negative — an endpoint-bearing method requires an agent-level mount.
+// @ts-expect-error method HTTP endpoints require `defineAgent({ http: ... })`
+void defineAgent({
+  name: 'M_EndpointWithoutMount',
+  id: { name: z.string() },
+  methods: {
+    op: method({ input: {}, returns: z.string(), http: http.get('/op') }),
+  },
 });
 
 // Positive — empty id record with a literal mount path.
@@ -471,11 +544,10 @@ void method({
 });
 
 // Negative — array with a bodyful (fine) + a bodyless-unbound (error) endpoint.
-// The bodyless element makes the whole `method({...})` call fail to compile.
-// @ts-expect-error bodyless GET in the array cannot have unbound 'payload'
 void method({
   input: { payload: z.string() },
   returns: z.string(),
+  // @ts-expect-error bodyless GET in the array cannot have unbound 'payload'
   http: [http.post('/op'), http.get('/op')],
 });
 

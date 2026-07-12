@@ -125,8 +125,9 @@ export interface ConfigGroupNode {
 function liftCodecToOption(inner: FluentCodec): FluentCodec {
   return {
     graph: { defs: inner.graph.defs, root: t.option(inner.graph.root) },
+    optionKind: 'optional',
     toValue: (value) =>
-      value === undefined || value === null ? v.option(undefined) : v.option(inner.toValue(value)),
+      value === undefined ? v.option(undefined) : v.option(inner.toValue(value)),
     fromValue: (sv) => {
       const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
       return opt === undefined ? undefined : inner.fromValue(opt);
@@ -165,7 +166,7 @@ function buildLeafDeclaration(
       required: true,
     };
   }
-  const leafIsOptional = isOptionCodec(codec);
+  const leafIsOptional = isOptionCodec(codec) && codec.optionKind !== 'nullable';
   // Lift a non-option leaf that sits under an optional group so an unset value
   // reads as `option none` (=> undefined) instead of trapping the guest.
   const declCodec = underOptional && !leafIsOptional ? liftCodecToOption(codec) : codec;

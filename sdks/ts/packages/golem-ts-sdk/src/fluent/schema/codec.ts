@@ -37,6 +37,8 @@ export interface FluentCodec {
    * (including `z.record(k, v)` maps, which are read whole).
    */
   readonly fields?: ReadonlyArray<{ readonly name: string; readonly codec: FluentCodec }>;
+  /** JavaScript absence convention for a codec whose root is a WIT `option`. */
+  readonly optionKind?: 'optional' | 'nullable' | 'nullish';
   /**
    * For an OPTIONAL object group (`z.object({...}).optional()`): the codec's own
    * `graph` round-trips as `option<record>`, but {@link fields} is ALSO exposed

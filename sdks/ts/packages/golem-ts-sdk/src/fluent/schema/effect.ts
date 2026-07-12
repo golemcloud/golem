@@ -56,6 +56,10 @@ function isNullOrUndefinedAst(node: Ast): boolean {
   return node._tag === 'Literal' && node.literal === null;
 }
 
+function isNullAst(node: Ast): boolean {
+  return node?._tag === 'Null' || (node?._tag === 'Literal' && node.literal === null);
+}
+
 /**
  * Unwrap `Refinement` (`.from`) and `Transformation` (`.from`, the encoded side)
  * nodes to the underlying structural AST. We walk the *encoded* form so the
@@ -299,23 +303,32 @@ function realMemberOf(ast: Ast): Ast {
   return node;
 }
 
-/** Build an `option<inner>` codec wrapping the codec for `innerAst`. */
-function optionCodec(innerAst: Ast, reg: RecursionRegistry): FluentCodec {
+/** Build an `option<inner>` codec preserving its JavaScript empty-value convention. */
+function optionCodec(
+  innerAst: Ast,
+  reg: RecursionRegistry,
+  mode: 'optional' | 'nullable' | 'nullish' = 'optional',
+): FluentCodec {
   const innerCodec = walkAst(innerAst, reg);
+  const noneValue = mode === 'nullable' ? null : undefined;
+  const isNone =
+    mode === 'nullish'
+      ? (value: unknown) => value === undefined || value === null
+      : (value: unknown) =>
+          value === noneValue ||
+          ((value === null || value === undefined) && innerCodec.graph.root.body.tag !== 'option');
   const wrapped: FluentCodec = {
     graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
-    toValue: (value) =>
-      value === undefined || value === null
-        ? v.option(undefined)
-        : v.option(innerCodec.toValue(value)),
+    optionKind: mode,
+    toValue: (value) => (isNone(value) ? v.option(undefined) : v.option(innerCodec.toValue(value))),
     fromValue: (sv) => {
       const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
-      return opt === undefined ? undefined : innerCodec.fromValue(opt);
+      return opt === undefined ? noneValue : innerCodec.fromValue(opt);
     },
   };
   // An OPTIONAL object group: expose the inner object's per-field codecs (so the
   // config surface can descend it) and flag it optional. See zod.ts.
-  if (innerCodec.fields !== undefined) {
+  if (mode !== 'nullable' && innerCodec.fields !== undefined) {
     return { ...wrapped, fields: innerCodec.fields, optionalGroup: true };
   }
   return wrapped;
@@ -343,7 +356,10 @@ function walkUnion(ast: Ast, reg: RecursionRegistry): FluentCodec {
   const emptyMembers = unwrapped.filter((m) => isNullOrUndefinedAst(m));
   const realMembers = types.filter((m) => !isNullOrUndefinedAst(unwrap(m)));
   if (emptyMembers.length >= 1 && realMembers.length === 1) {
-    return optionCodec(realMembers[0], reg);
+    const hasNull = emptyMembers.some(isNullAst);
+    const hasUndefined = emptyMembers.some((m) => !isNullAst(m));
+    const mode = hasNull && hasUndefined ? 'nullish' : hasNull ? 'nullable' : 'optional';
+    return optionCodec(realMembers[0], reg, mode);
   }
 
   // Tagged variant: every member is a `TypeLiteral` with a required string-literal

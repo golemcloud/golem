@@ -12,15 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
+import { WasmRpc } from 'golem:agent/host@2.0.0';
+import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/fluent/defineAgent';
 import { method } from '../src/fluent/method';
+import { clientFor } from '../src/fluent/client';
 import { compileSchema } from '../src/fluent/schema/adapter';
 import { s } from '../src/fluent/schema/markers';
+import { Uuid } from '../src/uuid';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
+
+function remoteClientTypeChecks(): void {
+  const def = defineAgent({
+    name: 'RemoteClientTypeChecks',
+    id: { name: z.string() },
+    methods: {
+      ping: method({ input: {}, returns: z.string() }),
+      add: method({ input: { by: z.number() }, returns: z.number() }),
+    },
+  });
+  const factory = clientFor(def);
+  const client = factory({ name: 'counter' });
+  const controller = new AbortController();
+  void client.ping({ signal: controller.signal });
+  void client.add({ by: 1 }, { signal: controller.signal });
+  // @ts-expect-error cancellation is an option on the normal call, not a separate operation
+  void client.ping.abortable(controller.signal);
+  const at: Datetime = { seconds: 1n, nanoseconds: 0 };
+  const pingToken: CancellationToken = client.ping.schedule(at);
+  const addToken: CancellationToken = client.add.schedule(at, { by: 1 });
+  // @ts-expect-error schedule now always returns a token; there is no separate variant
+  void client.ping.scheduleCancelable(at);
+  const phantom = factory.newPhantom({ name: 'counter' });
+  const phantomId: Uuid = phantom.phantomId;
+  void phantom.client.ping();
+  void pingToken;
+  void addToken;
+  void phantomId;
+}
+void remoteClientTypeChecks;
 
 describe('fluent Zod walker', () => {
   it('maps primitive schemas to schema types and round-trips values', () => {
@@ -44,6 +78,13 @@ describe('fluent Zod walker', () => {
     expect(opt.toValue(undefined)).toEqual({ tag: 'option', value: undefined });
     expect(opt.toValue(3)).toEqual({ tag: 'option', value: { tag: 'f64', value: 3 } });
     expect(opt.fromValue({ tag: 'option', value: undefined })).toBeUndefined();
+
+    const nullable = compileSchema(z.number().nullable());
+    expect(nullable.fromValue(nullable.toValue(null))).toBeNull();
+
+    const nested = compileSchema(z.number().nullable().optional());
+    expect(nested.fromValue(nested.toValue(undefined))).toBeUndefined();
+    expect(nested.fromValue(nested.toValue(null))).toBeNull();
     // `.default()` is transparent at the wire level.
     expect(compileSchema(z.number().int().default(1)).graph.root.body).toMatchObject({
       tag: 'f64',
@@ -405,5 +446,77 @@ describe('fluent numeric restrictions', () => {
   it('plain z.number() has no restrictions', () => {
     const body = compileSchema(z.number()).graph.root.body as { restrictions?: unknown };
     expect(body.restrictions).toBeUndefined();
+  });
+});
+
+describe('fluent RPC client', () => {
+  const clientDef = defineAgent({
+    name: 'FluentClientTestAgent',
+    id: { name: z.string() },
+    config: { greeting: z.string() },
+    methods: {
+      ping: method({ input: {}, returns: z.string() }),
+      add: method({ input: { by: z.number() }, returns: z.number() }),
+    },
+  });
+
+  const latestRpc = () =>
+    vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      scheduleInvocation: ReturnType<typeof vi.fn>;
+      scheduleCancelableInvocation: ReturnType<typeof vi.fn>;
+    };
+
+  it('creates a fresh phantom client and exposes the generated id', () => {
+    const phantomId = new Uuid(1n, 2n);
+    const generate = vi.spyOn(Uuid, 'generate').mockReturnValue(phantomId);
+    const phantom = clientFor(clientDef).newPhantom({ name: 'counter' }, { greeting: 'hello' });
+
+    expect(phantom.phantomId).toBe(phantomId);
+    expect(phantom.client.ping).toBeTypeOf('function');
+    const constructorArgs = vi.mocked(WasmRpc).mock.calls.at(-1)!;
+    expect(constructorArgs[2]).toBe(phantomId);
+    expect(constructorArgs[3]).toHaveLength(1);
+    generate.mockRestore();
+  });
+
+  it('preserves a declared remote method named phantomId on phantom clients', () => {
+    const def = defineAgent({
+      name: 'PhantomIdMethodAgent',
+      id: {},
+      methods: {
+        phantomId: method({ input: {}, returns: z.string() }),
+      },
+    });
+    const phantom = clientFor(def).newPhantom({});
+
+    expect(typeof phantom.client.phantomId).toBe('function');
+    expect(phantom.phantomId).toBeInstanceOf(Uuid);
+  });
+
+  it('returns cancellation tokens from schedule and removes the old operations', () => {
+    const client = clientFor(clientDef)({ name: 'counter' });
+    const rpc = latestRpc();
+    const token = { cancel: vi.fn() };
+    rpc.scheduleCancelableInvocation.mockReturnValue(token);
+    const at: Datetime = { seconds: 1n, nanoseconds: 0 };
+
+    expect(client.ping.schedule(at)).toBe(token);
+    expect(client.add.schedule(at, { by: 2 })).toBe(token);
+    expect(rpc.scheduleCancelableInvocation).toHaveBeenCalledTimes(2);
+    expect(rpc.scheduleInvocation).not.toHaveBeenCalled();
+    expect('abortable' in client.ping).toBe(false);
+    expect('scheduleCancelable' in client.ping).toBe(false);
+  });
+
+  it('accepts cancellation options on input and zero-input calls', async () => {
+    const client = clientFor(clientDef)({ name: 'counter' });
+    const rpc = latestRpc();
+    const controller = new AbortController();
+    controller.abort('cancelled');
+
+    await expect(client.add({ by: 1 }, { signal: controller.signal })).rejects.toBe('cancelled');
+    await expect(client.ping({ signal: controller.signal })).rejects.toBe('cancelled');
+    expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
   });
 });

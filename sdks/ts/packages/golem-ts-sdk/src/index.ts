@@ -102,6 +102,11 @@ async function initialize(
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
+  const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
+  if (registrationError) {
+    throw createCustomError(formatAgentRegistrationError(agentTypeName, registrationError));
+  }
+
   const initiator: AgentInitiator | undefined = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
@@ -166,8 +171,19 @@ async function invokeTool(
 
 async function discoverAgentTypes(): Promise<AgentType[]> {
   try {
-    // The fluent surface validates eagerly (throws during `defineAgent(...)` at
-    // module load), so there is no deferred validation-error gate here.
+    const registrationErrors = AgentTypeRegistry.getRegistrationErrors();
+    if (registrationErrors.length > 0) {
+      // Discovery's WIT result cannot carry valid definitions and diagnostics
+      // together, so report all invalid agents in one structured error. Valid
+      // agents remain registered and can still be initialized independently.
+      throw createCustomError(
+        `Agent registration failed:\n${registrationErrors
+          .map(({ agentTypeName, messages }) =>
+            formatAgentRegistrationError(agentTypeName, messages),
+          )
+          .join('\n')}`,
+      );
+    }
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
     // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>
@@ -177,6 +193,10 @@ async function discoverAgentTypes(): Promise<AgentType[]> {
       throw createCustomError(String(e));
     }
   }
+}
+
+function formatAgentRegistrationError(agentTypeName: string, messages: readonly string[]): string {
+  return `- Agent "${agentTypeName}": ${messages.join('; ')}`;
 }
 
 async function getDefinition(): Promise<AgentType> {
@@ -340,6 +360,13 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
+  if (registrationError) {
+    // The snapshot WIT interface returns `result<_, string>`, not AgentError.
+    throw formatAgentRegistrationError(agentTypeName, registrationError);
+  }
+
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
@@ -407,8 +434,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   }
 
   initializationPrincipal = principal;
-
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
 
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 

@@ -24,16 +24,17 @@ You address another agent with a typed RPC client built from its `defineAgent` d
 clientFor(Def)(id)                       // non-phantom: same agent for the same id
 clientFor(Def)(id, phantomUuid)          // phantom: addressed by id + a specific UUID
 clientFor(Def)(id, phantomUuid, config)  // + per-call non-secret config overrides (config-on-RPC)
+clientFor(Def).newPhantom(id, config?)    // new phantom with a generated UUID
 ```
 
 | Call | Description |
 |--------|-------------|
 | `client(id)` | Get or create a **non-phantom** agent identified solely by its id record |
-| `client(id, Uuid.generate())` | Create a **new phantom** agent with a freshly generated random UUID |
+| `client.newPhantom(id)` | Create a **new phantom** agent and return `{ client, phantomId }` |
 | `client(id, savedUuid)` | Get or create a phantom agent with a **specific** UUID |
 | `client(id, undefined, { foo })` | Override the target's non-secret config for this call (secrets stay host-provisioned) |
 
-Each method on the client has, besides the awaited call: `.trigger(input)` (fire-and-forget), `.schedule(at, input)` and `.scheduleCancelable(at, input) → CancellationToken`, and `.abortable(signal, input)` (cancels the in-flight remote invocation when the `AbortSignal` fires).
+Each method on the client has, besides the awaited call: `.trigger(input)` (fire-and-forget) and `.schedule(at, input) → CancellationToken`. Cancel an awaited invocation with the normal call shape's trailing `{ signal }` option: `method(input, { signal })`, or `method({ signal })` for a method with no input.
 
 ### Example
 
@@ -64,14 +65,21 @@ const counters = clientFor(Counter);
 const shared = counters({ name: 'shared' });
 await shared.increment();
 
-// New phantom: generate a fresh UUID for a brand new independent instance
-const phantomUuid1 = Uuid.generate();
-const phantom1 = counters({ name: 'shared' }, phantomUuid1);
-const phantom2 = counters({ name: 'shared' }, Uuid.generate());
+// New phantom: the factory returns the client and its generated UUID.
+const { client: phantom1, phantomId: phantomId1 } = counters.newPhantom({
+    name: 'shared',
+});
+const { client: phantom2 } = counters.newPhantom({ name: 'shared' });
 // phantom1 and phantom2 are different agents, both with name="shared"
 
-// Reconnect to an existing phantom by its UUID (e.g. saved as a string, reparsed)
-const samePhantom = counters({ name: 'shared' }, Uuid.parse(savedUuidString));
+// Reconnect to an existing phantom by its UUID.
+const samePhantom = counters({ name: 'shared' }, phantomId1);
+
+// A persisted UUID string can be restored later.
+const restoredPhantom = counters(
+    { name: 'shared' },
+    Uuid.parse(savedUuidString),
+);
 ```
 
 Persist the phantom UUID yourself (as a string via `uuid.toString()`, reparsed with `Uuid.parse(...)`) whenever you need to reach the same phantom instance again later.
@@ -120,6 +128,6 @@ Each HTTP request will be handled by a fresh agent instance with its own phantom
 ## Key Points
 
 - Phantom agents are **fully durable** — they persist just like regular agents.
-- The phantom ID is a standard UUID; use `Uuid.generate()` for a fresh one and `Uuid.parse(str)` to restore a saved one.
+- The phantom ID is a standard UUID; prefer `client.newPhantom(id)` for a fresh one, and use `Uuid.parse(str)` to restore a saved one or `Uuid.generate()` when the caller must choose the ID itself.
 - Reaching a phantom with the same UUID and id values always returns the same agent (idempotent).
 - Phantom and non-phantom agents with the same id values are **different agents** — they do not share state.

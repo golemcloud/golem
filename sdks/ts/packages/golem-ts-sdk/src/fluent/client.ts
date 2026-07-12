@@ -39,7 +39,7 @@ import { compileSchema } from './schema/adapter';
 import { FluentCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type { MarkerKindOf } from './schema/markers';
-import { AgentDefinition, IdRecord, MethodsRecord } from './defineAgent';
+import { AgentDefinition, ConfigSpec, IdRecord, MethodsRecord } from './defineAgent';
 import { MethodSpec } from './method';
 
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {
@@ -63,35 +63,44 @@ type CallerInput<Input extends Record<string, StandardSchemaV1>> = Omit<
 
 /** The async remote signature for a method spec (no-arg when caller input is empty). */
 type RemoteMethodFor<M> =
-  M extends MethodSpec<infer Input, infer Output>
+  M extends MethodSpec<infer Input, infer Output, boolean>
     ? keyof CallerInput<Input> extends never
       ? {
-          (): Promise<Output>;
+          (options?: RemoteCallOptions): Promise<Output>;
           /** Fire-and-forget; no result is awaited. */
           trigger(): void;
-          /** Enqueue the call to run at `at`. */
-          schedule(at: Datetime): void;
-          /** Await the call, cancelling the remote invocation if `signal` aborts. */
-          abortable(signal: AbortSignal): Promise<Output>;
           /** Enqueue at `at`, returning a token to cancel it before it runs. */
-          scheduleCancelable(at: Datetime): CancellationToken;
+          schedule(at: Datetime): CancellationToken;
         }
       : {
-          (input: InferRecord<CallerInput<Input>>): Promise<Output>;
+          (input: InferRecord<CallerInput<Input>>, options?: RemoteCallOptions): Promise<Output>;
           trigger(input: InferRecord<CallerInput<Input>>): void;
-          schedule(at: Datetime, input: InferRecord<CallerInput<Input>>): void;
-          abortable(signal: AbortSignal, input: InferRecord<CallerInput<Input>>): Promise<Output>;
-          scheduleCancelable(
-            at: Datetime,
-            input: InferRecord<CallerInput<Input>>,
-          ): CancellationToken;
+          /** Enqueue at `at`, returning a token to cancel it before it runs. */
+          schedule(at: Datetime, input: InferRecord<CallerInput<Input>>): CancellationToken;
         }
     : never;
+
+/** Options for an awaited remote call. */
+export interface RemoteCallOptions {
+  signal?: AbortSignal;
+}
 
 /** A typed remote client: one async method per declared method on the def. */
 export type RemoteClient<Methods extends MethodsRecord> = {
   [K in keyof Methods]: RemoteMethodFor<Methods[K]>;
 };
+
+/** A newly generated phantom client together with its reusable phantom id. */
+export interface PhantomClientDetails<Methods extends MethodsRecord> {
+  readonly client: RemoteClient<Methods>;
+  readonly phantomId: Uuid;
+}
+
+/** Address existing agents or create a fresh phantom agent client. */
+export interface RemoteClientFactory<Id extends IdRecord, Methods extends MethodsRecord> {
+  (id: InferRecord<Id>, phantomId?: Uuid, config?: Record<string, unknown>): RemoteClient<Methods>;
+  newPhantom(id: InferRecord<Id>, config?: Record<string, unknown>): PhantomClientDetails<Methods>;
+}
 
 interface NamedCodec {
   name: string;
@@ -165,13 +174,12 @@ function encodeConfigOverrides(
  * c1.increment.trigger({ by: 1 }); // fire-and-forget
  * ```
  */
-export function clientFor<Id extends IdRecord, Methods extends MethodsRecord>(
-  def: AgentDefinition<Id, Methods>,
-): (
-  id: InferRecord<Id>,
-  phantomId?: Uuid,
-  config?: Record<string, unknown>,
-) => RemoteClient<Methods> {
+export function clientFor<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec,
+  StateSchema extends StandardSchemaV1,
+>(def: AgentDefinition<Id, Methods, Config, StateSchema>): RemoteClientFactory<Id, Methods> {
   // Compile the def's id + method codecs once (cached in this closure).
   const idCodecs: NamedCodec[] = Object.keys(def.id).map((k) => ({
     name: k,
@@ -194,7 +202,7 @@ export function clientFor<Id extends IdRecord, Methods extends MethodsRecord>(
 
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
 
-  return (
+  const createClient = (
     id: InferRecord<Id>,
     phantomId?: Uuid,
     config?: Record<string, unknown>,
@@ -217,20 +225,22 @@ export function clientFor<Id extends IdRecord, Methods extends MethodsRecord>(
         throwIfAborted(signal);
         const inputTree = encodeRecord(mc.inputCodecs, input);
         const future = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree);
+        let onAbort: (() => void) | undefined;
         if (signal) {
-          signal.addEventListener(
-            'abort',
-            () => {
-              try {
-                future.cancel();
-              } catch {
-                /* the future may already have resolved */
-              }
-            },
-            { once: true },
-          );
+          onAbort = () => {
+            try {
+              future.cancel();
+            } catch {
+              /* the future may already have resolved */
+            }
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
         }
-        await awaitPollable(future.subscribe(), signal);
+        try {
+          await awaitPollable(future.subscribe(), signal);
+        } finally {
+          if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+        }
         const result = future.get();
         if (!result) {
           throw new RemoteCallError(`RPC to ${agentId}.${mc.name} failed (no result)`);
@@ -242,19 +252,29 @@ export function clientFor<Id extends IdRecord, Methods extends MethodsRecord>(
         }
         return decodeOutput(mc, result.val);
       };
-      const methodFn = (input: Record<string, unknown> = {}) => invoke(input);
-      methodFn.trigger = (input: Record<string, unknown> = {}) => {
-        wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input));
-      };
-      methodFn.schedule = (at: Datetime, input: Record<string, unknown> = {}) => {
-        wasmRpc.scheduleInvocation(at, mc.name, encodeRecord(mc.inputCodecs, input));
-      };
-      methodFn.abortable = (signal: AbortSignal, input: Record<string, unknown> = {}) =>
-        invoke(input, signal);
-      methodFn.scheduleCancelable = (at: Datetime, input: Record<string, unknown> = {}) =>
-        wasmRpc.scheduleCancelableInvocation(at, mc.name, encodeRecord(mc.inputCodecs, input));
-      client[mc.name] = methodFn;
+      const methodFn =
+        mc.inputCodecs.length === 0
+          ? (options?: RemoteCallOptions) => invoke({}, options?.signal)
+          : (input: Record<string, unknown>, options?: RemoteCallOptions) =>
+              invoke(input, options?.signal);
+      client[mc.name] = Object.assign(methodFn, {
+        trigger: (input: Record<string, unknown> = {}) => {
+          wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input));
+        },
+        schedule: (at: Datetime, input: Record<string, unknown> = {}) =>
+          wasmRpc.scheduleCancelableInvocation(at, mc.name, encodeRecord(mc.inputCodecs, input)),
+      });
     }
     return client as RemoteClient<Methods>;
   };
+
+  createClient.newPhantom = (
+    id: InferRecord<Id>,
+    config?: Record<string, unknown>,
+  ): PhantomClientDetails<Methods> => {
+    const phantomId = Uuid.generate();
+    return { client: createClient(id, phantomId, config), phantomId };
+  };
+
+  return createClient;
 }

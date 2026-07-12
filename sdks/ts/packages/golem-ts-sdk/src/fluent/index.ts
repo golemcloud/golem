@@ -51,7 +51,12 @@ export type { FluentCodec, SchemaWalker } from './schema/codec';
 
 // wasm-RPC client for calling other agents.
 export { clientFor, RemoteCallError } from './client';
-export type { RemoteClient } from './client';
+export type {
+  PhantomClientDetails,
+  RemoteCallOptions,
+  RemoteClient,
+  RemoteClientFactory,
+} from './client';
 
 // Typed host surfaces (plain async).
 export * from './keyvalue';

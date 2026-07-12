@@ -18,6 +18,21 @@ import type { BindableKeys, ValidateEndpointsTuple, ValidateSingleEndpoint } fro
 
 export type InputRecord = Record<string, StandardSchemaV1>;
 
+declare const MethodHasHttp: unique symbol;
+
+/** Whether a final method value definitely declares at least one HTTP endpoint. */
+export type MethodHasHttpOf<M> = M extends { readonly http: readonly [] }
+  ? false
+  : M extends { readonly http: undefined }
+    ? false
+    : M extends { readonly http: HttpEndpointSpec | ReadonlyArray<HttpEndpointSpec> }
+      ? true
+      : typeof MethodHasHttp extends keyof M
+        ? M extends MethodSpec<InputRecord, unknown, infer HasHttp>
+          ? HasHttp
+          : false
+        : false;
+
 /**
  * Fine-grained read-only configuration for a method (surfaced as the WIT
  * `agent-method.read-only` / `read-only-config`).
@@ -44,9 +59,15 @@ export type ReadOnlyOption = {
  * (a convenience boolean) → `read-only` (a `no-cache` / no-principal
  * `read-only-config`) when `true`.
  */
-export interface MethodSpec<Input extends InputRecord = InputRecord, Output = unknown> {
+export interface MethodSpec<
+  Input extends InputRecord = InputRecord,
+  Output = unknown,
+  HasHttp extends boolean = false,
+> {
   readonly input: Input;
   readonly returns: StandardSchemaV1<unknown, Output>;
+  /** Type-only marker used to require an agent-level HTTP mount. */
+  readonly [MethodHasHttp]?: HasHttp;
   /** Human-readable description, surfaced as `agent-method.description`. */
   readonly description?: string;
   /** Optional `prompt-hint`, surfaced as `agent-method.prompt-hint`. */
@@ -89,6 +110,32 @@ export interface MethodSpec<Input extends InputRecord = InputRecord, Output = un
 export function method<
   Input extends InputRecord,
   Output,
+  const Eps extends ReadonlyArray<HttpEndpointSpec<BindableKeys<Input>>>,
+>(spec: {
+  input: Input;
+  returns: StandardSchemaV1<unknown, Output>;
+  description?: string;
+  promptHint?: string;
+  readOnly?: boolean | ReadOnlyOption;
+  http: ValidateEndpointsTuple<Eps, Input>;
+}): MethodSpec<Input, Output, Eps extends readonly [] ? false : true> & {
+  readonly http: ValidateEndpointsTuple<Eps, Input>;
+};
+export function method<
+  Input extends InputRecord,
+  Output,
+  const Ep extends HttpEndpointSpec<BindableKeys<Input>>,
+>(spec: {
+  input: Input;
+  returns: StandardSchemaV1<unknown, Output>;
+  description?: string;
+  promptHint?: string;
+  readOnly?: boolean | ReadOnlyOption;
+  http: ValidateSingleEndpoint<Ep, Input>;
+}): MethodSpec<Input, Output, true> & { readonly http: ValidateSingleEndpoint<Ep, Input> };
+export function method<
+  Input extends InputRecord,
+  Output,
   const Eps extends ReadonlyArray<HttpEndpointSpec<BindableKeys<Input>>> = readonly [],
 >(spec: {
   input: Input;
@@ -97,7 +144,7 @@ export function method<
   promptHint?: string;
   readOnly?: boolean | ReadOnlyOption;
   http?: ValidateEndpointsTuple<Eps, Input>;
-}): MethodSpec<Input, Output>;
+}): MethodSpec<Input, Output, false>;
 export function method<
   Input extends InputRecord,
   Output,
@@ -109,9 +156,8 @@ export function method<
   promptHint?: string;
   readOnly?: boolean | ReadOnlyOption;
   http?: ValidateSingleEndpoint<Ep, Input>;
-}): MethodSpec<Input, Output>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function method(spec: any): MethodSpec {
+}): MethodSpec<Input, Output, false>;
+export function method(spec: any): MethodSpec<InputRecord, unknown, boolean> {
   return {
     input: spec.input,
     returns: spec.returns,
