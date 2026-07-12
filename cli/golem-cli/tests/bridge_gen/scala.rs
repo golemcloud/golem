@@ -21,12 +21,23 @@ use golem_cli::bridge_gen::scala::scala::{
     escape_scala_ident, is_scala_keyword, is_valid_scala_ident, to_scala_term_ident,
     unique_idents_with_reserved,
 };
+use golem_cli::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
 use golem_cli::bridge_gen::scala::type_name::RemappedType;
-use golem_cli::bridge_gen::scala::{ScalaBridgeGenerator, ScalaTypeName};
+use golem_cli::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode, ScalaTypeName};
 use golem_cli::bridge_gen::type_naming::{TypeName, TypeNaming};
-use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
+use golem_cli::bridge_gen::{
+    BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
+};
 use golem_common::model::agent::AgentMode;
-use golem_common::schema::{AgentTypeSchema, ResultSpec, SchemaType, TypeId};
+use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
+use golem_common::schema::tool::{
+    BoolFlagShape, CommandBody, CommandIndex, CommandTree, Doc, ErrorCase, ErrorKind, FlagShape,
+    FlagSpec, Formatter, Globals, OptionShape, OptionSpec, Positional, Positionals,
+    ResultSpec as ToolResultSpec, StreamSpec, TailPositional, Tool,
+};
+use golem_common::schema::{
+    AgentTypeSchema, MetadataEnvelope, NamedFieldType, ResultSpec, SchemaType, TypeId,
+};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
@@ -37,12 +48,20 @@ struct GeneratedPackage {
 
 impl GeneratedPackage {
     pub fn new(agent_type: AgentTypeSchema) -> Self {
-        let package_name =
-            bridge_client_directory_name(&agent_type.type_name, BridgeMode::External);
+        Self::new_with_mode(agent_type, ScalaBridgeMode::ExternalRest)
+    }
+
+    pub fn new_with_mode(agent_type: AgentTypeSchema, mode: ScalaBridgeMode) -> Self {
+        let bridge_mode = match mode {
+            ScalaBridgeMode::ExternalRest => BridgeMode::External,
+            ScalaBridgeMode::GuestWasmRpc => BridgeMode::Guest,
+        };
+        let package_name = bridge_client_directory_name(&agent_type.type_name, bridge_mode);
         let dir = TempDir::new().unwrap();
         let target_dir = Utf8Path::from_path(dir.path()).unwrap();
         let package_dir = target_dir.join(&package_name);
-        let mut generator = ScalaBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
+        let mut generator =
+            ScalaBridgeGenerator::new_with_mode(agent_type, &package_dir, true, mode).unwrap();
         generator.generate().unwrap();
         GeneratedPackage { dir, package_name }
     }
@@ -54,14 +73,216 @@ impl GeneratedPackage {
     }
 }
 
-fn cross_compile(package_dir: &Utf8Path) {
-    let status = std::process::Command::new("sbt")
+fn compile(package_dir: &Utf8Path) {
+    let output = std::process::Command::new("sbt")
         .arg("--batch")
-        .arg("+compile")
+        .arg("compile")
         .current_dir(package_dir)
-        .status()
+        .output()
         .expect("failed to run sbt; is it installed?");
-    assert!(status.success(), "sbt +compile failed in {package_dir}");
+    assert!(
+        output.status.success(),
+        "sbt compile failed in {package_dir}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn compile_guest_if_enabled(package_dir: &Utf8Path) {
+    if std::env::var_os("GOLEM_SCALA_GUEST_BRIDGE_COMPILE").is_some() {
+        compile(package_dir);
+    }
+}
+
+fn doc(summary: &str) -> Doc {
+    Doc {
+        summary: summary.to_string(),
+        description: String::new(),
+        examples: vec![],
+    }
+}
+
+fn tool_body() -> CommandBody {
+    CommandBody {
+        positionals: Positionals::default(),
+        options: vec![],
+        flags: vec![],
+        constraints: vec![],
+        stdin: None,
+        stdout: None,
+        result: None,
+        errors: vec![],
+        annotations: None,
+    }
+}
+
+fn command_node(name: &str) -> golem_common::schema::tool::CommandNode {
+    golem_common::schema::tool::CommandNode {
+        name: name.to_string(),
+        aliases: vec![],
+        doc: doc(name),
+        globals: Globals::default(),
+        subcommands: vec![],
+        body: None,
+    }
+}
+
+fn positional(name: &str, type_: SchemaType) -> Positional {
+    Positional {
+        name: name.to_string(),
+        doc: doc(name),
+        value_name: None,
+        type_,
+        default: None,
+        required: true,
+        accepts_stdio: false,
+    }
+}
+
+fn option(long: &str, shape: OptionShape) -> OptionSpec {
+    OptionSpec {
+        long: long.to_string(),
+        short: None,
+        aliases: vec![],
+        doc: doc(long),
+        value_name: None,
+        shape,
+        default: None,
+        required: false,
+        env_var: None,
+    }
+}
+
+fn flag(long: &str, shape: FlagShape) -> FlagSpec {
+    FlagSpec {
+        long: long.to_string(),
+        short: None,
+        aliases: vec![],
+        doc: doc(long),
+        shape,
+        env_var: None,
+    }
+}
+
+fn grep_tool() -> Tool {
+    let color_type = TypeId::from("color-mode");
+    let color_ref = SchemaType::ref_to(color_type.clone());
+    let mut root = command_node("grep");
+    root.globals = Globals {
+        options: vec![option("color", OptionShape::Scalar(color_ref))],
+        flags: vec![flag(
+            "case-sensitive",
+            FlagShape::BoolFlag(BoolFlagShape {
+                default: false,
+                negatable: false,
+            }),
+        )],
+    };
+    root.subcommands = vec![CommandIndex(1)];
+    root.body = Some(CommandBody {
+        positionals: Positionals {
+            fixed: vec![positional("pattern", SchemaType::string())],
+            tail: Some(TailPositional {
+                name: "files".to_string(),
+                doc: doc("files"),
+                value_name: None,
+                item_type: SchemaType::string(),
+                min: 0,
+                max: None,
+                separator: None,
+                verbatim: false,
+                accepts_stdio: false,
+            }),
+        },
+        options: vec![option(
+            "max-count",
+            OptionShape::OptionalScalar(SchemaType::u32()),
+        )],
+        flags: vec![flag("verbosity", FlagShape::CountFlag(None))],
+        result: Some(ToolResultSpec {
+            type_: SchemaType::list(SchemaType::string()),
+            doc: doc("matches"),
+            formatters: vec![Formatter {
+                name: "json".to_string(),
+                doc: doc("json"),
+            }],
+            default_formatter: "json".to_string(),
+        }),
+        errors: vec![
+            ErrorCase {
+                name: "bad-pattern".to_string(),
+                doc: doc("bad pattern"),
+                kind: ErrorKind::UsageError,
+                exit_code: 2,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "io".to_string(),
+                doc: doc("io"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: None,
+            },
+        ],
+        ..tool_body()
+    });
+    let mut replace = command_node("replace");
+    replace.body = Some(CommandBody {
+        positionals: Positionals {
+            fixed: vec![
+                positional("pattern", SchemaType::string()),
+                positional("replacement", SchemaType::string()),
+            ],
+            tail: None,
+        },
+        stdout: Some(StreamSpec {
+            doc: doc("stdout"),
+            mime: vec![],
+            required: true,
+        }),
+        ..tool_body()
+    });
+
+    Tool {
+        version: "1".to_string(),
+        commands: CommandTree {
+            nodes: vec![root, replace],
+        },
+        schema: SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: color_type,
+                name: None,
+                body: SchemaType::r#enum(vec![
+                    "never".to_string(),
+                    "always".to_string(),
+                    "auto".to_string(),
+                ]),
+            }],
+            root: SchemaType::record(vec![]),
+        },
+    }
+}
+
+struct GeneratedToolPackage {
+    pub dir: TempDir,
+    pub package_name: String,
+}
+
+impl GeneratedToolPackage {
+    fn new(tool: Tool) -> Self {
+        let package_name = tool_bridge_client_directory_name(&tool.commands.nodes[0].name);
+        let dir = TempDir::new().unwrap();
+        let package_dir = Utf8Path::from_path(dir.path()).unwrap().join(&package_name);
+        let mut generator = ScalaToolBridgeGenerator::new(tool, &package_dir, true).unwrap();
+        generator.generate().unwrap();
+        Self { dir, package_name }
+    }
+
+    fn package_dir(&self) -> camino::Utf8PathBuf {
+        Utf8Path::from_path(self.dir.path())
+            .unwrap()
+            .join(&self.package_name)
+    }
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "scala_single_agent")]
@@ -69,11 +290,10 @@ fn scala_single_agent() -> GeneratedPackage {
     GeneratedPackage::new(single_agent_wrapper_types()[0].clone())
 }
 
-/// Generates a single agent bridge and cross-compiles it with sbt against
-/// Scala 2.13 and Scala 3.
+/// Generates a single agent bridge and compiles it with Scala 3.
 #[test]
-fn single_agent_cross_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPackage) {
-    cross_compile(pkg.package_dir().as_path());
+fn single_agent_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPackage) {
+    compile(pkg.package_dir().as_path());
 }
 
 /// The generated project lays out the static runtime and the per-agent client
@@ -121,8 +341,131 @@ fn generated_project_layout_is_correct() {
     assert!(client_source.contains("\"CounterAgent\""));
 
     let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
-    assert!(build_sbt.contains("crossScalaVersions"));
+    assert!(build_sbt.contains("scalaVersion := \"3.8.2\""));
+    assert!(!build_sbt.contains("crossScalaVersions"));
     assert!(build_sbt.contains("counter-agent-client"));
+}
+
+/// Guest Scala bridge projects skip embedding the external REST runtime and
+/// depend on the Scala SDK's guest runtime instead, so the generated client must
+/// not refer to the external-only `golem.bridge.runtime` package.
+#[test]
+fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "CounterAgent",
+            "scala",
+            vec![field("name", SchemaType::string())],
+            vec![method("increment", vec![], Some(SchemaType::f64()))],
+            vec![],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+
+    assert!(
+        !dir.join("src/main/scala/golem/bridge/runtime").exists(),
+        "guest bridge must not embed the external REST runtime"
+    );
+
+    let client_path =
+        dir.join("src/main/scala/golem/bridge/client/counter_agent/CounterAgentClient.scala");
+    let client_source = std::fs::read_to_string(&client_path).unwrap();
+    assert!(
+        !client_source.contains("golem.bridge.runtime"),
+        "guest bridge client references the external REST runtime package:\n{client_source}"
+    );
+
+    let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
+    assert!(build_sbt.contains("golem-scala-core"));
+    assert!(build_sbt.contains("golem-scala-model"));
+    assert!(build_sbt.contains("ScalaJSPlugin"));
+}
+
+/// Guest agent bridges expose the Scala SDK RPC surface: constructors resolve
+/// remote agents through `RemoteAgentClient`, methods invoke Wasm RPC via
+/// `asyncInvokeAndAwait`, and the generated Scala.js build is ready for a real
+/// compile once the in-tree Scala SDK has been published locally.
+#[test]
+fn guest_agent_client_surface_targets_scala_sdk_rpc() {
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "CounterAgent",
+            "scala",
+            vec![field("name", SchemaType::string())],
+            vec![method(
+                "increment",
+                vec![field("amount", SchemaType::u32())],
+                Some(SchemaType::u32()),
+            )],
+            vec![],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let client_path =
+        dir.join("src/main/scala/golem/bridge/client/counter_agent/CounterAgentClient.scala");
+    let client_source = std::fs::read_to_string(&client_path).unwrap();
+
+    assert!(client_source.contains("object CounterAgentClient"));
+    assert!(client_source.contains("trait CounterAgentRemote"));
+    assert!(client_source.contains("def get(name: _root_.scala.Predef.String)"));
+    assert!(client_source.contains("_root_.scala.Either"));
+    assert!(client_source.contains("CounterAgentRemote"));
+    assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
+    assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
+    assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
+    assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
+    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
+    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue"));
+    assert!(!client_source.contains("Bridge.createAgent"));
+    assert!(!client_source.contains("golem.bridge.runtime"));
+
+    let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
+    assert!(build_sbt.contains("enablePlugins(ScalaJSPlugin)"));
+    assert!(build_sbt.contains("scalaJSUseMainModuleInitializer := false"));
+    assert!(build_sbt.contains("ModuleKind.ESModule"));
+    assert!(dir.join("project/plugins.sbt").exists());
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+/// Ephemeral guest agents omit the parameter-addressable `get` constructor, but
+/// still expose phantom constructors. Constructor errors are surfaced as
+/// `Either[String, …]`, not thrown futures, because guest RPC resolution is
+/// synchronous at the SDK boundary.
+#[test]
+fn guest_ephemeral_agent_omits_get_and_returns_either_constructors() {
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "EphemeralAgent",
+            "scala",
+            vec![field("name", SchemaType::string())],
+            vec![method("ping", vec![], None)],
+            vec![],
+            AgentMode::Ephemeral,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let client_source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/ephemeral_agent/EphemeralAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(
+        !client_source.contains("def get("),
+        "ephemeral guest agent must not expose get:\n{client_source}"
+    );
+    assert!(client_source.contains("def getPhantom(name: _root_.scala.Predef.String"));
+    assert!(client_source.contains("phantom: _root_.golem.Uuid"));
+    assert!(client_source.contains("def newPhantom(name: _root_.scala.Predef.String)"));
+    assert!(client_source.contains("_root_.scala.Either"));
+    assert!(client_source.contains("EphemeralAgentRemote"));
+
+    compile_guest_if_enabled(dir.as_path());
 }
 
 /// Generates a bridge for an agent with rich named types (record, enum,
@@ -138,7 +481,9 @@ fn generates_named_type_definitions() {
 
     // enum Color -> sealed trait + case objects (cases extend the fully
     // qualified trait so a nested case can never shadow it).
-    assert!(client.contains("sealed trait Color extends Product with Serializable"));
+    assert!(client.contains(
+        "sealed trait Color extends _root_.scala.Product with _root_.scala.Serializable"
+    ));
     assert!(client.contains("case object Red extends _root_.golem.bridge.client.agent1.Color"));
     assert!(client.contains("case object Green extends _root_.golem.bridge.client.agent1.Color"));
     assert!(client.contains("case object Blue extends _root_.golem.bridge.client.agent1.Color"));
@@ -333,7 +678,7 @@ fn ephemeral_agent_omits_get_constructor() {
     // A Unit-returning method's apply yields Future[Unit].
     assert!(client.contains("def apply(): _root_.scala.concurrent.Future[_root_.scala.Unit]"));
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Generated codecs reject malformed wire shapes on the negative path: a
@@ -341,7 +686,7 @@ fn ephemeral_agent_omits_get_constructor() {
 /// payload, and an invalid (surrogate) `char` on encode. (The runtime-only
 /// strictness — option object shape, UUID half ranges, strict case-index
 /// parsing — lives in the hand-written runtime sources, which the sbt
-/// cross-compile only type-checks rather than executes.)
+/// compile only type-checks rather than executes.)
 #[test]
 fn codecs_reject_malformed_wire_shapes() {
     let pkg = GeneratedPackage::new(agent(
@@ -386,15 +731,15 @@ fn codecs_reject_malformed_wire_shapes() {
     assert!(client.contains("Unexpected payload for payload-less variant case"));
 
     // The generated strictness paths (char encode, unit-result and variant
-    // payload checks) must also compile on both Scala versions.
-    cross_compile(pkg.package_dir().as_path());
+    // payload checks) must also compile.
+    compile(pkg.package_dir().as_path());
 }
 
-/// The bridge for an agent with rich named types cross-compiles with sbt.
+/// The bridge for an agent with rich named types compiles with sbt.
 #[test]
-fn multi_agent_named_types_cross_compiles() {
+fn multi_agent_named_types_compiles() {
     let pkg = GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone());
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Method names that are Scala keywords, and constructor/method parameters that
@@ -444,6 +789,8 @@ fn client_surface_handles_reserved_and_keyword_names() {
                 ],
                 None,
             ),
+            method("macro", vec![], None),
+            method("forSome", vec![], None),
         ],
         vec![],
         AgentMode::Durable,
@@ -485,7 +832,7 @@ fn client_surface_handles_reserved_and_keyword_names() {
     assert!(client.contains("p_2: _root_.scala.Predef.String"));
     assert!(client.contains("t0_2: _root_.scala.Predef.String"));
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Generated named-type members (record/flag fields, variant/enum/union cases)
@@ -568,7 +915,7 @@ fn named_type_members_avoid_reserved_member_names() {
         )
     );
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// Identifier uniqueness is computed on the semantic Scala symbol (backticks
@@ -617,12 +964,16 @@ fn keywords_are_backtick_escaped() {
     // Scala 3 soft keywords are escaped defensively.
     assert!(is_scala_keyword("using"));
     assert!(is_scala_keyword("inline"));
+    assert!(is_scala_keyword("forSome"));
+    assert!(is_scala_keyword("macro"));
     assert!(!is_scala_keyword("foo"));
 
     assert_eq!(escape_scala_ident("type"), "`type`");
     assert_eq!(escape_scala_ident("match"), "`match`");
     assert_eq!(escape_scala_ident("enum"), "`enum`");
     assert_eq!(escape_scala_ident("using"), "`using`");
+    assert_eq!(escape_scala_ident("forSome"), "`forSome`");
+    assert_eq!(escape_scala_ident("macro"), "`macro`");
 }
 
 #[test]
@@ -744,9 +1095,9 @@ fn uuid_ref_is_remapped_through_the_walker() {
 /// modality and a `List[Multimodal<N>]` parameter / return type, decoded
 /// through the generated list codec. Structurally identical modality sets used
 /// by multiple methods collapse to a single generated type, and the result
-/// cross-compiles on both Scala versions.
+/// compiles.
 #[test]
-fn multimodal_input_and_output_cross_compiles() {
+fn multimodal_input_and_output_compiles() {
     let parts = || {
         vec![
             variant_case("text", Some(SchemaType::string())),
@@ -782,7 +1133,9 @@ fn multimodal_input_and_output_cross_compiles() {
     .unwrap();
 
     // One sealed trait with a case per modality (UpperCamelCase, payload typed).
-    assert!(client.contains("sealed trait Multimodal0 extends Product with Serializable"));
+    assert!(client.contains(
+        "sealed trait Multimodal0 extends _root_.scala.Product with _root_.scala.Serializable"
+    ));
     assert!(client.contains("object Multimodal0 {"));
     assert!(client.contains(
         "final case class Text(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.media_agent.Multimodal0"
@@ -829,7 +1182,7 @@ fn multimodal_input_and_output_cross_compiles() {
         )
     );
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// A durable agent that declares local config overrides gets the
@@ -837,10 +1190,9 @@ fn multimodal_input_and_output_cross_compiles() {
 /// constructor variants (mirroring the Scala SDK's RPC clients), each taking an
 /// `Option[T] = None` per declared override and building the
 /// `List[AgentConfigEntry]` from the supplied values. The plain constructors
-/// pass an empty config list, and the result cross-compiles on both Scala
-/// versions.
+/// pass an empty config list, and the result compiles.
 #[test]
-fn local_config_overrides_cross_compiles() {
+fn local_config_overrides_compile() {
     let pkg = GeneratedPackage::new({
         let mut at = agent(
             "ConfigAgent",
@@ -887,7 +1239,7 @@ fn local_config_overrides_cross_compiles() {
         "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, phantomId, _root_.scala.collection.immutable.List()).map"
     ));
 
-    cross_compile(pkg.package_dir().as_path());
+    compile(pkg.package_dir().as_path());
 }
 
 /// An ephemeral agent with local config overrides omits the parameter-
@@ -937,4 +1289,200 @@ fn config_override_constructors_respect_mode_and_absence() {
         !no_config_client.contains("WithConfig"),
         "an agent without config declarations must not emit any WithConfig variant"
     );
+}
+
+/// Scala guest tool bridges emit a Scala.js guest-client project, a root client
+/// with subtree accessors, canonical record construction, typed error enums,
+/// and calls through the Scala SDK's `ToolClientRuntime` boundary.
+#[test]
+fn guest_tool_generation_emits_client_tree_and_runtime_boundary() {
+    let pkg = GeneratedToolPackage::new(grep_tool());
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
+    )
+    .unwrap();
+
+    for shape in [
+        "final class GrepClient",
+        "object GrepClient",
+        "def apply(): GrepClient",
+        "def grep(",
+        "def replace(",
+        "sealed trait GrepError",
+        "final case class BadPattern",
+        "case object Io",
+        "_root_.golem.runtime.tool.client.ToolRpcClient.transport(\"grep\")",
+        "_root_.golem.schema.TypedSchemaValue(__schema, _root_.golem.schema.SchemaValue.RecordValue(__fields))",
+        "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[_root_.golem.bridge.client.grep.GrepError]",
+        "_root_.golem.tool.ToolClientRuntime.invokeAndAwaitInfallible",
+        "object Codecs",
+        "sealed trait ColorMode",
+    ] {
+        assert!(source.contains(shape), "missing {shape}:\n{source}");
+    }
+
+    assert!(
+        !source.contains("golem.bridge.runtime"),
+        "guest tool bridge must not reference the external REST runtime:\n{source}"
+    );
+
+    let build_sbt = std::fs::read_to_string(dir.join("build.sbt")).unwrap();
+    assert!(build_sbt.contains("\"grep-tool-guest-client\""));
+    assert!(build_sbt.contains("enablePlugins(ScalaJSPlugin)"));
+    assert!(build_sbt.contains("scalaJSUseMainModuleInitializer := false"));
+    assert!(dir.join("project/plugins.sbt").exists());
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+/// Tool guest clients reserve Scala keywords, universal members, helper names,
+/// and generated error names before emitting clients so awkward tool metadata
+/// still produces valid, collision-free Scala.
+#[test]
+fn guest_tool_generation_handles_keywords_and_collisions() {
+    let mut tool = grep_tool();
+    tool.commands.nodes[0].name = "type".to_string();
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        positionals: Positionals {
+            fixed: vec![
+                positional("decode-result-value", SchemaType::string()),
+                positional("elems0", SchemaType::fixed_list(SchemaType::string(), 1)),
+            ],
+            tail: None,
+        },
+        errors: vec![
+            ErrorCase {
+                name: "type".to_string(),
+                doc: doc("type"),
+                kind: ErrorKind::UsageError,
+                exit_code: 2,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "type".to_string(),
+                doc: doc("type duplicate"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: None,
+            },
+        ],
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph::empty();
+
+    let pkg = GeneratedToolPackage::new(tool);
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/type_/TypeClient.scala"),
+    )
+    .unwrap();
+
+    assert!(source.contains("package golem.bridge.client.type_"));
+    assert!(source.contains("final class TypeClient"));
+    assert!(source.contains("def `type`("));
+    assert!(
+        !source.contains("def type("),
+        "keyword method name must not be emitted bare:\n{source}"
+    );
+    assert!(
+        !source.contains("decodeResultValue: _root_.scala.Predef.String"),
+        "parameter must not shadow the generated decodeResultValue helper:\n{source}"
+    );
+    assert!(source.contains("decodeResultValue_2: _root_.scala.Predef.String"));
+    assert!(
+        !source.contains("val elems0 = elems0.map"),
+        "parameter must not shadow fixed-list encoder temporaries:\n{source}"
+    );
+    assert!(source.contains("elems0_2: _root_.scala.collection.immutable.List"));
+    assert!(source.contains("val elems0 = elems0_2.map"));
+    assert!(source.contains("final case class Type"));
+    assert!(source.contains("case object Type_2"));
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_tool_error_decoder_return_type_uses_error_trait_when_variant_shadows_name() {
+    let mut tool = grep_tool();
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        errors: vec![
+            ErrorCase {
+                name: "grep-error".to_string(),
+                doc: doc("grep error"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "io".to_string(),
+                doc: doc("io"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 2,
+                payload: None,
+            },
+        ],
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph::empty();
+
+    let pkg = GeneratedToolPackage::new(tool);
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
+    )
+    .unwrap();
+
+    assert!(source.contains(
+        "final case class GrepError(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.grep.GrepError"
+    ));
+    assert!(source.contains(
+        "_root_.scala.Either[_root_.scala.Predef.String, _root_.golem.bridge.client.grep.GrepError]"
+    ));
+    assert!(source.contains("_root_.golem.bridge.client.grep.GrepError.GrepError"));
+    assert!(source.contains("_root_.golem.bridge.client.grep.GrepError.Io"));
+
+    compile(dir.as_path());
+}
+
+#[test]
+fn guest_tool_error_trait_parents_do_not_resolve_to_generated_user_types() {
+    let mut tool = grep_tool();
+    let product_type = TypeId::from("product");
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        errors: vec![ErrorCase {
+            name: "bad-product".to_string(),
+            doc: doc("bad product"),
+            kind: ErrorKind::RuntimeError,
+            exit_code: 1,
+            payload: Some(SchemaType::ref_to(product_type.clone())),
+        }],
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: product_type,
+            name: Some("product".to_string()),
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "name".to_string(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            }]),
+        }],
+        root: SchemaType::record(vec![]),
+    };
+
+    let pkg = GeneratedToolPackage::new(tool);
+    let dir = pkg.package_dir();
+
+    compile(dir.as_path());
 }

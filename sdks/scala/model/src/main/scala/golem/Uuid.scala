@@ -26,6 +26,18 @@ final case class Uuid(highBits: BigInt, lowBits: BigInt)
 object Uuid {
   implicit val schema: Schema[Uuid] = Schema.derived
 
+  def random(): Uuid = {
+    val high = (randomUnsigned64() & ~BigInt(0xf000)) | BigInt(0x4000)
+    val low  = (randomUnsigned64() & ~(BigInt(0xc000) << 48)) | (BigInt(0x8000) << 48)
+    Uuid(high, low)
+  }
+
+  private def randomUnsigned64(): BigInt = {
+    val high = (scala.math.random() * 4294967296.0).toLong
+    val low  = (scala.math.random() * 4294967296.0).toLong
+    (BigInt(high) << 32) | BigInt(low)
+  }
+
   def toStandardString(uuid: Uuid): String = {
     val hi = uuid.highBits
     val lo = uuid.lowBits

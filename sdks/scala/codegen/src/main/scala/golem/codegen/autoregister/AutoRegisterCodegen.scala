@@ -21,7 +21,7 @@ import golem.codegen.discovery.SourceDiscovery
 import java.security.MessageDigest
 
 import scala.meta._
-import scala.meta.dialects.Scala213
+import scala.meta.dialects.Scala3
 import scala.meta.parsers._
 
 /**
@@ -249,7 +249,7 @@ object AutoRegisterCodegen {
   // ── Type/term reference helpers ────────────────────────────────────────────
 
   private def parseMeta[T](code: String)(implicit parse: Parse[T]): T =
-    Scala213(code).parse[T].get
+    Scala3(code).parse[T].get
 
   private def parseTermRef(dotted: String): Term.Ref =
     parseMeta[Term](dotted).asInstanceOf[Term.Ref]

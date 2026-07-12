@@ -20,7 +20,6 @@ import golem.codegen.discovery.SourceDiscovery
 import golem.codegen.ir.AgentSurfaceIR._
 
 import scala.meta._
-import scala.meta.dialects.Scala213
 import scala.meta.parsers._
 
 /**
@@ -103,14 +102,9 @@ object RpcCodegen {
   private[rpc] def unwrapFutureType(returnTypeExpr: String): String = {
     val tpe =
       try {
-        dialects.Scala213(returnTypeExpr).parse[Type].get
+        dialects.Scala3(returnTypeExpr).parse[Type].get
       } catch {
-        case _: Exception =>
-          try {
-            dialects.Scala3(returnTypeExpr).parse[Type].get
-          } catch {
-            case _: Exception => return returnTypeExpr
-          }
+        case _: Exception => return returnTypeExpr
       }
 
     tpe match {

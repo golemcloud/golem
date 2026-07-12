@@ -35,7 +35,42 @@ final case class RemoteAgentClient(
   agentId: String,
   metadata: RegisteredAgentType,
   rpc: RpcInvoker
-)
+) {
+  def invokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, Option[JsSchemaValueTree]] =
+    rpc.invokeAndAwait(functionName, input)
+
+  def asyncInvokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Future[Option[JsSchemaValueTree]] =
+    rpc.asyncInvokeAndAwait(functionName, input)
+
+  def cancelableAsyncInvokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
+    rpc.cancelableAsyncInvokeAndAwait(functionName, input)
+
+  def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
+    rpc.invoke(functionName, input)
+
+  def scheduleInvocation(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, Unit] =
+    rpc.scheduleInvocation(datetime, functionName, input)
+
+  def scheduleCancelableInvocation(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, CancellationToken] =
+    rpc.scheduleCancelableInvocation(datetime, functionName, input)
+}
 
 object RemoteAgentClient {
   def resolve(agentTypeName: String, constructorPayload: JsSchemaValueTree): Either[String, RemoteAgentClient] =
