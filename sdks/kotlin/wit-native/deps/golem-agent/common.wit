@@ -1,0 +1,237 @@
+package golem:agent@2.0.0;
+
+interface common {
+  use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
+    metadata-envelope, agent-id, account-id, component-id};
+  use wasi:clocks/monotonic-clock@0.2.3.{duration};
+
+  enum agent-mode {
+    durable,
+    ephemeral
+  }
+
+  /// Full agent type declaration.
+  ///
+  /// `schema` is the per-agent type-node pool. Constructor / method / config
+  /// schema roots below are `type-node-index` values into `schema`. The
+  /// `schema.root` field is a structurally-required placeholder and is not the
+  /// semantic root of the agent type.
+  record agent-type {
+    type-name:       string,
+    description:     string,
+    source-language: string,
+    schema:          schema-graph,
+    %constructor:    agent-constructor,
+    methods:         list<agent-method>,
+    dependencies:    list<agent-dependency>,
+    mode:            agent-mode,
+    http-mount:      option<http-mount-details>,
+    snapshotting:    snapshotting,
+    config:       list<agent-config-declaration>,
+  }
+
+  /// Associates an agent type with a component that implements it
+  record registered-agent-type {
+    agent-type: agent-type,
+    implemented-by: component-id
+  }
+
+  /// Dependent agent type. All schema roots inside it resolve against its own
+  /// `schema`, not against the parent agent-type's graph.
+  record agent-dependency {
+    type-name:    string,
+    description:  option<string>,
+    schema:       schema-graph,
+    %constructor: agent-constructor,
+    methods:      list<agent-method>,
+  }
+
+  /// Ordered, named input parameters with per-field source annotation.
+  variant input-schema {
+    parameters(list<named-field>),
+  }
+
+  record named-field {
+    name:     string,
+    source:   field-source,
+    /// Index into the owning agent-type / dependency `schema` graph.
+    schema:   type-node-index,
+    metadata: metadata-envelope,
+  }
+
+  variant field-source {
+    user-supplied,
+    auto-injected(auto-injected-kind),
+  }
+
+  enum auto-injected-kind {
+    principal,
+  }
+
+  /// Output is either unit (no value) or a single value of the given type.
+  variant output-schema {
+    unit,
+    /// Index into the owning agent-type / dependency `schema` graph.
+    single(type-node-index),
+  }
+
+  record agent-method {
+    name:          string,
+    description:   string,
+    http-endpoint: list<http-endpoint-details>,
+    prompt-hint:   option<string>,
+    input-schema:  input-schema,
+    output-schema: output-schema,
+    read-only:     option<read-only-config>,
+  }
+
+  record read-only-config {
+    cache-policy:    cache-policy,
+    uses-principal:  bool,
+  }
+
+  variant cache-policy {
+    no-cache,
+    until-write,
+    ttl(duration),
+  }
+
+  record http-mount-details {
+    path-prefix:    list<path-segment>,
+    auth-details:   option<auth-details>,
+    phantom-agent:  bool,
+    cors-options:   cors-options,
+    webhook-suffix: list<path-segment>,
+  }
+
+  record cors-options {
+    allowed-patterns: list<string>,
+  }
+
+  record http-endpoint-details {
+    http-method: http-method,
+    path-suffix:  list<path-segment>,
+    header-vars:  list<header-variable>,
+    query-vars:   list<query-variable>,
+    auth-details: option<auth-details>,
+    cors-options: cors-options,
+  }
+
+  variant http-method {
+    get,
+    head,
+    post,
+    put,
+    delete,
+    connect,
+    options,
+    trace,
+    patch,
+    custom(string),
+  }
+
+  variant path-segment {
+    literal(string),
+    system-variable(system-variable),
+    path-variable(path-variable),
+    // only allowed as the last segment
+    remaining-path-variable(path-variable)
+  }
+
+  enum system-variable {
+    agent-type,
+    agent-version
+  }
+
+  record path-variable {
+    variable-name: string,
+  }
+
+  record header-variable {
+    header-name: string,
+    variable-name: string,
+  }
+
+  record query-variable {
+    query-param-name: string,
+    variable-name: string,
+  }
+
+  record auth-details {
+    required: bool,
+  }
+
+  variant principal {
+    oidc(oidc-principal),
+    agent(agent-principal),
+    golem-user(golem-user-principal),
+    anonymous
+  }
+
+  record oidc-principal {
+    sub:      string,
+    issuer: string,
+
+    email:    option<string>,
+    name:     option<string>,
+    email-verified: option<bool>,
+    given-name:     option<string>,
+    family-name:    option<string>,
+    picture:        option<string>,
+    preferred-username:       option<string>,
+
+    claims: string,
+  }
+
+  record agent-principal {
+    agent-id: agent-id,
+  }
+
+  record golem-user-principal {
+    account-id: account-id
+  }
+
+  record agent-constructor {
+    name:          option<string>,
+    description:   string,
+    prompt-hint:   option<string>,
+    input-schema:  input-schema,
+  }
+
+  variant snapshotting {
+    disabled,
+    enabled(snapshotting-config)
+  }
+
+  variant snapshotting-config {
+    default, // current default in the server
+    periodic(duration),
+    every-n-invocation(u16)
+  }
+
+  enum agent-config-source {
+    local,
+    secret
+  }
+
+  record agent-config-declaration {
+    source: agent-config-source,
+    path: list<string>,
+    /// Index into the owning agent-type `schema` graph.
+    value-type: type-node-index,
+  }
+
+  record typed-agent-config-value {
+    path: list<string>,
+    value: typed-schema-value,
+  }
+
+  /// Agent-level failures
+  variant agent-error {
+    invalid-input(string),
+    invalid-method(string),
+    invalid-type(string),
+    invalid-agent-id(string),
+    custom-error(typed-schema-value),
+  }
+}
