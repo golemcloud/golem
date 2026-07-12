@@ -3,8 +3,8 @@
 ## Overview
 
 Golem agents can be exposed over HTTP using code-first route definitions. This involves:
-1. Adding a `mount` path to the `@agent()` decorator
-2. Annotating methods with `@endpoint()`
+1. Adding an `http` mount to `defineAgent(...)` with `http.mount(...)`
+2. Attaching `http: http.<verb>(...)` endpoints to methods declared with `method(...)`
 3. Adding an `httpApi` deployment section to `golem.yaml` (See the [`golem-configure-api-domain`](/next/how-to-guides/common/golem-configure-api-domain) guide)
 
 ### Related Guides
@@ -18,129 +18,143 @@ Golem agents can be exposed over HTTP using code-first route definitions. This i
 
 ## Steps
 
-1. Add `mount` to the `@agent()` decorator
-2. Add `@endpoint()` decorators to methods
+1. Add `http: http.mount(...)` to `defineAgent(...)`
+2. Add `http: http.<verb>(...)` to the methods you want to expose
 3. Add `httpApi` deployment to `golem.yaml` (see [`golem-configure-api-domain`](/next/how-to-guides/common/golem-configure-api-domain) guide)
 4. Build and deploy
 
 ## Mount Path
 
-The `mount` option on `@agent()` defines the base HTTP path. Path variables in `{braces}` map to constructor parameters:
+The `http` field on `defineAgent(...)` defines the base HTTP path via `http.mount(...)`. Path variables in `{braces}` map to the agent's `id` record fields:
 
 ```typescript
-import { BaseAgent, agent, endpoint } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-@agent({
-  mount: '/api/tasks/{name}',
-})
-class TaskAgent extends BaseAgent {
-  constructor(readonly name: string) {
-    super();
-  }
-  // ...
-}
+export const TaskAgent = defineAgent({
+  name: 'TaskAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/tasks/{name}'),
+  methods: {
+    // ...
+  },
+});
 ```
 
 Rules:
 - Path must start with `/`
-- Every constructor parameter must appear as a `{variable}` in the mount path (or be mapped via mount-level `headers`)
-- Every `{variable}` must match a constructor parameter name
+- Every `id` field must appear as a `{variable}` in the mount path (enforced at compile time)
+- Every `{variable}` must match an `id` field name
 - Catch-all `{*rest}` variables are **not** allowed in mount paths
 
-## Endpoint Decorator
+The mount path template is template-literal typed: a `{var}` that does not match an id field (or an id field with no matching `{var}`) is a `tsc` error, not just a runtime failure. Passing a dynamically built (non-literal) `string` widens to `string` and defers to the runtime checks.
 
-The `@endpoint()` decorator marks a method as an HTTP endpoint. Specify exactly one HTTP method (`get`, `post`, `put`, `delete`, or `custom`):
+## Endpoint Declaration
+
+Attach an `http` endpoint to a method with one of the verb builders (`http.get`, `http.post`, `http.put`, `http.del`, `http.patch`, or `http.custom`):
 
 ```typescript
-@endpoint({ get: '/items' })
-async listItems(): Promise<Item[]> { ... }
+methods: {
+  listItems: method({ input: {}, returns: z.array(Item), http: http.get('/items') }),
 
-@endpoint({ post: '/items' })
-async createItem(name: string, count: number): Promise<Item> { ... }
+  createItem: method({
+    input: { name: z.string(), count: z.number() },
+    returns: Item,
+    http: http.post('/items'),
+  }),
 
-@endpoint({ put: '/items/{id}' })
-async updateItem(id: string, name: string): Promise<Item> { ... }
+  updateItem: method({
+    input: { id: z.string(), name: z.string() },
+    returns: Item,
+    http: http.put('/items/{id}'),
+  }),
 
-@endpoint({ delete: '/items/{id}' })
-async deleteItem(id: string): Promise<void> { ... }
+  deleteItem: method({ input: { id: z.string() }, returns: z.void(), http: http.del('/items/{id}') }),
 
-@endpoint({ custom: { method: 'PATCH', path: '/items/{id}' } })
-async patchItem(id: string, patch: PatchData): Promise<Item> { ... }
+  patchItem: method({
+    input: { id: z.string(), patch: PatchData },
+    returns: Item,
+    http: http.custom('PATCH', '/items/{id}'),
+  }),
+}
 ```
 
-Endpoint paths are relative to the mount path. A method can have multiple `@endpoint()` decorators to expose it under different routes.
+Endpoint paths are relative to the mount path. To expose a method under multiple routes, pass an array: `http: [http.get('/items'), http.get('/all')]`.
 
-For details on how path variables, query parameters, headers, and request bodies map to method parameters, See the [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts) guide.
+For details on how path variables, query parameters, headers, and request bodies map to method inputs, See the [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts) guide.
 
 ## Phantom Agents
 
-Set `phantom: true` on the agent to create a new ephemeral agent instance for each HTTP request. This enables fully parallel request processing:
+Set `phantomAgent: true` on the mount to create a fresh ephemeral agent instance for each HTTP request. This enables fully parallel request processing:
 
 ```typescript
-@agent({
-  mount: '/gateway/{name}',
-  phantom: true
-})
-class GatewayAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
-  // Each HTTP request gets its own agent instance
-}
+export const GatewayAgent = defineAgent({
+  name: 'GatewayAgent',
+  id: { name: z.string() },
+  http: http.mount('/gateway/{name}', { phantomAgent: true }),
+  methods: { /* each HTTP request gets its own agent instance */ },
+});
 ```
 
 ## Return Type to HTTP Response Mapping
 
-Golem maps method return types to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.**
+Golem maps a method's returned value to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.** In the fluent SDK the return *shape* is declared by the method's `returns` schema.
 
-| Return Type | HTTP Status | Response Body |
+| Returned value / `returns` schema | HTTP Status | Response Body |
 |---|---|---|
-| `void` / no return | 204 No Content | empty |
-| `T` (any type) | 200 OK | JSON-serialized `T` |
-| `T \| undefined` | 200 OK if value, 404 Not Found if `undefined` | JSON `T` or empty |
-| `Result<T, E>` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
-| `Result<void, E>` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
-| `Result<T, void>` | 200 OK if `Ok`, 500 if `Err` | JSON `T` or empty |
-| `UnstructuredBinary` | 200 OK | Raw binary with Content-Type |
+| `z.void()` / no value | 204 No Content | empty |
+| any schema `T` | 200 OK | JSON-serialized `T` |
+| `T.nullable()` / `T.optional()` | 200 OK if value, 404 Not Found if `null` / `undefined` | JSON `T` or empty |
+| `s.result(ok, err)` returning `Result.ok` / `Result.err` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `ok` or JSON `err` |
+| `s.unstructuredBinary()` | 200 OK | Raw binary with Content-Type |
 
 ## Complete Example
 
 ```typescript
-import { BaseAgent, agent, endpoint, Result } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http, s, Result } from '@golemcloud/golem-ts-sdk';
 
-type Task = { id: string; title: string; done: boolean };
+const Task = z.object({ id: z.string(), title: z.string(), done: z.boolean() });
+type Task = z.infer<typeof Task>;
 
-@agent({ mount: '/task-agents/{name}' })
-class TaskAgent extends BaseAgent {
-  private tasks: Task[] = [];
+export const TaskAgent = defineAgent({
+  name: 'TaskAgent',
+  id: { name: z.string() },
+  http: http.mount('/task-agents/{name}'),
+  methods: {
+    getTasks: method({ input: {}, returns: z.array(Task), http: http.get('/tasks') }),
+    createTask: method({ input: { title: z.string() }, returns: Task, http: http.post('/tasks') }),
+    getTask: method({ input: { id: z.string() }, returns: Task.nullable(), http: http.get('/tasks/{id}') }),
+    completeTask: method({
+      input: { id: z.string() },
+      returns: s.result(Task, z.object({ error: z.string() })),
+      http: http.post('/tasks/{id}/complete'),
+    }),
+  },
+});
 
-  constructor(readonly name: string) {
-    super();
-  }
-
-  @endpoint({ get: '/tasks' })
-  async getTasks(): Promise<Task[]> {
-    return this.tasks;
-  }
-
-  @endpoint({ post: '/tasks' })
-  async createTask(title: string): Promise<Task> {
-    const task: Task = { id: String(this.tasks.length + 1), title, done: false };
-    this.tasks.push(task);
-    return task;
-  }
-
-  @endpoint({ get: '/tasks/{id}' })
-  async getTask(id: string): Promise<Task | undefined> {
-    return this.tasks.find(t => t.id === id);
-  }
-
-  @endpoint({ post: '/tasks/{id}/complete' })
-  async completeTask(id: string): Promise<Result<Task, { error: string }>> {
-    const task = this.tasks.find(t => t.id === id);
-    if (!task) return Result.err({ error: 'not found' });
-    task.done = true;
-    return Result.ok(task);
-  }
-}
+export const TaskAgentImpl = TaskAgent.implement({
+  init: () => ({ tasks: [] as Task[] }),
+  methods: {
+    getTasks() {
+      return this.tasks;
+    },
+    createTask({ title }) {
+      const task: Task = { id: String(this.tasks.length + 1), title, done: false };
+      this.tasks.push(task);
+      return task;
+    },
+    getTask({ id }) {
+      return this.tasks.find((t) => t.id === id) ?? null;
+    },
+    completeTask({ id }) {
+      const task = this.tasks.find((t) => t.id === id);
+      if (!task) return Result.err({ error: 'not found' });
+      task.done = true;
+      return Result.ok(task);
+    },
+  },
+});
 ```
 
 ```yaml
@@ -155,9 +169,9 @@ httpApi:
 
 ## Key Constraints
 
-- A `mount` path is required on `@agent()` before any `@endpoint()` decorators can be used
-- All constructor parameters must be provided via mount path variables or header variables
-- Path/query/header variable names must exactly match method parameter names
-- Catch-all path variables `{*name}` can only appear as the last path segment
+- An `http.mount(...)` is required on `defineAgent(...)` before any method can declare an `http` endpoint
+- Every `id` field must be provided via a mount path variable (or a header variable — see [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts))
+- Path/query/header variable names must exactly match `id` fields (mount) or method input keys (endpoint)
+- Catch-all path variables `{*name}` can only appear as the last endpoint path segment and are not allowed in mount paths
 - The endpoint path must start with `/`
-- Exactly one HTTP method must be specified per `@endpoint()` decorator
+- Use exactly one verb builder per endpoint; pass an array of endpoints to expose a method under multiple routes

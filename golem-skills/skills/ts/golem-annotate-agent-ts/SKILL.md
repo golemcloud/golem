@@ -7,65 +7,72 @@ description: "Adding prompt and description annotations to TypeScript agents and
 
 ## Overview
 
-Golem agents can annotate the agent class and its methods with `@prompt()` and `@description()` decorators. These provide metadata for AI/LLM tool discovery — agents with annotations can be used as tools by LLM-based systems.
+Golem agents can annotate the agent and its methods with human-readable metadata. This metadata drives AI/LLM tool discovery — agents with annotations can be used as tools by LLM-based systems. In the fluent SDK the annotations are plain fields on the `defineAgent(...)` spec and on each `method(...)`.
 
 ## Annotations
 
-- **`@prompt("...")`** — A short instruction telling an LLM *when* to call this method
-- **`@description("...")`** — A longer explanation of what the agent or method does, its parameters, and return value
+- **`promptHint`** — a short instruction telling an LLM *when* to call this method
+- **`description`** — a longer explanation of what the agent or method does, its parameters, and return value
 
 ## Agent-Level Annotations
 
-To describe the agent itself (its overall purpose), apply `@description()` as a **standalone class-level decorator** alongside `@agent()`. Do **NOT** pass `description` as a property inside the `@agent()` options — `AgentDecoratorOptions` does not accept it, and it will cause a TypeScript compilation error.
+To describe the agent itself (its overall purpose), set `description` (and optionally `promptHint`) as top-level fields on the `defineAgent(...)` spec:
 
 ```typescript
-// ✅ Correct — @description is a separate class decorator
-@agent({ mount: "/api/v1/profiles" })
-@description("Handles user profile management and preferences")
-class ProfileAgent extends BaseAgent { ... }
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-// ❌ Wrong — description is not a valid @agent() option
-@agent({ mount: "/api/v1/profiles", description: "..." })
-class ProfileAgent extends BaseAgent { ... }
+export const ProfileAgent = defineAgent({
+    name: 'ProfileAgent',
+    description: 'Handles user profile management and preferences',
+    id: { userId: z.string() },
+    http: http.mount('/api/v1/profiles/{userId}'),
+    methods: { /* ... */ },
+});
 ```
 
 ## Method-Level Annotations
 
+Set `description` and `promptHint` inside the `method({...})` call for each method:
+
 ```typescript
-import { BaseAgent, agent, prompt, description } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-@agent({ mount: "/warehouses/{warehouseId}" })
-@description("Manages product inventory for a warehouse")
-class InventoryAgent extends BaseAgent {
-    constructor(warehouseId: string) {
-        super();
-    }
-
-    @prompt("Look up the current stock level for a product")
-    @description("Returns the number of units in stock for the given product SKU. Returns 0 if the product is not found.")
-    async checkStock(sku: string): Promise<number> {
-        // ...
-    }
-
-    @prompt("Add units of a product to inventory")
-    @description("Increases the stock count for the given SKU by the specified amount. Returns the new total.")
-    async restock(sku: string, quantity: number): Promise<number> {
-        // ...
-    }
-
-    @prompt("Remove units of a product from inventory")
-    @description("Decreases the stock count for the given SKU. Throws if insufficient stock.")
-    async pick(sku: string, quantity: number): Promise<number> {
-        // ...
-    }
-}
+export const InventoryAgent = defineAgent({
+    name: 'InventoryAgent',
+    description: 'Manages product inventory for a warehouse',
+    id: { warehouseId: z.string() },
+    http: http.mount('/warehouses/{warehouseId}'),
+    methods: {
+        checkStock: method({
+            input: { sku: z.string() },
+            returns: z.number(),
+            promptHint: 'Look up the current stock level for a product',
+            description:
+                'Returns the number of units in stock for the given product SKU. Returns 0 if the product is not found.',
+        }),
+        restock: method({
+            input: { sku: z.string(), quantity: z.number() },
+            returns: z.number(),
+            promptHint: 'Add units of a product to inventory',
+            description:
+                'Increases the stock count for the given SKU by the specified amount. Returns the new total.',
+        }),
+        pick: method({
+            input: { sku: z.string(), quantity: z.number() },
+            returns: z.number(),
+            promptHint: 'Remove units of a product from inventory',
+            description: 'Decreases the stock count for the given SKU. Throws if insufficient stock.',
+        }),
+    },
+});
 ```
 
 ## Guidelines
 
-- `@description()` on the **class** describes the agent's overall purpose for LLM discovery
-- `@prompt()` on a **method** should be a natural-language instruction an LLM can match against a user request
-- `@description()` on a **method** should document behavior, edge cases, and expected inputs/outputs
-- Both decorators are optional — omit them for internal methods not intended for LLM discovery
+- `description` on the **agent** spec describes the agent's overall purpose for LLM discovery
+- `promptHint` on a **method** should be a natural-language instruction an LLM can match against a user request
+- `description` on a **method** should document behavior, edge cases, and expected inputs/outputs
+- All of these fields are optional — omit them for internal methods not intended for LLM discovery
 - Annotations have no effect on runtime behavior; they are purely metadata
-- Never pass `description` as a property of the `@agent()` decorator options — always use the standalone `@description()` decorator

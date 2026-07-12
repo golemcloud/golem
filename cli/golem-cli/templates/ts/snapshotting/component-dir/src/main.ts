@@ -1,1 +1,1 @@
-import './counter-with-snapshot-agent';
+import './counter-with-snapshot-agent.js';

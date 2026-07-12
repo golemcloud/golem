@@ -1,25 +1,25 @@
-import {
-    BaseAgent,
-    agent,
-    prompt,
-    description,
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class SelfRpcAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+export const SelfRpcAgent = defineAgent({
+    name: 'SelfRpcAgent',
+    id: { name: z.string() },
+    methods: {
+        doWork: method({ input: {}, returns: z.void() }),
+        selfRpc: method({ input: {}, returns: z.void() }),
+    },
+});
 
-    constructor(name: string) {
-        super()
-        this.name = name;
-    }
+const selfClient = clientFor(SelfRpcAgent);
 
-    async doWork(): Promise<void> {
-        return
-    }
-
-    async selfRpc(): Promise<void> {
-      return SelfRpcAgent.get(this.name).doWork()
-    }
-}
+export const SelfRpcAgentImpl = SelfRpcAgent.implement({
+    init: ({ id }) => ({ name: id.name }),
+    methods: {
+        async doWork() {
+            return;
+        },
+        async selfRpc() {
+            return selfClient({ name: this.name }).doWork();
+        },
+    },
+});

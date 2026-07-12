@@ -30,6 +30,65 @@ pub fn collect_value_text_by_path(source: &str, path: &[&str]) -> anyhow::Result
     ))
 }
 
+/// Builds a JSON object *source* (compact text) that sets each `(path, value_literal)`
+/// entry, creating intermediate objects so the wrapper shape follows from the paths.
+/// Value literals are inserted verbatim (they must already be valid JSON text, e.g.
+/// `"\"bundler\""` or `true`); keys are escaped. Intended as the `update_source` for
+/// [`merge_object`], which re-parses and validates it — so the compact formatting here
+/// is irrelevant, only the base file's formatting is preserved.
+pub fn build_object_source(entries: &[(Vec<String>, String)]) -> anyhow::Result<String> {
+    enum Slot {
+        Leaf(String),
+        Branch(BTreeMap<String, Slot>),
+    }
+
+    fn insert(
+        object: &mut BTreeMap<String, Slot>,
+        path: &[String],
+        literal: &str,
+    ) -> anyhow::Result<()> {
+        match path {
+            [] => Err(anyhow!("Cannot set a value at an empty path")),
+            [key] => {
+                object.insert(key.clone(), Slot::Leaf(literal.to_string()));
+                Ok(())
+            }
+            [key, rest @ ..] => match object
+                .entry(key.clone())
+                .or_insert_with(|| Slot::Branch(BTreeMap::new()))
+            {
+                Slot::Branch(child) => insert(child, rest, literal),
+                Slot::Leaf(_) => Err(anyhow!("Conflicting JSON paths at key '{key}'")),
+            },
+        }
+    }
+
+    fn emit(object: &BTreeMap<String, Slot>, out: &mut String) {
+        out.push('{');
+        for (index, (key, slot)) in object.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&escape_json_string(key));
+            out.push_str("\":");
+            match slot {
+                Slot::Leaf(literal) => out.push_str(literal),
+                Slot::Branch(child) => emit(child, out),
+            }
+        }
+        out.push('}');
+    }
+
+    let mut root = BTreeMap::new();
+    for (path, literal) in entries {
+        insert(&mut root, path, literal)?;
+    }
+    let mut out = String::new();
+    emit(&root, &mut out);
+    Ok(out)
+}
+
 pub fn merge_object(base_source: &str, update_source: &str) -> anyhow::Result<String> {
     let base_tree = parse_json(base_source)?;
     let update_tree = parse_json(update_source)?;

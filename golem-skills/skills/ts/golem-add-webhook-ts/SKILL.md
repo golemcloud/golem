@@ -16,13 +16,13 @@ This is useful for:
 
 ### Prerequisites
 
-The agent type **must** be deployed via an HTTP API mount (`mount` on `@agent()` and an `httpApi` deployment in `golem.yaml`). Without a mount, webhooks cannot be created.
+The agent type **must** be deployed via an HTTP API mount (`http.mount(...)` on `defineAgent(...)` and an `httpApi` deployment in `golem.yaml`). Without a mount, webhooks cannot be created.
 
 ### Related Skills
 
 | Skill | When to Load |
 |---|---|
-| `golem-add-http-endpoint-ts` | Setting up the HTTP mount and endpoint decorators required before using webhooks |
+| `golem-add-http-endpoint-ts` | Setting up the `http.mount(...)` and endpoint declarations required before using webhooks |
 | `golem-configure-api-domain` | Configuring `httpApi` in `golem.yaml`, including `subdomain` versus `domain` |
 | `golem-wait-for-external-input-ts` | Lower-level promise API if you need more control than webhooks provide |
 
@@ -68,25 +68,21 @@ https://<domain>/<prefix>/<suffix>/<id>
 
 ## Webhook Suffix
 
-You can configure a `webhookSuffix` on the `@agent()` decorator to override the default kebab-case agent name in the webhook URL:
+You can configure a `webhookSuffix` in the mount options of `http.mount(...)` to override the default kebab-case agent name in the webhook URL:
 
 ```typescript
-@agent({
-  mount: '/api/orders/{id}',
-  webhookSuffix: '/workflow-hooks',
-})
-class OrderAgent extends BaseAgent {
-  // ...
-}
+export const OrderAgent = defineAgent({
+  name: 'OrderAgent',
+  id: { id: z.string() },
+  http: http.mount('/api/orders/{id}', { webhookSuffix: '/workflow-hooks' }),
+  methods: { /* ... */ },
+});
 ```
 
-Path variables in `{braces}` are also supported in `webhookSuffix`:
+Path variables in `{braces}` (and system variables like `{agent-type}`) are also supported in `webhookSuffix`:
 
 ```typescript
-@agent({
-  mount: '/api/events/{name}',
-  webhookSuffix: '/{agent-type}/callbacks/{name}',
-})
+http: http.mount('/api/events/{name}', { webhookSuffix: '/{agent-type}/callbacks/{name}' }),
 ```
 
 ## Usage Pattern
@@ -126,47 +122,50 @@ const raw: Uint8Array = payload.bytes();
 ## Complete Example
 
 ```typescript
-import { BaseAgent, agent, endpoint } from '@golemcloud/golem-ts-sdk';
-import { createWebhook } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http, createWebhook } from '@golemcloud/golem-ts-sdk';
 
 type WebhookEvent = { eventType: string; data: string };
 
-@agent({ mount: '/integrations/{name}' })
-class IntegrationAgent extends BaseAgent {
-  private lastEvent: string = '';
+export const IntegrationAgent = defineAgent({
+  name: 'IntegrationAgent',
+  id: { name: z.string() },
+  http: http.mount('/integrations/{name}'),
+  methods: {
+    registerAndWait: method({ input: {}, returns: z.string(), http: http.post('/register') }),
+    getLastEvent: method({ input: {}, returns: z.string(), http: http.get('/last-event') }),
+  },
+});
 
-  constructor(readonly name: string) {
-    super();
-  }
+export const IntegrationAgentImpl = IntegrationAgent.implement({
+  init: () => ({ lastEvent: '' }),
+  methods: {
+    async registerAndWait() {
+      // 1. Create a webhook
+      const webhook = createWebhook();
+      const url = webhook.getUrl();
 
-  @endpoint({ post: '/register' })
-  async registerAndWait(): Promise<string> {
-    // 1. Create a webhook
-    const webhook = createWebhook();
-    const url = webhook.getUrl();
+      // 2. In a real scenario, you would register `url` with an external service here.
+      //    For this example, the URL is created so the caller can POST to it.
+      //    The agent is durably suspended while awaiting.
 
-    // 2. In a real scenario, you would register `url` with an external service here.
-    //    For this example, the URL is returned so the caller can POST to it.
-    //    The agent is durably suspended while awaiting.
+      // 3. Wait for the external POST
+      const payload = await webhook;
+      const event = payload.json<WebhookEvent>();
 
-    // 3. Wait for the external POST
-    const payload = await webhook;
-    const event = payload.json<WebhookEvent>();
-
-    this.lastEvent = `${event.eventType}: ${event.data}`;
-    return this.lastEvent;
-  }
-
-  @endpoint({ get: '/last-event' })
-  async getLastEvent(): Promise<string> {
-    return this.lastEvent;
-  }
-}
+      this.lastEvent = `${event.eventType}: ${event.data}`;
+      return this.lastEvent;
+    },
+    getLastEvent() {
+      return this.lastEvent;
+    },
+  },
+});
 ```
 
 ## Key Constraints
 
-- The agent **must** have an HTTP mount (`mount` on `@agent()`) and be deployed via `httpApi` in `golem.yaml`
+- The agent **must** have an HTTP mount (`http.mount(...)` on `defineAgent(...)`) and be deployed via `httpApi` in `golem.yaml`
 - The webhook URL is a one-time-use URL — once POSTed to, the promise is completed and the URL becomes invalid
 - Only `POST` requests to the webhook URL will complete the promise
 - `WebhookHandler` implements `PromiseLike`, so use `await` to wait for the callback
