@@ -137,9 +137,6 @@ fn run_agents(project_root : String) -> Unit raise {
         pkg_content, "golemcloud/golem_sdk/interface/golem/tool/common", "@toolCommon",
       )
       pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/interface/golem/agent/common", "@agentCommon",
-      )
-      pkg_content = @lib.ensure_pkg_import(
         pkg_content, "golemcloud/golem_sdk/interface/wasi/io/streams", "@streams",
       )
       @fs.write_string_to_file(pkg_path, pkg_content)

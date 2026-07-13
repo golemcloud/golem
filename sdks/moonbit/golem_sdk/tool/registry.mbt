@@ -1,4 +1,12 @@
 ///|
+pub type Principal = @agentCommon.Principal
+
+///|
+pub fn get_stdout() -> @streams.OutputStream {
+  @stdout.get_stdout()
+}
+
+///|
 type ToolInvoker = (
   Array[String],
   @types.TypedSchemaValue,

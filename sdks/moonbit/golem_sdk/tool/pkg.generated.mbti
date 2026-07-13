@@ -47,6 +47,8 @@ pub fn forward_canonical_input(Array[CanonicalInputValue], ToolDef, Int) -> @typ
 
 pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
+pub fn get_stdout() -> @streams.OutputStream
+
 pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub fn invocation_result_stdout(@streams.OutputStream) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
@@ -322,6 +324,7 @@ pub(all) struct ValueIsRefDef {
 }
 
 // Type aliases
+pub using @golemcloud/golem_sdk/interface/golem/agent/common {type Principal}
 
 // Traits
 pub(open) trait ToolErrorSchema {

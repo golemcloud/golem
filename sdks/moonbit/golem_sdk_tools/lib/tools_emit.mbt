@@ -427,15 +427,16 @@ fn project_command(
   }
   for param_index, pair in command.params {
     let (source, parameter) = pair
+    if source.has_prefix("__golem_") {
+      emit_fail(
+        "Tool command '" +
+        command.source_name +
+        "' parameter '" +
+        source +
+        "' uses the reserved __golem_ generator prefix",
+      )
+    }
     match parameter {
-      Hidden(OutputStream) | LabelledHidden(OutputStream) =>
-        emit_fail(
-          "Tool command '" +
-          command.source_name +
-          "' parameter '" +
-          source +
-          "' uses stdout, which is unsupported until the WASI stdout import is available",
-        )
       Hidden(hidden) | LabelledHidden(hidden) => {
         let info = arg_info(command, source)
         validate_hidden_attrs(info, hidden, source)
@@ -1246,7 +1247,9 @@ fn emit_body(
   emit_constraints(command) +
   ", stdin: " +
   emit_stream(command, InputStream) +
-  ", stdout: None, result: " +
+  ", stdout: " +
+  emit_stream(command, OutputStream) +
+  ", result: " +
   emit_result(command) +
   ", errors: " +
   emit_errors(command) +
@@ -1618,10 +1621,36 @@ fn emit_descriptor(
 }
 
 ///|
-fn emit_invocation_value(value : String) -> String {
-  "Ok(@tool.invocation_result_value(" +
-  value +
-  ") catch { error => return Err(error) })"
+fn output_stream_source(command : ToolCommandInfo) -> String? {
+  for pair in command.params {
+    if pair.1 == Hidden(OutputStream) || pair.1 == LabelledHidden(OutputStream) {
+      return Some(pair.0)
+    }
+  }
+  None
+}
+
+///|
+fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
+  match output_stream_source(command) {
+    Some(_) =>
+      "Ok(@tool.invocation_result_value_with_stdout(" +
+      value +
+      ", @tool.get_stdout()" +
+      ") catch { error => return Err(error) })"
+    None =>
+      "Ok(@tool.invocation_result_value(" +
+      value +
+      ") catch { error => return Err(error) })"
+  }
+}
+
+///|
+fn emit_empty_invocation(command : ToolCommandInfo) -> String {
+  match output_stream_source(command) {
+    Some(_) => "Ok(@tool.invocation_result_stdout(@tool.get_stdout()))"
+    None => "Ok(@tool.invocation_result_empty())"
+  }
 }
 
 ///|
@@ -1662,34 +1691,37 @@ fn emit_success_call(command : ToolCommandInfo, call : String) -> String {
     if command.error_via_result {
       "match " +
       call +
-      " { Ok(value) => " +
+      " { Ok(__golem_value) => " +
       (if is_unit(command.success_type) {
-        "Ok(@tool.invocation_result_empty())"
+        emit_empty_invocation(command)
       } else {
-        emit_invocation_value("value")
+        emit_invocation_value(command, "__golem_value")
       }) +
       "\nErr(error) => " +
       emit_custom_error(command, "error") +
       " }"
     } else {
-      "let outcome = try { Ok(" +
+      "let __golem_outcome = try { Ok(" +
       call +
       ") } catch { " +
       emit_raised_error_capture(command) +
-      " }\nmatch outcome { Ok(value) => " +
+      " }\nmatch __golem_outcome { Ok(__golem_value) => " +
       (if is_unit(command.success_type) {
-        "Ok(@tool.invocation_result_empty())"
+        emit_empty_invocation(command)
       } else {
-        emit_invocation_value("value")
+        emit_invocation_value(command, "__golem_value")
       }) +
       "\nErr(error) => " +
       emit_custom_error(command, "error") +
       " }"
     }
   } else if is_unit(command.success_type) {
-    "let _ = " + call + "; Ok(@tool.invocation_result_empty())"
+    "let _ = " + call + "; " + emit_empty_invocation(command)
   } else {
-    "let value = " + call + "; " + emit_invocation_value("value")
+    "let __golem_value = " +
+    call +
+    "; " +
+    emit_invocation_value(command, "__golem_value")
   }
 }
 
@@ -1706,7 +1738,7 @@ fn emit_invoker(
   buf.write_string(
     "///|\nfn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @streams.InputStream?, __golem_principal : @agentCommon.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @streams.InputStream?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
     descriptor_name(tool) +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
@@ -1746,11 +1778,16 @@ fn emit_invoker(
           buf.write_string(
             "      let " +
             arg.source +
-            " = match __golem_stdin { Some(__golem_stream) => __golem_stream, None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\")) }\n",
+            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
           )
           call_args.push(arg.source)
         }
-        Hidden(OutputStream) => ()
+        Hidden(OutputStream) => {
+          buf.write_string(
+            "      let " + arg.source + " = @tool.get_stdout()\n",
+          )
+          call_args.push(arg.source)
+        }
         _ => {
           buf.write_string(
             "      let " +
@@ -1979,6 +2016,16 @@ fn emit_tool_client_method(
     .join(", ")
   let error = command.error_type.map(emit_type).unwrap_or("@tool.NoToolError")
   let success = command.success_type.map(emit_type).unwrap_or("Unit")
+  let has_stdout = output_stream_source(command) is Some(_)
+  let client_success = if has_stdout {
+    if is_unit(command.success_type) {
+      "@streams.OutputStream"
+    } else {
+      "(" + success + ", @streams.OutputStream)"
+    }
+  } else {
+    success
+  }
   buf.write_string(
     "///|\npub fn " +
     receiver +
@@ -1988,7 +2035,7 @@ fn emit_tool_client_method(
     receiver +
     (if signature.is_empty() { "" } else { ", " + signature }) +
     ") -> Result[" +
-    success +
+    client_success +
     ", @tool.ToolError[" +
     error +
     "]] {\n",
@@ -2033,7 +2080,13 @@ fn emit_tool_client_method(
     ", __golem_input, " +
     stdin +
     ") {\n    Err(__golem_error) => Err(__golem_error)\n    Ok(__golem_result) => @tool." +
-    (if is_unit(command.success_type) {
+    (if has_stdout {
+      if is_unit(command.success_type) {
+        "decode_result_stdout_only"
+      } else {
+        "decode_result_with_stdout"
+      }
+    } else if is_unit(command.success_type) {
       "decode_result_empty"
     } else {
       "decode_result_value"
@@ -2103,7 +2156,7 @@ fn emit_client_scope(
     })
     .unwrap_or([])
   if current.root_command is Some(index) {
-    let args = without_captured_args(plans[index], captured)
+    let args = without_captured_args(client_args(plans[index], []), captured)
     emit_tool_client_method(
       buf,
       root,

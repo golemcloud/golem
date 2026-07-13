@@ -30,7 +30,7 @@ test "tool emitters generate root, leaf, registration, and typed clients" {
 }
 
 ///|
-test "pure dispatcher, subtree authoring, and stdout diagnostics" {
+test "pure dispatcher, subtree authoring, and stdout support" {
   let dispatcher =
     #|#derive.tool
     #|struct Dispatcher {}
@@ -65,15 +65,118 @@ test "pure dispatcher, subtree authoring, and stdout diagnostics" {
   let stdout =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(stream : @streams.OutputStream) -> Unit { () }
-  try
-    @lib.generate_tool_client_code(@lib.parse_tools([("stdout.mbt", stdout)]))
-  catch {
-    @lib.ToolEmitError(message) => assert_true(message.contains("stdout"))
-    error => fail("unexpected error: " + error.to_string())
-  } noraise {
-    _ => fail("expected stdout diagnostic")
-  }
+    #|pub fn Out::out(input : @streams.InputStream, output : @streams.OutputStream) -> Unit { () }
+  let stdout_tools = @lib.parse_tools([("stdout.mbt", stdout)])
+  let stdout_registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(stdout_tools),
+  )
+  assert_true(stdout_registration.contains("stdout: Some("))
+  assert_true(stdout_registration.contains("match __golem_stdin"))
+  assert_true(stdout_registration.contains("let output = @tool.get_stdout()"))
+  assert_true(
+    stdout_registration.contains(
+      "@tool.invocation_result_stdout(@tool.get_stdout())",
+    ),
+  )
+  let stdout_client = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(stdout_tools),
+  )
+  assert_true(stdout_client.contains("@streams.OutputStream"))
+  assert_false(stdout_client.contains("output : @streams.InputStream"))
+  assert_true(stdout_client.contains("@tool.decode_result_stdout_only"))
+}
+
+///|
+test "labelled stdout is injected and returned by generated invoker" {
+  let source =
+    #|#derive.tool
+    #|struct Out {}
+    #|pub fn Out::out(output~ : @streams.OutputStream) -> Unit { ignore(output) }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
+  )
+  assert_true(generated.contains("let output = @tool.get_stdout()"))
+  assert_true(generated.contains("Out::out(output~)"))
+  assert_true(
+    generated.contains("@tool.invocation_result_stdout(@tool.get_stdout())"),
+  )
+}
+
+///|
+test "stdout result does not reuse the stream handle owned by the tool method" {
+  let source =
+    #|#derive.tool
+    #|struct Out {}
+    #|pub fn Out::out(output : @streams.OutputStream) -> Unit {
+    #|  output.drop()
+    #|}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
+  )
+  assert_eq(generated.split("@tool.get_stdout()").length(), 3)
+}
+
+///|
+test "stdout parameter is not shadowed by a generated result binding" {
+  let source =
+    #|#derive.tool
+    #|struct Out {}
+    #|pub fn Out::out(value : @streams.OutputStream) -> String {
+    #|  ignore(value)
+    #|  "ok"
+    #|}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
+  )
+  assert_false(
+    generated.contains(
+      "@tool.invocation_result_value_with_stdout(value, value)",
+    ),
+  )
+}
+
+///|
+test "stdout parameter cannot collide with reserved result binding" {
+  let source =
+    #|#derive.tool
+    #|struct Out {}
+    #|pub fn Out::out(__golem_value : @streams.OutputStream) -> String {
+    #|  ignore(__golem_value)
+    #|  "ok"
+    #|}
+  expect_tool_emit_error(source, "reserved __golem_ generator prefix")
+}
+
+///|
+test "tool generated internals use runtime facades instead of consumer aliases" {
+  let source =
+    #|#derive.tool
+    #|struct Out {}
+    #|pub fn Out::out(output : @streams.OutputStream) -> Unit { ignore(output) }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
+  )
+  assert_true(generated.contains("@tool.Principal"))
+  assert_true(generated.contains("@tool.get_stdout()"))
+  assert_false(generated.contains("@common.Principal"))
+  assert_false(generated.contains("@stdout.get_stdout()"))
+}
+
+///|
+test "reexported tool Principal is injected as invocation context" {
+  let source =
+    #|#derive.tool
+    #|struct Whoami {}
+    #|pub fn Whoami::whoami(principal : @tool.Principal) -> Unit {
+    #|  ignore(principal)
+    #|}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("principal.mbt", source)]),
+    ),
+  )
+  assert_true(generated.contains("Whoami::whoami(__golem_principal)"))
+  assert_false(generated.contains("decode_canonical_field"))
 }
 
 ///|
