@@ -295,6 +295,17 @@ impl MultiLayerOplogService {
             transfer_fiber.abort();
         }
     }
+
+    fn unregister_transfer(&self, agent_id: &AgentId, transfer_fiber: &TransferFiber) {
+        let transfer_fiber = Arc::downgrade(transfer_fiber);
+        let mut transfer_fibers = self.transfer_fibers.lock().unwrap();
+        if transfer_fibers
+            .get(agent_id)
+            .is_some_and(|registered| registered.ptr_eq(&transfer_fiber))
+        {
+            transfer_fibers.remove(agent_id);
+        }
+    }
 }
 
 impl Clone for MultiLayerOplogService {
@@ -954,6 +965,8 @@ impl MultiLayerOplog {
 
 impl Drop for MultiLayerOplog {
     fn drop(&mut self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
