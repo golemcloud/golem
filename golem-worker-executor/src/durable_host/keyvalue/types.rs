@@ -29,7 +29,6 @@ use golem_common::model::oplog::{
 };
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
-use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::types::{
     Error, Host, HostBucket, HostIncomingValue, HostIncomingValueWithStore, HostOutgoingValue,
@@ -39,8 +38,8 @@ use crate::workerctx::WorkerCtx;
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, HasSelf, Resource, StreamProducer, StreamReader,
-    StreamResult,
+    Access, Accessor, AccessorTask, Destination, HasSelf, Resource, Source, StreamConsumer,
+    StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime_wasi::IoView;
 
@@ -219,21 +218,6 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         Ok(outgoing_value)
     }
 
-    async fn outgoing_value_write_body_async(
-        &mut self,
-        _self_: Resource<OutgoingValueEntry>,
-    ) -> anyhow::Result<Result<StreamReader<u8>, Resource<Error>>> {
-        self.observe_function_call(
-            "keyvalue::types::outgoing_value",
-            "outgoing_value_write_body_async",
-        );
-        let error = self.as_wasi_view().table().push(ErrorEntry::new(
-            "keyvalue outgoing async body streams are not supported by this host binding"
-                .to_string(),
-        ))?;
-        Ok(Err(error))
-    }
-
     async fn outgoing_value_write_body_sync(
         &mut self,
         self_: Resource<OutgoingValueEntry>,
@@ -254,9 +238,61 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     }
 }
 
+/// Consumes the guest-provided `stream<u8>` written into an outgoing value and
+/// appends the bytes to the outgoing value's in-memory body buffer. The buffer
+/// is later captured durably by the consuming durable call (`eventual::set`,
+/// batch set or cache vacancy fill), so this consumer itself performs no oplog
+/// recording.
+struct OutgoingValueWriteConsumer {
+    body: Arc<RwLock<Vec<u8>>>,
+}
+
+impl<D> StreamConsumer<D> for OutgoingValueWriteConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        source: Source<'_, Self::Item>,
+        _finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        let mut source = source.as_direct(store);
+        let bytes = source.remaining();
+        if bytes.is_empty() {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+        let len = bytes.len();
+        self.body.write().unwrap().extend_from_slice(bytes);
+        source.mark_read(len);
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
 impl<U: Send + 'static, Ctx: WorkerCtx> HostOutgoingValueWithStore<U>
     for HasSelf<DurableWorkerCtx<Ctx>>
 {
+    fn outgoing_value_write_body_async(
+        mut host: Access<U, Self>,
+        self_: Resource<OutgoingValueEntry>,
+        data: StreamReader<u8>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        let body = {
+            let ctx = host.get();
+            ctx.observe_function_call(
+                "keyvalue::types::outgoing_value",
+                "outgoing_value_write_body_async",
+            );
+            ctx.as_wasi_view()
+                .table()
+                .get::<OutgoingValueEntry>(&self_)?
+                .body
+                .clone()
+        };
+        data.pipe(&mut host, OutgoingValueWriteConsumer { body })?;
+        Ok(Ok(()))
+    }
+
     async fn drop(
         accessor: &Accessor<U, Self>,
         rep: Resource<OutgoingValueEntry>,

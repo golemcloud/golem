@@ -21,7 +21,6 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::filesystem::WasiFilesystemView as _;
 use wasmtime_wasi::p2::FsError;
 use wasmtime_wasi::p2::ReaddirIterator;
-use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::p2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,
     DirectoryEntryStream, Error, ErrorCode, Filesize, Host, HostDescriptor,
@@ -712,16 +711,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 }
 
 fn calculate_metadata_hash(meta: &DescriptorStat) -> MetadataHashValue {
+    let (lower, upper) = calculate_metadata_hash_parts(
+        meta.data_modification_timestamp
+            .map(|t| (t.seconds, t.nanoseconds)),
+        meta.size,
+    );
+    MetadataHashValue { lower, upper }
+}
+
+/// Computes the deterministic metadata hash from the durable stat result's
+/// modification timestamp and file size. Shared by the P2 and P3 filesystem
+/// host implementations so both produce identical hashes for the same durable
+/// stat data.
+pub(crate) fn calculate_metadata_hash_parts(modified: Option<(u64, u32)>, size: u64) -> (u64, u64) {
     let mut hasher = MetroHash128::new();
 
-    let modified = meta.data_modification_timestamp.unwrap_or(Datetime {
-        seconds: 0,
-        nanoseconds: 0,
-    });
-    hasher.write_u64(modified.seconds);
-    hasher.write_u32(modified.nanoseconds);
-    hasher.write_u64(meta.size);
+    let (seconds, nanoseconds) = modified.unwrap_or((0, 0));
+    hasher.write_u64(seconds);
+    hasher.write_u32(nanoseconds);
+    hasher.write_u64(size);
 
-    let (lower, upper) = hasher.finish128();
-    MetadataHashValue { lower, upper }
+    hasher.finish128()
 }

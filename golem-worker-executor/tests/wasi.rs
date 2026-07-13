@@ -394,6 +394,107 @@ async fn initial_file_read_write(
 
 #[test]
 #[tracing::instrument]
+async fn initial_file_p3_parity(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "P3FileSystem",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("P3FileSystem", "initial-file-p3-parity-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let expected = vec![
+        "ro_flags_p2_write=false".to_string(),
+        "ro_flags_p3_write=false".to_string(),
+        "ro_hash_parity=true".to_string(),
+        "ro_hash_p3_deterministic=true".to_string(),
+        "ro_hash_at_parity=true".to_string(),
+        "ro_set_times_p2=err:not-permitted".to_string(),
+        "ro_set_times_p3=err:not-permitted".to_string(),
+        "ro_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_rename_at_p2=err:not-permitted".to_string(),
+        "ro_rename_at_p3=err:not-permitted".to_string(),
+        "ro_symlink_at_p2=err:not-permitted".to_string(),
+        "ro_symlink_at_p3=err:not-permitted".to_string(),
+        "ro_unlink_file_at_p2=err:not-permitted".to_string(),
+        "ro_unlink_file_at_p3=err:not-permitted".to_string(),
+        "rw_flags_p2_write=true".to_string(),
+        "rw_flags_p3_write=true".to_string(),
+        "rw_hash_parity=true".to_string(),
+        "rw_set_times_p2=ok".to_string(),
+        "rw_set_times_p3=ok".to_string(),
+    ];
+
+    fn as_entries(result: SchemaValue) -> Vec<String> {
+        let SchemaValue::List { elements } = result else {
+            panic!("expected list, got {result:?}")
+        };
+        elements
+            .into_iter()
+            .map(|element| match element {
+                SchemaValue::String(entry) => entry,
+                other => panic!("expected string, got {other:?}"),
+            })
+            .collect::<Vec<_>>()
+    }
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(as_entries(result), expected);
+
+    // Crash the worker so the next invocation replays the recorded oplog first,
+    // verifying the P3 metadata-hash -> durable stat call sequence is replay-stable
+    executor.simulated_crash(&worker_id).await?;
+
+    let result_after_crash = executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(as_entries(result_after_crash), expected);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn initial_file_listing_through_api(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1134,7 +1235,17 @@ async fn environment_variables(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
+    // The same environment must be visible through the P3-native
+    // `wasi:cli/environment@0.3` import as through the P2/std path
+    let result_p3 = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_environment_p3", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
     executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result_p3, result);
 
     let worker_name = agent_id.to_string();
     assert_eq!(

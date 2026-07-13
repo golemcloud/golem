@@ -32,9 +32,11 @@ interface types {
 	// Soon: switch to `resource value { ... }`
 	resource outgoing-value {
 		new-outgoing-value: static func() -> outgoing-value;
-		/// Returns a `stream<u8>` to write the value asynchronously.
+		/// Writes the value asynchronously by consuming the given `stream<u8>`:
+		/// the caller keeps the writable end and the host appends every received
+		/// byte to the outgoing value's body.
 		/// If any other error occurs, it returns an `Err(error)`.
-		outgoing-value-write-body-async: func() -> result<stream<u8>, error>;
+		outgoing-value-write-body-async: func(data: stream<u8>) -> result<_, error>;
 		/// Writes the value synchronously.
 		/// If any other error occurs, it returns an `Err(error)`.
 		outgoing-value-write-body-sync: func(value: list<u8>) -> result<_, error>;

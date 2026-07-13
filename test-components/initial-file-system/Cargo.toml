@@ -17,4 +17,5 @@ ctor = "0.4.0"
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-wasip3 = { version = "0.6.0", features = ["async-spawn"] }
+wasi = { version = "=0.14.7+wasi-0.2.4" }
+wasip3 = { version = "0.7.0", features = ["async-spawn"] }

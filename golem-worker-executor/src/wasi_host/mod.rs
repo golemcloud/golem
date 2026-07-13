@@ -169,10 +169,6 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         &mut linker,
         get,
     )?;
-    crate::preview2::wasi::keyvalue::atomic::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
-        &mut linker,
-        get,
-    )?;
     crate::preview2::wasi::keyvalue::cache::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
         get,

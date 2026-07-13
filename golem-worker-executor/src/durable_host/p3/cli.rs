@@ -305,7 +305,7 @@ where
 impl<Ctx: WorkerCtx> environment::Host for DurableP3View<'_, Ctx> {
     fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
         observe_function_call(&*self.0, "cli::environment", "get-environment");
-        environment::Host::get_environment(&mut WasiCliView::cli(self.0))
+        self.0.durable_ctx().build_enriched_environment()
     }
 
     fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {

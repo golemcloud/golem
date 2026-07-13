@@ -290,9 +290,7 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
         // without dropping the body — abandon it so the drain can proceed.
         durable_body.abandon_active_live_view();
         match durable_body.drain_to_terminal().await {
-            DurableRequestBodyDrainOutcome::Replayable => {
-                durable_body.replayer().boxed_unsync()
-            }
+            DurableRequestBodyDrainOutcome::Replayable => durable_body.replayer().boxed_unsync(),
             DurableRequestBodyDrainOutcome::NotReplayable => {
                 return ResendOutcome::Refused(
                     "the request body could not be replayed (guest body error or a \
@@ -303,13 +301,14 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
         }
     } else {
         match rebuild.recorded_request_body {
-        Some(send_start_index) => {
-            let oplog = accessor.with(|mut access| {
-                let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                ctx.state.oplog.clone()
-            });
-            let scan =
-                match scan_recorded_request_body_frames(oplog.clone(), send_start_index).await {
+            Some(send_start_index) => {
+                let oplog = accessor.with(|mut access| {
+                    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+                    ctx.state.oplog.clone()
+                });
+                let scan = match scan_recorded_request_body_frames(oplog.clone(), send_start_index)
+                    .await
+                {
                     Ok(scan) => scan,
                     Err(error) => {
                         return ResendOutcome::Refused(format!(
@@ -317,35 +316,35 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
                         ));
                     }
                 };
-            match scan.terminal {
-                Some(RecordedRequestBodyTerminal::End) => {
-                    recorded_request_body_replay(oplog, &scan)
-                }
-                Some(RecordedRequestBodyTerminal::Error(error)) => {
-                    return ResendOutcome::Refused(format!(
-                        "the recorded request body ended with a guest body error: {error:?}"
-                    ));
-                }
-                None => {
-                    return ResendOutcome::Refused(
+                match scan.terminal {
+                    Some(RecordedRequestBodyTerminal::End) => {
+                        recorded_request_body_replay(oplog, &scan)
+                    }
+                    Some(RecordedRequestBodyTerminal::Error(error)) => {
+                        return ResendOutcome::Refused(format!(
+                            "the recorded request body ended with a guest body error: {error:?}"
+                        ));
+                    }
+                    None => {
+                        return ResendOutcome::Refused(
                         "the recorded request body is incomplete (no terminal frame was recorded)"
                             .to_string(),
                     );
+                    }
                 }
             }
-        }
-        None => {
-            // Legacy send recorded before request-body frames existed: only a
-            // bodiless head can be re-issued.
-            if recorded_head_declares_body(&rebuild.request) {
-                return ResendOutcome::Refused(
-                    "the request had a body, which is not recorded in the oplog".to_string(),
-                );
+            None => {
+                // Legacy send recorded before request-body frames existed: only a
+                // bodiless head can be re-issued.
+                if recorded_head_declares_body(&rebuild.request) {
+                    return ResendOutcome::Refused(
+                        "the request had a body, which is not recorded in the oplog".to_string(),
+                    );
+                }
+                Empty::<Bytes>::new()
+                    .map_err(|never| match never {})
+                    .boxed_unsync()
             }
-            Empty::<Bytes>::new()
-                .map_err(|never| match never {})
-                .boxed_unsync()
-        }
         }
     };
 

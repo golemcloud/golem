@@ -28,6 +28,7 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/cache.[method]vacancy.vacancy-fill": store | async | trappable,
         "wasi:keyvalue/cache.[drop]vacancy": store | async | trappable,
         "wasi:keyvalue/types.[method]incoming-value.incoming-value-consume-async": store | trappable,
+        "wasi:keyvalue/types.[method]outgoing-value.outgoing-value-write-body-async": store | trappable,
         "wasi:blobstore/types.[method]incoming-value.incoming-value-consume-async": store | trappable,
         "wasi:blobstore/types.[method]outgoing-value.outgoing-value-write-body": store | trappable,
         "wasi:blobstore/container.[method]container.list-objects": store | async | trappable,

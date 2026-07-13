@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
+use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_read_access, wasi_filesystem_view,
@@ -260,6 +261,29 @@ where
     })
 }
 
+/// Fails with `not-permitted` when the descriptor refers to a file marked
+/// read-only in the worker's initial file system, matching the WASI P2
+/// `fail_if_read_only` enforcement. Directories always pass.
+fn fail_if_read_only_from_accessor<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    fd: &Resource<Descriptor>,
+) -> FilesystemResult<()>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    let read_only = accessor
+        .with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).check_if_file_is_readonly(fd)
+        })
+        .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
+    if read_only {
+        Err(types::ErrorCode::NotPermitted.into())
+    } else {
+        Ok(())
+    }
+}
+
 fn write_validation_error_from_access<Ctx: WorkerCtx, U>(
     store: &mut Access<'_, U, DurableP3<Ctx>>,
     fd: &Resource<Descriptor>,
@@ -435,6 +459,27 @@ where
         Ok(stat) => stat.size,
         Err(_) => 0,
     }
+}
+
+/// Computes the metadata hash from a durable stat result, using the same hash
+/// inputs and function as the WASI P2 implementation so P2 and P3 report
+/// identical hashes for the same file state. P3 datetimes use signed seconds
+/// while P2 uses unsigned; pre-epoch timestamps fail with `overflow` just like
+/// the P2 stat conversion does.
+fn metadata_hash_from_stat(
+    stat: &types::DescriptorStat,
+) -> FilesystemResult<types::MetadataHashValue> {
+    let modified = stat
+        .data_modification_timestamp
+        .map(|timestamp| {
+            let seconds =
+                u64::try_from(timestamp.seconds).map_err(|_| types::ErrorCode::Overflow)?;
+            Ok::<_, types::ErrorCode>((seconds, timestamp.nanoseconds))
+        })
+        .transpose()?;
+
+    let (lower, upper) = calculate_metadata_hash_parts(modified, stat.size);
+    Ok(types::MetadataHashValue { lower, upper })
 }
 
 async fn apply_stat_response(
@@ -909,18 +954,32 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn get_flags(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorFlags> {
-        store.with(|mut access| {
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "get-flags",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-        <WasiFilesystem as types::HostDescriptorWithStore<U>>::get_flags(&store, fd).await
+        // Files marked read-only in the worker's initial file system must not
+        // report the write flag, matching the WASI P2 behavior.
+        let read_only = accessor
+            .with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut()).check_if_file_is_readonly(&fd)
+            })
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let mut flags =
+            <WasiFilesystem as types::HostDescriptorWithStore<U>>::get_flags(&store, fd).await?;
+
+        if read_only {
+            flags &= !types::DescriptorFlags::WRITE;
+        }
+
+        Ok(flags)
     }
 
     async fn get_type(
@@ -983,19 +1042,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn set_times(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "set-times",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::set_times(
             &store,
             fd,
@@ -1174,21 +1234,22 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn set_times_at(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         path_flags: types::PathFlags,
         path: String,
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "set-times-at",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::set_times_at(
             &store,
             fd,
@@ -1308,20 +1369,22 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn rename_at(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         old_path: String,
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &new_fd)?;
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "rename-at",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::rename_at(
             &store, fd, old_path, new_fd, new_path,
         )
@@ -1329,19 +1392,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn symlink_at(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         old_path: String,
         new_path: String,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "symlink-at",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::symlink_at(
             &store, fd, old_path, new_path,
         )
@@ -1353,13 +1417,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
-        accessor.with(|mut access| {
-            observe_function_call_store::<Ctx, U>(
-                access.data_mut(),
-                "filesystem::types::descriptor",
-                "unlink-file-at",
-            )
-        });
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
@@ -1371,6 +1429,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         )
         .await;
 
+        accessor.with(|mut access| {
+            observe_function_call_store::<Ctx, U>(
+                access.data_mut(),
+                "filesystem::types::descriptor",
+                "unlink-file-at",
+            )
+        });
         let result = {
             let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
             <WasiFilesystem as types::HostDescriptorWithStore<U>>::unlink_file_at(&store, fd, path)
@@ -1414,8 +1479,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "metadata-hash",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-        <WasiFilesystem as types::HostDescriptorWithStore<U>>::metadata_hash(&store, fd).await
+        // Computed from the durable stat result so the hash only depends on
+        // replay-stable inputs (durable file times + size), matching WASI P2.
+        let stat = Self::stat(store, fd).await?;
+        metadata_hash_from_stat(&stat)
     }
 
     async fn metadata_hash_at(
@@ -1431,11 +1498,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "metadata-hash-at",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-        <WasiFilesystem as types::HostDescriptorWithStore<U>>::metadata_hash_at(
-            &store, fd, path_flags, path,
-        )
-        .await
+        // Computed from the durable stat result so the hash only depends on
+        // replay-stable inputs (durable file times + size), matching WASI P2.
+        let stat = Self::stat_at(store, fd, path_flags, path).await?;
+        metadata_hash_from_stat(&stat)
     }
 }
 
@@ -1455,6 +1521,49 @@ mod tests {
             false,
             path,
         )
+    }
+
+    #[test]
+    fn metadata_hash_from_stat_matches_p2_hash() {
+        let stat = types::DescriptorStat {
+            type_: types::DescriptorType::RegularFile,
+            link_count: 1,
+            size: 42,
+            data_access_timestamp: None,
+            data_modification_timestamp: Some(
+                wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
+                    seconds: 123,
+                    nanoseconds: 456,
+                },
+            ),
+            status_change_timestamp: None,
+        };
+        let hash = metadata_hash_from_stat(&stat).unwrap();
+        let (lower, upper) = calculate_metadata_hash_parts(Some((123, 456)), 42);
+        assert_eq!(hash.lower, lower);
+        assert_eq!(hash.upper, upper);
+    }
+
+    #[test]
+    fn metadata_hash_from_stat_fails_with_overflow_for_pre_epoch_timestamps() {
+        let stat = types::DescriptorStat {
+            type_: types::DescriptorType::RegularFile,
+            link_count: 1,
+            size: 42,
+            data_access_timestamp: None,
+            data_modification_timestamp: Some(
+                wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
+                    seconds: -1,
+                    nanoseconds: 0,
+                },
+            ),
+            status_change_timestamp: None,
+        };
+        let error = metadata_hash_from_stat(&stat).unwrap_err();
+        assert!(matches!(
+            error.downcast().unwrap(),
+            types::ErrorCode::Overflow
+        ));
     }
 
     #[test]

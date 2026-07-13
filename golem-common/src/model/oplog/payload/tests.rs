@@ -61,7 +61,7 @@ use wasmtime_wasi_http::p2::bindings::http::types::{
 
 fn datetime_strat()
 -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
-    (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
+    (0..(u64::MAX / 1_000_000_000), 0..1_000_000_000u32).prop_map(|(seconds, nanoseconds)| {
         wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
             seconds,
             nanoseconds,
@@ -70,9 +70,20 @@ fn datetime_strat()
 }
 
 fn systemtime_strat() -> impl Strategy<Value = SystemTime> {
-    (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
-        SystemTime::UNIX_EPOCH.add(Duration::new(seconds, nanoseconds))
-    })
+    // Covers pre-epoch instants too: `seconds` is the floored second offset from
+    // the epoch, `nanoseconds` the non-negative offset within that second.
+    (
+        -(i64::MAX / 1_000_000_000)..(i64::MAX / 1_000_000_000),
+        0..1_000_000_000u32,
+    )
+        .prop_map(|(seconds, nanoseconds)| {
+            if seconds >= 0 {
+                SystemTime::UNIX_EPOCH.add(Duration::new(seconds as u64, nanoseconds))
+            } else {
+                SystemTime::UNIX_EPOCH - Duration::new(seconds.unsigned_abs(), 0)
+                    + Duration::new(0, nanoseconds)
+            }
+        })
 }
 
 fn ipaddress_strat() -> impl Strategy<Value = IpAddress> {
@@ -160,6 +171,155 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn pre_epoch_systemtime_to_serializable_datetime() {
+    // 2.75 seconds before the epoch: floored seconds is -3 with 250ms on top
+    let value = SystemTime::UNIX_EPOCH - Duration::new(2, 750_000_000);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -3);
+    assert_eq!(serialized.nanoseconds, 250_000_000);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn pre_epoch_whole_second_systemtime_to_serializable_datetime() {
+    let value = SystemTime::UNIX_EPOCH - Duration::new(5, 0);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -5);
+    assert_eq!(serialized.nanoseconds, 0);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn one_nanosecond_before_epoch_roundtrips() {
+    let value = SystemTime::UNIX_EPOCH - Duration::new(0, 1);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -1);
+    assert_eq!(serialized.nanoseconds, 999_999_999);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn one_second_before_epoch_roundtrips() {
+    let value = SystemTime::UNIX_EPOCH - Duration::new(1, 0);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -1);
+    assert_eq!(serialized.nanoseconds, 0);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn earliest_i64_second_systemtime_roundtrips_if_representable() {
+    // epoch - 2^63 seconds is exactly SerializableDateTime { i64::MIN, 0 }
+    if let Some(value) = SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(1u64 << 63)) {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MIN);
+        assert_eq!(serialized.nanoseconds, 0);
+
+        let result: SystemTime = serialized.into();
+        assert_eq!(value, result);
+    }
+}
+
+#[test]
+fn fractional_instant_with_floored_i64_min_seconds_roundtrips_if_representable() {
+    // epoch - (2^63 - 0.25) seconds: floored seconds is i64::MIN with 250ms on top
+    if let Some(value) =
+        SystemTime::UNIX_EPOCH.checked_sub(Duration::new((1u64 << 63) - 1, 750_000_000))
+    {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MIN);
+        assert_eq!(serialized.nanoseconds, 250_000_000);
+
+        let result: SystemTime = serialized.into();
+        assert_eq!(value, result);
+    }
+}
+
+#[test]
+fn pre_epoch_systemtime_beyond_i64_seconds_saturates_if_representable() {
+    // epoch - (2^63 seconds + 1ns) is below SerializableDateTime's range
+    if let Some(value) = SystemTime::UNIX_EPOCH.checked_sub(Duration::new(1u64 << 63, 1)) {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MIN);
+        assert_eq!(serialized.nanoseconds, 0);
+    }
+}
+
+#[test]
+fn post_epoch_systemtime_beyond_i64_seconds_saturates_if_representable() {
+    if let Some(value) =
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(i64::MAX as u64 + 1))
+    {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MAX);
+        assert_eq!(serialized.nanoseconds, 999_999_999);
+    }
+}
+
+#[test]
+fn extreme_serializable_datetime_to_datetime_utc_clamps_to_chrono_bounds() {
+    let min = SerializableDateTime {
+        seconds: i64::MIN,
+        nanoseconds: 0,
+    };
+    let result: chrono::DateTime<chrono::Utc> = min.into();
+    assert_eq!(result, chrono::DateTime::<chrono::Utc>::MIN_UTC);
+
+    let max = SerializableDateTime {
+        seconds: i64::MAX,
+        nanoseconds: 999_999_999,
+    };
+    let result: chrono::DateTime<chrono::Utc> = max.into();
+    assert_eq!(result, chrono::DateTime::<chrono::Utc>::MAX_UTC);
+}
+
+#[test]
+fn pre_epoch_serializable_datetime_to_p2_datetime_clamps_to_epoch() {
+    let value = SerializableDateTime {
+        seconds: -3,
+        nanoseconds: 250_000_000,
+    };
+    let result: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime = value.into();
+    assert_eq!(result.seconds, 0);
+    assert_eq!(result.nanoseconds, 0);
+}
+
+#[test]
+fn pre_epoch_serializable_datetime_to_p3_instant_is_lossless() {
+    let value = SerializableDateTime {
+        seconds: -3,
+        nanoseconds: 250_000_000,
+    };
+    let instant: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant = value.clone().into();
+    assert_eq!(instant.seconds, -3);
+    assert_eq!(instant.nanoseconds, 250_000_000);
+
+    let result: SerializableDateTime = instant.into();
+    assert_eq!(result, value);
+}
+
+#[test]
+fn pre_epoch_serializable_datetime_to_datetime_utc_roundtrip() {
+    let value = SerializableDateTime {
+        seconds: -3,
+        nanoseconds: 250_000_000,
+    };
+    let datetime: chrono::DateTime<chrono::Utc> = value.clone().into();
+    assert_eq!(datetime.to_rfc3339(), "1969-12-31T23:59:57.250+00:00");
+
+    let result: SerializableDateTime = datetime.into();
+    assert_eq!(result, value);
 }
 
 #[test]

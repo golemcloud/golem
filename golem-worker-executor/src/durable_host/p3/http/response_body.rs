@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::rebuild::resend_recorded_request;
 use super::rebuild::{AbortOnDropIoTask, P3HttpSendRebuild};
 use super::rebuild::{RebuildOutcome, ResendOutcome, reissue_recorded_request};
-use super::rebuild::resend_recorded_request;
 use super::serialization::{deserialize_error_code, serialize_error_code};
 use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
@@ -1061,14 +1061,13 @@ where
                                     }
                                     Err(SkipBodyPrefixError::BodyTooShort) => {
                                         retry_exempt = true;
-                                        frame = HttpBodyFrame::Error(ErrorCode::InternalError(
-                                            Some(
+                                        frame =
+                                            HttpBodyFrame::Error(ErrorCode::InternalError(Some(
                                                 "response-body resume failed: the re-sent \
                                                  response body is shorter than the bytes already \
                                                  delivered to the guest"
                                                     .to_string(),
-                                            ),
-                                        ));
+                                            )));
                                         break;
                                     }
                                     Err(SkipBodyPrefixError::Read(code)) => {
