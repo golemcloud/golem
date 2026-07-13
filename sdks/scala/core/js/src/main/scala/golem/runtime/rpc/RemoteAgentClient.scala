@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -35,7 +35,42 @@ final case class RemoteAgentClient(
   agentId: String,
   metadata: RegisteredAgentType,
   rpc: RpcInvoker
-)
+) {
+  def invokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, Option[JsSchemaValueTree]] =
+    rpc.invokeAndAwait(functionName, input)
+
+  def asyncInvokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Future[Option[JsSchemaValueTree]] =
+    rpc.asyncInvokeAndAwait(functionName, input)
+
+  def cancelableAsyncInvokeAndAwait(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
+    rpc.cancelableAsyncInvokeAndAwait(functionName, input)
+
+  def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
+    rpc.invoke(functionName, input)
+
+  def scheduleInvocation(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, Unit] =
+    rpc.scheduleInvocation(datetime, functionName, input)
+
+  def scheduleCancelableInvocation(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, CancellationToken] =
+    rpc.scheduleCancelableInvocation(datetime, functionName, input)
+}
 
 object RemoteAgentClient {
   def resolve(agentTypeName: String, constructorPayload: JsSchemaValueTree): Either[String, RemoteAgentClient] =

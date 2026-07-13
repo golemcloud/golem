@@ -63,7 +63,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
-use golem_common::model::card::CardId;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
@@ -2024,6 +2024,47 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         receiver.await.unwrap()
     }
 
+    pub async fn get_wallet_cards(&self) -> Result<Vec<StoredCard>, WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot access wallet of a deleting worker",
+            ));
+        };
+
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
+        let (sender, receiver) = oneshot::channel();
+
+        self.queue
+            .write()
+            .await
+            .push_back(QueuedWorkerInvocation::GetWalletCards { sender });
+
+        if let WorkerInstance::Running(running) = &*instance_guard {
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+        };
+
+        drop(instance_guard);
+
+        let mut wallet = receiver.await.unwrap()?;
+        let revoked_cards = self
+            .get_last_known_status()
+            .await
+            .pending_card_events
+            .into_iter()
+            .filter_map(|pending_event| match pending_event.event {
+                QueuedCardEvent::Revoke(event) => Some(event.card_id),
+                QueuedCardEvent::Install(_) => None,
+            })
+            .collect::<HashSet<_>>();
+        wallet.retain(|card| !revoked_cards.contains(&card.card_id()));
+        Ok(wallet)
+    }
+
     pub async fn read_file(
         &self,
         path: CanonicalFilePath,
@@ -2603,6 +2644,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         for item in queued_items {
             match item {
                 QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
+                QueuedWorkerInvocation::GetWalletCards { sender } => {
                     let _ = sender.send(Err(error.clone()));
                 }
                 QueuedWorkerInvocation::ReadFile { sender, .. } => {
@@ -4332,6 +4376,9 @@ pub enum QueuedWorkerInvocation {
     GetFileSystemNode {
         path: CanonicalFilePath,
         sender: oneshot::Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
+    },
+    GetWalletCards {
+        sender: oneshot::Sender<Result<Vec<StoredCard>, WorkerExecutorError>>,
     },
     // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
     ReadFile {

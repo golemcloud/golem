@@ -104,6 +104,13 @@ jobs:
         with:
           use-cache: 'false'
           install-cargo-binstall: 'true'
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
@@ -558,11 +565,7 @@ jobs:
         working-directory: sdks/scala
         run: sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
 
-      - name: Run Golem tests (Scala 2.13.18)
-        working-directory: sdks/scala
-        run: sbt -mem 4096 "++2.13.18; modelJVM/test; modelJS/test; core/test; macros/test"
-
-      - name: Compile sbt plugin (Scala 2.12)
+      - name: Compile sbt plugin
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
 

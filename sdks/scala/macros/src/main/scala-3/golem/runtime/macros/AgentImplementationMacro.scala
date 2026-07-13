@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -38,8 +38,7 @@ object AgentImplementationMacro {
   private val schemaHint: String =
     "\nHint: IntoSchema/FromSchema are derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
-      "Scala 3: `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n" +
-      "Scala 2: `implicit val schema: zio.blocks.schema.Schema[T] = zio.blocks.schema.Schema.derived`.\n"
+      "Use `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
   inline def implementationType[Trait](inline build: => Trait): AgentImplementationType[Trait, Unit] =
     ${ implementationTypeImpl[Trait]('build) }
 

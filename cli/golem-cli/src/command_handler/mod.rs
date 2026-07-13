@@ -30,6 +30,7 @@ use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandle
 use crate::command_handler::api_token::ApiTokenCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::bridge::BridgeCommandHandler;
+use crate::command_handler::card::CardCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
@@ -63,6 +64,7 @@ mod api;
 mod api_token;
 mod app;
 mod bridge;
+mod card;
 mod component;
 mod environment;
 pub(crate) mod interactive;
@@ -449,6 +451,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
+                GolemCliSubcommand::Card { subcommand } => {
+                    ctx.get_or_init()
+                        .await?
+                        .card_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
                 GolemCliSubcommand::Secret { subcommand } => {
                     ctx.get_or_init()
                         .await?
@@ -573,6 +582,7 @@ pub trait Handlers {
     fn api_token_handler(&self) -> ApiTokenCommandHandler;
     fn app_handler(&self) -> AppCommandHandler;
     fn bridge_handler(&self) -> BridgeCommandHandler;
+    fn card_handler(&self) -> CardCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
@@ -628,6 +638,10 @@ impl Handlers for Arc<Context> {
 
     fn bridge_handler(&self) -> BridgeCommandHandler {
         BridgeCommandHandler::new(self.clone())
+    }
+
+    fn card_handler(&self) -> CardCommandHandler {
+        CardCommandHandler::new(self.clone())
     }
 
     fn component_handler(&self) -> ComponentCommandHandler {

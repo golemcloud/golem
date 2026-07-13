@@ -1,2 +1,2 @@
-import './human-agent';
-import './workflow-agent';
+import './human-agent.js';
+import './workflow-agent.js';

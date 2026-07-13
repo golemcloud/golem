@@ -63,7 +63,7 @@ impl ModuleName {
     }
 
     pub fn file_name(&self) -> String {
-        format!("{}.rs", &self.name)
+        format!("{}.rs", self.name)
     }
 
     fn escape_type_params(s: &str) -> String {

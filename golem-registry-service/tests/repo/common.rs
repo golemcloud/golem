@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::Deps;
+use crate::repo::{Deps, TestDb, test_environment_default_card_record};
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
@@ -23,14 +23,28 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
-use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
-use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::card::owner::{ComponentOwnerPattern, EnvironmentOwnerPattern};
+use golem_common::model::card::{
+    CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByAgentInitial, PermissionPattern,
+    PolymorphicCard, StoredCard,
+};
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ComponentMetadata};
+use golem_common::model::environment::{
+    EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
+};
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_registry_service::repo::account::DbAccountRepo;
+use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
+use golem_registry_service::repo::application::DbApplicationRepo;
+use golem_registry_service::repo::card::DbCardRepo;
+use golem_registry_service::repo::component::DbComponentRepo;
+use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::{
-    EnvironmentExtRevisionRecord, EnvironmentRevisionRecord, EnvironmentVisibilityFilter,
-    EnvironmentVisibilityScope,
+    DbEnvironmentRepo, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
+    EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
 };
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
@@ -60,18 +74,36 @@ use golem_registry_service::repo::model::mcp_deployment::{
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
+use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
+use golem_registry_service::repo::plan::DbPlanRepo;
+use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
 };
+use golem_registry_service::services::component_object_store::ComponentObjectStore;
 use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
     RegistryChangeNotifier, SqliteRegistryChangeNotifier,
 };
+use golem_registry_service::services::{
+    account::AccountService,
+    account_usage::AccountUsageService,
+    application::ApplicationService,
+    card::{AccountCardFilter, CardError, CardService},
+    component::ComponentService,
+    deployment::DeploymentService,
+    environment::EnvironmentService,
+    permission_share::PermissionShareService,
+    plan::PlanService,
+};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
+use std::sync::Arc;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
 // Common test cases -------------------------------------------------------------------------------
@@ -328,7 +360,11 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env = deps
         .environment_repo
-        .create(app.revision.application_id, revision_0.clone())
+        .create(
+            app.revision.application_id,
+            revision_0.clone(),
+            test_environment_default_card_record(revision_0.environment_id),
+        )
         .await
         .unwrap();
 
@@ -599,19 +635,21 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
     let results = join_all(
         (0..concurrency)
             .map(|_| async move {
+                let revision = EnvironmentRevisionRecord {
+                    environment_id: new_repo_uuid(),
+                    revision_id: 0,
+                    name: "local".to_string(),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                    hash: SqlBlake3Hash::empty(),
+                };
                 deps.environment_repo
                     .create(
                         app.revision.application_id,
-                        EnvironmentRevisionRecord {
-                            environment_id: new_repo_uuid(),
-                            revision_id: 0,
-                            name: "local".to_string(),
-                            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                            compatibility_check: false,
-                            version_check: false,
-                            security_overrides: false,
-                            hash: SqlBlake3Hash::empty(),
-                        },
+                        revision.clone(),
+                        test_environment_default_card_record(revision.environment_id),
                     )
                     .await
             })
@@ -745,18 +783,17 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
     let results = join_all(
         (0..concurrency)
             .map(|_| async {
-                deps.environment_repo
-                    .update(EnvironmentRevisionRecord {
-                        environment_id: env_rev_0.revision.environment_id,
-                        revision_id: 1,
-                        name: env_rev_0.revision.name.clone(),
-                        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                        compatibility_check: false,
-                        version_check: false,
-                        security_overrides: false,
-                        hash: SqlBlake3Hash::empty(),
-                    })
-                    .await
+                let revision = EnvironmentRevisionRecord {
+                    environment_id: env_rev_0.revision.environment_id,
+                    revision_id: 1,
+                    name: env_rev_0.revision.name.clone(),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                    hash: SqlBlake3Hash::empty(),
+                };
+                deps.environment_repo.update(revision.clone()).await
             })
             .collect::<Vec<_>>(),
     )
@@ -770,6 +807,459 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 
     check!(created_count == 1);
     check!(skipped_count == concurrency - 1);
+}
+
+pub async fn test_environment_default_card_ids_by_account_excludes_deleted(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(refs.len(), 1);
+
+    let _ = deps
+        .environment_repo
+        .delete(EnvironmentRevisionRecord {
+            revision_id: env.revision.revision_id + 1,
+            ..env.revision.clone()
+        })
+        .await
+        .unwrap();
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert!(refs.is_empty());
+}
+
+pub async fn test_deleted_environment_default_card_revoke_returns_not_found(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("env".to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(refs.len(), 1);
+    let default_card_id = refs[0].card_id;
+
+    services
+        .environment_service
+        .delete(env.id, env.revision, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let get_error = services
+        .card_service
+        .get_card(default_card_id, &AuthCtx::System)
+        .await
+        .unwrap_err();
+    assert!(matches!(get_error, CardError::CardNotFound(card_id) if card_id == default_card_id));
+
+    let revoke_error = services
+        .card_service
+        .revoke_card(default_card_id, &AuthCtx::System)
+        .await
+        .unwrap_err();
+    match revoke_error {
+        CardError::CardNotFound(card_id) if card_id == default_card_id => {}
+        other => panic!(
+            "deleted environment default cards should not remain revokable through the raw card row; expected CardNotFound({default_card_id}), got {other:?}"
+        ),
+    }
+}
+
+pub async fn test_deleted_environment_default_card_is_not_reported_existing(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("env".to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(refs.len(), 1);
+    let default_card_id = refs[0].card_id;
+
+    services
+        .environment_service
+        .delete(env.id, env.revision, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let get_error = services
+        .card_service
+        .get_card(default_card_id, &AuthCtx::System)
+        .await
+        .unwrap_err();
+    assert!(matches!(get_error, CardError::CardNotFound(card_id) if card_id == default_card_id));
+
+    assert!(
+        services
+            .card_service
+            .get_cards(vec![default_card_id])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let existing = services
+        .card_service
+        .existing(vec![default_card_id])
+        .await
+        .unwrap();
+
+    assert!(
+        existing.is_empty(),
+        "deleted environment-default cards are logically not found and must not be reported as existing"
+    );
+}
+
+pub async fn test_environment_default_card_tracks_environment_rename(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("old-env".to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    services
+        .environment_service
+        .update(
+            env.id,
+            EnvironmentUpdate {
+                current_revision: env.revision,
+                name: Some(EnvironmentName("new-env".to_string())),
+                compatibility_check: None,
+                version_check: None,
+                security_overrides: None,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(refs.len(), 1);
+
+    let card = services
+        .card_service
+        .get_card(refs[0].card_id, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    assert!(
+        default_card_contains_current_environment_permissions(
+            &card,
+            &EnvironmentName("new-env".to_string())
+        ),
+        "environment default card should grant permissions for the current environment name after rename"
+    );
+}
+
+pub async fn test_environment_default_card_tracks_application_rename(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("env".to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    deps.application_repo
+        .update(ApplicationRevisionRecord {
+            application_id: app.revision.application_id,
+            revision_id: app.revision.revision_id + 1,
+            name: "new-app".to_string(),
+            audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+        })
+        .await
+        .unwrap();
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(refs.len(), 1);
+
+    let card = services
+        .card_service
+        .get_card(refs[0].card_id, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    assert!(
+        default_card_contains_current_application_permissions(
+            &card,
+            &ApplicationName("new-app".to_string()),
+            &env.name,
+        ),
+        "environment default card should grant permissions for the current application name after rename"
+    );
+}
+
+struct EnvironmentServiceDeps {
+    environment_service: Arc<EnvironmentService>,
+    card_service: CardService,
+}
+
+fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            let notifier = deps.test_registry_change_notifier();
+            let plan_service = Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool.clone()))));
+            let account_service = Arc::new(AccountService::new(
+                Arc::new(DbAccountRepo::new(pool.clone())),
+                plan_service,
+                golem_common::model::plan::PlanId(deps.test_plan_id()),
+                notifier.clone(),
+            ));
+            let account_usage_service = Arc::new(AccountUsageService::new(Arc::new(
+                DbAccountUsageRepo::new(pool.clone()),
+            )));
+            let application_service = Arc::new(ApplicationService::new(
+                Arc::new(DbApplicationRepo::new(pool.clone())),
+                account_service.clone(),
+                account_usage_service.clone(),
+                notifier.clone(),
+            ));
+            let environment_service = EnvironmentService::new(
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                application_service.clone(),
+                account_usage_service,
+                Arc::new(DbPluginRepo::new(pool.clone())),
+                AccountId::SYSTEM,
+                notifier.clone(),
+            );
+            let environment_service = Arc::new(environment_service);
+            let permission_share_service = Arc::new(PermissionShareService::new(
+                Arc::new(DbPermissionShareRepo::new(pool.clone())),
+                account_service.clone(),
+                notifier.clone(),
+            ));
+            let deployment_service = Arc::new(DeploymentService::new(
+                environment_service.clone(),
+                application_service,
+                Arc::new(DbDeploymentRepo::new(pool.clone())),
+            ));
+            let component_service = Arc::new(ComponentService::new(
+                Arc::new(DbComponentRepo::new(pool.clone())),
+                Arc::new(ComponentObjectStore::new(Arc::new(
+                    InMemoryBlobStorage::new(),
+                ))),
+                environment_service.clone(),
+                deployment_service,
+            ));
+            let card_service = CardService::new(
+                Arc::new(DbCardRepo::new(pool.clone())),
+                account_service,
+                permission_share_service,
+                component_service,
+                environment_service.clone(),
+                notifier,
+            );
+
+            EnvironmentServiceDeps {
+                environment_service,
+                card_service,
+            }
+        }
+        TestDb::Sqlite(pool) => {
+            let notifier = deps.test_registry_change_notifier();
+            let plan_service = Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool.clone()))));
+            let account_service = Arc::new(AccountService::new(
+                Arc::new(DbAccountRepo::new(pool.clone())),
+                plan_service,
+                golem_common::model::plan::PlanId(deps.test_plan_id()),
+                notifier.clone(),
+            ));
+            let account_usage_service = Arc::new(AccountUsageService::new(Arc::new(
+                DbAccountUsageRepo::new(pool.clone()),
+            )));
+            let application_service = Arc::new(ApplicationService::new(
+                Arc::new(DbApplicationRepo::new(pool.clone())),
+                account_service.clone(),
+                account_usage_service.clone(),
+                notifier.clone(),
+            ));
+            let environment_service = EnvironmentService::new(
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                application_service.clone(),
+                account_usage_service,
+                Arc::new(DbPluginRepo::new(pool.clone())),
+                AccountId::SYSTEM,
+                notifier.clone(),
+            );
+            let environment_service = Arc::new(environment_service);
+            let permission_share_service = Arc::new(PermissionShareService::new(
+                Arc::new(DbPermissionShareRepo::new(pool.clone())),
+                account_service.clone(),
+                notifier.clone(),
+            ));
+            let deployment_service = Arc::new(DeploymentService::new(
+                environment_service.clone(),
+                application_service,
+                Arc::new(DbDeploymentRepo::new(pool.clone())),
+            ));
+            let component_service = Arc::new(ComponentService::new(
+                Arc::new(DbComponentRepo::new(pool.clone())),
+                Arc::new(ComponentObjectStore::new(Arc::new(
+                    InMemoryBlobStorage::new(),
+                ))),
+                environment_service.clone(),
+                deployment_service,
+            ));
+            let card_service = CardService::new(
+                Arc::new(DbCardRepo::new(pool.clone())),
+                account_service,
+                permission_share_service,
+                component_service,
+                environment_service.clone(),
+                notifier,
+            );
+
+            EnvironmentServiceDeps {
+                environment_service,
+                card_service,
+            }
+        }
+    }
+}
+
+fn default_card_contains_current_environment_permissions(
+    card: &StoredCard,
+    environment_name: &EnvironmentName,
+) -> bool {
+    let StoredCard::Concrete(card) = card else {
+        return false;
+    };
+
+    let has_environment_permissions = card.lower_positive.iter().any(|permission| {
+        matches!(
+            permission,
+            PermissionPattern::Environment(pattern)
+                if matches!(
+                    &pattern.owner,
+                    EnvironmentOwnerPattern::Environment { environment, .. }
+                        if environment == environment_name
+                )
+        )
+    });
+    let has_component_permissions = card.lower_positive.iter().any(|permission| {
+        matches!(
+            permission,
+            PermissionPattern::Component(pattern)
+                if matches!(
+                    &pattern.owner,
+                    ComponentOwnerPattern::EnvironmentComponents { environment, .. }
+                        if environment == environment_name
+                )
+        )
+    });
+
+    has_environment_permissions && has_component_permissions
+}
+
+fn default_card_contains_current_application_permissions(
+    card: &StoredCard,
+    application_name: &ApplicationName,
+    environment_name: &EnvironmentName,
+) -> bool {
+    let StoredCard::Concrete(card) = card else {
+        return false;
+    };
+
+    let has_environment_permissions = card.lower_positive.iter().any(|permission| {
+        matches!(
+            permission,
+            PermissionPattern::Environment(pattern)
+                if matches!(
+                    &pattern.owner,
+                    EnvironmentOwnerPattern::Environment { application, environment, .. }
+                        if application == application_name && environment == environment_name
+                )
+        )
+    });
+    let has_component_permissions = card.lower_positive.iter().any(|permission| {
+        matches!(
+            permission,
+            PermissionPattern::Component(pattern)
+                if matches!(
+                    &pattern.owner,
+                    ComponentOwnerPattern::EnvironmentComponents { application, environment, .. }
+                        if application == application_name && environment == environment_name
+                )
+        )
+    });
+
+    has_environment_permissions && has_component_permissions
 }
 
 pub async fn test_component_stage(deps: &Deps) {
@@ -1015,6 +1505,576 @@ pub async fn test_component_stage(deps: &Deps) {
     .unwrap();
     let_assert!(created_after_delete = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
+}
+
+pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata.clone()),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.card_id,
+                initial_card.parent_ids.clone(),
+                initial_card.lower_positive.clone(),
+                initial_card.lower_negative.clone(),
+                initial_card.upper_positive.clone(),
+                initial_card.upper_negative.clone(),
+                initial_card.expires_at,
+                initial_card.system_card,
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: agent_type.clone(),
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    deps.component_repo
+        .update(
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.next().unwrap().into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    let ids = deps
+        .component_repo
+        .list_initial_permission_card_ids_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(ids, vec![initial_card.card_id]);
+}
+
+pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let services = environment_service_deps(deps);
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata_with_agent = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata_with_agent),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.card_id,
+                initial_card.parent_ids.clone(),
+                initial_card.lower_positive.clone(),
+                initial_card.lower_negative.clone(),
+                initial_card.upper_positive.clone(),
+                initial_card.upper_negative.clone(),
+                initial_card.expires_at,
+                initial_card.system_card,
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: agent_type.clone(),
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    deps.component_repo
+        .update(
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.next().unwrap().into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::default()),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        deps.component_repo
+            .list_staged(env.revision.environment_id)
+            .await
+            .unwrap()[0]
+            .revision
+            .metadata
+            .clone()
+            .into_value()
+            .agent_type_provision_configs()
+            .is_empty(),
+        "the current live component revision no longer has an agent-initial source entry"
+    );
+
+    let ids = deps
+        .component_repo
+        .list_initial_permission_card_ids_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        ids,
+        Vec::<CardId>::new(),
+        "agent-initial cards removed from the current live component revision must not remain account cards"
+    );
+
+    assert!(
+        services
+            .card_service
+            .get_cards(vec![initial_card.card_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "agent-initial cards removed from the current live component revision must not remain live through batch_get_cards"
+    );
+    assert!(
+        services
+            .card_service
+            .existing(vec![initial_card.card_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "agent-initial cards removed from the current live component revision must not be reported as existing"
+    );
+
+    let account_cards = services
+        .card_service
+        .list_account_cards(
+            AccountId(owner.revision.account_id),
+            AccountCardFilter {
+                root: false,
+                permission_share: false,
+                environment_default: false,
+                agent_initial: true,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert!(
+        account_cards.is_empty(),
+        "account card listing filtered to agent-initial cards must follow the current live component revision"
+    );
+}
+
+pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_components(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.card_id,
+                initial_card.parent_ids.clone(),
+                initial_card.lower_positive.clone(),
+                initial_card.lower_negative.clone(),
+                initial_card.upper_positive.clone(),
+                initial_card.upper_negative.clone(),
+                initial_card.expires_at,
+                initial_card.system_card,
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: agent_type.clone(),
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let ids = deps
+        .component_repo
+        .list_initial_permission_card_ids_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(ids, vec![initial_card.card_id]);
+
+    deps.component_repo
+        .delete(owner.revision.account_id, component_id.0, 1)
+        .await
+        .unwrap();
+
+    let ids = deps
+        .component_repo
+        .list_initial_permission_card_ids_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert!(ids.is_empty());
+}
+
+pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let services = environment_service_deps(deps);
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.card_id,
+                initial_card.parent_ids.clone(),
+                initial_card.lower_positive.clone(),
+                initial_card.lower_negative.clone(),
+                initial_card.upper_positive.clone(),
+                initial_card.upper_negative.clone(),
+                initial_card.expires_at,
+                initial_card.system_card,
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: agent_type.clone(),
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        deps.component_repo
+            .list_initial_permission_card_ids_by_account(owner.revision.account_id)
+            .await
+            .unwrap(),
+        vec![initial_card.card_id]
+    );
+
+    deps.component_repo
+        .delete(owner.revision.account_id, component_id.0, 1)
+        .await
+        .unwrap();
+
+    assert!(
+        deps.component_repo
+            .list_initial_permission_card_ids_by_account(owner.revision.account_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        services
+            .card_service
+            .get_cards(vec![initial_card.card_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "deleted component agent-initial cards are no longer account cards and must not remain live through batch_get_cards"
+    );
+    assert!(
+        services
+            .card_service
+            .existing(vec![initial_card.card_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "deleted component agent-initial cards are no longer account cards and must not remain live through existing"
+    );
+}
+
+pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(
+    deps: &Deps,
+) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let services = environment_service_deps(deps);
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.card_id,
+                initial_card.parent_ids.clone(),
+                initial_card.lower_positive.clone(),
+                initial_card.lower_negative.clone(),
+                initial_card.upper_positive.clone(),
+                initial_card.upper_negative.clone(),
+                initial_card.expires_at,
+                initial_card.system_card,
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: agent_type.clone(),
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    deps.component_repo
+        .delete(owner.revision.account_id, component_id.0, 1)
+        .await
+        .unwrap();
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component",
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::default()),
+                object_store_key: "component-recreated".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    let ids = deps
+        .component_repo
+        .list_initial_permission_card_ids_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        ids,
+        Vec::<CardId>::new(),
+        "agent-initial cards from a deleted component incarnation must not reappear after same-name recreation"
+    );
+    assert!(
+        services
+            .card_service
+            .get_cards(vec![initial_card.card_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "agent-initial cards from a deleted component incarnation must not remain live through batch_get_cards after same-name recreation"
+    );
+    assert!(
+        services
+            .card_service
+            .existing(vec![initial_card.card_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "agent-initial cards from a deleted component incarnation must not be reported as existing after same-name recreation"
+    );
 }
 
 pub async fn test_http_api_deployment_stage(deps: &Deps) {
@@ -1293,20 +2353,22 @@ pub async fn test_account_usage(deps: &Deps) {
             .await
             .unwrap();
 
+        let env_revision = EnvironmentRevisionRecord {
+            environment_id: new_repo_uuid(),
+            revision_id: 0,
+            name: "env".to_string(),
+            hash: SqlBlake3Hash::empty(),
+            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+        };
         let env = deps
             .environment_repo
             .create(
                 app.revision.application_id,
-                EnvironmentRevisionRecord {
-                    environment_id: new_repo_uuid(),
-                    revision_id: 0,
-                    name: "env".to_string(),
-                    hash: SqlBlake3Hash::empty(),
-                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                    compatibility_check: false,
-                    version_check: false,
-                    security_overrides: false,
-                },
+                env_revision.clone(),
+                test_environment_default_card_record(env_revision.environment_id),
             )
             .await
             .unwrap();
@@ -1430,20 +2492,22 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         .await
         .unwrap();
 
+    let env_revision = EnvironmentRevisionRecord {
+        environment_id: new_repo_uuid(),
+        revision_id: 0,
+        name: env_name.clone(),
+        audit: DeletableRevisionAuditFields::new(owner_account_id),
+        compatibility_check: false,
+        version_check: false,
+        security_overrides: false,
+        hash: SqlBlake3Hash::empty(),
+    };
     let env = deps
         .environment_repo
         .create(
             app.revision.application_id,
-            EnvironmentRevisionRecord {
-                environment_id: new_repo_uuid(),
-                revision_id: 0,
-                name: env_name.clone(),
-                audit: DeletableRevisionAuditFields::new(owner_account_id),
-                compatibility_check: false,
-                version_check: false,
-                security_overrides: false,
-                hash: SqlBlake3Hash::empty(),
-            },
+            env_revision.clone(),
+            test_environment_default_card_record(env_revision.environment_id),
         )
         .await
         .unwrap();
@@ -1581,19 +2645,21 @@ pub async fn test_resolve_agent_type_no_deployment_returns_none(deps: &Deps) {
         .await
         .unwrap();
 
+    let env_revision = EnvironmentRevisionRecord {
+        environment_id: new_repo_uuid(),
+        revision_id: 0,
+        name: env_name.clone(),
+        audit: DeletableRevisionAuditFields::new(owner_account_id),
+        compatibility_check: false,
+        version_check: false,
+        security_overrides: false,
+        hash: SqlBlake3Hash::empty(),
+    };
     deps.environment_repo
         .create(
             app.revision.application_id,
-            EnvironmentRevisionRecord {
-                environment_id: new_repo_uuid(),
-                revision_id: 0,
-                name: env_name.clone(),
-                audit: DeletableRevisionAuditFields::new(owner_account_id),
-                compatibility_check: false,
-                version_check: false,
-                security_overrides: false,
-                hash: SqlBlake3Hash::empty(),
-            },
+            env_revision.clone(),
+            test_environment_default_card_record(env_revision.environment_id),
         )
         .await
         .unwrap();

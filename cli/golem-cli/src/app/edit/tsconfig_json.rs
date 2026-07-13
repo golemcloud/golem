@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::edit::json::{collect_value_text_by_path, merge_object};
+use crate::app::edit::json::{build_object_source, collect_value_text_by_path, merge_object};
 
 #[derive(Debug, Clone)]
 pub struct RequiredSetting {
@@ -56,4 +56,22 @@ pub fn check_required_settings(
         }
     }
     Ok(missing)
+}
+
+/// Builds the JSON object (to be deep-merged via [`merge_with_newer`]) that fixes the
+/// given missing settings, by placing each one's expected literal at its full path.
+/// The object shape (e.g. the `compilerOptions` wrapper) follows from the paths
+/// themselves. Settings without an expected literal (presence-only) are skipped — there
+/// is no value to write.
+pub fn build_settings_patch(missing: &[MissingSetting]) -> anyhow::Result<String> {
+    let entries = missing
+        .iter()
+        .filter_map(|setting| {
+            setting
+                .expected_literal
+                .clone()
+                .map(|literal| (setting.path.clone(), literal))
+        })
+        .collect::<Vec<_>>();
+    build_object_source(&entries)
 }

@@ -117,15 +117,19 @@ object SchemaWireInterop {
 
   private def roleToJs(r: Role): JsRole =
     r match {
-      case Role.Multimodal  => JsRole.multimodal
-      case Role.Other(name) => JsRole.other(name)
+      case Role.Multimodal         => JsRole.multimodal
+      case Role.UnstructuredText   => JsRole.unstructuredText
+      case Role.UnstructuredBinary => JsRole.unstructuredBinary
+      case Role.Other(name)        => JsRole.other(name)
     }
 
   private def roleFromJs(j: JsRole): Role =
     j.tag match {
-      case "multimodal" => Role.Multimodal
-      case "other"      => Role.Other(valOf(j).asInstanceOf[String])
-      case other        => throw new IllegalArgumentException(s"Unknown role tag: $other")
+      case "multimodal"          => Role.Multimodal
+      case "unstructured-text"   => Role.UnstructuredText
+      case "unstructured-binary" => Role.UnstructuredBinary
+      case "other"               => Role.Other(valOf(j).asInstanceOf[String])
+      case other                 => Role.Other(other)
     }
 
   private def mdToJs(m: MetadataEnvelope): JsMetadataEnvelope =

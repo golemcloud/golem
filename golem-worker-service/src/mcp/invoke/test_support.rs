@@ -27,6 +27,7 @@ use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
 };
@@ -418,6 +419,16 @@ impl WorkerClient for RecordingWorkerClient {
         _: AccountId,
         _: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
+        unimplemented!()
+    }
+
+    async fn get_agent_wallet(
+        &self,
+        _: &AgentId,
+        _: EnvironmentId,
+        _: AccountId,
+        _: AuthCtx,
+    ) -> WorkerResult<Vec<StoredCard>> {
         unimplemented!()
     }
 

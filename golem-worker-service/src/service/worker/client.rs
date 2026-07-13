@@ -32,6 +32,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -168,6 +169,14 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
+
+    async fn get_agent_wallet(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<StoredCard>>;
 
     async fn get_file_contents(
         &self,
@@ -993,6 +1002,59 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             WorkerServiceError::InternalCallError,
         )
             .await
+    }
+
+    async fn get_agent_wallet(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<StoredCard>> {
+        let agent_id = agent_id.clone();
+        self.call_worker_executor(
+            agent_id.clone(),
+            "get_agent_wallet",
+            move |worker_executor_client| {
+                let agent_id = agent_id.clone();
+                Box::pin(worker_executor_client.get_agent_wallet(
+                    workerexecutor::v1::GetAgentWalletRequest {
+                        agent_id: Some(agent_id.into()),
+                        component_owner_account_id: Some(account_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::GetAgentWalletResponse {
+                    result:
+                        Some(workerexecutor::v1::get_agent_wallet_response::Result::Success(
+                            success,
+                        )),
+                } => success
+                    .wallet_cards
+                    .into_iter()
+                    .map(|bytes| {
+                        golem_common::serialization::deserialize(&bytes).map_err(|e| {
+                            WorkerServiceError::Internal(format!(
+                                "Failed to decode wallet card: {e}"
+                            ))
+                            .into()
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>(),
+                workerexecutor::v1::GetAgentWalletResponse {
+                    result: Some(workerexecutor::v1::get_agent_wallet_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::GetAgentWalletResponse { result: None } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn get_file_contents(

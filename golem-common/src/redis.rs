@@ -160,7 +160,7 @@ impl RedisLabelledApi<'_> {
     where
         K: AsRef<str>,
     {
-        format!("{}{}", &self.key_prefix, key.as_ref())
+        format!("{}{}", self.key_prefix, key.as_ref())
     }
 
     pub async fn del<R, K>(&self, key: K) -> RedisResult<R>
@@ -906,7 +906,7 @@ impl RedisTransaction {
     where
         K: AsRef<str>,
     {
-        format!("{}{}", &self.key_prefix, key.as_ref())
+        format!("{}{}", self.key_prefix, key.as_ref())
     }
 
     pub async fn del<K>(&self, key: K) -> RedisResult<()>

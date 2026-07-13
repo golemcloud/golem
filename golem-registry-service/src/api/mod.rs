@@ -17,6 +17,7 @@ pub mod accounts;
 pub mod admin;
 pub mod agent_secrets;
 pub mod applications;
+pub mod cards;
 pub mod components;
 pub mod domain_registrations;
 pub mod environment_plugin_grants;
@@ -38,6 +39,7 @@ use self::accounts::AccountsApi;
 use self::admin::AdminApi;
 use self::agent_secrets::AgentSecretsApi;
 use self::applications::ApplicationsApi;
+use self::cards::CardsApi;
 use self::components::ComponentsApi;
 use self::domain_registrations::DomainRegistrationsApi;
 use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
@@ -63,6 +65,7 @@ pub type Apis = (
     AccountsApi,
     AgentSecretsApi,
     ApplicationsApi,
+    CardsApi,
     ComponentsApi,
     DomainRegistrationsApi,
     (AdminApi, EnvironmentPluginGrantsApi, EnvironmentsApi),
@@ -97,6 +100,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.application_service.clone(),
                 services.auth_service.clone(),
             ),
+            CardsApi::new(services.card_service.clone(), services.auth_service.clone()),
             ComponentsApi::new(
                 services.component_service.clone(),
                 services.component_write_service.clone(),

@@ -152,17 +152,15 @@ fn disambiguate_ident(escaped: &str, n: usize) -> String {
 
 /// Reserved words to backtick-escape in generated Scala source.
 ///
-/// The set is the union of the Scala 2.13 and Scala 3 hard keywords plus the
-/// Scala 3 soft/contextual keywords. Soft keywords are only contextually
-/// reserved, but backtick-escaping them is always safe and keeps the generated
-/// code parser-proof under both dialects of the cross-build, so they are
-/// included to avoid context-sensitive surprises.
+/// The set includes Scala 3 hard and soft/contextual keywords. Soft keywords
+/// are only contextually reserved, but backtick-escaping them is always safe
+/// and avoids context-sensitive surprises.
 pub fn is_scala_keyword(name: &str) -> bool {
     SCALA_KEYWORDS.contains(&name)
 }
 
 const SCALA_KEYWORDS: &[&str] = &[
-    // Scala 2.13 / Scala 3 hard keywords
+    // Scala 3 hard keywords
     "abstract",
     "as",
     "case",

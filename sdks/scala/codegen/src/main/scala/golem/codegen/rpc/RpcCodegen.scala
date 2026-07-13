@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,7 +20,6 @@ import golem.codegen.discovery.SourceDiscovery
 import golem.codegen.ir.AgentSurfaceIR._
 
 import scala.meta._
-import scala.meta.dialects.Scala213
 import scala.meta.parsers._
 
 /**
@@ -103,14 +102,9 @@ object RpcCodegen {
   private[rpc] def unwrapFutureType(returnTypeExpr: String): String = {
     val tpe =
       try {
-        dialects.Scala213(returnTypeExpr).parse[Type].get
+        dialects.Scala3(returnTypeExpr).parse[Type].get
       } catch {
-        case _: Exception =>
-          try {
-            dialects.Scala3(returnTypeExpr).parse[Type].get
-          } catch {
-            case _: Exception => return returnTypeExpr
-          }
+        case _: Exception => return returnTypeExpr
       }
 
     tpe match {

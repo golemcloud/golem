@@ -43,12 +43,13 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
     CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
     DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
-    GetFileContentsRequest, GetFileContentsResponse, GetFileSystemNodeRequest,
-    GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
-    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAgentRequest, InvokeAgentResponse, ProcessOplogEntriesRequest,
-    ProcessOplogEntriesResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse, process_oplog_entries_response,
+    GetAgentWalletRequest, GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest,
+    GetFileContentsResponse, GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest,
+    GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAgentRequest, InvokeAgentResponse,
+    ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, RevertWorkerRequest,
+    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse, process_oplog_entries_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -1611,6 +1612,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(response)
     }
 
+    async fn get_agent_wallet_internal(
+        &self,
+        request: GetAgentWalletRequest,
+    ) -> Result<GetAgentWalletResponse, WorkerExecutorError> {
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+
+        let worker = self.get_or_create(&request).await?;
+
+        let wallet_cards = worker.get_wallet_cards().await?;
+        let wallet_cards = wallet_cards
+            .into_iter()
+            .map(|card| golem_common::serialization::serialize(&card))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                WorkerExecutorError::unknown(format!("Failed to encode wallet card: {e}"))
+            })?;
+
+        Ok(GetAgentWalletResponse {
+            result: Some(
+                golem::workerexecutor::v1::get_agent_wallet_response::Result::Success(
+                    GetAgentWalletSuccess { wallet_cards },
+                ),
+            ),
+        })
+    }
+
     async fn get_file_contents_internal(
         &self,
         request: GetFileContentsRequest,
@@ -2849,6 +2876,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(Response::new(GetFileSystemNodeResponse {
                     result: Some(
                         golem::workerexecutor::v1::get_file_system_node_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn get_agent_wallet(
+        &self,
+        request: Request<GetAgentWalletRequest>,
+    ) -> ResponseResult<GetAgentWalletResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_agent_wallet",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let result = self
+            .get_agent_wallet_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(response) => record.succeed(Ok(Response::new(response))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(GetAgentWalletResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::get_agent_wallet_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),

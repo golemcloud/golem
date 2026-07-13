@@ -5,155 +5,134 @@ description: "Enabling snapshot-based recovery and implementing custom snapshot 
 
 # Custom Snapshots in TypeScript
 
-Golem agents can override `saveSnapshot` and `loadSnapshot` on `BaseAgent` to support manual (snapshot-based) updates and snapshot-based recovery.
+Golem agents can opt into snapshotting to support manual (snapshot-based) updates and snapshot-based recovery. In the fluent SDK this is configured declaratively with the `snapshotting` option on `defineAgent(...)`, and — when you need full control over the bytes — with a `snapshot: { save, load }` block on `.implement(...)`.
 
 ## When to Use Snapshotting
 
 Snapshotting solves two distinct problems:
 
 1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions.
-2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, agents with frequent state changes). Without snapshotting, every recovery replays the full oplog from the beginning, which becomes increasingly expensive. With periodic snapshotting (`every` or `periodic`), recovery starts from the latest snapshot and replays only the entries after it.
+2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, agents with frequent state changes). Without snapshotting, every recovery replays the full oplog from the beginning, which becomes increasingly expensive. With periodic snapshotting, recovery starts from the latest snapshot and replays only the entries after it.
 
 > **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
 
 ## Enabling Snapshotting
 
-Snapshotting is configured via the `snapshotting` option in the `@agent` decorator. Without it, no periodic snapshots are taken (but save/load are still available for manual updates):
+Set the `snapshotting` option on `defineAgent(...)`. Without it, snapshotting is disabled:
 
 ```typescript
-@agent({ mount: "/counters/{name}", snapshotting: { every: 1 } })
-class CounterAgent extends BaseAgent { ... }
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+
+export const CounterAgent = defineAgent({
+    name: 'CounterAgent',
+    id: { name: z.string() },
+    http: http.mount('/counters/{name}'),
+    // Typed state schema + a policy for WHEN to snapshot.
+    snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 1 } },
+    methods: {
+        increment: method({ input: {}, returns: z.number(), http: http.post('/increment') }),
+    },
+});
 ```
 
-### Snapshotting Modes
+### Snapshotting Policies
 
-The `snapshotting` option accepts these values:
+The policy controls **when** a snapshot is taken. It can be given directly (`snapshotting: 'default'`) or inside `{ policy, state }`:
 
-| Mode | Example | Description |
+| Policy | Example | Description |
 |------|---------|-------------|
-| `'disabled'` | (default when omitted) | No periodic snapshotting |
-| `'enabled'` | `snapshotting: 'enabled'` | Enable snapshot support with the server's default policy. **The server default is `disabled`**, so this may have no effect. Use `{ every: N }` or `{ periodic: '…' }` to guarantee snapshotting is active. |
-| `{ every: number }` | `snapshotting: { every: 1 }` | Snapshot every N successful function calls (use `{ every: 1 }` for every invocation) |
-| `{ periodic: string }` | `snapshotting: { periodic: '30s' }` | Snapshot at most once per time interval |
+| `'disabled'` | (default when omitted) | No snapshotting |
+| `'default'` | `snapshotting: 'default'` | Enable snapshot support with the server's default policy. **The server default may be `disabled`**, so use `{ everyNInvocations }` or `{ periodicSeconds }` to guarantee snapshotting is active. |
+| `{ everyNInvocations: number }` | `{ everyNInvocations: 1 }` | Snapshot every N successful invocations (use `1` for every invocation) |
+| `{ periodicSeconds: number }` | `{ periodicSeconds: 30 }` | Snapshot at most once per N-second interval |
+
+## Typed State Snapshotting (recommended)
+
+Give `snapshotting` a `state` schema to snapshot **only the schema-declared fields** of your state — typed and scoped, so scratch/ephemeral fields are not persisted. On recovery the executor restores those fields from the last snapshot and replays the oplog tail. This is the declarative fluent replacement for overriding `save`/`loadSnapshot`.
 
 ```typescript
-@agent({ mount: "/periodic/{name}", snapshotting: { periodic: '30s' } })
-class PeriodicAgent extends BaseAgent { ... }
-
-@agent({ mount: "/batch/{name}", snapshotting: { every: 10 } })
-class BatchAgent extends BaseAgent { ... }
+export const CounterAgentImpl = CounterAgent.implement({
+    // `count` is persisted; any other field returned here is not.
+    init: () => ({ count: 0 }),
+    methods: {
+        increment() {
+            this.count += 1;
+            return this.count;
+        },
+    },
+});
 ```
 
-## Automatic Snapshotting (Default)
-
-By default, `BaseAgent` provides automatic snapshotting that:
-1. JSON-serializes all own properties of the agent (excluding `cachedAgentType`, `agentClassName`, functions, and internal types).
-2. Automatically detects and serializes any `DatabaseSync` fields as binary SQLite snapshots.
-3. When databases are present, uses a `multipart/mixed` format to bundle JSON state with binary database blobs.
-
-No custom code is needed if the agent's state is JSON-serializable.
-
-```typescript
-import { BaseAgent, agent, endpoint } from '@golemcloud/golem-ts-sdk';
-
-@agent({ mount: "/counters/{name}", snapshotting: { every: 1 } })
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
-
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @endpoint({ post: "/increment" })
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-    // No saveSnapshot/loadSnapshot needed — automatic JSON snapshotting works
-}
-```
+A bare policy without a `state` schema (e.g. `snapshotting: 'default'` or `snapshotting: { everyNInvocations: 5 }`) falls back to reflective JSON serialization of the whole state (config fields are excluded). Prefer the typed `state` form.
 
 ## Custom Snapshotting
 
-Override both `saveSnapshot()` and `loadSnapshot()` to implement a custom binary format:
+For state the default JSON path can't represent (a compact binary format, cross-version migration logic), supply a `snapshot: { save, load }` block on `.implement(...)`. `this` is the agent state; `save()` returns the raw snapshot bytes and `load(bytes)` restores from them:
 
 ```typescript
-import { BaseAgent, agent, prompt, description, endpoint } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-@agent({ mount: "/snapshot-counters/{name}", snapshotting: { every: 1 } })
-class CounterWithSnapshotAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+export const CounterWithSnapshot = defineAgent({
+    name: 'CounterWithSnapshot',
+    id: { name: z.string() },
+    http: http.mount('/snapshot-counters/{name}'),
+    snapshotting: { everyNInvocations: 1 },
+    methods: {
+        increment: method({
+            input: {},
+            returns: z.number(),
+            promptHint: 'Increase the count by one',
+            description: 'Increases the count by one and returns the new value',
+            http: http.post('/increment'),
+        }),
+    },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @prompt("Increase the count by one")
-    @description("Increases the count by one and returns the new value")
-    @endpoint({ post: "/increment" })
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-
-    override async saveSnapshot(): Promise<Uint8Array> {
-        const snapshot = new Uint8Array(4);
-        const view = new DataView(snapshot.buffer);
-        view.setUint32(0, this.value);
-        console.info(`Saved snapshot: ${this.value}`);
-        return snapshot;
-    }
-
-    override async loadSnapshot(bytes: Uint8Array): Promise<void> {
-        const view = new DataView(bytes.buffer);
-        this.value = view.getUint32(0);
-        console.info(`Loaded snapshot!: ${this.value}`);
-    }
-}
+export const CounterWithSnapshotImpl = CounterWithSnapshot.implement({
+    init: () => ({ value: 0 }),
+    methods: {
+        increment() {
+            this.value += 1;
+            return this.value;
+        },
+    },
+    snapshot: {
+        save() {
+            const snapshot = new Uint8Array(4);
+            new DataView(snapshot.buffer).setUint32(0, this.value);
+            console.info(`Saved snapshot: ${this.value}`);
+            return snapshot;
+        },
+        load(bytes) {
+            this.value = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+            console.info(`Loaded snapshot: ${this.value}`);
+        },
+    },
+});
 ```
 
-## Method Signatures
+### Signatures
 
 ```typescript
-// Save: serialize the agent's state. Can return raw bytes or bytes with a MIME type.
-async saveSnapshot(): Promise<Uint8Array | { data: Uint8Array; mimeType: string }>
+// save: serialize the agent's state into raw snapshot bytes.
+save(): Uint8Array | Promise<Uint8Array>
 
-// Load: restore the agent's state from previously saved snapshot bytes.
-// The mimeType parameter indicates the format of the saved snapshot.
-async loadSnapshot(bytes: Uint8Array, mimeType?: string): Promise<void>
+// load: restore the agent's state from previously saved snapshot bytes.
+load(bytes: Uint8Array): void | Promise<void>
 ```
 
-### Return Type Options for `saveSnapshot`
-
-- **`Uint8Array`** — treated as `application/octet-stream`
-- **`{ data: Uint8Array; mimeType: string }`** — explicit MIME type, use `application/json` for JSON or `application/octet-stream` for binary
-
-### Error Handling
-
-- `loadSnapshot` can **throw a string** to signal that the update should fail and the agent should revert to the old version.
-
-## Working with SQLite Databases
-
-If the agent uses `DatabaseSync` fields, the default `saveSnapshot` and `loadSnapshot` implementations automatically handle them via a `multipart/mixed` format. For custom overrides that still need database support, use the protected helper:
-
-```typescript
-// Inside a custom saveSnapshot override:
-const databases = this.serializeTrackedDatabases();
-// Returns Array<{ name: string; bytes: Uint8Array }>
-```
+A custom `snapshot` block overrides the default serialization entirely. `load` may throw to signal that an update should fail and the agent should revert to the old version.
 
 ## Best Practices
 
-1. **Prefer automatic (JSON) snapshotting** unless you need a compact binary format or cross-version migration logic.
+1. **Prefer the typed `state` schema** unless you need a compact binary format or cross-version migration logic.
 2. **Keep snapshots small** — large snapshots impact recovery and update time.
-3. **Version your snapshot format** — include a version byte or marker so `loadSnapshot` can handle snapshots from older versions.
-4. **Test round-trips** — verify that `saveSnapshot` → `loadSnapshot` produces equivalent state.
-5. **Handle migration** — when the state schema changes between versions, `loadSnapshot` in the new version should be able to parse snapshots from the old version.
-6. **Override both or neither** — always override `saveSnapshot` and `loadSnapshot` together to keep serialization consistent.
+3. **Version your snapshot format** — include a version byte or marker so `load` can handle snapshots from older versions.
+4. **Test round-trips** — verify that `save` → `load` produces equivalent state.
+5. **Handle migration** — when the state schema changes between versions, `load` in the new version should be able to parse snapshots from the old version.
+6. **Define both or neither** — always provide `save` and `load` together to keep serialization consistent.
 
 ## Project Template
 
