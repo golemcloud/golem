@@ -14,6 +14,7 @@
 
 use crate::durable_host::concurrent::{
     CallHandle, CallReplayOutcome, Cancellable, NotCancellable, drain_dropped_call_events_access,
+    drain_queued_dropped_call_events,
 };
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::suspendable_wait::{
@@ -59,7 +60,7 @@ use golem_common::model::oplog::{
     HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
     HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
     HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
-    HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
+    HostResponseGolemApiUnit, OplogEntry, PersistenceLevel, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, Timestamp};
@@ -513,6 +514,43 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.persistence_level != new_persistence_level {
             // commit all pending entries and change persistence level
             if self.state.is_live() {
+                // A persistence-level transition is a positional replay boundary: replay skips
+                // whole persist-nothing zones, so a concurrent durable call's `Start`/`End` pair
+                // must never straddle the `ChangePersistenceLevel` entry — replay would claim one
+                // half and skip the other. First drain already-dropped cancellable calls so their
+                // `Cancelled` is recorded on this side of the boundary, then refuse to switch
+                // while any live durable call is still in flight.
+                //
+                // Open *durable scopes* (batched remote writes such as an unconsumed HTTP
+                // response, remote transactions) are deliberately allowed to stay open across the
+                // boundary: their `End` is resolved by identity through the concurrent replay
+                // resolver, not positionally, so a scope whose `Start` and `End` both lie outside
+                // the zone replays correctly even with the zone skipped in between.
+                //
+                // The exception is leaving a `PersistNothing` zone while a scope *opened inside
+                // the zone* is still open: its `Start` lies in the region replay skips, so its
+                // eventual `End` outside the zone would reference a `Start` replay never sees.
+                // Such a scope must be closed before the zone is.
+                //
+                // During snapshotting no oplog entries are written, so no boundary is created and
+                // the guard is skipped.
+                if self.state.snapshotting_mode.is_none() {
+                    drain_queued_dropped_call_events(self)
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    if self.state.has_in_flight_live_host_calls() {
+                        return Err(anyhow!(
+                            "Cannot change oplog persistence level: durable host calls are still in flight"
+                        ));
+                    }
+                    if self.state.persistence_level == PersistenceLevel::PersistNothing
+                        && self.state.has_open_scope_in_persist_nothing_zone()
+                    {
+                        return Err(anyhow!(
+                            "Cannot change oplog persistence level: a durable scope (batched remote write or transaction) opened inside the PersistNothing zone is still open"
+                        ));
+                    }
+                }
                 self.public_state
                     .worker()
                     .add_and_commit_oplog(OplogEntry::change_persistence_level(

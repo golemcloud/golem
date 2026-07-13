@@ -1198,6 +1198,17 @@ impl ReplayState {
         std::mem::take(&mut self.cursor.state.lock().await.pending_replay_events)
     }
 
+    /// Whether some task currently holds an open cursor transaction ([`ReplayCursor::tx`]).
+    ///
+    /// The invocation event loop can exit while a store-spawned durable task is suspended
+    /// mid-transaction (a transaction awaits oplog reads); such a task is not polled again until
+    /// the next event loop runs, so the fair cursor lock it holds would block every cursor read
+    /// issued from outside the event loop. The invocation completion path polls the event loop
+    /// until this reports `false` before any such read.
+    pub fn has_open_cursor_transaction(&self) -> bool {
+        self.cursor.state.try_lock().is_err()
+    }
+
     /// Reads the next oplog entry, and skips every hint entry following it.
     /// Returns the oplog index of the entry read, no matter how many more hint entries
     /// were read.
@@ -2163,6 +2174,104 @@ mod tests {
     }
 
     #[test]
+    async fn interrupted_call_reports_incomplete_while_sibling_completes() {
+        // [NoOp, Start(A=2), Start(B=3), End(B=3→4)] — a worker interrupted mid-call commits A's
+        // `Start` but never its terminal, while a concurrent sibling B completed before the
+        // interrupt. Replay must resolve B normally and report A as Incomplete (so A can be
+        // re-executed live), not error out or misroute B's End to A.
+        let rs = replay_state_over(vec![noop(), start_now(), start_now(), end_for(3, 42)]).await;
+        let handle_a = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
+        let handle_b = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+
+        match rs.await_resolution_outcome(handle_a).await.unwrap() {
+            ResolutionOutcome::Incomplete => {}
+            other => panic!("expected Incomplete for the interrupted call, got {other:?}"),
+        }
+        match rs.await_resolution_outcome(handle_b).await.unwrap() {
+            ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }) => {
+                assert_eq!(end_idx, OplogIndex::from_u64(4));
+            }
+            other => panic!("expected Completed for the sibling call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    async fn replay_resolves_cancelled_without_partial() {
+        // [NoOp, Start, Cancelled { partial: None }] — a call dropped mid-flight live and
+        // recorded as `Cancelled` with no partial result replays to a `Cancelled` resolution
+        // carrying no payload. (The caller decides how to surface it; the accessor replay path
+        // rejects it as an unexpected entry when a response is required.)
+        let rs = replay_state_over(vec![noop(), start_now(), cancelled_for(2)]).await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+
+        match rs.await_resolution(handle).await.unwrap() {
+            Resolution::Cancelled {
+                cancelled_idx,
+                partial,
+            } => {
+                assert_eq!(cancelled_idx, OplogIndex::from_u64(3));
+                assert!(partial.is_none());
+            }
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    async fn replay_resolves_cancelled_with_partial_result() {
+        // [NoOp, Start, Cancelled { partial: Some(..) }] — a call cancelled live with a partial
+        // result replays to a `Cancelled` resolution that preserves the recorded partial
+        // response payload (the CallHandle replay path downloads and converts it).
+        let rs =
+            replay_state_over(vec![noop(), start_now(), cancelled_with_partial_for(2, 42)]).await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+
+        match rs.await_resolution(handle).await.unwrap() {
+            Resolution::Cancelled {
+                cancelled_idx,
+                partial,
+            } => {
+                assert_eq!(cancelled_idx, OplogIndex::from_u64(3));
+                match partial {
+                    Some(OplogPayload::Inline(response)) => match *response {
+                        HostResponse::MonotonicClockTimestamp(
+                            HostResponseMonotonicClockTimestamp { nanos },
+                        ) => assert_eq!(nanos, 42),
+                        other => panic!("unexpected partial response: {other:?}"),
+                    },
+                    other => panic!("expected an inline partial payload, got {other:?}"),
+                }
+            }
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+    }
+
+    #[test]
     async fn drain_parks_on_unclaimed_start() {
         // [NoOp, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5)] — draining the awaited terminals
         // while only A is claimed must stop on the still-unclaimed Start(B): A stays pending and the
@@ -2715,6 +2824,18 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             start_index: OplogIndex::from_u64(start_index),
             partial: None,
+        }
+    }
+
+    fn cancelled_with_partial_for(start_index: u64, nanos: u64) -> OplogEntry {
+        OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(start_index),
+            partial: Some(OplogPayload::Inline(Box::new(
+                HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp {
+                    nanos,
+                }),
+            ))),
         }
     }
 
@@ -3390,5 +3511,219 @@ mod tests {
                 "seed {seed}: replay did not reach live after skipping the persist-nothing zone"
             );
         }
+    }
+
+    fn suspend() -> OplogEntry {
+        OplogEntry::Suspend {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    /// A batched-write scope `Start` exactly as `begin_function` records it: request-less,
+    /// top-level, `WriteRemoteBatched(None)`.
+    fn batched_scope_start() -> OplogEntry {
+        OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        }
+    }
+
+    /// A batched-write scope `End` exactly as `end_function` records it: response-less,
+    /// `forced_commit: true`.
+    fn batched_scope_end(start_index: u64) -> OplogEntry {
+        OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(start_index),
+            response: None,
+            forced_commit: true,
+        }
+    }
+
+    /// A host-call `Start` nested in the batched-write scope at `parent`, exactly as the
+    /// legacy sequential adapter recorded followup batched invocations:
+    /// `parent_start_index: Some(scope)`, `WriteRemoteBatched(Some(scope))`.
+    fn batched_child_start(parent: u64) -> OplogEntry {
+        OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: Some(OplogIndex::from_u64(parent)),
+            function_name: HostFunctionName::MonotonicClockNow,
+            request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                HostRequestNoInput {},
+            )))),
+            durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(
+                OplogIndex::from_u64(parent),
+            )),
+        }
+    }
+
+    /// G18 compatibility: a representative pre-concurrency oplog — written by a build where
+    /// durable execution was strictly sequential, so every host call is an *adjacent*
+    /// `Start`/`End` pair appended atomically via `Oplog::add_pair` — must replay cleanly
+    /// through the concurrent resolver.
+    ///
+    /// The fixture is synthesized in the exact shapes the sequential writers produced
+    /// (`OplogOps::add_completed_host_call`, `begin_function` / `end_function`), covering:
+    /// - plain adjacent host-call pairs,
+    /// - a hint entry (`Suspend`) between calls,
+    /// - an adjacent pair inside an atomic region (positional `Begin`/`EndAtomicRegion` markers),
+    /// - a batched-write scope (request-less scope `Start`, a child call pair recorded with
+    ///   `parent_start_index: Some(scope)` / `WriteRemoteBatched(Some(scope))`, and the
+    ///   response-less, forced-commit scope `End`),
+    /// - no `Cancelled` entries and no overlapping calls anywhere.
+    ///
+    /// Replay drives the same claim/await sequence the sequential durability layer performs:
+    /// each call is claimed then awaited immediately, scope `End`s resolve through the
+    /// resolver (FU4), and positional markers are consumed by `get_oplog_entry`.
+    #[test]
+    async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver() {
+        // [ 1: NoOp,
+        //   2: Start(A), 3: End(A=2, 41),
+        //   4: Suspend (hint),
+        //   5: Start(B), 6: End(B=5, 42),
+        //   7: BeginAtomicRegion, 8: Start(C), 9: End(C=8, 43), 10: EndAtomicRegion(7),
+        //   11: Start(scope), 12: Start(D, parent=11), 13: End(D=12, 44), 14: End(scope=11) ]
+        let rs = replay_state_over(vec![
+            noop(),
+            start_now(),
+            end_for(2, 41),
+            suspend(),
+            start_now(),
+            end_for(5, 42),
+            begin_atomic_region(),
+            start_now(),
+            end_for(8, 43),
+            end_atomic_region(7),
+            batched_scope_start(),
+            batched_child_start(11),
+            end_for(12, 44),
+            batched_scope_end(11),
+        ])
+        .await;
+
+        // Call A: claim + immediate await, the sequential replay pattern. The recorded
+        // response payload must round-trip through the resolution.
+        let handle_a = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
+        match rs.await_resolution(handle_a).await.unwrap() {
+            Resolution::Completed {
+                end_idx, response, ..
+            } => {
+                assert_eq!(end_idx, OplogIndex::from_u64(3));
+                match response {
+                    Some(OplogPayload::Inline(boxed)) => assert_eq!(
+                        *boxed,
+                        HostResponse::MonotonicClockTimestamp(
+                            HostResponseMonotonicClockTimestamp { nanos: 41 }
+                        )
+                    ),
+                    other => panic!("expected inline response payload, got {other:?}"),
+                }
+            }
+            other => panic!("expected Completed for A, got {other:?}"),
+        }
+
+        // Call B: the Suspend hint between the pairs is skipped transparently by the claim.
+        let handle_b = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(5));
+        match rs.await_resolution(handle_b).await.unwrap() {
+            Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+            other => panic!("expected Completed for B, got {other:?}"),
+        }
+
+        // Atomic region markers are positional; call C replays inside the region.
+        let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+        assert_eq!(idx, OplogIndex::from_u64(7));
+        assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+
+        let handle_c = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle_c.start_idx(), OplogIndex::from_u64(8));
+        match rs.await_resolution(handle_c).await.unwrap() {
+            Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(9)),
+            other => panic!("expected Completed for C, got {other:?}"),
+        }
+
+        let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+        assert_eq!(idx, OplogIndex::from_u64(10));
+        assert!(
+            matches!(entry, OplogEntry::EndAtomicRegion { begin_index, .. } if begin_index == OplogIndex::from_u64(7))
+        );
+
+        // Batched-write scope: scope Start claims through the resolver (FU4), the child call
+        // is claimed by identity (parent_start_index), and the scope End resolves response-less.
+        let scope_names = [HostFunctionName::Custom(
+            "<scope:batched-write>".to_string(),
+        )];
+        let (scope_idx, scope_handle) = rs
+            .claim_scope_start(&scope_names, &DurableFunctionType::WriteRemoteBatched(None))
+            .await
+            .unwrap();
+        assert_eq!(scope_idx, OplogIndex::from_u64(11));
+
+        let handle_d = rs
+            .claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(11))),
+                OplogIndex::from_u64(11),
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle_d.start_idx(), OplogIndex::from_u64(12));
+        match rs.await_resolution(handle_d).await.unwrap() {
+            Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(13)),
+            other => panic!("expected Completed for D, got {other:?}"),
+        }
+
+        match rs.await_resolution_outcome(scope_handle).await.unwrap() {
+            ResolutionOutcome::Resolved(Resolution::Completed {
+                end_idx, response, ..
+            }) => {
+                assert_eq!(end_idx, OplogIndex::from_u64(14));
+                assert!(response.is_none(), "scope End must be response-less");
+            }
+            other => panic!("expected Completed for the scope, got {other:?}"),
+        }
+
+        // The whole pre-migration oplog is consumed: replay is over and nothing is left pending.
+        assert!(rs.is_live(), "replay must reach live at the end");
+        let internal = rs.cursor.state.lock().await;
+        assert!(
+            !internal
+                .concurrent_resolver
+                .is_pending(OplogIndex::from_u64(2))
+                && !internal
+                    .concurrent_resolver
+                    .is_pending(OplogIndex::from_u64(5))
+                && !internal
+                    .concurrent_resolver
+                    .is_pending(OplogIndex::from_u64(8))
+                && !internal
+                    .concurrent_resolver
+                    .is_pending(OplogIndex::from_u64(11))
+                && !internal
+                    .concurrent_resolver
+                    .is_pending(OplogIndex::from_u64(12)),
+            "no resolver awaiter may remain pending after a full replay"
+        );
     }
 }

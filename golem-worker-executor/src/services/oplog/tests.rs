@@ -1178,6 +1178,153 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     assert_eq!(p4_mime, "application/octet-stream");
 }
 
+/// The `PersistNothing` contract for live durable host calls — including the P3 accessor path,
+/// which appends its `Start` via `add_start_with_reserved_payload` and its `End` via `add` exactly
+/// as simulated here — is enforced at the oplog level, not at the call sites: entries written
+/// inside a persist-nothing zone are buffered but never flushed by the call's own
+/// `CommitLevel::DurableOnly` commits. They only reach durable storage when a `CommitLevel::Always`
+/// commit runs (e.g. the zone-closing `ChangePersistenceLevel`, written via `add_and_commit`),
+/// which is intentional: zone contents are observability-only and the replay cursor skips whole
+/// persist-nothing zones, never claiming the `Start`/`End` entries inside them.
+#[test]
+async fn persist_nothing_zone_suppresses_durable_commits_of_live_host_call_entries(
+    _tracing: &Tracing,
+) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    // Commit thresholds high enough that no threshold-triggered `Always` commit fires during the
+    // test (threshold commits flush even inside a persist-nothing zone, to bound memory).
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        100,
+        100,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    // Enter a persist-nothing zone the way `set_oplog_persistence_level` does: the zone-begin
+    // entry is committed with `CommitLevel::Always` *before* the level switch, so the zone
+    // boundary itself is always durable.
+    let zone_begin_idx = oplog
+        .add_and_commit(OplogEntry::change_persistence_level(
+            PersistenceLevel::PersistNothing,
+        ))
+        .await;
+    oplog
+        .switch_persistence_level(PersistenceLevel::PersistNothing)
+        .await;
+
+    // A live host call inside the zone, using the same primitives as the P3 accessor live path
+    // (`execute_access_start` / `CallHandle::complete`): eager `Start` with a reserved request
+    // payload, then an `End` referencing it.
+    let request = HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap());
+    let (start_idx, request_upload) = oplog
+        .add_start_with_reserved_payload(request, move |request_payload| OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::Custom("f1".to_string()),
+            request: Some(request_payload),
+            durable_function_type: DurableFunctionType::WriteRemote,
+        })
+        .await
+        .unwrap();
+    request_upload.wait().await.unwrap();
+    let response = HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap());
+    let response_payload = oplog.upload_payload(&response).await.unwrap();
+    let end_idx = oplog
+        .add(OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: start_idx,
+            response: Some(response_payload),
+            forced_commit: false,
+        })
+        .await;
+
+    // The call-site commit (`end_durable_function` commits with `DurableOnly` for remote writes)
+    // must not flush anything while the persist-nothing zone is open.
+    oplog.commit(CommitLevel::DurableOnly).await;
+    let committed = oplog_service
+        .read(&owned_agent_id, AgentMode::Durable, start_idx, 10)
+        .await;
+    check!(
+        committed.is_empty(),
+        "Start/End written inside a persist-nothing zone must not be durably committed by DurableOnly commits"
+    );
+
+    // The buffered entries are still visible through the open oplog (`read_many` merges the
+    // uncommitted buffer).
+    let buffered = oplog.read_many(start_idx, 2).await;
+    check!(matches!(
+        buffered.get(&start_idx),
+        Some(OplogEntry::Start { .. })
+    ));
+    check!(matches!(
+        buffered.get(&end_idx),
+        Some(OplogEntry::End { .. })
+    ));
+
+    // Closing the zone (again mirroring `set_oplog_persistence_level`) commits with `Always`,
+    // which flushes the zone contents: they become durable as observability-only entries that
+    // replay skips wholesale.
+    let zone_end_idx = oplog
+        .add_and_commit(OplogEntry::change_persistence_level(
+            PersistenceLevel::Smart,
+        ))
+        .await;
+    oplog
+        .switch_persistence_level(PersistenceLevel::Smart)
+        .await;
+
+    let committed = oplog_service
+        .read(&owned_agent_id, AgentMode::Durable, zone_begin_idx, 10)
+        .await;
+    let kinds = committed
+        .into_iter()
+        .map(|(idx, entry)| (idx, entry.rounded()))
+        .collect::<Vec<_>>();
+    check!(kinds.len() == 4);
+    check!(kinds[0].0 == zone_begin_idx);
+    check!(matches!(
+        kinds[0].1,
+        OplogEntry::ChangePersistenceLevel {
+            persistence_level: PersistenceLevel::PersistNothing,
+            ..
+        }
+    ));
+    check!(kinds[1].0 == start_idx);
+    check!(matches!(kinds[1].1, OplogEntry::Start { .. }));
+    check!(kinds[2].0 == end_idx);
+    check!(matches!(kinds[2].1, OplogEntry::End { .. }));
+    check!(kinds[3].0 == zone_end_idx);
+    check!(matches!(
+        kinds[3].1,
+        OplogEntry::ChangePersistenceLevel {
+            persistence_level: PersistenceLevel::Smart,
+            ..
+        }
+    ));
+}
+
 #[test]
 async fn multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;

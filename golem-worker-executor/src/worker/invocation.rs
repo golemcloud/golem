@@ -468,10 +468,67 @@ cached_guest_loader!(
     "failed to load oplog-processor export"
 );
 
+/// Keeps the store's event loop alive after a guest call returned, until no store-spawned task
+/// holds an open replay-cursor transaction.
+///
+/// `run_concurrent` returns as soon as the invocation's root future resolves, leaving any still
+/// pending store-spawned tasks (durable background work such as HTTP body consumption) suspended
+/// wherever their last poll left them — they are only polled again inside the next event loop.
+/// A task suspended *inside* a replay-cursor transaction (which awaits oplog reads) would keep
+/// the fair cursor lock held, deadlocking the cursor reads the completion path performs outside
+/// the event loop (e.g. reading `AgentInvocationFinished` after a replayed invocation).
+///
+/// This is deliberately *not* a full drain of spawned tasks: tasks parked outside a cursor
+/// transaction (on demand channels or replay suspension) are left parked, so tasks that never
+/// finish cannot hang the invocation. It terminates because the only suspension points while
+/// holding a cursor transaction are oplog reads and payload I/O (e.g. downloading a payload
+/// while applying commit effects); resolver and cursor-progress waits release the transaction
+/// before suspending.
+///
+/// The probe loop sleeps briefly between checks instead of `yield_now`-ing: a `yield_now`ed
+/// future self-wakes immediately, so while the lock holder awaits slow oplog/payload I/O the
+/// settlement root would stay continuously runnable and spin the whole event loop on a core.
+/// The holder is re-polled whenever its own I/O wakes it; the timer is only a bounded fallback
+/// wake for re-probing the lock.
+async fn settle_replay_cursor<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+) -> Result<(), WorkerExecutorError> {
+    if !store
+        .data()
+        .durable_ctx()
+        .has_open_replay_cursor_transaction()
+    {
+        return Ok(());
+    }
+    store
+        .as_context_mut()
+        .run_concurrent(async |accessor| {
+            loop {
+                let open = accessor.with(|mut access| {
+                    access
+                        .get()
+                        .durable_ctx()
+                        .has_open_replay_cursor_transaction()
+                });
+                if !open {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "failed to settle replay cursor after invocation: {err}"
+            ))
+        })
+}
+
 async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) -> Result<u64, WorkerExecutorError> {
+    settle_replay_cursor(store).await?;
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level);
 

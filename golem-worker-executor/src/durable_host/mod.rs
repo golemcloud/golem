@@ -2633,6 +2633,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             })
     }
 
+    /// Whether some task currently holds an open replay-cursor transaction. See
+    /// [`ReplayState::has_open_cursor_transaction`]; used by the invocation completion path to
+    /// keep the store's event loop alive until no store-spawned task holds the cursor lock.
+    pub fn has_open_replay_cursor_transaction(&self) -> bool {
+        self.state.replay_state.has_open_cursor_transaction()
+    }
+
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
         let replay_events = self.state.replay_state.take_new_replay_events().await;
         if !replay_events.is_empty() {
@@ -4839,6 +4846,12 @@ struct ActiveDurableScope {
     /// scope `End` is written, not replayed) and once the handle has been taken by the closing
     /// `end_function` / transaction terminal.
     replay_end: Option<concurrent::ReplayCallHandle>,
+    /// `true` when the scope `Start` was appended live while a `PersistNothing` zone was open, i.e.
+    /// the `Start` lies inside a region that replay skips wholesale. Such a scope must be closed
+    /// before the zone is: if the zone ended first, the scope's `End` would land outside the
+    /// skipped region and reference a `Start` replay never sees. `set_oplog_persistence_level`
+    /// refuses to leave a `PersistNothing` zone while such a scope is open.
+    opened_in_persist_nothing_zone: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -5430,11 +5443,26 @@ impl PrivateDurableWorkerState {
         kind: DurableScopeKind,
         replay_end: Option<concurrent::ReplayCallHandle>,
     ) {
+        // A scope claimed during replay (`replay_end` present) can never lie inside a
+        // persist-nothing zone: replay skips such zones wholesale, so their contents are never
+        // claimed.
+        let opened_in_persist_nothing_zone =
+            replay_end.is_none() && self.persistence_level == PersistenceLevel::PersistNothing;
         self.active_durable_scopes.push(ActiveDurableScope {
             start_index,
             kind,
             replay_end,
+            opened_in_persist_nothing_zone,
         });
+    }
+
+    /// Whether any currently open durable scope was opened live inside the currently open
+    /// `PersistNothing` zone. Leaving the zone while such a scope is open would strand its `Start`
+    /// in the replay-skipped region while its eventual `End` lands outside it.
+    fn has_open_scope_in_persist_nothing_zone(&self) -> bool {
+        self.active_durable_scopes
+            .iter()
+            .any(|scope| scope.opened_in_persist_nothing_zone)
     }
 
     /// Takes the resolver handle for the scope `End` of the open scope at `start_index`, if one was
@@ -5489,6 +5517,14 @@ impl PrivateDurableWorkerState {
 
     fn live_host_call_counter(&self) -> Arc<AtomicUsize> {
         self.live_host_calls.clone()
+    }
+
+    /// Whether any live durable host call is currently in flight (its `Start` may already be
+    /// appended while its `End`/`Cancelled` is still pending). Used to guard operations that
+    /// establish positional oplog boundaries — e.g. a persistence-level transition — which no
+    /// durable call's `Start`/`End` pair may straddle.
+    pub fn has_in_flight_live_host_calls(&self) -> bool {
+        self.live_host_calls.load(Ordering::Acquire) > 0
     }
 
     fn suspendable_waits(&self) -> Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>> {

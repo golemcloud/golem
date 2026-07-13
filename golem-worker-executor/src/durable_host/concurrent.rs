@@ -21,9 +21,9 @@
 //! halves of a call no longer have to be adjacent in the oplog — which is what lets us track
 //! async, parallel host functions.
 //!
-//! Every durable host call runs through this path via [`CallHandle`]. Because the ported host
-//! methods still take `&mut self`, two calls cannot truly overlap yet, so the resolver's
-//! out-of-order behaviour is proven by synthetic unit tests rather than a concurrent runtime test.
+//! Every durable host call runs through this path via [`CallHandle`]. Calls made through the
+//! p3 `Accessor` entry points ([`CallHandle::start_access_with`] and friends) run concurrently;
+//! host methods still taking `&mut self` remain serialized by the store borrow.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -49,7 +49,7 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::component::Component;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData};
 
@@ -151,10 +151,10 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 pub struct ConcurrentReplayResolver {
     /// Awaiters that have registered but whose resolution has not been observed yet.
     pending: HashMap<OplogIndex, ReplayableOneshot<ResolutionOutcome>>,
-    /// Resolutions observed before their awaiter registered. While durable host calls are
-    /// serialized this is always empty (the await-resolution guard guarantees a call's `Start` is
-    /// claimed before its `End`/`Cancelled` is consumed); it exists for the resolver's own unit
-    /// tests and for once host calls can genuinely overlap and that order is no longer guaranteed.
+    /// Resolutions observed before their awaiter registered. The await-resolution guard
+    /// guarantees a call's `Start` is claimed before its `End`/`Cancelled` is consumed, so on the
+    /// replay path this stays empty; it covers the resolver's own unit tests and any future entry
+    /// point that resolves without that ordering guarantee.
     buffered: HashMap<OplogIndex, ResolutionOutcome>,
 }
 
@@ -290,6 +290,14 @@ pub struct DroppedCall {
     /// this context so the retry grouping belongs to the dropped call, not to whichever later host
     /// call happens to drive the drain.
     trap_context: DurableCallTrapContext,
+    /// Keeps the dropped call counted as an in-flight live host call until the drop event is
+    /// actually processed (its `Cancelled`/terminal recorded at a drain point). Without this, a
+    /// handle dropped between a drain and a subsequent in-flight check (e.g. the
+    /// `set_oplog_persistence_level` boundary guard) would release its permit before its terminal
+    /// entry is recorded, letting the terminal land on the far side of a positional replay
+    /// boundary. `None` for call sites that only use the snapshot locally while the handle (and
+    /// its own permit) is still alive.
+    live_call_permit: Option<LiveCallPermit>,
 }
 
 impl DroppedCall {
@@ -355,10 +363,15 @@ impl DroppedCall {
     }
 }
 
-/// Event emitted when a [`CallHandle`] is dropped without being finished or cancelled.
+/// Deferred work emitted from `Drop` impls that cannot touch the worker store themselves.
 ///
-/// There is no recorder actor in production yet, so an unfinished drop only logs. The drop policy
-/// is exercised in unit tests by attaching a sink that records these events.
+/// Each worker owns a `dropped_call_events` channel (see `PrivateDurableWorkerState`); `Drop`
+/// impls ([`CallHandle`], [`AccessTerminalGuard`], resource wrappers) enqueue these events, and
+/// they are drained from the next safe worker-access window: [`drain_queued_dropped_call_events`]
+/// at the start of every `&mut ctx` durable call and [`drain_dropped_call_events_access`] on the
+/// accessor path (call start and terminals). The drain records durable effects (`Cancelled`
+/// entries, scope closes, span finishes) via [`record_dropped_call_event`] or the accessor-window
+/// equivalent. Unit tests attach their own sink to observe the enqueued events directly.
 #[derive(Debug)]
 pub enum DropEvent {
     /// A `Cancellable` handle was dropped unfinished; the next drain records `Cancelled` from this
@@ -377,6 +390,11 @@ pub enum DropEvent {
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
         trap_context: DurableCallTrapContext,
+        /// Keeps the call counted as in flight until this event is fully consumed (the owned
+        /// terminal task joined and the durable-function scope closed), so a positional boundary
+        /// (e.g. a persistence-level change) cannot be placed before the delayed terminal append.
+        /// Never read — held purely for its `Drop` effect on the shared counter.
+        live_call_permit: Option<LiveCallPermit>,
     },
     /// A guest-cancelled accessor future may leave a caller-managed durable scope with no code path
     /// back into the resource's `drop`. Close that parent scope from the next safe store-access
@@ -461,21 +479,36 @@ enum AccessTerminalGuardState {
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
         trap_context: DurableCallTrapContext,
+        /// Moved out of the armed [`DroppedCall`] when the terminal is handed to an owned task,
+        /// so the call stays counted as in flight while the append is still pending.
+        live_call_permit: Option<LiveCallPermit>,
     },
     Disarmed,
 }
 
 struct AccessTerminalGuard<P: DropPolicy> {
     state: AccessTerminalGuardState,
+    /// Policy-controlled sink for unfinished drops (`BeforeTerminal`): `None` for policies (e.g.
+    /// `NotCancellable`) that treat an unfinished drop as a programming error instead of queueing
+    /// a cancellation.
     sink: Option<UnboundedSender<DropEvent>>,
+    /// Unconditional sink for `CleanupAfterTerminal`: once a terminal task has been spawned, its
+    /// join + scope close (and the in-flight permit it carries) must be handed to the next drain
+    /// regardless of the drop policy.
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
     _phantom: PhantomData<P>,
 }
 
 impl<P: DropPolicy> AccessTerminalGuard<P> {
-    fn new(call: DroppedCall, sink: Option<UnboundedSender<DropEvent>>) -> Self {
+    fn new(
+        call: DroppedCall,
+        sink: Option<UnboundedSender<DropEvent>>,
+        cleanup_sink: Option<UnboundedSender<DropEvent>>,
+    ) -> Self {
         Self {
             state: AccessTerminalGuardState::BeforeTerminal { call },
             sink,
+            cleanup_sink,
             _phantom: PhantomData,
         }
     }
@@ -502,19 +535,19 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         &mut self,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
     ) {
-        let call = self
-            .call()
-            .expect("cleanup_after_terminal called before the terminal is armed");
-        let atomic_region_registration = call.atomic_region_registration();
-        let function_type = call.function_type().clone();
-        let durable_begin_index = call.begin_index();
-        let trap_context = call.trap_context();
+        let call = match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
+            AccessTerminalGuardState::BeforeTerminal { call } => call,
+            _ => panic!("cleanup_after_terminal called before the terminal is armed"),
+        };
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
-            atomic_region_registration,
-            function_type,
-            durable_begin_index,
+            atomic_region_registration: call.atomic_region_registration(),
+            function_type: call.function_type().clone(),
+            durable_begin_index: call.begin_index(),
             terminal: Some(terminal),
-            trap_context,
+            trap_context: call.trap_context(),
+            // The permit moves with the state transition: the call remains counted as in flight
+            // while the owned terminal append is pending.
+            live_call_permit: call.live_call_permit,
         };
     }
 
@@ -549,14 +582,16 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 durable_begin_index,
                 terminal,
                 trap_context,
+                live_call_permit,
             } => {
-                if let Some(sink) = &self.sink {
+                if let Some(sink) = &self.cleanup_sink {
                     let _ = sink.send(DropEvent::CleanupAfterTerminal {
                         atomic_region_registration,
                         function_type,
                         durable_begin_index,
                         terminal,
                         trap_context,
+                        live_call_permit,
                     });
                 }
             }
@@ -565,27 +600,12 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
     }
 }
 
-/// Drains currently queued dropped-call events and records cancellable drops as `Cancelled`.
+/// Drains the worker's currently queued dropped-call events and records their durable effects
+/// (cancellable drops as `Cancelled`, deferred terminal joins, scope closes, span finishes).
 ///
-/// A future p3 wrapper can enqueue from `Drop` and call this from the next safe worker-access window.
-/// The helper deliberately drains only currently available events; callers decide where to wait for
-/// more work.
-#[expect(
-    dead_code,
-    reason = "p3 cancellable host wrappers will drain this queue once they are wired"
-)]
-pub async fn drain_dropped_call_events<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    receiver: &mut UnboundedReceiver<DropEvent>,
-) -> Result<usize, TerminalCallError> {
-    let mut recorded = 0;
-    while let Ok(event) = receiver.try_recv() {
-        record_dropped_call_event(ctx, event).await?;
-        recorded += 1;
-    }
-    Ok(recorded)
-}
-
+/// Called from the next safe worker-access window after the events were enqueued — the start of
+/// every `&mut ctx` durable call ([`CallHandle::begin`]). The helper deliberately drains only
+/// currently available events; callers decide where to wait for more work.
 pub async fn drain_queued_dropped_call_events<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<usize, TerminalCallError> {
@@ -629,6 +649,9 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             durable_begin_index,
             terminal,
             trap_context,
+            // Bound (not `_`) so the permit is released only at the end of this arm, after the
+            // terminal join and scope close.
+            live_call_permit: _live_call_permit,
         } => {
             if let Some(terminal) = terminal {
                 let joined = terminal.await.map_err(|err| {
@@ -680,7 +703,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
     Ok(())
 }
 
-/// Accessor-window variant of [`drain_dropped_call_events`]. It drains the queue from a short
+/// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short
 /// worker-state window, records `Cancelled` entries using owned oplog handles outside the window,
 /// then re-enters only to unregister atomic-region membership.
 pub async fn drain_dropped_call_events_access<T, D, Ctx>(
@@ -773,6 +796,10 @@ where
                 durable_begin_index,
                 terminal,
                 trap_context,
+                // Left in place: the permit stays owned by the event, so it survives a torn drain
+                // (the event is re-queued with the permit) and is released when the event is
+                // finished or dropped.
+                live_call_permit: _,
             } => {
                 let atomic_region_registration = *atomic_region_registration;
                 let function_type = function_type.clone();
@@ -936,9 +963,11 @@ impl DropPolicy for Cancellable {
         if let Some(sink) = sink {
             let _ = sink.send(DropEvent::UnfinishedCancellable { call });
         } else {
+            // Production always attaches the worker's dropped-call event sink; a missing sink
+            // means a test fixture without one, and the drop is only logged.
             let start_idx = call.start_idx;
             tracing::warn!(
-                "durable call {start_idx} dropped unfinished; no production cancellation recorder yet"
+                "durable call {start_idx} dropped unfinished with no drop-event sink attached; no Cancelled entry will be recorded"
             );
         }
     }
@@ -1007,6 +1036,10 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// Replay-side resolver receiver; `Some` only for replay handles.
     replay: Option<ReplayCallHandle>,
     finished: bool,
+    /// `true` when this replay handle parked on a recorded `Cancelled { partial: None }` terminal,
+    /// waiting for the deterministic guest to drop it at the same point it did live. Makes that
+    /// drop an expected state (debug-logged, scope close enqueued) rather than an anomaly.
+    parked_cancelled_replay: bool,
     /// Initiation-time execution metadata owned by this call. Later phases still mirror selected
     /// fields into `PrivateDurableWorkerState` for compatibility, but the call-owned copy is the
     /// source we can move retry/atomic decisions onto as the Accessor reshape proceeds.
@@ -1018,19 +1051,36 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     retry: InFunctionRetryController,
-    /// Optional sink used by unit tests to observe unfinished-drop behaviour. `None` in production.
+    /// Policy-controlled sink for unfinished drops, from [`DropPolicy::production_drop_sink`]:
+    /// the worker's dropped-call event sender for `Cancellable`/`LeaveIncompleteOnDrop`, `None`
+    /// for `NotCancellable`. Unit tests attach their own sink to observe drop events.
     drop_sink: Option<UnboundedSender<DropEvent>>,
+    /// Policy-independent sink for `CleanupAfterTerminal` events: a torn terminal (the completion
+    /// future dropped while the spawned terminal append is still pending) must hand its join +
+    /// in-flight permit to the next drain even for policies whose `production_drop_sink` is `None`
+    /// (e.g. `NotCancellable`).
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
     /// Counts this handle as an in-flight live host call while present.
     live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
 }
 
-struct LiveCallPermit(Arc<AtomicUsize>);
+#[derive(Debug)]
+pub struct LiveCallPermit(Arc<AtomicUsize>);
 
 impl LiveCallPermit {
     fn new(counter: Arc<AtomicUsize>) -> Self {
         counter.fetch_add(1, Ordering::AcqRel);
         Self(counter)
+    }
+}
+
+impl Clone for LiveCallPermit {
+    /// Cloning takes an additional permit on the same counter, so the call stays counted as
+    /// in-flight until *every* holder (the handle itself, a queued drop event, a terminal guard)
+    /// has been dropped.
+    fn clone(&self) -> Self {
+        Self::new(self.0.clone())
     }
 }
 
@@ -1108,6 +1158,14 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
     claim_options: AccessClaimOptions,
+    /// The worker's in-flight live host call counter, kept so `execute_access_start` can take a
+    /// permit when a replayed scope switches to live mid-start.
+    live_host_calls: Arc<AtomicUsize>,
+    /// Taken at prepare time — synchronously with worker state, *before* any oplog entry of this
+    /// call is appended — so an in-flight check (e.g. the `set_oplog_persistence_level` boundary
+    /// guard) can never observe zero calls between this call's `Start` append and its handle
+    /// construction in `finish_access_start`. `Some` for live calls, `None` on replay.
+    live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -1146,6 +1204,11 @@ struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
     atomic_region_registration: Option<OplogIndex>,
     opened_scope: Option<AccessOpenedScope>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
+    /// The in-flight permit taken at prepare time (or when a replayed scope switched to live),
+    /// handed on to the [`CallHandle`] so the call stays counted continuously from before its
+    /// first oplog append until its terminal is recorded.
+    live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -1551,6 +1614,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
         let cleanup_sink = ctx.state.dropped_call_event_sender();
+        let live_host_calls = ctx.state.live_host_call_counter();
         Ok(PreparedAccessStart {
             is_live,
             snapshotting,
@@ -1567,17 +1631,34 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
             cleanup_sink,
             claim_options,
+            live_call_permit: if is_live {
+                Some(LiveCallPermit::new(live_host_calls.clone()))
+            } else {
+                None
+            },
+            live_host_calls,
             _phantom: PhantomData,
         })
     }
 
+    /// Persistence-suppression model: only **snapshotting** is handled here (the live
+    /// `persisted: false` branch). `PersistenceLevel::PersistNothing` deliberately is *not* — a
+    /// live call inside a persist-nothing zone still appends its `Start`/`End`, exactly like the
+    /// legacy P2 path (`persist_durable_function_invocation`), because the PersistNothing contract
+    /// is enforced elsewhere: `PrimaryOplog::commit` suppresses non-`Always` commits while the
+    /// zone is open (so the call's own `DurableOnly` commits flush nothing), zone contents that do
+    /// reach storage (via the zone-closing `Always` commit) are observability-only, and the replay
+    /// cursor skips whole persist-nothing zones without claiming the entries inside them. The
+    /// replay branch below guards against ever *replaying* a durable call inside a PersistNothing
+    /// block, mirroring `read_persisted_durable_function_invocation`.
     async fn execute_access_start<Ctx: WorkerCtx, F>(
-        prepared: PreparedAccessStart<Pair, P, Ctx>,
+        mut prepared: PreparedAccessStart<Pair, P, Ctx>,
         build_request: F,
     ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)>
     where
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
+        let mut live_call_permit = prepared.live_call_permit.take();
         let starts_scope = opens_accessor_scope(
             prepared.retry.function_type(),
             prepared.retry.durable_execution_state().assume_idempotence,
@@ -1608,6 +1689,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     Pair::FQFN,
                 );
                 is_live = true;
+                if live_call_permit.is_none() {
+                    live_call_permit = Some(LiveCallPermit::new(prepared.live_host_calls.clone()));
+                }
             }
         }
 
@@ -1657,6 +1741,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     atomic_region_registration: None,
                     opened_scope: scope_start,
                     drop_sink: prepared.drop_sink,
+                    cleanup_sink: prepared.cleanup_sink,
+                    live_call_permit,
                     _phantom: PhantomData,
                 })
             } else {
@@ -1699,6 +1785,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     atomic_region_registration: prepared.atomic_region_registration,
                     opened_scope: scope_start,
                     drop_sink: prepared.drop_sink,
+                    cleanup_sink: prepared.cleanup_sink,
+                    live_call_permit,
                     _phantom: PhantomData,
                 })
             }
@@ -1787,6 +1875,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 atomic_region_registration: None,
                 opened_scope: scope_start,
                 drop_sink: prepared.drop_sink,
+                cleanup_sink: prepared.cleanup_sink,
+                live_call_permit: None,
                 _phantom: PhantomData,
             })
         }
@@ -1965,15 +2055,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             request_upload: executed.request_upload,
             replay: executed.replay,
             finished: false,
+            parked_cancelled_replay: false,
             execution_scope: executed.execution_scope,
             atomic_region_registration: executed.atomic_region_registration,
             retry: executed.retry,
             drop_sink: executed.drop_sink,
-            live_call_permit: if is_live {
-                Some(LiveCallPermit::new(ctx.state.live_host_call_counter()))
-            } else {
-                None
-            },
+            cleanup_sink: executed.cleanup_sink,
+            // Taken at prepare time (or at the replay→live switch), before this call's first
+            // oplog append, so the in-flight count never dips to zero mid-call.
+            live_call_permit: executed.live_call_permit,
             _phantom: PhantomData,
         })
     }
@@ -2030,6 +2120,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             execution_scope,
             retry,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
+            cleanup_sink: ctx.state.dropped_call_event_sender(),
             _phantom: PhantomData,
         })
     }
@@ -2485,8 +2576,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     request_upload: self.request_upload.clone(),
                     atomic_region_registration: self.atomic_region_registration.take(),
                     trap_context,
+                    live_call_permit: self.live_call_permit.clone(),
                 },
                 self.drop_sink.clone(),
+                self.cleanup_sink.clone(),
             );
             self.finished = true;
             let persist_result: Result<(), WorkerExecutorError> = if self.persisted {
@@ -2704,8 +2797,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 cancelled_idx,
                 partial,
             }) => {
-                self.finished = true;
                 if let Some(payload) = partial {
+                    self.finished = true;
                     let host_response = oplog.download_payload(payload).await.map_err(|err| {
                         WorkerExecutorError::runtime(format!(
                             "Cancelled partial payload cannot be downloaded: {err}"
@@ -2718,10 +2811,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         .await?;
                     Ok(CallReplayOutcome::Replayed(response))
                 } else {
-                    Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "End or Cancelled { partial: Some(..) }",
-                        format!("Cancelled without partial at {cancelled_idx}"),
-                    ))
+                    // `Cancelled` with no partial result: in the recorded run this call never
+                    // returned a value to the guest — its future was dropped mid-flight (e.g. the
+                    // loser of a guest `race`/`select!`). Mirror that exactly: never complete, so
+                    // the deterministic guest drops this future at the same point it did live.
+                    // Resolving to an error here instead would race the guest's own drop — the
+                    // resolver delivers the recorded terminal as soon as the cursor crosses it,
+                    // which may be before the winning branch has been polled and had a chance to
+                    // drop the loser.
+                    //
+                    // Durable cleanup (closing the durable scope for scope-opening calls) is
+                    // deferred to this handle's `Drop`, which enqueues the idempotent
+                    // `CloseDurableScope` event. Awaiting `end_durable_function_access` *here*,
+                    // before the park, would open a cancellation window: for scope-opening calls
+                    // it takes the scope's replay handle before its first await, so the guest
+                    // dropping this future mid-close would strand the open scope (with `finished`
+                    // already set, `Drop` would not clean it up either).
+                    tracing::debug!(
+                        "durable call cancelled without partial at {cancelled_idx} during replay; \
+                         parking until the guest drops it"
+                    );
+                    self.parked_cancelled_replay = true;
+                    std::future::pending::<()>().await;
+                    unreachable!("std::future::pending never completes")
                 }
             }
             ResolutionOutcome::Incomplete => {
@@ -2811,6 +2923,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     request_upload: self.request_upload.clone(),
                     atomic_region_registration: self.atomic_region_registration.take(),
                     trap_context,
+                    live_call_permit: self.live_call_permit.clone(),
                 };
                 // As in `complete`: surface a deferred request-upload failure at the call site before
                 // recording the `Cancelled` that references the request. A no-op when the request was
@@ -2917,8 +3030,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         request_upload: self.request_upload.clone(),
                         atomic_region_registration: self.atomic_region_registration.take(),
                         trap_context,
+                        live_call_permit: self.live_call_permit.clone(),
                     },
                     self.drop_sink.clone(),
+                    self.cleanup_sink.clone(),
                 );
                 let result = async {
                     guard.call().expect("terminal guard is armed").wait_request_upload().await?;
@@ -3685,6 +3800,7 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
     drop_sink: Option<UnboundedSender<DropEvent>>,
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
     _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -3775,10 +3891,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload,
             replay: None,
             finished: false,
+            parked_cancelled_replay: false,
             execution_scope,
             atomic_region_registration,
             retry: self.retry,
             drop_sink: self.drop_sink,
+            cleanup_sink: self.cleanup_sink,
             live_call_permit: Some(LiveCallPermit::new(ctx.state.live_host_call_counter())),
             _phantom: PhantomData,
         })
@@ -3814,10 +3932,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload: PendingUpload::already_durable(),
             replay: Some(replay),
             finished: false,
+            parked_cancelled_replay: false,
             execution_scope,
             atomic_region_registration: None,
             retry: self.retry,
             drop_sink: self.drop_sink,
+            cleanup_sink: self.cleanup_sink,
             live_call_permit: None,
             _phantom: PhantomData,
         })
@@ -3841,6 +3961,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
                         request_upload: self.request_upload.clone(),
                         atomic_region_registration: self.atomic_region_registration,
                         trap_context,
+                        live_call_permit: self.live_call_permit.take(),
                     },
                     self.drop_sink.as_ref(),
                 );
@@ -3858,11 +3979,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
                     span_id: None,
                 });
             }
-            // A replay handle must never enqueue a live cancellation; just note the anomaly.
-            tracing::warn!(
-                "replay durable call handle for Start {} dropped without finishing",
-                self.start_idx
-            );
+            if self.parked_cancelled_replay {
+                // Expected: the recorded terminal was `Cancelled { partial: None }` and the
+                // deterministic guest dropped this future at the same point it did live. Any
+                // scope close was enqueued above.
+                tracing::debug!(
+                    "parked cancelled durable call replay handle for Start {} dropped by the guest",
+                    self.start_idx
+                );
+            } else {
+                // A replay handle must never enqueue a live cancellation; just note the anomaly.
+                tracing::warn!(
+                    "replay durable call handle for Start {} dropped without finishing",
+                    self.start_idx
+                );
+            }
         }
     }
 }
@@ -4041,6 +4172,7 @@ mod tests {
             request_upload: PendingUpload::already_durable(),
             replay: None,
             finished: false,
+            parked_cancelled_replay: false,
             execution_scope: CallExecutionScope {
                 retry_from: start_idx,
                 durable_scope: None,
@@ -4054,6 +4186,7 @@ mod tests {
                 "test:monotonic_clock::now",
             ),
             drop_sink: Some(sink),
+            cleanup_sink: None,
             live_call_permit: None,
             _phantom: PhantomData,
         }
@@ -4087,6 +4220,7 @@ mod tests {
             request_upload: PendingUpload::already_durable(),
             replay: None,
             finished: true,
+            parked_cancelled_replay: false,
             execution_scope: scope,
             atomic_region_registration,
             retry: InFunctionRetryController::new(
@@ -4095,6 +4229,7 @@ mod tests {
                 "test:monotonic_clock::now",
             ),
             drop_sink: None,
+            cleanup_sink: None,
             live_call_permit: None,
             _phantom: PhantomData,
         }
@@ -4109,6 +4244,262 @@ mod tests {
             assert_eq!(counter.load(Ordering::Acquire), 1);
         }
 
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn cloning_a_live_call_permit_takes_an_extra_count() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let permit = LiveCallPermit::new(counter.clone());
+        let cloned = permit.clone();
+        assert_eq!(counter.load(Ordering::Acquire), 2);
+        drop(permit);
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        drop(cloned);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
+        // An `AccessTerminalGuard` armed with `cleanup_after_terminal` and then dropped (a torn
+        // completion future) must keep the call counted as in flight — via the queued
+        // `CleanupAfterTerminal` event — until the event is consumed, so a positional boundary
+        // cannot be placed before the still-pending terminal append.
+        //
+        // The policy here is `NotCancellable`, whose `production_drop_sink` is `None`: the
+        // cleanup event must be enqueued through the policy-independent cleanup sink, exactly as
+        // it is for the p3 accessor calls that use this policy.
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (gate_tx, gate_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut guard = AccessTerminalGuard::<NotCancellable>::new(
+                DroppedCall {
+                    start_idx: idx(5),
+                    begin_index: idx(4),
+                    function_type: DurableFunctionType::ReadRemote,
+                    request_upload: PendingUpload::already_durable(),
+                    atomic_region_registration: None,
+                    trap_context: DurableCallTrapContext {
+                        retry_from: idx(4),
+                        in_atomic_region: false,
+                    },
+                    live_call_permit: Some(LiveCallPermit::new(counter.clone())),
+                },
+                NotCancellable::production_drop_sink(Some(tx.clone())),
+                Some(tx),
+            );
+            assert_eq!(counter.load(Ordering::Acquire), 1);
+            let terminal = tokio::spawn(async move {
+                let _ = gate_rx.await;
+                Ok(())
+            });
+            guard.cleanup_after_terminal(terminal);
+            assert_eq!(
+                counter.load(Ordering::Acquire),
+                1,
+                "the state transition must keep the permit"
+            );
+            // The guard is dropped here while the terminal task is still pending.
+        }
+        assert_eq!(
+            counter.load(Ordering::Acquire),
+            1,
+            "the queued CleanupAfterTerminal event must own the permit"
+        );
+        let event = rx
+            .try_recv()
+            .expect("expected a CleanupAfterTerminal drop event");
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        gate_tx.send(()).expect("terminal task is alive");
+        drop(event);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    /// Minimal in-memory [`Oplog`] recording appended entries, for tests that assert what a
+    /// drained drop event writes durably.
+    #[derive(Debug)]
+    struct InMemoryOplog {
+        entries: tokio::sync::Mutex<Vec<OplogEntry>>,
+    }
+
+    impl InMemoryOplog {
+        fn new() -> Self {
+            Self {
+                entries: tokio::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for InMemoryOplog {
+        async fn add(&self, entry: OplogEntry) -> OplogIndex {
+            let mut entries = self.entries.lock().await;
+            entries.push(entry);
+            OplogIndex::from_u64(entries.len() as u64)
+        }
+
+        async fn add_start_with_reserved_raw_payload(
+            &self,
+            serialized_request: Vec<u8>,
+            build_start: Box<
+                dyn FnOnce(
+                        golem_common::model::oplog::RawOplogPayload,
+                    ) -> Result<OplogEntry, String>
+                    + Send,
+            >,
+        ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+            let entry = build_start(
+                golem_common::model::oplog::RawOplogPayload::SerializedInline(serialized_request),
+            )?;
+            let index = self.add(entry.clone()).await;
+            Ok(crate::services::oplog::OrderedOplogStart {
+                index,
+                entry,
+                pending_upload: PendingUpload::already_durable(),
+            })
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+            0
+        }
+
+        async fn commit(
+            &self,
+            _level: CommitLevel,
+        ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+            std::collections::BTreeMap::new()
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            OplogIndex::from_u64(self.entries.lock().await.len() as u64)
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            None
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            true
+        }
+
+        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            let entries = self.entries.lock().await;
+            let idx: u64 = oplog_index.into();
+            entries[(idx - 1) as usize].clone()
+        }
+
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+            let entries = self.entries.lock().await;
+            let start: u64 = oplog_index.into();
+            let mut result = std::collections::BTreeMap::new();
+            for i in start..(start + n) {
+                if let Some(entry) = entries.get((i - 1) as usize) {
+                    result.insert(OplogIndex::from_u64(i), entry.clone());
+                }
+            }
+            result
+        }
+
+        async fn length(&self) -> u64 {
+            self.entries.lock().await.len() as u64
+        }
+
+        async fn upload_raw_payload(
+            &self,
+            _data: Vec<u8>,
+        ) -> Result<golem_common::model::oplog::RawOplogPayload, String> {
+            unimplemented!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _payload_id: golem_common::model::oplog::PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unimplemented!()
+        }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
+    }
+
+    #[test]
+    async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
+        // A live `Cancellable` call dropped mid-flight enqueues an `UnfinishedCancellable`
+        // snapshot; this test drives the drain's *recording step* directly
+        // (`DroppedCall::append_cancelled_with_oplog`, shared by both production drains) and
+        // asserts the durable outcome. Invoking a production drain itself, and the ctx-side
+        // effects (durable-scope close, atomic-region unregistration), require full-worker
+        // integration coverage.
+        let oplog = Arc::new(InMemoryOplog::new());
+        let start_idx = oplog
+            .add(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::MonotonicClockNow,
+                request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                    golem_common::model::oplog::HostRequestNoInput {},
+                )))),
+                durable_function_type: DurableFunctionType::ReadLocal,
+            })
+            .await;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        {
+            let _handle = live_unfinished_handle::<Cancellable>(start_idx, tx);
+            // Dropped mid-flight here, e.g. by a guest cancelling the subtask driving the call.
+        }
+
+        let call = match rx.try_recv() {
+            Ok(DropEvent::UnfinishedCancellable { call }) => call,
+            other => panic!("expected an UnfinishedCancellable drop event, got {other:?}"),
+        };
+
+        // The drain point: wait for the request upload, then record the terminal.
+        call.wait_request_upload()
+            .await
+            .expect("request upload must succeed");
+        call.append_cancelled_with_oplog(oplog.clone(), None)
+            .await
+            .expect("recording Cancelled must succeed");
+
+        let entries = oplog.entries.lock().await;
+        assert_eq!(entries.len(), 2, "expected [Start, Cancelled]");
+        match &entries[1] {
+            OplogEntry::Cancelled {
+                start_index,
+                partial,
+                ..
+            } => {
+                assert_eq!(*start_index, start_idx);
+                assert!(partial.is_none());
+            }
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dropped_unfinished_call_keeps_live_permit_until_drop_event_is_consumed() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        {
+            let mut handle = live_unfinished_handle::<Cancellable>(idx(5), tx);
+            handle.live_call_permit = Some(LiveCallPermit::new(counter.clone()));
+            assert_eq!(counter.load(Ordering::Acquire), 1);
+        }
+        // The handle is gone, but the queued drop event now owns the permit: an in-flight check
+        // (e.g. the `set_oplog_persistence_level` boundary guard) running between the drop and
+        // the next drain must still count this call.
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        let event = rx
+            .try_recv()
+            .expect("expected an UnfinishedCancellable drop event");
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        drop(event);
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
@@ -4585,6 +4976,7 @@ mod tests {
                 retry_from: idx(3),
                 in_atomic_region: true,
             },
+            live_call_permit: None,
         };
         // A non-atomic dropped call: its membership (false) must win over the hostile ambient's
         // `in_atomic_region = true`, so the membership assertion is independent of the retry point.
@@ -4598,6 +4990,7 @@ mod tests {
                 retry_from: idx(8),
                 in_atomic_region: false,
             },
+            live_call_permit: None,
         };
 
         for (dropped, expected_retry, expected_atomic) in [
