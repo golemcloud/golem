@@ -32,7 +32,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -83,6 +83,7 @@ pub struct ReplayState {
     last_replayed_non_hint_index: AtomicOplogIndex,
     internal: Arc<RwLock<InternalReplayState>>,
     has_seen_logs: Arc<AtomicBool>,
+    replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
 }
 
 #[derive(Debug)]
@@ -128,6 +129,7 @@ impl ReplayState {
                 concurrent_resolver: ConcurrentReplayResolver::default(),
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
+            replay_buffer: VecDeque::new(),
         };
         result.move_to_start_of_replay().await;
         result.skip_forward().await?;
@@ -170,6 +172,9 @@ impl ReplayState {
     }
 
     pub fn set_replay_target(&mut self, new_target: OplogIndex) {
+        if new_target < self.replay_target.get() {
+            self.replay_buffer.clear();
+        }
         self.replay_target.set(new_target)
     }
 
@@ -301,11 +306,23 @@ impl ReplayState {
 
             Ok(Some((read_idx, entry)))
         } else {
+            self.rewind_replay_buffer(read_idx, entry);
             self.last_replayed_index.set(saved_replay_idx);
             let mut internal = self.internal.write().await;
             internal.next_skipped_region = saved_next_skipped_region;
 
             Ok(None)
+        }
+    }
+
+    fn rewind_replay_buffer(&mut self, idx: OplogIndex, entry: OplogEntry) {
+        if self
+            .replay_buffer
+            .front()
+            .map(|(front_idx, _)| *front_idx != idx)
+            .unwrap_or(true)
+        {
+            self.replay_buffer.push_front((idx, entry));
         }
     }
 
@@ -340,6 +357,7 @@ impl ReplayState {
                     // We've found the first non-hint entry after the first read one,
                     // so we move everything back the last position (saved_replay_idx), including
                     // possibly skipped regions.
+                    self.rewind_replay_buffer(saved_replay_idx.next(), entry);
                     self.last_replayed_index.set(saved_replay_idx);
                     let mut internal = self.internal.write().await;
                     // TODO: cache the last hint entry to avoid reading it again
@@ -394,8 +412,47 @@ impl ReplayState {
     async fn internal_get_next_oplog_entry(&mut self) -> Result<OplogEntry, WorkerExecutorError> {
         let read_idx = self.last_replayed_index.get().next();
 
-        let oplog_entries = self.read_oplog(read_idx, 1).await;
-        let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
+        while self
+            .replay_buffer
+            .front()
+            .map(|(idx, _)| *idx < read_idx)
+            .unwrap_or(false)
+        {
+            self.replay_buffer.pop_front();
+        }
+
+        if self
+            .replay_buffer
+            .front()
+            .map(|(idx, _)| *idx > read_idx)
+            .unwrap_or(false)
+        {
+            self.replay_buffer.clear();
+        }
+
+        if self.replay_buffer.is_empty() {
+            let remaining = u64::from(self.replay_target.get())
+                .saturating_sub(u64::from(read_idx))
+                .saturating_add(1);
+            self.replay_buffer = self
+                .read_oplog(read_idx, remaining.min(CHUNK_SIZE))
+                .await
+                .into_iter()
+                .collect();
+
+            if self
+                .replay_buffer
+                .front()
+                .map(|(idx, _)| *idx != read_idx)
+                .unwrap_or(true)
+            {
+                self.replay_buffer = self.read_oplog(read_idx, 1).await.into_iter().collect();
+            }
+        }
+
+        let oplog_entry = if let Some((idx, oplog_entry)) = self.replay_buffer.pop_front()
+            && idx == read_idx
+        {
             oplog_entry
         } else {
             // Use `unexpected_oplog_entry` so the typing survives the wasmtime
@@ -506,6 +563,14 @@ impl ReplayState {
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         self.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region(false).await;
+        while self
+            .replay_buffer
+            .front()
+            .map(|(idx, _)| *idx <= self.last_replayed_index.get())
+            .unwrap_or(false)
+        {
+            self.replay_buffer.pop_front();
+        }
     }
 
     pub async fn lookup_oplog_entry(
@@ -1023,13 +1088,27 @@ mod tests {
     #[derive(Debug)]
     struct InMemoryOplog {
         entries: tokio::sync::Mutex<Vec<OplogEntry>>,
+        sparse_batch_reads: bool,
     }
 
     impl InMemoryOplog {
         fn new() -> Self {
             Self {
                 entries: tokio::sync::Mutex::new(Vec::new()),
+                sparse_batch_reads: false,
             }
+        }
+
+        fn sparse(entries: Vec<OplogEntry>) -> Self {
+            Self {
+                entries: tokio::sync::Mutex::new(entries),
+                sparse_batch_reads: true,
+            }
+        }
+
+        async fn replace(&self, index: OplogIndex, entry: OplogEntry) {
+            let mut entries = self.entries.lock().await;
+            entries[(u64::from(index) - 1) as usize] = entry;
         }
     }
 
@@ -1073,6 +1152,15 @@ mod tests {
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
             let entries = self.entries.lock().await;
+            if self.sparse_batch_reads && n > 1 && oplog_index != OplogIndex::INITIAL.next() {
+                return BTreeMap::from([(
+                    oplog_index.next(),
+                    entries
+                        .first()
+                        .expect("sparse oplog must contain an entry")
+                        .clone(),
+                )]);
+            }
             let start: u64 = oplog_index.into();
             let mut result = BTreeMap::new();
             for i in start..(start + n) {
@@ -1158,6 +1246,49 @@ mod tests {
         ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
             .await
             .expect("failed to build replay state")
+    }
+
+    #[test]
+    async fn replay_reads_sparse_batch_entries_individually() {
+        let oplog = Arc::new(InMemoryOplog::sparse(vec![noop(), noop(), noop()]));
+        let mut state = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            state.get_oplog_entry().await.unwrap().1,
+            OplogEntry::NoOp { .. }
+        ));
+        assert!(matches!(
+            state.get_oplog_entry().await.unwrap().1,
+            OplogEntry::NoOp { .. }
+        ));
+    }
+
+    #[test]
+    async fn lowering_replay_target_discards_prefetched_future_entries() {
+        let original = OplogEntry::NoOp {
+            timestamp: Timestamp::from(1),
+        };
+        let replacement = OplogEntry::NoOp {
+            timestamp: Timestamp::from(2),
+        };
+        let oplog = Arc::new(InMemoryOplog::new());
+        for _ in 0..3 {
+            oplog.add(original.clone()).await;
+        }
+        let mut state = ReplayState::new(test_agent_id(), oplog.clone(), DeletedRegions::default())
+            .await
+            .unwrap();
+
+        state.set_replay_target(OplogIndex::INITIAL.next());
+        state.get_oplog_entry().await.unwrap();
+        oplog
+            .replace(OplogIndex::INITIAL.next().next(), replacement.clone())
+            .await;
+        state.set_replay_target(OplogIndex::INITIAL.next().next());
+
+        assert_eq!(state.get_oplog_entry().await.unwrap().1, replacement);
     }
 
     #[test]
