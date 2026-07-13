@@ -1860,7 +1860,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     where
         Err: From<WorkerExecutorError>,
     {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            let (_, tx) = handler.create_new().await?;
+            let begin_index = self.state.current_oplog_index().await;
+            Ok((begin_index, tx))
+        } else if self.is_live() {
             let (tx_id, tx) = handler.create_new().await?;
             // A transaction is a durable scope: append the scope `Start` and the
             // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
@@ -2087,7 +2091,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            Ok(())
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
@@ -2114,7 +2120,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            Ok(())
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
@@ -2141,7 +2149,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             // The final marker and the scope `End` are appended as an atomic pair so they can never
@@ -2195,7 +2205,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             // The final marker and the scope `End` are appended as an atomic pair so they can never
