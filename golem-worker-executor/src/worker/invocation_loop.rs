@@ -24,7 +24,7 @@ use crate::worker::status_checkpointer;
 use crate::worker::{
     FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
 };
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_lock::Mutex;
 use drop_stream::DropStream;
@@ -1154,12 +1154,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
         }
 
-        self.store.data_mut().begin_call_snapshotting_function();
-
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_call_snapshotting_function();
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
-        self.store.data_mut().end_call_snapshotting_function();
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
 
         for span_id in local_span_ids {
             let _ = self.store.data_mut().remove_span(&span_id);
@@ -1378,12 +1383,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return CommandOutcome::Continue;
         }
 
-        self.store.data_mut().begin_call_snapshotting_function();
-
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_call_snapshotting_function();
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
-        self.store.data_mut().end_call_snapshotting_function();
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
 
         for span_id in local_span_ids {
             let _ = self.store.data_mut().remove_span(&span_id);
