@@ -127,13 +127,10 @@ async fn resolve_uniform_component(
         .user_context(deps)
         .get_latest_component_revision(component_id)
         .await
-        .map_err(Into::into)
 }
 
 fn validated_rates(rates: &[u32]) -> anyhow::Result<&[u32]> {
-    if rates.is_empty()
-        || rates.iter().any(|rate| *rate == 0)
-        || rates.windows(2).any(|rates| rates[0] >= rates[1])
+    if rates.is_empty() || rates.contains(&0) || rates.windows(2).any(|rates| rates[0] >= rates[1])
     {
         anyhow::bail!("schedule rate ramp must contain strictly increasing positive rates");
     }
