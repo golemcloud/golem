@@ -1,0 +1,71 @@
+# Cloud schedule-density benchmark suite (golemcloud/golem#3524).
+#
+# The buildspec drives each cell through `benchmarks density --section schedule`.
+# Warm cells continuously ramp schedule-registration rate. Operators read
+# scheduler lag manually in Grafana or Prometheus. Cold cells queue a timed
+# realistic batch, restart the executor, then measure recovery as a diagnostic.
+
+name: cloud-density-schedule
+section: schedule
+
+defaultRateRamp:
+  initialPerSec: 1
+  doublingPeriodSecs: 60
+  refinementPeriodSecs: 30
+  refinementStepPercent: 10
+
+cells:
+  # Primary scheduler-capacity cells. Targets and the shared component are
+  # pre-warmed; poll is a no-op so scheduler lag is not confounded by guest work.
+  - name: sched-warm-d1-fanin
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: fanin
+  - name: sched-warm-d1-spread
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: spread
+  - name: sched-warm-d1-realistic
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: realistic
+  - name: sched-warm-d50-fanin
+    targetResidency: warm
+    contextSpans: 50
+    targetPattern: fanin
+  - name: sched-warm-d50-spread
+    targetResidency: warm
+    contextSpans: 50
+    targetPattern: spread
+  - name: sched-warm-d50-realistic
+    targetResidency: warm
+    contextSpans: 50
+    targetPattern: realistic
+  - name: sched-warm-d500-fanin
+    targetResidency: warm
+    contextSpans: 500
+    targetPattern: fanin
+  - name: sched-warm-d500-spread
+    targetResidency: warm
+    contextSpans: 500
+    targetPattern: spread
+  - name: sched-warm-d500-realistic
+    targetResidency: warm
+    contextSpans: 500
+    targetPattern: realistic
+
+  # Cold controls deliberately stage a finite batch before restart. They are not
+  # rate-ceiling cells: they isolate recovery-plus-delivery from warm scheduler
+  # capacity. Realistic spread avoids one-agent queueing dominating recovery.
+  - name: sched-cold-d1-realistic
+    targetResidency: cold
+    contextSpans: 1
+    targetPattern: realistic
+  - name: sched-cold-d50-realistic
+    targetResidency: cold
+    contextSpans: 50
+    targetPattern: realistic
+  - name: sched-cold-d500-realistic
+    targetResidency: cold
+    contextSpans: 500
+    targetPattern: realistic

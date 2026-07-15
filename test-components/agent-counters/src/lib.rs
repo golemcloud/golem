@@ -1,6 +1,8 @@
 pub mod repository;
 mod snapshot_test;
 
+use golem_rust::bindings::golem::agent::host::Datetime;
+use golem_rust::bindings::golem::api::context::start_span;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
 /// Page size used when touching retained memory so the OS backs it with real
@@ -186,6 +188,69 @@ impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
     fn increment(&mut self) -> u32 {
         self.count += 1;
         self.count
+    }
+}
+
+/// No-op target for schedule-density. The scheduled action under test is
+/// dispatching this method, not its guest-side work.
+#[agent_definition]
+trait ScheduleCounter {
+    fn new(id: String) -> Self;
+    fn poll(&self);
+}
+
+struct ScheduleCounterImpl {
+    _id: String,
+}
+
+#[agent_implementation]
+impl ScheduleCounter for ScheduleCounterImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id }
+    }
+
+    fn poll(&self) {}
+}
+
+/// Schedules no-op polls on durable targets. Keeping scheduling separate from
+/// the target lets the benchmark prepare target residency before registration.
+#[agent_definition]
+trait ScheduleEmitter {
+    fn new(id: String) -> Self;
+    fn schedule_poll_at(
+        &self,
+        target_name: String,
+        seconds: u64,
+        nanoseconds: u32,
+        context_spans: u32,
+    );
+}
+
+struct ScheduleEmitterImpl {
+    _id: String,
+}
+
+#[agent_implementation]
+impl ScheduleEmitter for ScheduleEmitterImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id }
+    }
+
+    fn schedule_poll_at(
+        &self,
+        target_name: String,
+        seconds: u64,
+        nanoseconds: u32,
+        context_spans: u32,
+    ) {
+        let _spans: Vec<_> = (0..context_spans)
+            .map(|_| start_span("schedule-density"))
+            .collect();
+        let target = ScheduleCounterClient::get(target_name);
+        target.schedule_poll(Datetime {
+            seconds,
+            nanoseconds,
+        });
     }
 }
 

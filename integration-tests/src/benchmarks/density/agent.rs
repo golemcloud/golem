@@ -296,10 +296,44 @@ impl ExecutorProbe {
         }
     }
 
+    /// Scrapes the executor's local Prometheus endpoint through Kubernetes. The
+    /// density runner has no direct pod network access in cloud mode.
+    pub async fn scrape_metrics(&self) -> Option<String> {
+        let pod = self.pod_name.as_ref()?;
+        let output = tokio::process::Command::new("kubectl")
+            .args([
+                "exec",
+                pod,
+                "-n",
+                &self.namespace,
+                "--",
+                "curl",
+                "--fail",
+                "--silent",
+                "http://127.0.0.1:8082/metrics",
+            ])
+            .output()
+            .await;
+        match output {
+            Ok(out) if out.status.success() => String::from_utf8(out.stdout).ok(),
+            Ok(out) => {
+                warn!(
+                    "density: kubectl executor metrics scrape failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                None
+            }
+            Err(e) => {
+                warn!("density: kubectl executor metrics scrape spawn failed: {e:?}");
+                None
+            }
+        }
+    }
+
     /// Scales the worker-executor deployment down and back up to force durable
     /// agents out of memory while preserving registry, keyvalue, indexed, and
     /// oplog state.
-    async fn restart_executor(&self) -> anyhow::Result<()> {
+    pub async fn restart_executor(&self) -> anyhow::Result<()> {
         info!(
             "density: scaling worker-executor deployment down in namespace {}",
             self.namespace
@@ -1328,7 +1362,6 @@ fn record_attempts(
             connection_alive,
             overloaded: attempt.overloaded,
             snapshot: CrossAxisSnapshot::default(),
-            queue_depth: None,
         };
         for event in detector.observe(&sample) {
             handle_event(event, outcome, timeout);
@@ -1359,8 +1392,6 @@ async fn run_ramp_cell(
     let mut detector = CeilingDetector::new();
     let mut outcome = CellOutcome::default();
     let mut timeout = AdaptiveTimeout::new();
-    let started = Instant::now();
-
     'ramp: for &target in &ramp {
         info!(
             "Density-agent[{}]: measuring independent target {target}",
@@ -1382,7 +1413,6 @@ async fn run_ramp_cell(
                 )
                 .await;
                 let pod_restart_count = probe.pod_restart_count().await;
-                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
                 let attempt_refs: Vec<&AttemptOutcome> = creates.iter().map(|(_, a)| a).collect();
                 let connection_alive = batch_connection_alive(&attempt_refs);
                 let attempts: Vec<AttemptOutcome> = creates.into_iter().map(|(_, a)| a).collect();
@@ -1411,7 +1441,6 @@ async fn run_ramp_cell(
                 )
                 .await;
                 let pod_restart_count = probe.pod_restart_count().await;
-                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
                 let attempt_refs: Vec<&AttemptOutcome> = cold.iter().map(|(_, a)| a).collect();
                 let connection_alive = batch_connection_alive(&attempt_refs);
                 let attempts: Vec<AttemptOutcome> = cold.into_iter().map(|(_, a)| a).collect();
@@ -1440,7 +1469,6 @@ async fn run_ramp_cell(
                     )
                     .await;
                     let pod_restart_count = probe.pod_restart_count().await;
-                    detector.set_elapsed_secs(started.elapsed().as_secs_f64());
                     let attempt_refs: Vec<&AttemptOutcome> = warm.iter().map(|(_, a)| a).collect();
                     let connection_alive = batch_connection_alive(&attempt_refs);
                     let attempts: Vec<AttemptOutcome> = warm.into_iter().map(|(_, a)| a).collect();
@@ -1500,7 +1528,6 @@ async fn run_ramp_cell(
                     )
                 );
                 let pod_restart_count = probe.pod_restart_count().await;
-                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
                 let attempt_refs: Vec<&AttemptOutcome> = busy
                     .iter()
                     .map(|(_, a)| a)
@@ -1544,7 +1571,6 @@ async fn run_ramp_cell(
                         )
                     );
                     let pod_restart_count = probe.pod_restart_count().await;
-                    detector.set_elapsed_secs(started.elapsed().as_secs_f64());
                     let attempt_refs: Vec<&AttemptOutcome> = busy
                         .iter()
                         .map(|(_, a)| a)
@@ -1709,8 +1735,6 @@ async fn run_resume_cell(
     let mut outcome = CellOutcome::default();
     let mut detector = CeilingDetector::new();
     let mut timeout = AdaptiveTimeout::new();
-    let started = Instant::now();
-
     let ramp = config.ramp.clone();
 
     'ramp: for &requested_host_calls_per_agent in &ramp {
@@ -1875,7 +1899,6 @@ async fn run_resume_cell(
             }
         }
 
-        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
         let attempt_refs: Vec<&AttemptOutcome> = resumed_batch.iter().map(|(_, a)| a).collect();
         let connection_alive = batch_connection_alive(&attempt_refs);
         for (_, resume) in &resumed_batch {
@@ -1896,7 +1919,6 @@ async fn run_resume_cell(
                 connection_alive,
                 overloaded: resume.overloaded,
                 snapshot: CrossAxisSnapshot::default(),
-                queue_depth: None,
             };
             for event in detector.observe(&sample) {
                 handle_event(event, &mut outcome, &mut timeout);

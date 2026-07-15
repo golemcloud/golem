@@ -26,12 +26,12 @@
 //! ramps its axis internally feeding the [`ceiling`] state machine, and emits
 //! one cell `BenchmarkResult` plus an optional timeseries file.
 //!
-//! v1 ships the agent-density section ([`agent`]). Schedule-density and
-//! promise-density reuse [`prep`] and [`ceiling`] and are added later.
+//! Agent-density and schedule-density reuse [`prep`] and [`ceiling`].
 
 pub mod agent;
 pub mod ceiling;
 pub mod prep;
+pub mod schedule;
 
 use clap::ValueEnum;
 use std::fmt::{self, Display, Formatter};
@@ -115,6 +115,53 @@ impl ComponentSharing {
 }
 
 impl Display for ComponentSharing {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Whether a schedule-density target remains resident when scheduled actions
+/// fire, or is deliberately unloaded by a staged executor restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScheduleTargetResidency {
+    Warm,
+    Cold,
+}
+
+impl ScheduleTargetResidency {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScheduleTargetResidency::Warm => "warm",
+            ScheduleTargetResidency::Cold => "cold",
+        }
+    }
+}
+
+impl Display for ScheduleTargetResidency {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How scheduled actions are distributed across target agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScheduleTargetPattern {
+    Fanin,
+    Spread,
+    Realistic,
+}
+
+impl ScheduleTargetPattern {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScheduleTargetPattern::Fanin => "fanin",
+            ScheduleTargetPattern::Spread => "spread",
+            ScheduleTargetPattern::Realistic => "realistic",
+        }
+    }
+}
+
+impl Display for ScheduleTargetPattern {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

@@ -226,11 +226,10 @@ impl SchedulerServiceDefault {
                 .await?;
 
             let claimed_count = claimed.len();
+            crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
             if claimed.is_empty() {
                 break;
             }
-
-            crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
 
             // ! Do not exit early from this loop because of failed actions, as it will cause all other actions to be skipped.
             // ! Retryable failures are left unacknowledged and retried after lease expiry.

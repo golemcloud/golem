@@ -65,6 +65,10 @@ pub const PER_AGENT_COMPONENT_COUNT: u32 = 2_000;
 /// shared-component sharing mode, labelled `U`).
 pub const UNIFORM_COMPONENT_NAME: &str = "density-counter-uniform";
 
+/// Registry name of the component shared by schedule-density emitters and
+/// targets. Both agent types live in the agent-counters WASM.
+pub const SCHEDULE_COMPONENT_NAME: &str = "density-schedule";
+
 /// Builds the registry name of the `index`-th (1-based) per-agent distinct
 /// component: `density-counter-distinct-0001` ..
 /// `density-counter-distinct-2000`.
@@ -312,12 +316,22 @@ async fn upload_components(
 
             Ok((Some(uniform.id), distinct))
         }
-        DensitySection::Schedule | DensitySection::Promise => {
-            // Schedule- and promise-density components are added when those
-            // sections are implemented (golemcloud/golem#3524, #3525).
-            anyhow::bail!(
-                "density-prep for section {section} is not implemented yet (agent-density only in v1)"
-            )
+        DensitySection::Schedule => {
+            info!("Density-prep: uploading schedule component {SCHEDULE_COMPONENT_NAME}");
+            let component = user
+                .component(shared_env, AGENT_COUNTERS_WASM)
+                .name(SCHEDULE_COMPONENT_NAME)
+                .store()
+                .await
+                .context("uploading schedule component")?;
+            user.deploy_environment(*shared_env)
+                .await
+                .context("deploying schedule environment")?;
+
+            Ok((Some(component.id), Vec::new()))
+        }
+        DensitySection::Promise => {
+            anyhow::bail!("density-prep for section {section} is not implemented yet")
         }
     }
 }

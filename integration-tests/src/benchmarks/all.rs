@@ -22,7 +22,8 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
     BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityScenarioArg,
-    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunMetadata,
+    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
+    DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -303,6 +304,9 @@ async fn main() {
             active_fraction,
             prefill,
             ramp,
+            schedule_target_residency,
+            schedule_context_spans,
+            schedule_target_pattern,
             executor_pod_name,
             executor_namespace,
             save_to_json,
@@ -322,6 +326,9 @@ async fn main() {
                 *active_fraction,
                 *prefill,
                 ramp.clone(),
+                schedule_target_residency.map(map_schedule_target_residency),
+                *schedule_context_spans,
+                schedule_target_pattern.map(map_schedule_target_pattern),
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
                 save_to_json.clone(),
@@ -560,6 +567,35 @@ fn map_snapshotting(arg: DensitySnapshottingArg) -> bool {
     }
 }
 
+fn map_schedule_target_residency(
+    arg: DensityScheduleTargetResidencyArg,
+) -> integration_tests::benchmarks::density::ScheduleTargetResidency {
+    match arg {
+        DensityScheduleTargetResidencyArg::Warm => {
+            integration_tests::benchmarks::density::ScheduleTargetResidency::Warm
+        }
+        DensityScheduleTargetResidencyArg::Cold => {
+            integration_tests::benchmarks::density::ScheduleTargetResidency::Cold
+        }
+    }
+}
+
+fn map_schedule_target_pattern(
+    arg: DensityScheduleTargetPatternArg,
+) -> integration_tests::benchmarks::density::ScheduleTargetPattern {
+    match arg {
+        DensityScheduleTargetPatternArg::Fanin => {
+            integration_tests::benchmarks::density::ScheduleTargetPattern::Fanin
+        }
+        DensityScheduleTargetPatternArg::Spread => {
+            integration_tests::benchmarks::density::ScheduleTargetPattern::Spread
+        }
+        DensityScheduleTargetPatternArg::Realistic => {
+            integration_tests::benchmarks::density::ScheduleTargetPattern::Realistic
+        }
+    }
+}
+
 /// Runs one density action: either the one-time prep (writing the manifest) or
 /// a single cell (using a previously-written manifest).
 #[allow(clippy::too_many_arguments)]
@@ -577,6 +613,11 @@ async fn run_density(
     active_fraction: Option<u32>,
     prefill: Option<u32>,
     ramp: Option<Vec<u32>>,
+    schedule_target_residency: Option<
+        integration_tests::benchmarks::density::ScheduleTargetResidency,
+    >,
+    schedule_context_spans: Option<u32>,
+    schedule_target_pattern: Option<integration_tests::benchmarks::density::ScheduleTargetPattern>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
@@ -600,27 +641,47 @@ async fn run_density(
             let manifest =
                 PrepManifest::load(prep_manifest_path).expect("failed to load prep manifest");
 
-            let ramp = ramp.unwrap_or_else(|| {
-                integration_tests::benchmarks::density::DEFAULT_AGENT_RAMP.to_vec()
-            });
-
-            let config = CellConfig {
-                scenario: scenario.expect("--scenario required for --action cell"),
-                mode: agent_mode.expect("--agent-mode required for --action cell"),
-                sharing: sharing.expect("--sharing required for --action cell"),
-                snapshotting,
-                active_fraction,
-                prefill_n: prefill,
-                ramp,
-            };
-
             let probe = ExecutorProbe::new(executor_pod_name, executor_namespace).await;
-
-            let result = integration_tests::benchmarks::density::agent::run_cell(
-                &config, &manifest, &deps, &probe,
-            )
-            .await
-            .expect("density cell failed");
+            let result = match section {
+                DensitySection::Agent => {
+                    let config = CellConfig {
+                        scenario: scenario.expect("--scenario required for --action cell"),
+                        mode: agent_mode.expect("--agent-mode required for --action cell"),
+                        sharing: sharing.expect("--sharing required for --action cell"),
+                        snapshotting,
+                        active_fraction,
+                        prefill_n: prefill,
+                        ramp: ramp.unwrap_or_else(|| {
+                            integration_tests::benchmarks::density::DEFAULT_AGENT_RAMP.to_vec()
+                        }),
+                    };
+                    integration_tests::benchmarks::density::agent::run_cell(
+                        &config, &manifest, &deps, &probe,
+                    )
+                    .await
+                    .expect("density agent cell failed")
+                }
+                DensitySection::Schedule => {
+                    let config = integration_tests::benchmarks::density::schedule::CellConfig {
+                        residency: schedule_target_residency
+                            .expect("--schedule-target-residency required for schedule cells"),
+                        context_spans: schedule_context_spans
+                            .expect("--schedule-context-spans required for schedule cells"),
+                        target_pattern: schedule_target_pattern
+                            .expect("--schedule-target-pattern required for schedule cells"),
+                    };
+                    integration_tests::benchmarks::density::schedule::run_cell(
+                        &config,
+                        ramp.as_deref(),
+                        &manifest,
+                        &deps,
+                        &probe,
+                    )
+                    .await
+                    .expect("density schedule cell failed")
+                }
+                DensitySection::Promise => panic!("density promise cells are not implemented"),
+            };
 
             // Emit the cell result as a single-result suite so the JSON shape
             // matches cloud-perf (BenchmarkSuiteResultCollection), and the

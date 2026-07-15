@@ -37,9 +37,10 @@
 //!   [`CeilingEvent::HardCrossed`] once and raises an
 //!   escalate-timeout-to-5-minutes signal; flag set; state stays `Measuring`.
 //! - Catastrophic: any of (5-minute timeout fires; pod-restart count increased;
-//!   connection lost; a sustained run of overloaded (503) responses; schedule-only
-//!   queue-depth has not decreased for 60 consecutive seconds). Transitions to
-//!   `Catastrophic`; emits [`CeilingEvent::Catastrophic`].
+//!   connection lost; or a sustained run of overloaded (503) responses). Transitions
+//!   to `Catastrophic`; emits [`CeilingEvent::Catastrophic`]. Schedule density has
+//!   its own lag-runaway detector: `scheduler_queue_depth` is a claimed-batch size,
+//!   not a scheduler backlog.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -69,10 +70,6 @@ pub const HARD_CEILING_THRESHOLD: Duration = Duration::from_secs(30);
 /// Timeout the coordinator escalates to once the hard ceiling is crossed; if a
 /// sample then exceeds this, the catastrophic ceiling is crossed.
 pub const ESCALATED_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// Schedule-density only: how long the queue depth may stay non-decreasing
-/// before the queue-depth-no-drain catastrophic condition fires.
-pub const QUEUE_NO_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How many consecutive overloaded (HTTP 503) responses constitute the platform
 /// shedding load rather than an isolated blip. The executor returns 503 when it
@@ -159,9 +156,6 @@ pub struct Sample {
     pub overloaded: bool,
     /// Most recent cross-axis snapshot from the metrics scrape.
     pub snapshot: CrossAxisSnapshot,
-    /// Schedule-density only: scheduler queue depth observed for this sample.
-    /// `None` for sections that do not track queue depth.
-    pub queue_depth: Option<u64>,
 }
 
 /// Events the state machine emits as it consumes samples.
@@ -207,41 +201,6 @@ enum CeilingState {
     },
 }
 
-/// Tracks how long the scheduler queue depth has been non-decreasing, firing
-/// the catastrophic no-drain condition after [`QUEUE_NO_DRAIN_TIMEOUT`].
-///
-/// Time is supplied by the caller (monotonic seconds since cell start) so the
-/// machine stays deterministic and testable without a real clock.
-#[derive(Debug, Default)]
-struct QueueDrainTracker {
-    last_depth: Option<u64>,
-    non_decreasing_since_secs: Option<f64>,
-}
-
-impl QueueDrainTracker {
-    /// Returns true if the queue has not drained for [`QUEUE_NO_DRAIN_TIMEOUT`].
-    ///
-    /// The no-drain timer anchors at the first observation of a non-decreasing
-    /// run: as long as each observed depth is >= the previous one, the queue is
-    /// considered "not draining". Any decrease resets the anchor.
-    fn observe(&mut self, depth: u64, now_secs: f64) -> bool {
-        let non_decreasing = match self.last_depth {
-            Some(prev) => depth >= prev,
-            None => true,
-        };
-        self.last_depth = Some(depth);
-
-        if non_decreasing {
-            let since = self.non_decreasing_since_secs.get_or_insert(now_secs);
-            (now_secs - *since) >= QUEUE_NO_DRAIN_TIMEOUT.as_secs_f64()
-        } else {
-            // The queue drained: reset the anchor to this observation.
-            self.non_decreasing_since_secs = Some(now_secs);
-            false
-        }
-    }
-}
-
 /// The ceiling-detection state machine. Feed it samples via
 /// [`Self::observe`]; it returns the events triggered by that sample (usually
 /// empty).
@@ -249,9 +208,6 @@ impl QueueDrainTracker {
 pub struct CeilingDetector {
     state: CeilingState,
     rolling: VecDeque<Duration>,
-    queue_tracker: QueueDrainTracker,
-    /// Monotonic seconds since cell start, for the queue-no-drain timer.
-    elapsed_secs: f64,
     /// Length of the current uninterrupted run of overloaded responses; any
     /// non-overloaded sample resets it.
     overload_run: u32,
@@ -270,8 +226,6 @@ impl CeilingDetector {
                 samples: VecDeque::with_capacity(BASELINE_SAMPLE_COUNT),
             },
             rolling: VecDeque::with_capacity(ROLLING_WINDOW),
-            queue_tracker: QueueDrainTracker::default(),
-            elapsed_secs: 0.0,
             overload_run: 0,
         }
     }
@@ -280,13 +234,6 @@ impl CeilingDetector {
     /// terminate.
     pub fn is_terminal(&self) -> bool {
         matches!(self.state, CeilingState::Catastrophic { .. })
-    }
-
-    /// Advances the internal monotonic clock used by the queue-no-drain timer.
-    /// Drivers call this with the seconds elapsed since the cell started before
-    /// (or as part of) observing the corresponding sample.
-    pub fn set_elapsed_secs(&mut self, elapsed_secs: f64) {
-        self.elapsed_secs = elapsed_secs;
     }
 
     /// Consumes one sample, returning the events it triggered.
@@ -356,12 +303,6 @@ impl CeilingDetector {
         // regardless.
         if sample.latency >= ESCALATED_TIMEOUT {
             return Some(TerminatedReason::OomKill);
-        }
-        // Schedule-density only: queue depth has not drained for 60s.
-        if let Some(depth) = sample.queue_depth
-            && self.queue_tracker.observe(depth, self.elapsed_secs)
-        {
-            return Some(TerminatedReason::LagRunaway);
         }
         None
     }
@@ -473,7 +414,6 @@ mod tests {
             connection_alive: true,
             overloaded: false,
             snapshot: CrossAxisSnapshot::default(),
-            queue_depth: None,
         }
     }
 
@@ -642,59 +582,6 @@ mod tests {
             }]
         ));
         assert!(d.is_terminal());
-    }
-
-    #[test]
-    fn catastrophic_fires_on_queue_no_drain() {
-        let mut d = CeilingDetector::new();
-        feed_baseline(&mut d, ms(10));
-
-        // Queue depth non-decreasing for just under the timeout: no fire.
-        let mut s = ok_sample(ms(10), 900);
-        s.queue_depth = Some(100);
-        d.set_elapsed_secs(0.0);
-        assert!(d.observe(&s).is_empty());
-
-        d.set_elapsed_secs(QUEUE_NO_DRAIN_TIMEOUT.as_secs_f64() - 1.0);
-        let mut s = ok_sample(ms(10), 901);
-        s.queue_depth = Some(100);
-        assert!(d.observe(&s).is_empty());
-
-        // At/after the timeout, still non-decreasing: catastrophic lag-runaway.
-        d.set_elapsed_secs(QUEUE_NO_DRAIN_TIMEOUT.as_secs_f64() + 1.0);
-        let mut s = ok_sample(ms(10), 902);
-        s.queue_depth = Some(101);
-        let events = d.observe(&s);
-        assert!(matches!(
-            events.as_slice(),
-            [CeilingEvent::Catastrophic {
-                reason: TerminatedReason::LagRunaway,
-                ..
-            }]
-        ));
-    }
-
-    #[test]
-    fn queue_drain_resets_timer() {
-        let mut d = CeilingDetector::new();
-        feed_baseline(&mut d, ms(10));
-
-        let mut s = ok_sample(ms(10), 900);
-        s.queue_depth = Some(100);
-        d.set_elapsed_secs(0.0);
-        assert!(d.observe(&s).is_empty());
-
-        // Depth decreased: timer resets.
-        d.set_elapsed_secs(30.0);
-        let mut s = ok_sample(ms(10), 901);
-        s.queue_depth = Some(50);
-        assert!(d.observe(&s).is_empty());
-
-        // Even well past the original 60s window, no fire because it reset.
-        d.set_elapsed_secs(70.0);
-        let mut s = ok_sample(ms(10), 902);
-        s.queue_depth = Some(60);
-        assert!(d.observe(&s).is_empty());
     }
 
     #[test]

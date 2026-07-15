@@ -78,7 +78,7 @@ pub enum BenchmarkConfig {
         #[arg(long, value_enum)]
         action: DensityAction,
 
-        /// Density section. Only `agent` is implemented in v1.
+        /// Density section.
         #[arg(long, value_enum, default_value = "agent")]
         section: DensitySectionArg,
 
@@ -116,6 +116,18 @@ pub enum BenchmarkConfig {
         /// suite YAML. When omitted, the built-in default ramp is used.
         #[arg(long, value_delimiter = ',')]
         ramp: Option<Vec<u32>>,
+
+        /// Schedule-density target residency.
+        #[arg(long, value_enum)]
+        schedule_target_residency: Option<DensityScheduleTargetResidencyArg>,
+
+        /// Number of invocation-context spans added before scheduling an action.
+        #[arg(long)]
+        schedule_context_spans: Option<u32>,
+
+        /// Schedule-density target distribution.
+        #[arg(long, value_enum)]
+        schedule_target_pattern: Option<DensityScheduleTargetPatternArg>,
 
         /// Optional executor pod name for `kubectl` restart-count polling
         /// (drives the catastrophic pod-restart condition).
@@ -178,6 +190,21 @@ pub enum DensitySharingArg {
 pub enum DensitySnapshottingArg {
     Disabled,
     Enabled,
+}
+
+/// Target residency mode for schedule-density cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityScheduleTargetResidencyArg {
+    Warm,
+    Cold,
+}
+
+/// Target distribution for schedule-density cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityScheduleTargetPatternArg {
+    Fanin,
+    Spread,
+    Realistic,
 }
 
 impl BenchmarkConfig {
