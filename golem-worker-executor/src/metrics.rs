@@ -64,9 +64,18 @@ const BLOB_SIZE_BUCKETS: &[f64; 17] = &[
     67_108_864.0,
 ];
 
-/// Lag buckets for the scheduler: sub-second to multi-minute range.
-const SCHEDULER_LAG_BUCKETS: &[f64; 11] = &[
-    0.001, 0.01, 0.1, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+/// Lag buckets for the scheduler. Values are dense at low latencies so Grafana
+/// quantiles distinguish normal scheduling delay from missed ticks.
+const SCHEDULER_LAG_BUCKETS: &[f64; 22] = &[
+    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
+    10.0, 30.0, 60.0, 300.0, 600.0,
+];
+
+/// Tick-duration buckets for the scheduler. Values are dense at low latencies
+/// because slow ticks directly add scheduling delay.
+const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 20] = &[
+    0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
+    2.5, 3.0, 5.0, 10.0,
 ];
 
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
@@ -667,7 +676,7 @@ pub mod scheduler {
             "scheduler_tick_duration_seconds",
             "Wall time of a single scheduler process() iteration",
             &["executor_id"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+            crate::metrics::SCHEDULER_TICK_DURATION_BUCKETS.to_vec()
         )
         .unwrap();
         pub static ref SCHEDULED_ACTION_SIZE_BYTES: HistogramVec = register_histogram_vec!(
