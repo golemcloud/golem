@@ -59,9 +59,7 @@ pub const AGENT_COUNTERS_WASM: &str = "it_agent_counters_release";
 /// cache defaults to 32 entries, so even a few hundred distinct components
 /// thrash it hard — the per-agent ceiling is reached well below this count.
 ///
-/// Temporarily low while debugging resume/snapshot cells; restore to 2000 for
-/// full per-agent-component density runs.
-pub const PER_AGENT_COMPONENT_COUNT: u32 = 10;
+pub const PER_AGENT_COMPONENT_COUNT: u32 = 2_000;
 
 /// Registry name of the single shared agent-density component (the
 /// shared-component sharing mode, labelled `U`).
