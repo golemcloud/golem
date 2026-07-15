@@ -9,10 +9,10 @@ name: cloud-density-schedule
 section: schedule
 
 defaultRateRamp:
+  # First offered schedule-registration rate, in actions per second.
   initialPerSec: 1
+  # Time each offered rate runs before moving to the next doubled rate.
   doublingPeriodSecs: 60
-  refinementPeriodSecs: 30
-  refinementStepPercent: 10
 
 cells:
   # Primary scheduler-capacity cells. Targets and the shared component are

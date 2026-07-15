@@ -217,6 +217,7 @@ impl ScheduleCounter for ScheduleCounterImpl {
 #[agent_definition]
 trait ScheduleEmitter {
     fn new(id: String) -> Self;
+    fn warm(&self);
     fn schedule_poll_at(
         &self,
         target_name: String,
@@ -235,6 +236,8 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
     fn new(id: String) -> Self {
         Self { _id: id }
     }
+
+    fn warm(&self) {}
 
     fn schedule_poll_at(
         &self,

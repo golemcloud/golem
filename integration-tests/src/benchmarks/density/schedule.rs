@@ -72,10 +72,8 @@ pub async fn run_cell(
     let target_names = target_names(config, target_count);
     let targets = target_ids(&target_names);
     warm_targets(&user, &component, &targets).await?;
-    let emitter = agent_id!(
-        SCHEDULE_EMITTER_AGENT_TYPE,
-        format!("{}-emitter", config.cell_name())
-    );
+    let emitters = emitter_ids(config, *rates.last().unwrap());
+    warm_emitters(&user, &component, &emitters).await?;
     let mut outcome = ScheduleOutcome::default();
 
     match config.residency {
@@ -84,13 +82,13 @@ pub async fn run_cell(
                 let period = run_rate_period(
                     &user,
                     &component,
-                    &emitter,
+                    &emitters,
                     &target_names,
                     config.context_spans,
                     rate,
                 )
                 .await?;
-                outcome.record(rate, period.scheduled, period.registration_latency);
+                outcome.record_period(rate, period);
             }
         }
         ScheduleTargetResidency::Cold => {
@@ -98,7 +96,7 @@ pub async fn run_cell(
             let batch = schedule_batch(
                 &user,
                 &component,
-                &emitter,
+                &emitters,
                 &target_names,
                 config.context_spans,
                 rate,
@@ -163,6 +161,17 @@ fn target_ids(names: &[String]) -> Vec<ParsedAgentId> {
         .collect()
 }
 
+fn emitter_ids(config: &CellConfig, count: u32) -> Vec<ParsedAgentId> {
+    (0..count)
+        .map(|index| {
+            agent_id!(
+                SCHEDULE_EMITTER_AGENT_TYPE,
+                format!("{}-emitter-{index}", config.cell_name())
+            )
+        })
+        .collect()
+}
+
 async fn warm_targets(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
@@ -170,6 +179,18 @@ async fn warm_targets(
 ) -> anyhow::Result<()> {
     for target in targets {
         user.invoke_and_await_agent(component, target, "poll", data_value!())
+            .await?;
+    }
+    Ok(())
+}
+
+async fn warm_emitters(
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    component: &ComponentDto,
+    emitters: &[ParsedAgentId],
+) -> anyhow::Result<()> {
+    for emitter in emitters {
+        user.invoke_and_await_agent(component, emitter, "warm", data_value!())
             .await?;
     }
     Ok(())
@@ -183,27 +204,31 @@ struct Batch {
 async fn schedule_batch(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    emitter: &ParsedAgentId,
+    emitters: &[ParsedAgentId],
     targets: &[String],
     context_spans: u32,
     rate: u32,
 ) -> anyhow::Result<Batch> {
-    let (seconds, nanoseconds) = scheduled_at();
     let started = Instant::now();
-    for index in 0..rate {
+    let due_start = SystemTime::now() + SCHEDULE_LEAD;
+    let registrations = (0..rate).map(|index| {
         let target_name = targets[index as usize % targets.len()].clone();
-        user.invoke_and_await_agent(
-            component,
-            emitter,
-            "schedule_poll_at",
-            data_value!(target_name, seconds, nanoseconds, context_spans),
-        )
-        .await?;
-        tokio::time::sleep_until(
-            (started + Duration::from_secs_f64((index + 1) as f64 / rate as f64)).into(),
-        )
-        .await;
-    }
+        let emitter = &emitters[index as usize % emitters.len()];
+        let registration_at = started + Duration::from_secs_f64(index as f64 / rate as f64);
+        let due_at = due_start + Duration::from_secs_f64(index as f64 / rate as f64);
+        async move {
+            tokio::time::sleep_until(registration_at.into()).await;
+            let (seconds, nanoseconds) = scheduled_at(due_at);
+            user.invoke_and_await_agent(
+                component,
+                emitter,
+                "schedule_poll_at",
+                data_value!(target_name, seconds, nanoseconds, context_spans),
+            )
+            .await
+        }
+    });
+    futures::future::try_join_all(registrations).await?;
     Ok(Batch {
         scheduled: rate,
         registration_latency: started.elapsed(),
@@ -213,7 +238,7 @@ async fn schedule_batch(
 async fn run_rate_period(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    emitter: &ParsedAgentId,
+    emitters: &[ParsedAgentId],
     targets: &[String],
     context_spans: u32,
     rate: u32,
@@ -221,15 +246,18 @@ async fn run_rate_period(
     let started = Instant::now();
     let mut outcome = PeriodOutcome::default();
     while started.elapsed() < RATE_PERIOD {
-        let batch = schedule_batch(user, component, emitter, targets, context_spans, rate).await?;
+        let batch = schedule_batch(user, component, emitters, targets, context_spans, rate).await?;
         outcome.scheduled += batch.scheduled as u64;
-        outcome.registration_latency += batch.registration_latency;
     }
+    outcome.registration_latency = started.elapsed();
     Ok(outcome)
 }
 
-fn scheduled_at() -> (u64, u32) {
-    let deadline = SystemTime::now() + SCHEDULE_LEAD;
+fn expected_actions(rate: u32) -> u64 {
+    rate as u64 * RATE_PERIOD.as_secs()
+}
+
+fn scheduled_at(deadline: SystemTime) -> (u64, u32) {
     let since_epoch = deadline
         .duration_since(UNIX_EPOCH)
         .expect("system clock before epoch");
@@ -242,11 +270,20 @@ struct PeriodOutcome {
     registration_latency: Duration,
 }
 
+struct RatePeriod {
+    rate: u32,
+    scheduled: u64,
+    expected: u64,
+    registration_latency: Duration,
+}
+
 #[derive(Default)]
 struct ScheduleOutcome {
     scheduled: u64,
+    expected_scheduled: u64,
     max_rate: u32,
     registration_latencies: Vec<Duration>,
+    rate_periods: Vec<RatePeriod>,
     recovery_latency: Option<Duration>,
 }
 
@@ -257,9 +294,27 @@ impl ScheduleOutcome {
         self.registration_latencies.push(registration_latency);
     }
 
+    fn record_period(&mut self, rate: u32, period: PeriodOutcome) {
+        let expected = expected_actions(rate);
+        self.record(rate, period.scheduled, period.registration_latency);
+        self.expected_scheduled += expected;
+        self.rate_periods.push(RatePeriod {
+            rate,
+            scheduled: period.scheduled,
+            expected,
+            registration_latency: period.registration_latency,
+        });
+    }
+
     fn into_benchmark_result(self, config: &CellConfig, targets: u32) -> BenchmarkResult {
         let recorder = BenchmarkRecorder::new();
         recorder.count(&ResultKey::primary("scheduled-actions"), self.scheduled);
+        if self.expected_scheduled > 0 {
+            recorder.count(
+                &ResultKey::primary("expected-scheduled-actions"),
+                self.expected_scheduled,
+            );
+        }
         recorder.count(
             &ResultKey::primary("max-schedule-rate-per-sec"),
             self.max_rate as u64,
@@ -275,6 +330,26 @@ impl ScheduleOutcome {
                 latency,
             );
         }
+        for period in self.rate_periods {
+            recorder.count(
+                &ResultKey::primary(format!(
+                    "expected-scheduled-actions-at-{}-per-sec",
+                    period.rate
+                )),
+                period.expected,
+            );
+            recorder.count(
+                &ResultKey::primary(format!("scheduled-actions-at-{}-per-sec", period.rate)),
+                period.scheduled,
+            );
+            recorder.duration(
+                &ResultKey::primary(format!(
+                    "schedule-registration-period-latency-at-{}-per-sec",
+                    period.rate
+                )),
+                period.registration_latency,
+            );
+        }
         if let Some(latency) = self.recovery_latency {
             recorder.duration(&ResultKey::primary("cold-recovery-latency"), latency);
         }
@@ -287,9 +362,10 @@ impl ScheduleOutcome {
         let mut run_result = BenchmarkRunResult::new(run_config.clone());
         run_result.add(recorder);
         info!(
-            "Density-schedule[{}]: scheduled {} actions at max {} per second across {} targets",
+            "Density-schedule[{}]: scheduled {} of {} expected actions at max {} per second across {} targets",
             config.cell_name(),
             self.scheduled,
+            self.expected_scheduled,
             self.max_rate,
             targets
         );
@@ -316,5 +392,17 @@ mod tests {
         assert!(validated_rates(&[]).is_err());
         assert!(validated_rates(&[1, 1]).is_err());
         assert_eq!(validated_rates(&[1, 2, 4]).unwrap(), &[1, 2, 4]);
+    }
+
+    #[test]
+    fn expected_actions_match_the_default_rate_ramp() {
+        assert_eq!(expected_actions(64), 3_840);
+        assert_eq!(
+            DEFAULT_RATE_RAMP
+                .iter()
+                .map(|rate| expected_actions(*rate))
+                .sum::<u64>(),
+            7_620
+        );
     }
 }
