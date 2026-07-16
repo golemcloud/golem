@@ -51,21 +51,21 @@ cells:
     contextSpans: 500
     targetPattern: realistic
 
-  # Sustained-load controls. They hold 64 actions/second for 30
+  # Sustained-load controls. They hold 128 actions/second for 15
   # minutes to measure scheduler backlog growth after the regular ramp finds
   # its knee. Remove after the scheduler investigation.
-  - name: sched-soak-d1-spread-64
+  - name: sched-soak-d1-spread-128
     targetResidency: warm
     contextSpans: 1
     targetPattern: spread
-    ramp: [64]
-    ratePeriodSecs: 1800
-  - name: sched-soak-d1-realistic-64
+    ramp: [128]
+    ratePeriodSecs: 900
+  - name: sched-soak-d1-realistic-128
     targetResidency: warm
     contextSpans: 1
     targetPattern: realistic
-    ramp: [64]
-    ratePeriodSecs: 1800
+    ramp: [128]
+    ratePeriodSecs: 900
 
   # Cold controls deliberately stage a finite batch before restart. They are not
   # rate-ceiling cells: they isolate recovery-plus-delivery from warm scheduler
