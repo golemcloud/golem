@@ -318,6 +318,173 @@ async fn card_host_api_observes_revocation(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn card_host_api_observes_revocation_during_invocation(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let target = deps.user().await?;
+    let (_, target_env) = target.app_and_env().await?;
+
+    let share = owner
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: target.account_email.clone(),
+                name: PermissionShareName("card-mid-invocation-revocation".to_string()),
+                data: permission_share_data(&format!(
+                    "application({}/card-mid-invocation-revocation) @ {} : view :",
+                    owner.account_email.as_str(),
+                    target.account_email.as_str()
+                )),
+            },
+        )
+        .await?;
+    let card_id = share
+        .current_card_id
+        .ok_or_else(|| anyhow!("permission share did not create a card"))?;
+    let (high_bits, low_bits) = card_id.0.as_u64_pair();
+
+    let component = target
+        .component(&target_env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "card-mid-invocation-revocation");
+    let target_agent_id = target.start_agent(&component.id, agent_id.clone()).await?;
+
+    let install_result = target
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "install_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected install return value"))?;
+    assert_eq!(install_result, SchemaValue::Bool(true));
+
+    let release_promise = target
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected release promise"))?;
+    let release_promise = <PromiseId as FromSchema>::from_value(&release_promise)
+        .map_err(|error| anyhow!("{error}"))?;
+    let before_invocation_idx = target
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map(|entry| entry.oplog_index)
+        .unwrap_or(OplogIndex::INITIAL);
+
+    let invocation = {
+        let target = target.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let release_promise = release_promise.clone();
+        tokio::spawn(
+            async move {
+                target
+                    .invoke_and_await_agent(
+                        &component,
+                        &agent_id,
+                        "derive_card_after_promise",
+                        data_value!(high_bits, low_bits, release_promise),
+                    )
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+
+    let mut random_boundary_observed = false;
+    for _ in 0..40 {
+        let oplog = target
+            .get_oplog(&target_agent_id, before_invocation_idx.next())
+            .await?;
+        random_boundary_observed = oplog.iter().any(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name.contains("random")
+            )
+        });
+        if random_boundary_observed {
+            break;
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+    assert!(
+        random_boundary_observed,
+        "invocation did not reach a random-call durable boundary"
+    );
+    assert!(
+        !invocation.is_finished(),
+        "invocation finished before the revocation was queued"
+    );
+
+    owner
+        .registry_service_client()
+        .await
+        .delete_permission_share(&share.id.0, share.revision.into())
+        .await?;
+
+    let mut queued_event_index = None;
+    for _ in 0..40 {
+        let oplog = target
+            .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+            .await?;
+        queued_event_index = oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardEventQueued(params) if params.event.card_id() == card_id => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        });
+        if queued_event_index.is_some() {
+            break;
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+    let queued_event_index = queued_event_index
+        .ok_or_else(|| anyhow!("card revocation was not queued during the invocation"))?;
+
+    target
+        .complete_promise(&release_promise, b"release".to_vec())
+        .await?;
+
+    let invocation = tokio::time::timeout(Duration::from_secs(30), invocation)
+        .await
+        .map_err(|_| anyhow!("invocation did not finish after release"))?;
+    let result = invocation??
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected mid-invocation revocation result"))?;
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Bool(true), SchemaValue::Bool(false)]
+        }
+    );
+
+    let oplog = target
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().any(|entry| {
+        matches!(
+            &entry.entry,
+            PublicOplogEntry::CardRevoked(params)
+                if params.queued_event_index == queued_event_index && params.card_id == card_id
+        )
+    }));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn counter_resource_test_1(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

@@ -31,6 +31,12 @@ pub struct CardApiResult {
     pub self_card_found_after_install: bool,
 }
 
+#[derive(Clone, Schema, Serialize, Deserialize)]
+pub struct MidInvocationCardRevocationResult {
+    pub release_observed: bool,
+    pub derive_succeeded: bool,
+}
+
 #[agent_definition()]
 pub trait GolemHostApi {
     fn new(name: String) -> Self;
@@ -68,6 +74,12 @@ pub trait GolemHostApi {
     fn card_api_roundtrip(&self) -> CardApiResult;
     fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
     fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
+    fn derive_card_after_promise(
+        &self,
+        high_bits: u64,
+        low_bits: u64,
+        release: PromiseId,
+    ) -> MidInvocationCardRevocationResult;
 
     fn list_retry_policy_names(&self) -> Vec<String>;
     fn get_retry_policy_count(&self) -> u64;
@@ -477,6 +489,30 @@ impl GolemHostApi for GolemHostApiImpl {
             },
         })
         .is_ok()
+    }
+
+    fn derive_card_after_promise(
+        &self,
+        high_bits: u64,
+        low_bits: u64,
+        release: PromiseId,
+    ) -> MidInvocationCardRevocationResult {
+        for _ in 0..100_000 {
+            if get_promise(&release).get().is_some() {
+                return MidInvocationCardRevocationResult {
+                    release_observed: true,
+                    derive_succeeded: self.derive_card_by_id(high_bits, low_bits),
+                };
+            }
+
+            let mut bytes = [0; 4];
+            wstd::rand::get_random_bytes(&mut bytes);
+        }
+
+        MidInvocationCardRevocationResult {
+            release_observed: false,
+            derive_succeeded: false,
+        }
     }
 
     fn list_retry_policy_names(&self) -> Vec<String> {

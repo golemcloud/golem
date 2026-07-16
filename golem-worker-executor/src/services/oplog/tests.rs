@@ -201,20 +201,33 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let entry2 = OplogEntry::suspend().rounded();
     let entry3 = OplogEntry::exited().rounded();
     let entry4 = OplogEntry::interrupted().rounded();
+    let entry5 = OplogEntry::no_op().rounded();
 
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
     oplog.add(entry3.clone()).await;
     oplog.commit(CommitLevel::Always).await;
-    oplog.add(entry4.clone()).await; // uncommitted entry
+    oplog.add(entry4.clone()).await;
+    oplog.add(entry5.clone()).await; // uncommitted entries
 
     let entries = oplog
-        .read_many(OplogIndex::INITIAL, 4)
+        .read_many(OplogIndex::INITIAL, 5)
         .await
         .into_values()
         .collect::<Vec<_>>();
 
-    assert_eq!(entries, vec![entry1, entry2, entry3, entry4]);
+    assert_eq!(
+        entries,
+        vec![entry1, entry2, entry3, entry4, entry5.clone()]
+    );
+
+    let entry = oplog
+        .read_many(OplogIndex::from_u64(5), 1)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+
+    assert_eq!(entry, vec![entry5]);
 }
 
 #[test]
