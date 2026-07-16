@@ -1,4 +1,4 @@
-# Cloud schedule-density benchmark suite (golemcloud/golem#3524).
+# Cloud schedule-density benchmark suite.
 #
 # The buildspec drives each cell through `benchmarks density --section schedule`.
 # Warm cells continuously ramp schedule-registration rate. Operators read

@@ -1,4 +1,4 @@
-# Cloud agent-density benchmark suite (golemcloud/golem#3523).
+# Cloud agent-density benchmark suite.
 #
 # Unlike cloud-perf (which is run by the benchmark binary's `suite` runner),
 # agent-density is driven cell-by-cell by the buildspec: the buildspec invokes
