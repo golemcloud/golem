@@ -444,9 +444,11 @@ impl RustBridgeGenerator {
                     Self::__create(constructor_parameters, Some(uuid), agent_config).await
                 }
             });
-            let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
-                .then(|| quote! { Some(uuid::Uuid::new_v4()) })
-                .unwrap_or_else(|| quote! { None });
+            let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
+                quote! { Some(uuid::Uuid::new_v4()) }
+            } else {
+                quote! { None }
+            };
             quote! {
                 #get_with_config_method
                 #get_phantom_with_config
@@ -480,9 +482,11 @@ impl RustBridgeGenerator {
                 Self::__create(constructor_parameters, Some(uuid), vec![]).await
             }
         });
-        let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
-            .then(|| quote! { Some(uuid::Uuid::new_v4()) })
-            .unwrap_or_else(|| quote! { None });
+        let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
+            quote! { Some(uuid::Uuid::new_v4()) }
+        } else {
+            quote! { None }
+        };
         let agent_id_field = (self.agent_type.mode == AgentMode::Durable)
             .then(|| quote! { agent_id: golem_client::model::AgentId, });
         let agent_config_field = (self.agent_type.mode == AgentMode::Ephemeral).then(|| {
@@ -498,14 +502,18 @@ impl RustBridgeGenerator {
                 return Ok(Self { constructor_parameters, phantom_id: None, agent_config });
             }
         });
-        let invocation_config = (self.agent_type.mode == AgentMode::Ephemeral)
-            .then(|| quote! { Some(self.agent_config.clone()) })
-            .unwrap_or_else(|| quote! { None });
-        let created_fields = (self.agent_type.mode == AgentMode::Durable)
-            .then(|| quote! { constructor_parameters, phantom_id, agent_id: response.agent_id })
-            .unwrap_or_else(|| {
+        let invocation_config = if self.agent_type.mode == AgentMode::Ephemeral {
+            quote! { Some(self.agent_config.clone()) }
+        } else {
+            quote! { None }
+        };
+        let created_fields = if self.agent_type.mode == AgentMode::Durable {
+            quote! { constructor_parameters, phantom_id, agent_id: response.agent_id }
+        } else {
+            {
                 quote! { constructor_parameters, phantom_id: None, agent_config }
-            });
+            }
+        };
 
         // Type definitions + codecs are generated last so all language /
         // mimetype / multimodal enums discovered while emitting methods are
@@ -805,9 +813,11 @@ impl RustBridgeGenerator {
                         }
                     }
                 });
-            let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
-                .then(|| quote! { Some(golem_rust::Uuid::new_v4()) })
-                .unwrap_or_else(|| quote! { None });
+            let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
+                quote! { Some(golem_rust::Uuid::new_v4()) }
+            } else {
+                quote! { None }
+            };
             quote! {
                 #get_with_config_method
 
@@ -842,9 +852,11 @@ impl RustBridgeGenerator {
                 }
             }
         });
-        let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
-            .then(|| quote! { Some(golem_rust::Uuid::new_v4()) })
-            .unwrap_or_else(|| quote! { None });
+        let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
+            quote! { Some(golem_rust::Uuid::new_v4()) }
+        } else {
+            quote! { None }
+        };
 
         let type_definitions = self.type_definitions()?;
         let multimodals = self.multimodals()?;

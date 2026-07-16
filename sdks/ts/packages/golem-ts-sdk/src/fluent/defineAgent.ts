@@ -240,8 +240,9 @@ interface AgentSpecBase<
   config?: Config;
 }
 
-type AgentModeSpec<Mode extends 'durable' | 'ephemeral'> = { mode?: Mode } &
-  (Mode extends 'ephemeral' ? { mode: 'ephemeral' } : { mode?: 'durable' });
+type AgentModeSpec<Mode extends 'durable' | 'ephemeral'> = {
+  mode?: Mode;
+} & (Mode extends 'ephemeral' ? { mode: 'ephemeral' } : { mode?: 'durable' });
 
 /**
  * HTTP mount for the agent: required when any method declares HTTP endpoints,
