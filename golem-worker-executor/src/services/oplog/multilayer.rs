@@ -274,7 +274,7 @@ impl MultiLayerOplogService {
         Ok(ids)
     }
 
-    fn register_transfer(&self, agent_id: AgentId, transfer_fiber: &TransferFiber) {
+    pub(crate) fn register_transfer(&self, agent_id: AgentId, transfer_fiber: &TransferFiber) {
         self.transfer_fibers
             .lock()
             .unwrap()
@@ -298,7 +298,7 @@ impl MultiLayerOplogService {
         }
     }
 
-    fn unregister_transfer(&self, agent_id: &AgentId, transfer_fiber: &TransferFiber) {
+    pub(crate) fn unregister_transfer(&self, agent_id: &AgentId, transfer_fiber: &TransferFiber) {
         let transfer_fiber = Arc::downgrade(transfer_fiber);
         let mut transfer_fibers = self.transfer_fibers.lock().unwrap();
         if transfer_fibers
@@ -449,6 +449,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         lower,
                         tx,
                         transfer_fiber,
+                        self.service,
                         close,
                     )
                     .await,

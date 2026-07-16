@@ -1920,6 +1920,15 @@ async fn batch_read_spans_two_archived_snapshot_generations(_tracing: &Tracing) 
 
 #[test]
 async fn deleting_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) {
+    deleting_worker_fences_in_flight_archive_transfers_impl(AgentMode::Durable).await;
+}
+
+#[test]
+async fn deleting_ephemeral_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) {
+    deleting_worker_fences_in_flight_archive_transfers_impl(AgentMode::Ephemeral).await;
+}
+
+async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: AgentMode) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary = Arc::new(
@@ -1936,22 +1945,41 @@ async fn deleting_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) 
     let (append_started_tx, append_started_rx) = oneshot::channel();
     let release_append = Arc::new(Notify::new());
     let append_finished = Arc::new(Notify::new());
-    let secondary: Arc<dyn OplogArchiveService> = Arc::new(BlockingArchiveService {
-        inner: Arc::new(CompressedOplogArchiveService::new(
-            indexed_storage.clone(),
+    let (secondary, tertiary, entry_count_limit) = match agent_mode {
+        AgentMode::Durable => (
+            Arc::new(BlockingArchiveService {
+                inner: Arc::new(CompressedOplogArchiveService::new(
+                    indexed_storage.clone(),
+                    1,
+                    RetryConfig::default(),
+                )),
+                append_started: Arc::new(Mutex::new(Some(append_started_tx))),
+                release_append: release_append.clone(),
+                append_finished: append_finished.clone(),
+            }) as Arc<dyn OplogArchiveService>,
+            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+                as Arc<dyn OplogArchiveService>,
             1,
-            RetryConfig::default(),
-        )),
-        append_started: Arc::new(Mutex::new(Some(append_started_tx))),
-        release_append: release_append.clone(),
-        append_finished: append_finished.clone(),
-    });
-    let tertiary: Arc<dyn OplogArchiveService> =
-        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+        ),
+        AgentMode::Ephemeral => (
+            Arc::new(CompressedOplogArchiveService::new(
+                indexed_storage.clone(),
+                1,
+                RetryConfig::default(),
+            )) as Arc<dyn OplogArchiveService>,
+            Arc::new(BlockingArchiveService {
+                inner: Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2)),
+                append_started: Arc::new(Mutex::new(Some(append_started_tx))),
+                release_append: release_append.clone(),
+                append_finished: append_finished.clone(),
+            }) as Arc<dyn OplogArchiveService>,
+            2,
+        ),
+    };
     let service = Arc::new(MultiLayerOplogService::new(
         primary,
         nev![secondary, tertiary],
-        1,
+        entry_count_limit,
         1,
     ));
 
@@ -1965,22 +1993,30 @@ async fn deleting_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) 
     let oplog = service
         .open(
             &owned_agent_id,
-            AgentMode::Durable,
+            agent_mode,
             None,
-            make_agent_metadata(agent_id, account_id, environment_id),
+            AgentMetadata {
+                agent_mode,
+                ..make_agent_metadata(agent_id, account_id, environment_id)
+            },
             default_last_known_status(),
-            default_execution_status(AgentMode::Durable),
+            default_execution_status(agent_mode),
         )
         .await;
 
     oplog.add(OplogEntry::no_op()).await;
     oplog.commit(CommitLevel::Always).await;
+    if agent_mode == AgentMode::Ephemeral {
+        EphemeralOplog::try_archive(&oplog)
+            .await
+            .expect("ephemeral oplog must be archivable");
+    }
     tokio::time::timeout(Duration::from_secs(1), append_started_rx)
         .await
         .expect("archive transfer did not start")
         .expect("archive transfer start signal dropped");
 
-    service.delete(&owned_agent_id, AgentMode::Durable).await;
+    service.delete(&owned_agent_id, agent_mode).await;
 
     let append_completed = append_finished.notified();
     release_append.notify_one();
@@ -1992,7 +2028,7 @@ async fn deleting_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) 
     );
 
     assert!(
-        !service.exists(&owned_agent_id, AgentMode::Durable).await,
+        !service.exists(&owned_agent_id, agent_mode).await,
         "an in-flight archive transfer recreated a deleted oplog"
     );
 }

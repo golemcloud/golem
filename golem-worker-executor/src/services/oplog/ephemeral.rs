@@ -14,7 +14,8 @@
 
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
-    BackgroundTransferMessage, InstrumentedOplogArchive, OplogArchive, WrappedOplogArchive,
+    BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
+    WrappedOplogArchive,
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogService, downcast_oplog};
 use async_lock::Mutex;
@@ -42,6 +43,7 @@ pub struct EphemeralOplog {
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     transfer_fiber: Arc<StdMutex<Option<tokio::task::JoinHandle<()>>>>,
+    multi_layer_oplog_service: MultiLayerOplogService,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
@@ -96,9 +98,13 @@ impl EphemeralOplog {
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
         transfer_fiber: tokio::task::JoinHandle<()>,
+        multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let target = lower.first().clone();
+        let transfer_fiber = Arc::new(StdMutex::new(Some(transfer_fiber)));
+        multi_layer_oplog_service
+            .register_transfer(owned_agent_id.agent_id.clone(), &transfer_fiber);
         Self {
             owned_agent_id,
             agent_mode,
@@ -113,7 +119,8 @@ impl EphemeralOplog {
             })),
             lower,
             transfer,
-            transfer_fiber: Arc::new(StdMutex::new(Some(transfer_fiber))),
+            transfer_fiber,
+            multi_layer_oplog_service,
             close_fn: Some(close),
         }
     }
@@ -338,6 +345,8 @@ impl EphemeralOplog {
 
 impl Drop for EphemeralOplog {
     fn drop(&mut self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
