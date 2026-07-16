@@ -22,7 +22,7 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::moonbit::moonbit::{
     to_moonbit_constructor_ident, to_moonbit_term_ident, unique_idents, unique_idents_with_reserved,
 };
-use golem_cli::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitTypeName};
+use golem_cli::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode, MoonBitTypeName};
 use golem_cli::bridge_gen::type_naming::TypeName;
 use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
@@ -97,6 +97,48 @@ impl GeneratedPackage {
     }
 }
 
+fn generate_without_check(agent_type: AgentTypeSchema, mode: MoonBitBridgeMode) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let mut generator =
+        MoonBitBridgeGenerator::new_with_mode(agent_type, target_dir, true, mode).unwrap();
+    generator.generate().unwrap();
+    dir
+}
+
+fn generate_with_default_mode_without_check(agent_type: AgentTypeSchema) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let mut generator = MoonBitBridgeGenerator::new(agent_type, target_dir, true).unwrap();
+    generator.generate().unwrap();
+    dir
+}
+
+fn generated_files(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    fn visit(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        files: &mut Vec<(std::path::PathBuf, Vec<u8>)>,
+    ) {
+        for entry in std::fs::read_dir(current).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.push((
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    std::fs::read(&path).unwrap(),
+                ));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    visit(root, root, &mut files);
+    files.sort_by(|(left, _), (right, _)| left.cmp(right));
+    files
+}
+
 fn counter_agent() -> AgentTypeSchema {
     agent(
         "CounterAgent",
@@ -106,6 +148,25 @@ fn counter_agent() -> AgentTypeSchema {
         vec![],
         AgentMode::Durable,
     )
+}
+
+#[test]
+fn explicit_external_mode_is_byte_identical_to_the_default() {
+    let default = generate_with_default_mode_without_check(counter_agent());
+    let explicit = generate_without_check(counter_agent(), MoonBitBridgeMode::ExternalRest);
+
+    assert_eq!(
+        generated_files(default.path()),
+        generated_files(explicit.path())
+    );
+}
+
+#[test]
+fn guest_mode_uses_guest_module_name() {
+    let guest = generate_without_check(counter_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let module = std::fs::read_to_string(guest.path().join("moon.mod.json")).unwrap();
+
+    assert!(module.contains(r#""name": "counter-agent-guest-client""#));
 }
 
 /// An agent whose constructor and methods exercise every schema type kind the
@@ -662,6 +723,35 @@ fn config_param_names_are_deconflicted() {
 }
 
 // --- Multimodal input / output ---------------------------------------------
+
+#[test]
+fn constructor_multimodal_is_precomputed() {
+    let agent_type = agent(
+        "VisionSession",
+        "moonbit",
+        vec![field(
+            "input",
+            multimodal(vec![
+                ("text", SchemaType::string()),
+                (
+                    "image",
+                    unstructured_binary_schema_type(BinaryRestrictions::default()),
+                ),
+            ]),
+        )],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    );
+    let pkg = GeneratedPackage::new(agent_type);
+    let client = pkg.client_source();
+
+    assert!(client.contains("pub(all) enum Multimodal0 {"));
+    assert!(client.contains(
+        "pub async fn VisionSession::get(input : Array[Multimodal0]) -> VisionSession raise {"
+    ));
+    assert!(client.contains("let f0 = encode_Multimodal0(input)"));
+}
 
 #[test]
 fn multimodal_input_and_output_are_generated() {

@@ -69,6 +69,21 @@ static RUNTIME_DIR: Dir<'static> =
 const MODE_AWAIT: &str = "await";
 const MODE_SCHEDULE: &str = "schedule";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoonBitBridgeMode {
+    ExternalRest,
+    GuestWasmRpc,
+}
+
+impl MoonBitBridgeMode {
+    fn bridge_mode(self) -> BridgeMode {
+        match self {
+            MoonBitBridgeMode::ExternalRest => BridgeMode::External,
+            MoonBitBridgeMode::GuestWasmRpc => BridgeMode::Guest,
+        }
+    }
+}
+
 /// Internal local / parameter names emitted in generated constructor and method
 /// bodies. A user-supplied parameter is disambiguated away from these so it can
 /// never shadow or collide with generated code. The set is the union of all
@@ -114,11 +129,12 @@ pub struct MoonBitBridgeGenerator {
     agent_type: AgentTypeSchema,
     #[allow(dead_code)]
     testing: bool,
+    mode: MoonBitBridgeMode,
     same_language: bool,
     type_naming: TypeNaming<MoonBitTypeName>,
-    /// Multimodal enums needed by this agent's methods, deduplicated by case
-    /// list. Precomputed in [`MoonBitBridgeGenerator::new`] so the `&self`
-    /// emitters can look them up.
+    /// Multimodal enums needed by this agent's constructor and methods,
+    /// deduplicated by case list. Precomputed during construction so the
+    /// `&self` emitters can look them up.
     multimodals: Vec<MultimodalEnum>,
 }
 
@@ -148,43 +164,98 @@ impl MoonBitBridgeGenerator {
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mode(
+            agent_type,
+            target_path,
+            testing,
+            MoonBitBridgeMode::ExternalRest,
+        )
+    }
+
+    pub fn new_with_mode(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: MoonBitBridgeMode,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            mode,
+            std::iter::empty::<String>(),
+        )
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn new_guest_with_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        extra_reserved_names: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            MoonBitBridgeMode::GuestWasmRpc,
+            extra_reserved_names,
+        )
+    }
+
+    fn new_with_mode_and_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: MoonBitBridgeMode,
+        extra_reserved_names: impl IntoIterator<Item = String>,
+    ) -> anyhow::Result<Self> {
         let same_language = agent_type.source_language.eq_ignore_ascii_case("moonbit");
 
-        let reserved = RESERVED_TYPE_NAMES
+        let mut reserved_names = RESERVED_TYPE_NAMES
             .iter()
-            .map(|name| MoonBitTypeName::from((*name).to_string()))
-            .chain(std::iter::once(MoonBitTypeName::from(agent_struct_name(
-                &agent_type,
-            ))));
-        let type_naming =
-            TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved)?;
+            .map(|name| (*name).to_string())
+            .chain(std::iter::once(agent_struct_name(&agent_type)))
+            .collect::<Vec<_>>();
+        if mode == MoonBitBridgeMode::GuestWasmRpc {
+            reserved_names.push(guest_client_struct_name(&agent_type));
+            reserved_names.extend(extra_reserved_names);
+        }
+        let type_naming = TypeNaming::new_with_reserved_names(
+            &agent_type,
+            same_language,
+            reserved_names.iter().cloned().map(MoonBitTypeName::from),
+        )?;
 
-        let multimodals = Self::collect_multimodals(&agent_type, &type_naming, same_language)?;
+        let multimodals =
+            Self::collect_multimodals(&agent_type, &type_naming, same_language, &reserved_names)?;
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
             agent_type,
             testing,
+            mode,
             same_language,
             type_naming,
             multimodals,
         })
     }
 
-    /// Walks every method's input and output, collecting the distinct
+    /// Walks the constructor input and every method's input and output,
+    /// collecting the distinct
     /// multimodal enums (deduplicated by exact case list) and assigning each a
     /// `Multimodal{N}` type name that does not collide with a generated named
-    /// type. Multimodal input is only recognized when a method takes a single
+    /// type. Multimodal input is only recognized when an invocation takes a single
     /// user field whose schema is the structural multimodal `list<variant<…>>`;
     /// multimodal output when the single return type is that shape.
     fn collect_multimodals(
         agent_type: &AgentTypeSchema,
         type_naming: &TypeNaming<MoonBitTypeName>,
         same_language: bool,
+        reserved_names: &[String],
     ) -> anyhow::Result<Vec<MultimodalEnum>> {
         let mut used_names: std::collections::HashSet<String> =
-            RESERVED_TYPE_NAMES.iter().map(|s| s.to_string()).collect();
-        used_names.insert(agent_struct_name(agent_type));
+            reserved_names.iter().cloned().collect();
         for (_, name) in type_naming.types() {
             used_names.insert(name.name.clone());
         }
@@ -219,6 +290,13 @@ impl MoonBitBridgeGenerator {
             Ok(())
         };
 
+        let constructor_fields = user_supplied_fields(&agent_type.constructor.input_schema);
+        if let [field] = constructor_fields.as_slice()
+            && let Some(cases) = multimodal_variant_cases(type_naming.graph(), &field.schema)?
+        {
+            consider(cases)?;
+        }
+
         for method in &agent_type.methods {
             let fields = user_supplied_fields(&method.input_schema);
             if let [field] = fields.as_slice()
@@ -244,7 +322,7 @@ impl MoonBitBridgeGenerator {
     /// The generated `moon` module name. The runtime package is
     /// `<module>/runtime` and the generated client package is `<module>/client`.
     fn module_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name, BridgeMode::External)
+        bridge_client_directory_name(&self.agent_type.type_name, self.mode.bridge_mode())
     }
 
     // --- Project files ------------------------------------------------------
@@ -1930,6 +2008,10 @@ fn agent_struct_name(agent_type: &AgentTypeSchema) -> String {
     agent_type.type_name.as_str().to_upper_camel_case()
 }
 
+fn guest_client_struct_name(agent_type: &AgentTypeSchema) -> String {
+    format!("{}Client", agent_struct_name(agent_type))
+}
+
 /// Recursively writes every file of an embedded [`Dir`] under `dest`, preserving
 /// the embedded relative path of each file.
 fn write_dir(dir: &Dir<'_>, dest: &Utf8Path) -> anyhow::Result<()> {
@@ -1953,4 +2035,63 @@ fn write_dir(dir: &Dir<'_>, dest: &Utf8Path) -> anyhow::Result<()> {
         write_dir(sub, dest)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{AgentTypeName, Snapshotting};
+    use golem_common::schema::{AgentConstructorSchema, MetadataEnvelope, Role, SchemaGraph};
+    use tempfile::TempDir;
+    use test_r::test;
+
+    #[test]
+    fn guest_extra_reserved_name_is_honored_by_multimodal_generation() {
+        let variant = SchemaType::variant(vec![VariantCaseType {
+            name: "text".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: MetadataEnvelope::default(),
+        }]);
+        let mut multimodal = SchemaType::list(variant);
+        multimodal.metadata_mut().role = Some(Role::Multimodal);
+        let agent_type = AgentTypeSchema {
+            type_name: AgentTypeName("VisionSession".to_string()),
+            description: String::new(),
+            source_language: "moonbit".to_string(),
+            schema: SchemaGraph {
+                defs: vec![],
+                root: SchemaType::record(vec![]),
+            },
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                    "input", multimodal,
+                )]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        };
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator = MoonBitBridgeGenerator::new_guest_with_extra_reserved_names(
+            agent_type,
+            target,
+            true,
+            ["Multimodal0".to_string()],
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let client = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+        assert!(!client.contains("pub(all) enum Multimodal0 {"));
+        assert!(client.contains("pub(all) enum Multimodal1 {"));
+    }
 }
