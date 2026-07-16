@@ -369,7 +369,7 @@ pub enum ScheduledAction {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
-        creation_principal: Principal,
+        creation_principal: Box<Principal>,
     },
 }
 

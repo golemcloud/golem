@@ -2082,7 +2082,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 env: request.env().unwrap_or_default(),
                                 config: request.config()?,
                                 parent: request.parent(),
-                                creation_principal: worker_creation_principal,
+                                creation_principal: Box::new(worker_creation_principal),
                             }
                         } else {
                             let worker = self

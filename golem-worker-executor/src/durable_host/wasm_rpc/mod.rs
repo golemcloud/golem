@@ -928,12 +928,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 owned_agent_id: remote_agent_id,
                 invocation,
                 component_revision: remote_component_revision,
-                env: env,
-                config: config,
+                env,
+                config,
                 parent: Some(self.agent_id().clone()),
-                creation_principal: Principal::Agent(golem_common::model::agent::AgentPrincipal {
-                    agent_id: self.agent_id().clone(),
-                }),
+                creation_principal: Box::new(Principal::Agent(
+                    golem_common::model::agent::AgentPrincipal {
+                        agent_id: self.agent_id().clone(),
+                    },
+                )),
             }
         } else {
             let target_worker_fingerprint = match ensure_rpc_target_activated(self, this).await {

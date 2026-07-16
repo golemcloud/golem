@@ -4161,6 +4161,7 @@ struct FailedInvocationResult {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum InvocationResult {
     Cached {
         result: Result<AgentInvocationOutput, FailedInvocationResult>,
@@ -4652,6 +4653,7 @@ pub enum QueuedWorkerInvocation {
     SaveSnapshot,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ResultOrSubscription {
     Finished(Result<AgentInvocationOutput, WorkerExecutorError>),
     Pending(EventsSubscription),

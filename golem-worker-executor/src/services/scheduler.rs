@@ -558,7 +558,7 @@ impl SchedulerServiceDefault {
                         worker_agent_config,
                         Some(component_revision),
                         worker_parent,
-                        worker_creation_principal,
+                        *worker_creation_principal,
                     )
                     .await;
 
@@ -1273,7 +1273,7 @@ mod tests {
                 env: vec![("KEY".to_string(), "value".to_string())],
                 config: config.clone(),
                 parent: Some(parent.clone()),
-                creation_principal: Principal::anonymous(),
+                creation_principal: Box::new(Principal::anonymous()),
             },
         )
         .await;
@@ -1310,7 +1310,7 @@ mod tests {
             env: vec![],
             config: vec![],
             parent: None,
-            creation_principal: Principal::anonymous(),
+            creation_principal: Box::new(Principal::anonymous()),
         };
 
         assert_eq!(serialize(&resume).unwrap()[2], 3);
@@ -1353,7 +1353,7 @@ mod tests {
                 env: vec![],
                 config: vec![],
                 parent: None,
-                creation_principal: Principal::anonymous(),
+                creation_principal: Box::new(Principal::anonymous()),
             },
         )
         .await;
@@ -1404,7 +1404,7 @@ mod tests {
                 env: vec![],
                 config: vec![],
                 parent: None,
-                creation_principal: Principal::anonymous(),
+                creation_principal: Box::new(Principal::anonymous()),
             },
         )
         .await;
