@@ -287,6 +287,8 @@ impl SchedulerServiceDefault {
             // ! Do not exit early from this loop because of failed actions, as it will cause all other actions to be skipped.
             // ! Retryable failures are left unacknowledged and retried after lease expiry.
             for claimed_action in claimed {
+                let action_kind =
+                    crate::metrics::scheduler::action_kind_label(&claimed_action.action);
                 // Observe the lag between scheduled_at (due_at) and actual fire time.
                 let lag = now.signed_duration_since(claimed_action.due_at);
                 let lag_secs = lag.num_milliseconds().max(0) as f64 / 1000.0;
@@ -294,10 +296,15 @@ impl SchedulerServiceDefault {
                     lag_secs,
                 ));
 
-                if self
+                let action_start = std::time::Instant::now();
+                let processed = self
                     .process_claimed_action(claimed_action.clone(), now)
-                    .await
-                {
+                    .await;
+                crate::metrics::scheduler::record_scheduled_action_processing(
+                    action_kind,
+                    action_start.elapsed(),
+                );
+                if processed {
                     let acked = self
                         .scheduler_storage
                         .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
