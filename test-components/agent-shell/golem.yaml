@@ -1,0 +1,26 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+
+manifestVersion: 1.6.0
+
+app: agent-shell
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  it:agent-shell:
+    dir: "."
+    templates: rust, rust-test-component
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

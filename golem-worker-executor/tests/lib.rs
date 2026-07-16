@@ -25,6 +25,7 @@ use test_r::{sequential_suite, tag_suite, test_dep};
 
 pub mod agent;
 pub mod agent_sdk_ts;
+pub mod agent_shell;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
@@ -196,6 +197,12 @@ test_component!(
     "agent_counters",
     "it_agent_counters_release",
     "it:agent-counters"
+);
+test_component!(
+    agent_shell,
+    "agent_shell",
+    "it_agent_shell_release",
+    "it:agent-shell"
 );
 test_component!(
     agent_sdk_rust,
