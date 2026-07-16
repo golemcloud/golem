@@ -58,13 +58,13 @@ cells:
     targetResidency: warm
     contextSpans: 1
     targetPattern: spread
-    ramp: [128]
+    ramp: [64]
     ratePeriodSecs: 900
   - name: sched-soak-d1-realistic-128
     targetResidency: warm
     contextSpans: 1
     targetPattern: realistic
-    ramp: [128]
+    ramp: [64]
     ratePeriodSecs: 900
 
   # Cold controls deliberately stage a finite batch before restart. They are not
