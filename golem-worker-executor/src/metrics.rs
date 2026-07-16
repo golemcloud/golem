@@ -679,6 +679,13 @@ pub mod scheduler {
             crate::metrics::SCHEDULER_TICK_DURATION_BUCKETS.to_vec()
         )
         .unwrap();
+        pub static ref SCHEDULED_ACTION_PROCESSING_SECONDS: HistogramVec = register_histogram_vec!(
+            "scheduled_action_processing_seconds",
+            "Time to process a claimed scheduled action before acknowledgement",
+            &["executor_id", "action_kind"],
+            crate::metrics::SCHEDULER_TICK_DURATION_BUCKETS.to_vec()
+        )
+        .unwrap();
         pub static ref SCHEDULED_ACTION_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "scheduled_action_size_bytes",
             "Serialized blob size in bytes of a ScheduledAction at insert time",
@@ -703,6 +710,12 @@ pub mod scheduler {
     pub fn record_scheduler_tick_duration(duration: Duration) {
         SCHEDULER_TICK_DURATION_SECONDS
             .with_label_values(&[crate::metrics::storage::executor_id()])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_scheduled_action_processing(action_kind: &'static str, duration: Duration) {
+        SCHEDULED_ACTION_PROCESSING_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id(), action_kind])
             .observe(duration.as_secs_f64());
     }
 
