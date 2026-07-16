@@ -34,6 +34,8 @@ wasmtime::component::bindgen!({
         "wasi:blobstore/container.[method]container.list-objects": store | async | trappable,
         "wasi:keyvalue/types.[drop]outgoing-value": store | async | trappable,
         "golem:agent/host.[drop]future-invoke-result": store | async | trappable,
+        "golem:websocket/client.[method]websocket-connection.receive": store | async | trappable,
+        "golem:websocket/client.[method]websocket-connection.receive-with-timeout": store | async | trappable,
         default: async | trappable,
     },
     exports: { default: async },

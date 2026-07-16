@@ -39,21 +39,25 @@ impl WebsocketConnection {
 
     /// Receive the next message, blocking until one is available.
     pub fn blocking_receive(&self) -> Result<Message, Error> {
-        self.inner.receive()
+        wit_bindgen::block_on(async move { self.inner.receive().await })
     }
 
     /// Receive the next message, blocking with a timeout in milliseconds.
     /// Returns `None` if the timeout expires before a message arrives.
     pub fn blocking_receive_with_timeout(&self, timeout_ms: u64) -> Result<Option<Message>, Error> {
-        self.inner.receive_with_timeout(timeout_ms)
+        wit_bindgen::block_on(async move { self.inner.receive_with_timeout(timeout_ms).await })
     }
 
     /// Receive the next message asynchronously.
     /// Yields the current task until a message is available.
-    // TODO(p3): WIT no longer exposes a `subscribe()` pollable; needs a p3-native
-    // async `receive` host function (blocked on concurrent durability support).
     pub async fn receive(&self) -> Result<Message, Error> {
-        unimplemented!("async websocket receive not yet supported on p3")
+        self.inner.receive().await
+    }
+
+    /// Receive the next message asynchronously with a timeout in milliseconds.
+    /// Yields the current task; returns `None` if the timeout expires before a message arrives.
+    pub async fn receive_with_timeout(&self, timeout_ms: u64) -> Result<Option<Message>, Error> {
+        self.inner.receive_with_timeout(timeout_ms).await
     }
 
     /// Send a close frame with optional code and reason.
