@@ -281,7 +281,7 @@ impl MultiLayerOplogService {
             .insert(agent_id, Arc::downgrade(transfer_fiber));
     }
 
-    fn abort_transfer(&self, agent_id: &AgentId) {
+    async fn abort_transfer(&self, agent_id: &AgentId) {
         let transfer_fiber = self
             .transfer_fibers
             .lock()
@@ -289,10 +289,12 @@ impl MultiLayerOplogService {
             .remove(agent_id)
             .and_then(|transfer_fiber| transfer_fiber.upgrade());
 
-        if let Some(transfer_fiber) = transfer_fiber
-            && let Some(transfer_fiber) = transfer_fiber.lock().unwrap().take()
-        {
+        let transfer_fiber =
+            transfer_fiber.and_then(|transfer_fiber| transfer_fiber.lock().unwrap().take());
+
+        if let Some(transfer_fiber) = transfer_fiber {
             transfer_fiber.abort();
+            let _ = transfer_fiber.await;
         }
     }
 
@@ -534,7 +536,7 @@ impl OplogService for MultiLayerOplogService {
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
-        self.abort_transfer(&owned_agent_id.agent_id);
+        self.abort_transfer(&owned_agent_id.agent_id).await;
         self.primary.delete(owned_agent_id, agent_mode).await;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
@@ -788,16 +790,13 @@ impl MultiLayerOplog {
             close_fn: Some(close),
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
-        multi_layer_oplog_service
-            .register_transfer(owned_agent_id.agent_id.clone(), &result.transfer_fiber);
-
-        result.set_background_transfer(tokio::spawn(
+        let transfer_fiber = tokio::spawn(
             Self::background_transfer(
                 owned_agent_id,
                 agent_mode,
                 Arc::downgrade(&result_oplog),
                 lower,
-                multi_layer_oplog_service,
+                multi_layer_oplog_service.clone(),
                 rx,
             )
             .instrument(
@@ -805,7 +804,12 @@ impl MultiLayerOplog {
                     .follows_from(Span::current())
                     .clone(),
             ),
-        ));
+        );
+        result.set_background_transfer(transfer_fiber);
+        multi_layer_oplog_service.register_transfer(
+            result.owned_agent_id.agent_id.clone(),
+            &result.transfer_fiber,
+        );
 
         result
     }
