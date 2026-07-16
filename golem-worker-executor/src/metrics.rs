@@ -681,6 +681,12 @@ pub mod scheduler {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref SCHEDULER_DUE_ACTION_BACKLOG: GaugeVec = register_gauge_vec!(
+            "scheduler_due_action_backlog",
+            "Due scheduled actions not yet acknowledged, including currently leased actions",
+            &["executor_id"]
+        )
+        .unwrap();
         pub static ref SCHEDULER_TICK_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
             "scheduler_tick_duration_seconds",
             "Wall time of a single scheduler process() iteration",
@@ -714,6 +720,12 @@ pub mod scheduler {
         SCHEDULER_QUEUE_DEPTH
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .set(depth as f64);
+    }
+
+    pub fn set_scheduler_due_action_backlog(backlog: u64) {
+        SCHEDULER_DUE_ACTION_BACKLOG
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(backlog as f64);
     }
 
     pub fn record_scheduler_tick_duration(duration: Duration) {

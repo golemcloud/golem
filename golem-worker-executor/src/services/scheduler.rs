@@ -271,6 +271,11 @@ impl SchedulerServiceDefault {
             .current_assignment()
             .map_err(|err| err.to_string())?;
 
+        match self.scheduler_storage.count_due(now, &assignment).await {
+            Ok(backlog) => crate::metrics::scheduler::set_scheduler_due_action_backlog(backlog),
+            Err(error) => warn!(error, "Failed to count due scheduled actions"),
+        }
+
         for _ in 0..self.max_batches_per_tick {
             let claimed = self
                 .scheduler_storage
@@ -1619,6 +1624,40 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    async fn due_backlog_includes_leased_actions_until_acknowledged() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let shard = ShardId::new(0);
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([shard]),
+        };
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+        let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
+        let schedule_id = ScheduleId::fresh();
+        storage
+            .insert(schedule_id, due_at, shard, &action)
+            .await
+            .unwrap();
+
+        assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 1);
+
+        let claimed = storage
+            .claim_due(now, &assignment, 1, Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 1);
+
+        assert!(
+            storage
+                .ack(&schedule_id, claimed[0].lease_owner)
+                .await
+                .unwrap()
+        );
+        assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 0);
     }
 
     #[test]
