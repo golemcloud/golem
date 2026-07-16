@@ -45,7 +45,8 @@ export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 
 export type { StandardSchemaV1 } from './schema/standardSchema';
-export { s } from './schema/markers';
+export { Bytes, KeyValue, Path, Quantity, s } from './schema/markers';
+export type { KeyValueOptions, PathOptions, QuantityOptions } from './schema/markers';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { FluentCodec, SchemaWalker } from './schema/codec';
 

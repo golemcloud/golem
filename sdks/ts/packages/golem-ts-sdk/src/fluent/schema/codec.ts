@@ -18,12 +18,15 @@
 // (`internal/schema-model/`), never on the decorator-era `Type.Type` resolvers.
 
 import { SchemaGraph, SchemaValue } from '../../internal/schema-model';
+import type { StandardSchemaV1 } from './standardSchema';
 
 export interface FluentCodec {
   /** Root SchemaType and the nominal definitions it references. */
   readonly graph: SchemaGraph;
   toValue(value: unknown): SchemaValue;
   fromValue(value: SchemaValue): unknown;
+  /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
+  readonly sourceSchema?: StandardSchemaV1;
   /**
    * True for the unit/void type: the method's `returns` maps to WIT
    * `output-schema.unit`, so `graph` is a placeholder and is never encoded.
@@ -50,6 +53,13 @@ export interface FluentCodec {
    * plain (non-optional) object group.
    */
   readonly optionalGroup?: boolean;
+  /** Inner codec for a WIT `option`, preserving the source-schema convention. */
+  readonly optionInner?: FluentCodec;
+  /** Item codec for a WIT `list` or `fixed-list`. */
+  readonly listItem?: FluentCodec;
+  /** Child codecs for a WIT `map`, when the source schema exposes them. */
+  readonly mapKey?: FluentCodec;
+  readonly mapValue?: FluentCodec;
   /**
    * For SECRET markers (`s.secret(inner)`): the inner (revealed-value) codec —
    * the one that decodes the plaintext after `golem:secrets/reveal`. The
