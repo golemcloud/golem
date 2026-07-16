@@ -22,7 +22,7 @@ pub mod sdk {
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.6.0-dev.5"
+            "1.6.0-dev.6"
         };
     }
 }
@@ -49,6 +49,9 @@ pub mod ts_dep {
     pub const ROLLUP: &str = "^4.50.1";
     pub const TSLIB: &str = "^2.8.1";
     pub const TYPESCRIPT: &str = "^5.9.2";
+    pub const ZOD: &str = "^4.4.3";
+    pub const VALIBOT: &str = "^1.0.0";
+    pub const ARKTYPE: &str = "^2.1.0";
 }
 
 // Keep this aligned with the Rust component template
@@ -61,7 +64,6 @@ pub mod rust_dep {
 
 pub mod scala_dep {
     pub const SCALA_VERSION: &str = "3.8.2";
-    pub const SCALA_2_VERSION: &str = "2.13.18";
     pub const SCALAJS_PLUGIN_VERSION: &str = "1.20.2";
     pub const SBT_VERSION: &str = "1.12.0";
     /// zio-blocks (schema/JSON) library used by the generated Scala bridge

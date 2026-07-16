@@ -64,8 +64,8 @@ steps:
         - `getTickCount` — returns `tickCount` as a number.
 
         The self-scheduling must use the generated RPC client to schedule a future
-        invocation on the same agent instance. Use the cancelable schedule variant
-        (.scheduleCancelable() in TypeScript) which returns a CancellationToken.
+        invocation on the same agent instance. In TypeScript, .schedule() returns
+        a CancellationToken; keep that token when the invocation must be canceled.
 
         Make sure the project builds successfully.
       scala: >

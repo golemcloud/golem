@@ -1133,35 +1133,44 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
     fs::write_str(
         &component_source_code_main_file,
         indoc! { r#"
-            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
 
-            @agent()
-            class TargetAgent extends BaseAgent {
-              id: string;
+            export const TargetAgent = defineAgent({
+              name: 'TargetAgent',
+              id: { id: z.string() },
+              methods: {
+                ping: method({ input: {}, returns: z.string() }),
+              },
+            });
 
-              constructor(id: string) {
-                super();
-                this.id = id;
-              }
+            export const TargetAgentImpl = TargetAgent.implement({
+              init: ({ id }) => ({ id: id.id }),
+              methods: {
+                ping() {
+                  return `pong:${this.id}`;
+                },
+              },
+            });
 
-              async ping(): Promise<string> {
-                return `pong:${this.id}`;
-              }
-            }
+            const targetClient = clientFor(TargetAgent);
 
-            @agent()
-            class CallerAgent extends BaseAgent {
-              id: string;
+            export const CallerAgent = defineAgent({
+              name: 'CallerAgent',
+              id: { id: z.string() },
+              methods: {
+                callTarget: method({ input: { targetId: z.string() }, returns: z.string() }),
+              },
+            });
 
-              constructor(id: string) {
-                super();
-                this.id = id;
-              }
-
-              async callTarget(targetId: string): Promise<string> {
-                return await (await TargetAgent.get(targetId)).ping();
-              }
-            }
+            export const CallerAgentImpl = CallerAgent.implement({
+              init: ({ id }) => ({ id: id.id }),
+              methods: {
+                async callTarget({ targetId }) {
+                  return await targetClient({ id: targetId }).ping();
+                },
+              },
+            });
         "# },
     )
     .unwrap();
@@ -1217,6 +1226,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
 // Early in the code-first release, some of these cases failed at the Golem execution stage
 // (post type extraction). This test ensures such issues are caught automatically
 // and act as a regression-test.
+//
 #[test]
 async fn test_ts_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
@@ -1315,13 +1325,13 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funOptional",
         &[
-            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case0", value: "foo"}"#,
             r#"{a: "foo"}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "UnionType2", value: "foo"}"#,
+            r#"{tag: "case1", value: "foo"}"#,
         ],
     )
     .await;
@@ -1344,35 +1354,35 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     // function with a very complex object
     let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "case1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}
     "#;
 
     run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
 
     // union type that has anonymous terms
-    run_and_assert(
-        &ctx,
-        "funUnionType",
-        &[r#"{tag: "UnionType2", value: "foo"}"#],
-    )
-    .await;
+    run_and_assert(&ctx, "funUnionType", &[r#"{tag: "case1", value: "foo"}"#]).await;
 
     // A complex union type
     run_and_assert(
         &ctx,
         "funUnionComplexType",
-        &[r#"{tag: "UnionComplexType2", value: "foo"}"#],
+        &[r#"{tag: "case1", value: "foo"}"#],
     )
     .await;
 
     // Union that includes literals and boolean (string literal input)
-    run_and_assert(&ctx, "funUnionWithLiterals", &[r#"{tag: "lit1"}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funUnionWithLiterals",
+        &[r#"{tag: "case0", value: "lit1"}"#],
+    )
+    .await;
 
     // Union that includes literals and boolean (boolean input)
     run_and_assert(
         &ctx,
         "funUnionWithLiterals",
-        &[r#"{tag: "UnionWithLiterals1", value: true}"#],
+        &[r#"{tag: "case3", value: true}"#],
     )
     .await;
 
@@ -1422,7 +1432,12 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     assert!(outputs.success_or_dump());
 
     // A tagged union
-    run_and_assert(&ctx, "funTaggedUnion", &[r#"{tag: "a", value: "foo"}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funTaggedUnion",
+        &[r#"{tag: "case0", value: {tag: "a", val: "foo"}}"#],
+    )
+    .await;
 
     assert!(outputs.success_or_dump());
 
@@ -1451,23 +1466,38 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funUndefinedReturn", &[r#""foo""#]).await;
 
     // A function with result type
-    run_and_assert(&ctx, "funResultExact", &[r#"{ok: "foo"}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funResultExact",
+        &[r#"{tag: "case0", value: {tag: "ok", value: "foo"}}"#],
+    )
+    .await;
 
     // A function with (untagged) result-like type - but not result
     run_and_assert(&ctx, "funEitherOptional", &[r#"{ok: "foo", err: null}"#]).await;
 
     // Functions using the builtin result type
-    run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{ok: null}"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{ok: {}}"#]).await;
     run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{error: "foo"}"#]).await;
 
     run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{ok: "foo"}"#]).await;
-    run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{error: null}"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{error: {}}"#]).await;
 
     run_and_assert(&ctx, "funBuiltinResultSN", &[r#"{ok: "yay"}"#]).await;
     run_and_assert(&ctx, "funBuiltinResultSN", &[r#"{error: 42}"#]).await;
 
-    run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{error: null}"#]).await;
-    run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{ok: null}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funResultLikeWithVoid",
+        &[r#"{tag: "case1", value: {tag: "err", errVal: {}}}"#],
+    )
+    .await;
+    run_and_assert(
+        &ctx,
+        "funResultLikeWithVoid",
+        &[r#"{tag: "case0", value: {tag: "ok", okVal: {}}}"#],
+    )
+    .await;
 
     // An arrow function
     run_and_assert(&ctx, "funArrowSync", &[r#""foo""#]).await;
@@ -1477,9 +1507,9 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funAll",
         &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}"#,
-            r#"{tag: "UnionType2", value: "foo"}"#,
-            r#"{tag: "UnionComplexType2", value: "foo"}"#,
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "case1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}"#,
+            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case1", value: "foo"}"#,
             r#"42"#,
             r#""foo""#,
             r#"true"#,
@@ -1488,16 +1518,16 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             r#"["foo", 42, true]"#,
             r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
             r#"{a: "foo", b: 42, c: true}"#,
-            r#"{tag: "okay", value: "foo"}"#,
+            r#"{tag: "case0", value: {tag: "okay", value: "foo"}}"#,
             r#"{ok: "foo", err: "foo"}"#,
-            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case0", value: "foo"}"#,
             r#"{a: "foo"}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
-            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
+            r#"{a: {tag: "case0", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "UnionType2", value: "foo"}"#,
-            r#"{tag: "a", value: "foo"}"#
+            r#"{tag: "case1", value: "foo"}"#,
+            r#"{tag: "case0", value: {tag: "a", val: "foo"}}"#
         ],
     )
         .await;
@@ -1614,25 +1644,30 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     fs::write_str(
         &component_source_code,
         indoc! { r#"
-            import { BaseAgent, agent, } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-            type Complex = {
-              oneField: string;
-              anotherField: number;
-            }
+            const Complex = z.object({
+              oneField: z.string(),
+              anotherField: z.number(),
+            });
 
-            @agent()
-            class LongAgentName extends BaseAgent {
-              params: Complex;
-              constructor(params: Complex) {
-                super();
-                this.params = params;
-              }
+            export const LongAgentName = defineAgent({
+              name: 'LongAgentName',
+              id: { params: Complex },
+              methods: {
+                ask: method({ input: { question: Complex }, returns: z.tuple([Complex, Complex]) }),
+              },
+            });
 
-              async ask(question: Complex): Promise<[Complex, Complex]> {
-                return [this.params, question];
-              }
-            }
+            export const LongAgentNameImpl = LongAgentName.implement({
+              init: ({ id }) => ({ params: id.params }),
+              methods: {
+                ask({ question }) {
+                  return [this.params, question];
+                },
+              },
+            });
         "# },
     )
     .unwrap();

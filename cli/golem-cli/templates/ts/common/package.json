@@ -12,7 +12,6 @@
     "@types/node": "GOLEM_TS_TYPES_NODE_VERSION",
     "rollup": "GOLEM_TS_ROLLUP_VERSION",
     "tslib": "GOLEM_TS_TSLIB_VERSION",
-    "typescript": "GOLEM_TS_TYPESCRIPT_VERSION",
-    "@golemcloud/golem-ts-typegen": "GOLEM_TS_TYPEGEN_VERSION_OR_PATH"
+    "typescript": "GOLEM_TS_TYPESCRIPT_VERSION"
   }
 }

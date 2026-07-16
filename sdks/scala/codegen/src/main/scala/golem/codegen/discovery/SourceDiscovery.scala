@@ -17,7 +17,6 @@
 package golem.codegen.discovery
 
 import scala.meta._
-import scala.meta.dialects.Scala213
 import scala.meta.parsers._
 
 import java.security.MessageDigest
@@ -200,11 +199,7 @@ object SourceDiscovery {
   // ── Parsing ────────────────────────────────────────────────────────────────
 
   private def parseSource(source: String): Option[Source] =
-    dialects
-      .Scala3(source)
-      .parse[Source]
-      .toOption
-      .orElse(Scala213(source).parse[Source].toOption)
+    dialects.Scala3(source).parse[Source].toOption
 
   private def sourceHash(source: String): String = {
     val digest = MessageDigest.getInstance("SHA-256")

@@ -122,6 +122,8 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environments: IndexMap<String, Environment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<AppVersionSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub secret_defaults: IndexMap<EnvironmentName, JsonObject>,
@@ -669,6 +671,8 @@ pub struct Environment {
     pub cli: Option<CliOptions>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub deployment: Option<DeploymentOptions>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub version: Option<AppVersionSourceOverride>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -762,7 +766,6 @@ impl DeploymentOptions {
     }
 
     pub fn version_check(&self) -> bool {
-        // TODO: atomic: switch to true, once versioning is implemented
         self.version_check.unwrap_or(false)
     }
 
@@ -775,6 +778,154 @@ impl DeploymentOptions {
             compatibility_check: self.compatibility_check(),
             version_check: self.version_check(),
             security_overrides: self.security_overrides(),
+        }
+    }
+}
+
+/// How the logical version attached to a deployment is computed. Orthogonal to
+/// [`DeploymentOptions::version_check`], which governs uniqueness of that string.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AppVersionSource {
+    Static(String),
+    Git { git: GitVersionSource },
+    Env { env: String },
+}
+
+/// Hash mode (`hashOnly`) or tag mode (`tagPattern`); mutually exclusive by shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GitVersionSource {
+    Hash(GitHashVersionSource),
+    Tag(GitTagVersionSource),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitHashVersionSource {
+    pub hash_only: Marker,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub static_fallback: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagVersionSource {
+    pub tag_pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub commit_info: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hash_fallback: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub static_fallback: Option<String>,
+}
+
+/// Partial per-environment override, layered over the application-wide `version`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AppVersionSourceOverride {
+    Static(String),
+    Git { git: GitVersionSourceOverride },
+    Env { env: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GitVersionSourceOverride {
+    Hash(GitHashVersionSource),
+    Tag(GitTagVersionSourceOverride),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagVersionSourceOverride {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tag_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub commit_info: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hash_fallback: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub static_fallback: Option<String>,
+}
+
+const TAG_PATTERN_REQUIRED: &str = "`tagPattern` is required for git tag mode; set it on the environment override or the application-wide `version`";
+
+impl AppVersionSourceOverride {
+    /// Resolve this override against the optional application-wide root.
+    pub fn resolve_over(self, root: Option<AppVersionSource>) -> Result<AppVersionSource, String> {
+        match root {
+            Some(root) => self.merge_over(root),
+            None => self.into_source(),
+        }
+    }
+
+    fn merge_over(self, root: AppVersionSource) -> Result<AppVersionSource, String> {
+        match (self, root) {
+            (AppVersionSourceOverride::Git { git: over }, AppVersionSource::Git { git: root }) => {
+                Ok(AppVersionSource::Git {
+                    git: over.merge_over(root)?,
+                })
+            }
+            // The override selects a different top-level source: it replaces.
+            (over, _) => over.into_source(),
+        }
+    }
+
+    fn into_source(self) -> Result<AppVersionSource, String> {
+        match self {
+            AppVersionSourceOverride::Git { git } => Ok(AppVersionSource::Git {
+                git: git.into_source()?,
+            }),
+            AppVersionSourceOverride::Static(value) => Ok(AppVersionSource::Static(value)),
+            AppVersionSourceOverride::Env { env } => Ok(AppVersionSource::Env { env }),
+        }
+    }
+}
+
+impl GitVersionSourceOverride {
+    fn merge_over(self, root: GitVersionSource) -> Result<GitVersionSource, String> {
+        match (self, root) {
+            (GitVersionSourceOverride::Tag(over), GitVersionSource::Tag(root)) => {
+                Ok(GitVersionSource::Tag(GitTagVersionSource {
+                    tag_pattern: over.tag_pattern.unwrap_or(root.tag_pattern),
+                    commit_info: over.commit_info.or(root.commit_info),
+                    hash_fallback: over.hash_fallback.or(root.hash_fallback),
+                    allow_dirty: over.allow_dirty.or(root.allow_dirty),
+                    static_fallback: over.static_fallback.or(root.static_fallback),
+                }))
+            }
+            (GitVersionSourceOverride::Hash(over), GitVersionSource::Hash(root)) => {
+                Ok(GitVersionSource::Hash(GitHashVersionSource {
+                    hash_only: Marker,
+                    allow_dirty: over.allow_dirty.or(root.allow_dirty),
+                    static_fallback: over.static_fallback.or(root.static_fallback),
+                }))
+            }
+            // Mode switch: the override must stand on its own.
+            (over, _) => over.into_source(),
+        }
+    }
+
+    fn into_source(self) -> Result<GitVersionSource, String> {
+        match self {
+            GitVersionSourceOverride::Hash(hash) => Ok(GitVersionSource::Hash(hash)),
+            GitVersionSourceOverride::Tag(tag) => match tag.tag_pattern {
+                Some(tag_pattern) => Ok(GitVersionSource::Tag(GitTagVersionSource {
+                    tag_pattern,
+                    commit_info: tag.commit_info,
+                    hash_fallback: tag.hash_fallback,
+                    allow_dirty: tag.allow_dirty,
+                    static_fallback: tag.static_fallback,
+                })),
+                None => Err(TAG_PATTERN_REQUIRED.to_string()),
+            },
         }
     }
 }
@@ -1675,6 +1826,72 @@ mod test {
             .boxed()
     }
 
+    fn arb_git_hash_model() -> BoxedStrategy<GitHashVersionSource> {
+        (arb_opt(any::<bool>().boxed()), arb_opt(arb_ident().boxed()))
+            .prop_map(|(allow_dirty, static_fallback)| GitHashVersionSource {
+                hash_only: Marker,
+                allow_dirty,
+                static_fallback,
+            })
+            .boxed()
+    }
+
+    fn arb_app_version_source_model() -> BoxedStrategy<AppVersionSource> {
+        let git_tag = (
+            arb_ident(),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(arb_ident().boxed()),
+        )
+            .prop_map(
+                |(tag_pattern, commit_info, hash_fallback, allow_dirty, static_fallback)| {
+                    GitVersionSource::Tag(GitTagVersionSource {
+                        tag_pattern,
+                        commit_info,
+                        hash_fallback,
+                        allow_dirty,
+                        static_fallback,
+                    })
+                },
+            );
+        let git_hash = arb_git_hash_model().prop_map(GitVersionSource::Hash);
+        prop_oneof![
+            prop_oneof![git_tag, git_hash].prop_map(|git| AppVersionSource::Git { git }),
+            arb_ident().prop_map(AppVersionSource::Static),
+            arb_ident().prop_map(|env| AppVersionSource::Env { env }),
+        ]
+        .boxed()
+    }
+
+    fn arb_app_version_source_override_model() -> BoxedStrategy<AppVersionSourceOverride> {
+        let git_tag = (
+            arb_opt(arb_ident().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(arb_ident().boxed()),
+        )
+            .prop_map(
+                |(tag_pattern, commit_info, hash_fallback, allow_dirty, static_fallback)| {
+                    GitVersionSourceOverride::Tag(GitTagVersionSourceOverride {
+                        tag_pattern,
+                        commit_info,
+                        hash_fallback,
+                        allow_dirty,
+                        static_fallback,
+                    })
+                },
+            );
+        let git_hash = arb_git_hash_model().prop_map(GitVersionSourceOverride::Hash);
+        prop_oneof![
+            prop_oneof![git_tag, git_hash].prop_map(|git| AppVersionSourceOverride::Git { git }),
+            arb_ident().prop_map(AppVersionSourceOverride::Static),
+            arb_ident().prop_map(|env| AppVersionSourceOverride::Env { env }),
+        ]
+        .boxed()
+    }
+
     fn arb_environment_model() -> BoxedStrategy<Environment> {
         (
             any::<bool>(),
@@ -1683,15 +1900,19 @@ mod test {
             arb_token_list_model(),
             arb_opt(arb_cli_options_model()),
             arb_opt(arb_deployment_options_model()),
+            arb_opt(arb_app_version_source_override_model()),
         )
             .prop_map(
-                |(is_default, account, server, component_presets, cli, deployment)| Environment {
-                    default: is_default.then_some(Marker),
-                    account,
-                    server,
-                    component_presets,
-                    cli,
-                    deployment,
+                |(is_default, account, server, component_presets, cli, deployment, version)| {
+                    Environment {
+                        default: is_default.then_some(Marker),
+                        account,
+                        server,
+                        component_presets,
+                        cli,
+                        deployment,
+                        version,
+                    }
                 },
             )
             .boxed()
@@ -1702,11 +1923,12 @@ mod test {
     }
 
     fn arb_local_server_model() -> BoxedStrategy<LocalServer> {
+        // Ports must be nonzero to satisfy the manifest schema (min 1).
         (
             arb_opt(arb_ident()),
-            arb_opt(any::<u16>().boxed()),
-            arb_opt(any::<u16>().boxed()),
-            arb_opt(any::<u16>().boxed()),
+            arb_opt((1..=u16::MAX).boxed()),
+            arb_opt((1..=u16::MAX).boxed()),
+            arb_opt((1..=u16::MAX).boxed()),
             arb_opt(arb_path_buf_model()),
             arb_opt(arb_path_buf_model()),
             arb_opt(arb_path_buf_model()),
@@ -2154,6 +2376,7 @@ mod test {
                 arb_opt(arb_local_server_model()),
                 prop::collection::vec((arb_ident(), arb_environment_model()), 0..=3)
                     .prop_map(IndexMap::from_iter),
+                arb_opt(arb_app_version_source_model()),
                 arb_opt(arb_bridge_sdks_model()),
                 arb_secret_defaults_model(),
                 arb_retry_policy_defaults_model(),
@@ -2171,6 +2394,7 @@ mod test {
                         mcp,
                         local_server,
                         environments,
+                        version,
                         bridge,
                         secret_defaults,
                         retry_policy_defaults,
@@ -2189,6 +2413,7 @@ mod test {
                     mcp,
                     local_server,
                     environments,
+                    version,
                     bridge,
                     secret_defaults,
                     retry_policy_defaults,
@@ -2263,6 +2488,71 @@ mod test {
         assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
         assert_eq!(guest.agents.into_vec(), vec!["GuestAgent".to_string()]);
         assert_eq!(guest.output_dir.as_deref(), Some("bridge/rust-guest"));
+    }
+
+    #[test]
+    fn root_version_source_shape_rules() {
+        fn parse(yaml: &str) -> Result<AppVersionSource, serde_yaml::Error> {
+            serde_yaml::from_str(yaml)
+        }
+        // bare string is a literal version, and env is a map variant
+        assert!(matches!(parse("\"1.2.3\"").unwrap(), AppVersionSource::Static(v) if v == "1.2.3"));
+        assert!(matches!(
+            parse("env: MY_VERSION").unwrap(),
+            AppVersionSource::Env { .. }
+        ));
+        assert!(matches!(
+            parse("git:\n  hashOnly: true").unwrap(),
+            AppVersionSource::Git {
+                git: GitVersionSource::Hash(_)
+            }
+        ));
+        // tag mode requires an explicit tagPattern
+        assert!(matches!(
+            parse("git:\n  tagPattern: \"v*\"").unwrap(),
+            AppVersionSource::Git {
+                git: GitVersionSource::Tag(_)
+            }
+        ));
+        // root tag mode without tagPattern is rejected (no default), as is empty git
+        assert!(parse("git:\n  hashFallback: true").is_err());
+        assert!(parse("git: {}").is_err());
+        // mixing hash and tag options is rejected
+        assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
+        // hashOnly must be true; unknown fields rejected
+        assert!(parse("git:\n  hashOnly: false").is_err());
+        assert!(parse("git:\n  tagPattern: \"v*\"\n  bogus: 1").is_err());
+    }
+
+    #[test]
+    fn override_version_source_shape_rules() {
+        fn parse(yaml: &str) -> Result<AppVersionSourceOverride, serde_yaml::Error> {
+            serde_yaml::from_str(yaml)
+        }
+        assert!(
+            matches!(parse("\"9.9.9\"").unwrap(), AppVersionSourceOverride::Static(v) if v == "9.9.9")
+        );
+        // partial tag override without tagPattern is allowed
+        assert!(matches!(
+            parse("git:\n  allowDirty: true").unwrap(),
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Tag(_)
+            }
+        ));
+        assert!(matches!(
+            parse("git: {}").unwrap(),
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Tag(_)
+            }
+        ));
+        assert!(matches!(
+            parse("git:\n  hashOnly: true").unwrap(),
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Hash(_)
+            }
+        ));
+        // mixing hash and tag options is still rejected
+        assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
     }
 
     #[test]

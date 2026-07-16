@@ -84,3 +84,10 @@ Shows what would be deployed without making any changes.
 - **Build failure**: fix the build errors reported in the output — `golem deploy` runs the build automatically.
 - **Server not reachable**: ensure the Golem server is running and accessible at the configured address.
 - **Port conflict**: if deploying locally, make sure no other process is using the Golem server ports.
+- **Version-related errors** (`tagPattern` required, working tree dirty, version already exists): see `golem-deployment-version`.
+
+## Related Skills
+
+- Load `golem-deployment-version` for the logical version attached to each deployment (git/static/env source, `versionCheck`).
+- Load `golem-rollback` for reverting to a previous deployment.
+- Load `golem-profiles-and-environments` for selecting deployment targets.

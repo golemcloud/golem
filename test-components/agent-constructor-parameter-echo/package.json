@@ -1,7 +1,8 @@
 {
   "name": "app",
   "dependencies": {
-    "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk"
+    "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@rollup/plugin-alias": "^5.1.1",
@@ -12,7 +13,6 @@
     "@types/node": "^24.3.1",
     "rollup": "^4.50.1",
     "tslib": "^2.8.1",
-    "typescript": "^5.9.2",
-    "@golemcloud/golem-ts-typegen": "file:../../sdks/ts/packages/golem-ts-typegen"
+    "typescript": "^5.9.2"
   }
 }
