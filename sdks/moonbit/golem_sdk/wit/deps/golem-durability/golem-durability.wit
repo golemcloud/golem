@@ -76,14 +76,10 @@ interface durability {
     /// Reads the next persisted durable function invocation from the oplog during replay
     read-persisted-durable-function-invocation: func() -> persisted-durable-function-invocation;
 
-    // TODO(p3): redesign `lazy-initialized-pollable` for WASI p3.
-    // The original resource exposed a host pollable that could be re-attached to a real
-    // pollable during replay. Pollables no longer exist in p3; this needs to be modelled
-    // as a host-resolvable `future<T>` (or similar) before durable async operations work.
-    //
-    // resource lazy-initialized-pollable {
-    //     constructor();
-    //     set: func(pollable: pollable);
-    //     subscribe: func() -> pollable;
-    // }
+    // The p2 version of this interface had a `lazy-initialized-pollable` resource: a
+    // host-owned pollable that was ready while unattached (during replay) and could later
+    // be re-bound to a real pollable when execution went live. It has no p3 equivalent
+    // and none is needed: p3 `future`/`stream` handles are one-shot and guest-creatable,
+    // so durable stream wrappers express the replay-to-live transition by resolving
+    // replayed results immediately and directly awaiting the live source afterwards.
 }

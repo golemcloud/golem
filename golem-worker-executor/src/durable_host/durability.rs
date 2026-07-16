@@ -955,8 +955,6 @@ impl TryFrom<PersistedDurableFunctionInvocation>
     }
 }
 
-// TODO(p3): re-implement LazyInitializedPollable when the WIT resource is redesigned for p3.
-
 impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn observe_function_call(
         &mut self,
