@@ -1413,6 +1413,14 @@ pub mod worker {
             #[command(flatten)]
             stream_args: StreamArgs,
         },
+        /// Drive an agent as an interactive shell: each line you type is sent to the agent and its
+        /// output is printed back.
+        /// Unlike `stream`, which tails the agent's output channels one-way, this invokes the agent.
+        #[command(after_help = crate::command_examples::AGENT_SHELL)]
+        Shell {
+            #[command(flatten)]
+            agent_id: AgentIdArgs,
+        },
         /// Like stream, but for helping Bridge SDK-based REPLs
         #[clap(hide = true)]
         ReplStream {

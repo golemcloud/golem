@@ -270,6 +270,13 @@ pub const AGENT_STREAM: &str = "Examples:
   # In structured formats, each stream event is emitted as a separate document
   golem-cli --format json agent stream 'CounterAgent(\"my-counter\")'";
 
+pub const AGENT_SHELL: &str = "Examples:
+  # Open an interactive shell session on an agent that exposes the shell surface
+  golem-cli agent shell 'ClankAgent(\"demo\")'
+
+  # From a script, use the non-interactive equivalent instead
+  golem-cli agent invoke 'ClankAgent(\"demo\")' eval '\"ls /\"'";
+
 pub const AGENT_UPDATE: &str = "Examples:
   # Update one agent in automatic mode (default), to the current deployed revision
   golem-cli agent update 'Counter(\"my-counter\")'

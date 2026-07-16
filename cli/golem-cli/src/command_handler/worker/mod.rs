@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod interactive_shell;
 mod stream;
 mod stream_output;
 
@@ -87,7 +88,7 @@ use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
-use std::io::{Stdout, Write};
+use std::io::{IsTerminal, Stdout, Write};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -173,6 +174,9 @@ impl WorkerCommandHandler {
                     agent_id: agent_name,
                     stream_args,
                 } => self.cmd_stream(agent_name, stream_args).await,
+                AgentSubcommand::Shell {
+                    agent_id: agent_name,
+                } => self.cmd_shell(agent_name).await,
                 AgentSubcommand::ReplStream {
                     agent_type_name,
                     parameters,
@@ -587,6 +591,42 @@ impl WorkerCommandHandler {
         connection.run_forever().await;
 
         Ok(())
+    }
+
+    /// Drive an agent as a shell: read a line, invoke `eval`, print the result, repeat.
+    async fn cmd_shell(&self, agent_name: AgentIdArgs) -> anyhow::Result<()> {
+        if !std::io::stdin().is_terminal() {
+            bail!(
+                "`agent shell` needs a terminal: it reads command lines interactively, so it cannot \
+                 be piped or redirected.\n\
+                 To drive an agent from a script, invoke its method directly:\n    \
+                 golem agent invoke '{}' eval '\"<command>\"'",
+                agent_name.agent_id
+            );
+        }
+
+        self.ctx.silence_app_context_init().await;
+
+        let agent_name_match = self.match_agent_name(agent_name.agent_id).await?;
+        let (component, _agent_name) = self
+            .component_by_agent_name_match(&agent_name_match)
+            .await?;
+
+        // `Ok(None)` from the validation means exactly one thing: the component carries no agent
+        // metadata (it is not an agent component) — every other failure bails inside it.
+        let Some((agent_id, agent_type)) = self.validate_worker_and_function_names(
+            &component,
+            &agent_name_match.agent_name,
+            None,
+        )?
+        else {
+            bail!("`agent shell` requires an agent component");
+        };
+        interactive_shell::validate_interactive_surface(&agent_type)?;
+        let agent_id = normalize_public_agent_id(&agent_id, &agent_type)?;
+
+        self.run_interactive_shell(&agent_name_match, &agent_type, &agent_id)
+            .await
     }
 
     async fn cmd_repl_stream(
