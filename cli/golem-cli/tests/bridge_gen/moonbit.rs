@@ -22,17 +22,25 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::moonbit::moonbit::{
     to_moonbit_constructor_ident, to_moonbit_term_ident, unique_idents, unique_idents_with_reserved,
 };
-use golem_cli::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode, MoonBitTypeName};
+use golem_cli::bridge_gen::moonbit::{
+    MoonBitBridgeGenerator, MoonBitBridgeMode, MoonBitTypeName, emit_schema_graph_literal,
+};
 use golem_cli::bridge_gen::type_naming::TypeName;
 use golem_cli::model::GuestLanguage;
 use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
-use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions, VariantCaseType};
+use golem_common::schema::schema_type::{
+    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NumericBound, NumericRestrictions,
+    PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, SecretSpec,
+    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+};
 use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
-use golem_common::schema::{AgentTypeSchema, ResultSpec, Role, SchemaType};
+use golem_common::schema::{
+    AgentTypeSchema, MetadataEnvelope, ResultSpec, Role, SchemaGraph, SchemaType,
+};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
@@ -188,6 +196,649 @@ fn guest_mode_generates_wasm_rpc_project_layout() {
     assert!(!moon_pkg.contains("moonbitlang/async"));
     assert!(!moon_pkg.contains("/runtime"));
     assert!(!moon_pkg.contains("golemcloud/golem_sdk/tool"));
+}
+
+#[test]
+fn guest_mode_reserves_unstructured_support_type_names() {
+    let user_type = def(
+        "UnstructuredText",
+        SchemaType::record(vec![named_field("value", SchemaType::string())]),
+    );
+    let agent = agent(
+        "CollisionAgent",
+        "moonbit",
+        vec![field("value", ref_to("UnstructuredText"))],
+        vec![],
+        vec![user_type],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
+    let guest = generate_without_check(kitchen_sink_agent(), MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    assert!(source.contains("pub suberror CodecError"));
+    assert!(source.contains("-> @model.SchemaValue"));
+    assert!(source.contains("@model.SchemaValue::FixedList("));
+    assert!(source.contains("@model.SchemaValue::Datetime("));
+    assert!(!source.contains("@runtime"));
+    assert!(!source.contains("IntoSchema"));
+    assert!(!source.contains("FromSchema"));
+    assert!(!source.contains("pub struct KitchenAgent"));
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn schema_graph_literal_moon_checks_as_sdk_model() {
+    let graph = SchemaGraph {
+        defs: vec![def(
+            "original.Type-ID",
+            SchemaType::record(vec![named_field(
+                "next",
+                SchemaType::option(ref_to("original.Type-ID")),
+            )]),
+        )],
+        root: SchemaType::record(vec![
+            named_field(
+                "numeric",
+                SchemaType::S64 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Signed(-9)),
+                        max: Some(NumericBound::Signed(12)),
+                        unit: Some("ms".into()),
+                    }),
+                    metadata: MetadataEnvelope {
+                        doc: Some("root docs".into()),
+                        aliases: vec!["alias".into()],
+                        examples: vec!["42".into()],
+                        deprecated: Some("old".into()),
+                        role: Some(Role::Other("custom".into())),
+                    },
+                },
+            ),
+            named_field(
+                "text",
+                SchemaType::text(TextRestrictions {
+                    languages: Some(vec!["en".into()]),
+                    min_length: Some(1),
+                    max_length: Some(8),
+                    regex: Some("^[a-z]+$".into()),
+                }),
+            ),
+            named_field(
+                "binary",
+                SchemaType::binary(BinaryRestrictions {
+                    mime_types: Some(vec!["image/png".into()]),
+                    min_bytes: Some(1),
+                    max_bytes: Some(1024),
+                }),
+            ),
+            named_field(
+                "path",
+                SchemaType::path(PathSpec {
+                    direction: PathDirection::InOut,
+                    kind: PathKind::File,
+                    allowed_mime_types: Some(vec!["text/plain".into()]),
+                    allowed_extensions: Some(vec![".txt".into()]),
+                }),
+            ),
+            named_field(
+                "url",
+                SchemaType::url(UrlRestrictions {
+                    allowed_schemes: Some(vec!["https".into()]),
+                    allowed_hosts: Some(vec!["example.com".into()]),
+                }),
+            ),
+            named_field(
+                "quantity",
+                SchemaType::quantity(QuantitySpec {
+                    base_unit: "m".into(),
+                    allowed_suffixes: vec!["km".into()],
+                    min: Some(QuantityValue {
+                        mantissa: -2,
+                        scale: 1,
+                        unit: "m".into(),
+                    }),
+                    max: Some(QuantityValue {
+                        mantissa: 9,
+                        scale: 0,
+                        unit: "m".into(),
+                    }),
+                }),
+            ),
+            named_field(
+                "union",
+                SchemaType::union(UnionSpec {
+                    branches: vec![
+                        UnionBranch {
+                            tag: "prefix".into(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Prefix { prefix: "a".into() },
+                            metadata: MetadataEnvelope::default(),
+                        },
+                        UnionBranch {
+                            tag: "suffix".into(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Suffix { suffix: "z".into() },
+                            metadata: MetadataEnvelope::default(),
+                        },
+                        UnionBranch {
+                            tag: "contains".into(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Contains {
+                                substring: "x".into(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        },
+                        UnionBranch {
+                            tag: "regex".into(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Regex { regex: "^r".into() },
+                            metadata: MetadataEnvelope::default(),
+                        },
+                        UnionBranch {
+                            tag: "equals".into(),
+                            body: SchemaType::record(vec![named_field(
+                                "kind",
+                                SchemaType::string(),
+                            )]),
+                            discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                                field_name: "kind".into(),
+                                literal: Some("value".into()),
+                            }),
+                            metadata: MetadataEnvelope::default(),
+                        },
+                        UnionBranch {
+                            tag: "absent".into(),
+                            body: SchemaType::record(vec![named_field(
+                                "other",
+                                SchemaType::string(),
+                            )]),
+                            discriminator: DiscriminatorRule::FieldAbsent {
+                                field_name: "kind".into(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        },
+                    ],
+                }),
+            ),
+            named_field(
+                "secret",
+                SchemaType::secret(SecretSpec {
+                    inner: Box::new(SchemaType::string()),
+                    category: Some("api-key".into()),
+                }),
+            ),
+            named_field(
+                "quota",
+                SchemaType::quota_token(QuotaTokenSpec {
+                    resource_name: Some("cpu".into()),
+                }),
+            ),
+            named_field("future", SchemaType::future(Some(SchemaType::u32()))),
+            named_field("stream", SchemaType::stream(None)),
+        ]),
+    };
+    let dir = TempDir::new().unwrap();
+    let sdk_path = workspace_root().unwrap().join("sdks/moonbit/golem_sdk");
+    std::fs::create_dir(dir.path().join("client")).unwrap();
+    std::fs::write(
+        dir.path().join("moon.mod.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "schema-graph-literal-check",
+            "version": "0.0.0",
+            "preferred-target": "wasm",
+            "deps": {
+                "golemcloud/golem_sdk": { "path": sdk_path }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("client/moon.pkg"),
+        "import {\n  \"golemcloud/golem_sdk/schema_model\" @model,\n  \"golemcloud/golem_sdk/interface/golem/core/types\" @types,\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("client/literal.mbt"),
+        format!(
+            "pub fn emitted_graph() -> @model.SchemaGraph {{\n  {}\n}}\n",
+            emit_schema_graph_literal(&graph)
+        ),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(dir.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "schema graph literal moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_moon_checks_result_nested_in_list() {
+    let nested = def(
+        "nested",
+        SchemaType::record(vec![named_field(
+            "results",
+            SchemaType::list(SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::string())),
+                err: Some(Box::new(SchemaType::u32())),
+            })),
+        )]),
+    );
+    let agent = agent(
+        "NestedResultAgent",
+        "moonbit",
+        vec![field("value", ref_to("nested"))],
+        vec![],
+        vec![nested],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_moon_checks_unstructured_text_codec() {
+    let media = def(
+        "media",
+        SchemaType::record(vec![named_field(
+            "body",
+            unstructured_text_schema_type(TextRestrictions::default()),
+        )]),
+    );
+    let agent = agent(
+        "MediaAgent",
+        "moonbit",
+        vec![field("value", ref_to("media"))],
+        vec![],
+        vec![media],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
+    let media = def(
+        "media",
+        SchemaType::record(vec![named_field(
+            "body",
+            unstructured_text_schema_type(TextRestrictions {
+                languages: Some(vec!["en".into()]),
+                ..Default::default()
+            }),
+        )]),
+    );
+    let agent = agent(
+        "MediaAgent",
+        "moonbit",
+        vec![field("value", ref_to("media"))],
+        vec![],
+        vec![media],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+    std::fs::write(
+        guest.path().join("client/unstructured_wbtest.mbt"),
+        r#"test "unstructured text encoder enforces language restrictions" {
+  let result = try? encode_Media({ body: Inline("bonjour", Some("fr")) })
+  guard result is Err(CodecError(_)) else {
+    fail("expected CodecError for a disallowed language")
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_preserves_union_tags_and_moon_checks_multimodal_datetime() {
+    let tagged = def(
+        "tagged",
+        SchemaType::union(UnionSpec {
+            branches: vec![
+                UnionBranch {
+                    tag: "@runtime.BridgeError".into(),
+                    body: SchemaType::string(),
+                    discriminator: DiscriminatorRule::Prefix {
+                        prefix: "error:".into(),
+                    },
+                    metadata: MetadataEnvelope::default(),
+                },
+                UnionBranch {
+                    tag: "@runtime.SchemaValue".into(),
+                    body: SchemaType::string(),
+                    discriminator: DiscriminatorRule::Prefix {
+                        prefix: "value:".into(),
+                    },
+                    metadata: MetadataEnvelope::default(),
+                },
+            ],
+        }),
+    );
+    let agent = agent(
+        "TaggedAgent",
+        "moonbit",
+        vec![
+            field("tagged", ref_to("tagged")),
+            field(
+                "media",
+                multimodal(vec![("captured-at", SchemaType::datetime())]),
+            ),
+        ],
+        vec![],
+        vec![tagged],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    assert!(source.contains("\"@runtime.BridgeError\""));
+    assert!(source.contains("\"@runtime.SchemaValue\""));
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_moon_checks_referenced_unstructured_codecs_with_distinct_restrictions() {
+    let text = def(
+        "localized-text",
+        unstructured_text_schema_type(TextRestrictions {
+            languages: Some(vec!["en".into(), "de".into()]),
+            ..Default::default()
+        }),
+    );
+    let binary = def(
+        "png-image",
+        unstructured_binary_schema_type(BinaryRestrictions {
+            mime_types: Some(vec!["image/png".into()]),
+            ..Default::default()
+        }),
+    );
+    let media = def(
+        "media",
+        SchemaType::record(vec![
+            named_field("caption", ref_to("localized-text")),
+            named_field("image", ref_to("png-image")),
+        ]),
+    );
+    let agent = agent(
+        "MediaAgent",
+        "moonbit",
+        vec![field("value", ref_to("media"))],
+        vec![],
+        vec![text, binary, media],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    assert!(source.contains("guest_decode_unstructured_text(fields[0], [\"en\", \"de\"])"));
+    assert!(source.contains("guest_decode_unstructured_binary(fields[1], [\"image/png\"])"));
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_fixed_list_encoder_rejects_wrong_length() {
+    let fixed = def(
+        "fixed",
+        SchemaType::record(vec![named_field(
+            "values",
+            SchemaType::fixed_list(SchemaType::u32(), 2),
+        )]),
+    );
+    let agent = agent(
+        "FixedAgent",
+        "moonbit",
+        vec![field("value", ref_to("fixed"))],
+        vec![],
+        vec![fixed],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+    std::fs::write(
+        guest.path().join("client/fixed_wbtest.mbt"),
+        r#"test "fixed-list length is checked" {
+  let result = try? encode_Fixed({ values: [1U] })
+  guard result is Err(CodecError(_)) else {
+    fail("expected CodecError")
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_narrow_integer_encoder_rejects_out_of_range_value() {
+    let narrow = def(
+        "narrow",
+        SchemaType::record(vec![named_field("value", SchemaType::s8())]),
+    );
+    let agent = agent(
+        "NarrowAgent",
+        "moonbit",
+        vec![field("value", ref_to("narrow"))],
+        vec![],
+        vec![narrow],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+    std::fs::write(
+        guest.path().join("client/narrow_wbtest.mbt"),
+        r#"test "s8 range is checked" {
+  let result = try? encode_Narrow({ value: 128 })
+  guard result is Err(CodecError(_)) else {
+    fail("expected CodecError for an out-of-range s8")
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_narrow_integer_decoder_rejects_out_of_range_values() {
+    let narrow = def(
+        "narrow",
+        SchemaType::record(vec![
+            named_field("s8_value", SchemaType::s8()),
+            named_field("s16_value", SchemaType::s16()),
+            named_field("u16_value", SchemaType::u16()),
+        ]),
+    );
+    let agent = agent(
+        "NarrowAgent",
+        "moonbit",
+        vec![field("value", ref_to("narrow"))],
+        vec![],
+        vec![narrow],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+    std::fs::write(
+        guest.path().join("client/narrow_decode_wbtest.mbt"),
+        r#"fn assert_decode_rejected(value : @model.SchemaValue) -> Unit raise {
+  let result = try? decode_Narrow(value)
+  guard result is Err(CodecError(_)) else {
+    fail("expected CodecError for an out-of-range narrow integer")
+  }
+}
+
+test "s8 decoder enforces schema range" {
+  assert_decode_rejected(Record([S8(128), S16(0), U16(0)]))
+}
+
+test "s16 decoder enforces schema range" {
+  assert_decode_rejected(Record([S8(0), S16(-32769), U16(0)]))
+}
+
+test "u16 decoder enforces schema range" {
+  assert_decode_rejected(Record([S8(0), S16(0), U16(65536)]))
+}
+"#,
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("test")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// An agent whose constructor and methods exercise every schema type kind the
