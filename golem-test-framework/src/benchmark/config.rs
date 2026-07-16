@@ -129,6 +129,10 @@ pub enum BenchmarkConfig {
         #[arg(long, value_enum)]
         schedule_target_pattern: Option<DensityScheduleTargetPatternArg>,
 
+        /// Duration of each schedule-density rate step in seconds.
+        #[arg(long)]
+        schedule_rate_period_secs: Option<u64>,
+
         /// Optional executor pod name for `kubectl` restart-count polling
         /// (drives the catastrophic pod-restart condition).
         #[arg(long)]

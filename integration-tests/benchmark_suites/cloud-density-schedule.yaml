@@ -21,42 +21,67 @@ cells:
   # receives about one scheduled action per second. Realistic rotates actions
   # through a fixed pool of 1,000 warm targets to model broad production load.
   - name: sched-warm-d1-spread
+    enabled: false
     targetResidency: warm
     contextSpans: 1
     targetPattern: spread
   - name: sched-warm-d1-realistic
+    enabled: false
     targetResidency: warm
     contextSpans: 1
     targetPattern: realistic
   - name: sched-warm-d50-spread
+    enabled: false
     targetResidency: warm
     contextSpans: 50
     targetPattern: spread
   - name: sched-warm-d50-realistic
+    enabled: false
     targetResidency: warm
     contextSpans: 50
     targetPattern: realistic
   - name: sched-warm-d500-spread
+    enabled: false
     targetResidency: warm
     contextSpans: 500
     targetPattern: spread
   - name: sched-warm-d500-realistic
+    enabled: false
     targetResidency: warm
     contextSpans: 500
     targetPattern: realistic
+
+  # Temporary sustained-load controls. They hold 64 actions/second for 30
+  # minutes to measure scheduler backlog growth after the regular ramp finds
+  # its knee. Remove after the scheduler investigation.
+  - name: sched-soak-d1-spread-64
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: spread
+    ramp: [64]
+    ratePeriodSecs: 1800
+  - name: sched-soak-d1-realistic-64
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: realistic
+    ramp: [64]
+    ratePeriodSecs: 1800
 
   # Cold controls deliberately stage a finite batch before restart. They are not
   # rate-ceiling cells: they isolate recovery-plus-delivery from warm scheduler
   # capacity. Realistic spread avoids one-agent queueing dominating recovery.
   - name: sched-cold-d1-realistic
+    enabled: false
     targetResidency: cold
     contextSpans: 1
     targetPattern: realistic
   - name: sched-cold-d50-realistic
+    enabled: false
     targetResidency: cold
     contextSpans: 50
     targetPattern: realistic
   - name: sched-cold-d500-realistic
+    enabled: false
     targetResidency: cold
     contextSpans: 500
     targetPattern: realistic

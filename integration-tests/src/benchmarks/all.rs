@@ -307,6 +307,7 @@ async fn main() {
             schedule_target_residency,
             schedule_context_spans,
             schedule_target_pattern,
+            schedule_rate_period_secs,
             executor_pod_name,
             executor_namespace,
             save_to_json,
@@ -329,6 +330,7 @@ async fn main() {
                 schedule_target_residency.map(map_schedule_target_residency),
                 *schedule_context_spans,
                 schedule_target_pattern.map(map_schedule_target_pattern),
+                *schedule_rate_period_secs,
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
                 save_to_json.clone(),
@@ -615,6 +617,7 @@ async fn run_density(
     >,
     schedule_context_spans: Option<u32>,
     schedule_target_pattern: Option<integration_tests::benchmarks::density::ScheduleTargetPattern>,
+    schedule_rate_period_secs: Option<u64>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
@@ -666,6 +669,12 @@ async fn run_density(
                             .expect("--schedule-context-spans required for schedule cells"),
                         target_pattern: schedule_target_pattern
                             .expect("--schedule-target-pattern required for schedule cells"),
+                        rate_period: std::time::Duration::from_secs(
+                            schedule_rate_period_secs.unwrap_or_else(|| {
+                                integration_tests::benchmarks::density::schedule::DEFAULT_RATE_PERIOD
+                                    .as_secs()
+                            }),
+                        ),
                     };
                     integration_tests::benchmarks::density::schedule::run_cell(
                         &config,

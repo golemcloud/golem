@@ -41,13 +41,14 @@ pub const REALISTIC_TARGET_COUNT: u32 = 1_000;
 const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64];
 const SCHEDULE_LEAD: Duration = Duration::from_secs(2);
 const DELIVERY_GRACE: Duration = Duration::from_secs(2);
-const RATE_PERIOD: Duration = Duration::from_secs(60);
+pub const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct CellConfig {
     pub residency: ScheduleTargetResidency,
     pub context_spans: u32,
     pub target_pattern: ScheduleTargetPattern,
+    pub rate_period: Duration,
 }
 
 impl CellConfig {
@@ -66,6 +67,9 @@ pub async fn run_cell(
     deps: &BenchmarkTestDependencies,
     probe: &ExecutorProbe,
 ) -> anyhow::Result<BenchmarkResult> {
+    if config.rate_period.is_zero() {
+        anyhow::bail!("schedule rate period must be positive");
+    }
     let component = resolve_uniform_component(manifest, deps).await?;
     let user = manifest.user_context(deps);
     let rates = validated_rates(rate_ramp.unwrap_or(DEFAULT_RATE_RAMP))?;
@@ -87,9 +91,10 @@ pub async fn run_cell(
                     &target_names,
                     config.context_spans,
                     rate,
+                    config.rate_period,
                 )
                 .await?;
-                outcome.record_period(rate, period);
+                outcome.record_period(rate, config.rate_period, period);
             }
         }
         ScheduleTargetResidency::Cold => {
@@ -239,10 +244,11 @@ async fn run_rate_period(
     targets: &[String],
     context_spans: u32,
     rate: u32,
+    rate_period: Duration,
 ) -> anyhow::Result<PeriodOutcome> {
     let started = Instant::now();
     let due_start = SystemTime::now() + SCHEDULE_LEAD;
-    let scheduled = expected_actions(rate);
+    let scheduled = expected_actions(rate, rate_period);
     futures::stream::iter(0..scheduled)
         .map(|index| {
             let target_name = targets[index as usize % targets.len()].clone();
@@ -270,8 +276,8 @@ async fn run_rate_period(
     })
 }
 
-fn expected_actions(rate: u32) -> u64 {
-    rate as u64 * RATE_PERIOD.as_secs()
+fn expected_actions(rate: u32, rate_period: Duration) -> u64 {
+    rate as u64 * rate_period.as_secs()
 }
 
 fn scheduled_at(deadline: SystemTime) -> (u64, u32) {
@@ -311,8 +317,8 @@ impl ScheduleOutcome {
         self.registration_latencies.push(registration_latency);
     }
 
-    fn record_period(&mut self, rate: u32, period: PeriodOutcome) {
-        let expected = expected_actions(rate);
+    fn record_period(&mut self, rate: u32, rate_period: Duration, period: PeriodOutcome) {
+        let expected = expected_actions(rate, rate_period);
         self.record(rate, period.scheduled, period.registration_latency);
         self.expected_scheduled += expected;
         self.rate_periods.push(RatePeriod {
@@ -423,11 +429,12 @@ mod tests {
 
     #[test]
     fn expected_actions_match_the_default_rate_ramp() {
-        assert_eq!(expected_actions(64), 3_840);
+        assert_eq!(expected_actions(64, DEFAULT_RATE_PERIOD), 3_840);
+        assert_eq!(expected_actions(64, Duration::from_secs(30 * 60)), 115_200);
         assert_eq!(
             DEFAULT_RATE_RAMP
                 .iter()
-                .map(|rate| expected_actions(*rate))
+                .map(|rate| expected_actions(*rate, DEFAULT_RATE_PERIOD))
                 .sum::<u64>(),
             7_620
         );
