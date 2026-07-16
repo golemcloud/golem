@@ -927,7 +927,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 freshness_disposition,
             )
             .await?;
-            let worker = Worker::get_or_create_running_with_freshness(
+            let worker = Worker::get_or_create_suspended_with_freshness(
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
@@ -1027,7 +1027,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 freshness_disposition,
             )
             .await?;
-            let worker = Worker::get_or_create_running_with_freshness(
+            let worker = Worker::get_or_create_suspended_with_freshness(
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
@@ -1048,9 +1048,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 principal,
             };
 
-            match worker.invoke(invocation).await? {
+            match worker.clone().invoke(invocation).await? {
                 crate::worker::ResultOrSubscription::Finished(Err(err)) => Err(err.into()),
-                _ => Ok(()),
+                crate::worker::ResultOrSubscription::Finished(Ok(_)) => Ok(()),
+                crate::worker::ResultOrSubscription::Pending(_) => {
+                    Worker::start_if_needed(worker).await?;
+                    Ok(())
+                }
             }
         } else {
             self.remote_rpc

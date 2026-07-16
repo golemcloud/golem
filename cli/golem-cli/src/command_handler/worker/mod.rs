@@ -398,6 +398,7 @@ impl WorkerCommandHandler {
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
+        validate_public_invocation_agent_id(&agent_id, &agent_type)?;
         let stream_agent_id =
             if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
                 agent_id
@@ -3124,11 +3125,21 @@ fn normalize_public_agent_id(
     .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
 }
 
+fn validate_public_invocation_agent_id(
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentTypeSchema,
+) -> anyhow::Result<()> {
+    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
+        bail!("Explicit phantom IDs cannot be used to invoke ephemeral agents");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_schema_value, split_agent_name,
+        parse_method_argument_schema_value, split_agent_name, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
@@ -3300,6 +3311,24 @@ mod tests {
         let normalized = normalize_public_agent_id(&agent_id, &agent_type).unwrap();
 
         assert!(normalized.phantom_id.is_some());
+    }
+
+    #[test]
+    fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
+        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
+        let agent_id = ParsedAgentId::try_new(
+            AgentTypeName("repl-agent".to_string()),
+            empty_typed_parameters(),
+            Some(Uuid::new_v4()),
+        )
+        .unwrap();
+
+        let error = validate_public_invocation_agent_id(&agent_id, &agent_type).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Explicit phantom IDs cannot be used to invoke ephemeral agents"
+        );
     }
 
     #[test]

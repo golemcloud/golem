@@ -88,7 +88,7 @@ object RemoteAgentClient {
       invokeWithFallback(functionName)(fn =>
         client
           .invokeAndAwaitWithMetadata(fn, input)
-          .map(value => value.copy(result = value.result.toOption))
+          .map(value => value.copy(value = value.value.toOption))
           .left
           .map(_.toString)
       )

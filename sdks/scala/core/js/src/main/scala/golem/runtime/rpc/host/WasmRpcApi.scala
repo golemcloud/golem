@@ -111,7 +111,7 @@ private[golem] object WasmRpcApi {
       functionName: String,
       input: JsSchemaValueTree
     ): Either[RpcError, js.UndefOr[JsSchemaValueTree]] =
-      invokeAndAwaitWithMetadata(functionName, input).map(_.result)
+      invokeAndAwaitWithMetadata(functionName, input).map(_.value)
 
     def invokeAndAwaitWithMetadata(
       functionName: String,

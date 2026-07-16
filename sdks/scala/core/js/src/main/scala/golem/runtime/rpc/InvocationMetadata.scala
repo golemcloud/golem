@@ -14,7 +14,7 @@ import scala.concurrent.Future
 
 final case class InvocationMetadata(agentId: String, idempotencyKey: String)
 
-final case class InvocationResult[+A](metadata: InvocationMetadata, result: A)
+final case class InvocationResult[+A](metadata: InvocationMetadata, value: A)
 
 final case class InvocationReceipt(metadata: InvocationMetadata)
 

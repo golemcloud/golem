@@ -261,19 +261,19 @@ fn emit_client_method(
     None =>
       buf.write_string(
         if durable {
-          "  let _ = response.result\n"
+          "  let _ = response.value\n"
         } else {
-          "  { metadata: response.metadata, result: () }\n"
+          "  { metadata: response.metadata, value: () }\n"
         },
       )
     Some(_) => {
-      buf.write_string("  let result = response.result\n")
+      buf.write_string("  let result = response.value\n")
       buf.write_string("  match result {\n")
       buf.write_string(
         if durable {
           "    Some(tree) => @agents.decode_output(tree, \"\{ctx}\")\n"
         } else {
-          "    Some(tree) => { metadata: response.metadata, result: @agents.decode_output(tree, \"\{ctx}\") }\n"
+          "    Some(tree) => { metadata: response.metadata, value: @agents.decode_output(tree, \"\{ctx}\") }\n"
         },
       )
       buf.write_string(

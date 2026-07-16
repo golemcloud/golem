@@ -610,7 +610,7 @@ impl TypeScriptBridgeGenerator {
         writer.declare_field("parameters", "base.SchemaValue", None);
         writer.declare_field("phantomId", "base.PhantomId | undefined", None);
         if self.agent_type.mode == AgentMode::Ephemeral {
-            writer.declare_field("agentConfig", "base.AgentConfigEntry[]", None);
+            writer.declare_field("#agentConfig", "base.AgentConfigEntry[]", None);
         }
         if self.agent_type.mode == AgentMode::Durable {
             writer.declare_field("_agentId", "base.AgentId", None);
@@ -632,7 +632,7 @@ impl TypeScriptBridgeGenerator {
         constructor.write_line("this.parameters = parameters;");
         constructor.write_line("this.phantomId = phantomId;");
         if self.agent_type.mode == AgentMode::Ephemeral {
-            constructor.write_line("this.agentConfig = agentConfig;");
+            constructor.write_line("this.#agentConfig = agentConfig;");
         }
         if self.agent_type.mode == AgentMode::Durable {
             constructor.write_line("this._agentId = agentId;");
@@ -1106,7 +1106,7 @@ impl TypeScriptBridgeGenerator {
         get_method_request.write_line("parameters: this.parameters,");
         get_method_request.write_line("phantomId: this.phantomId,");
         if self.agent_type.mode == AgentMode::Ephemeral {
-            get_method_request.write_line("config: this.agentConfig,");
+            get_method_request.write_line("config: this.#agentConfig,");
         }
         get_method_request.write_line(format!("methodName: \"{}\",", method_def.name));
         get_method_request.write_line("mode: \"await\",");

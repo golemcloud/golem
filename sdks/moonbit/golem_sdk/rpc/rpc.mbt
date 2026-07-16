@@ -20,7 +20,7 @@ pub(all) struct InvocationMetadata {
 ///|
 pub(all) struct InvocationResult[T] {
   metadata : InvocationMetadata
-  result : T
+  value : T
 }
 
 ///|
@@ -163,7 +163,7 @@ pub fn AgentClient::invoke_and_await(
         agent_id: value.metadata.agent_id,
         idempotency_key: value.metadata.idempotency_key,
       }
-      { metadata, result: value.result }
+      { metadata, value: value.result }
     }
     Err(e) => panic_on_rpc_error(e)
   }

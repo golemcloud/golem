@@ -354,6 +354,70 @@ async fn ephemeral_agent_works(
 #[test]
 #[timeout("60s")]
 #[tracing::instrument]
+async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralEchoAgent", "immediate-schedule-retry");
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let initial_result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &logical_agent_id,
+            &idempotency_key,
+            "changeAndGet",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(initial_result, "immediate-schedule-retry!");
+
+    let final_agent_id = logical_agent_id
+        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let worker_id =
+        AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
+
+    executor
+        .client
+        .clone()
+        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+            agent_id: Some(worker_id.into()),
+            method_name: Some("changeAndGet".to_string()),
+            method_parameters: Some(SchemaValue::Tuple { elements: vec![] }.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: None,
+            idempotency_key: Some(idempotency_key.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            context: None,
+            principal: None,
+            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+                as i32,
+            config: Vec::new(),
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
 async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

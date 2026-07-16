@@ -2119,9 +2119,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                     None => {
                         let worker = self
-                            .get_or_create_with_freshness(&request, freshness_disposition)
+                            .get_or_create_pending_with_freshness(&request, freshness_disposition)
                             .await?;
-                        worker.invoke(invocation).await?;
+                        match worker.clone().invoke(invocation).await? {
+                            crate::worker::ResultOrSubscription::Finished(Err(err)) => {
+                                return Err(err);
+                            }
+                            crate::worker::ResultOrSubscription::Finished(Ok(_)) => {}
+                            crate::worker::ResultOrSubscription::Pending(_) => {
+                                Worker::start_if_needed(worker).await?;
+                            }
+                        }
                         Ok((
                             Some(AgentInvocationOutput {
                                 result: AgentInvocationResult::AgentInitialization,

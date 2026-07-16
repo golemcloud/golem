@@ -49,7 +49,7 @@ pub(all) struct InvocationMetadata {
 
 pub(all) struct InvocationResult[T] {
   metadata : InvocationMetadata
-  result : T
+  value : T
 }
 
 pub(all) struct ScheduledInvocationReceipt {

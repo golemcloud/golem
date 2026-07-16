@@ -135,7 +135,7 @@ object AgentClientRuntime {
       val result = for {
         params <- encodeInput(method.inputCodec, input)
         raw    <- client.rpc.invokeAndAwaitWithMetadata(method.functionName, params)
-        value  <- decodeOutput(method.outputCodec, raw.result)
+        value  <- decodeOutput(method.outputCodec, raw.value)
       } yield InvocationResult(raw.metadata, value)
       FutureInterop.fromEither(result)
     }

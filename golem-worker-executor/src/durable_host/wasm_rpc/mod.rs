@@ -687,6 +687,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state.enrich_retry_properties(&mut retry_properties);
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
             let worker = self.public_state.worker();
+            let initial_freshness_disposition = if known_fresh_dispatch_allowed(
+                self.state.is_live(),
+                ephemeral_logical_agent_id.is_some(),
+                self.state.assume_idempotence,
+                self.state.persistence_level,
+            ) {
+                InvocationFreshnessDisposition::KnownFresh
+            } else {
+                InvocationFreshnessDisposition::MayExist
+            };
+
+            if initial_freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                worker
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await;
+            }
 
             let retry_params = if allow_retry {
                 Some(TaskRetryParams {
@@ -719,16 +735,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 retry_params,
                 self.agent_auth_ctx(),
                 None,
-                if known_fresh_dispatch_allowed(
-                    self.state.is_live(),
-                    ephemeral_logical_agent_id.is_some(),
-                    self.state.assume_idempotence,
-                    self.state.persistence_level,
-                ) {
-                    InvocationFreshnessDisposition::KnownFresh
-                } else {
-                    InvocationFreshnessDisposition::MayExist
-                },
+                initial_freshness_disposition,
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -1119,6 +1126,13 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
             let dispatch_freshness = freshness_disposition;
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
 
+            if dispatch_freshness == InvocationFreshnessDisposition::KnownFresh {
+                ctx.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await;
+            }
+
             let either_result = futures::future::select(
                 rpc.invoke_and_await(
                     &remote_agent_id,
@@ -1222,6 +1236,14 @@ async fn run_invoke<Ctx: WorkerCtx>(
             let stack = ctx.clone_as_inherited_stack(span.span_id());
             let dispatch_freshness = freshness_disposition;
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
+
+            if dispatch_freshness == InvocationFreshnessDisposition::KnownFresh {
+                ctx.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await;
+            }
+
             let result = ctx
                 .rpc()
                 .invoke(

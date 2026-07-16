@@ -126,9 +126,21 @@ fn ephemeral_agent_is_a_local_metadata_bearing_proxy() {
     assert!(client.contains("static async newPhantomWithConfig("));
     assert!(!client.contains("static async getPhantom("));
     assert!(!client.contains("base.createAgent("));
-    assert!(client.contains("readonly agentConfig: base.AgentConfigEntry[];"));
-    assert!(client.contains("config: this.agentConfig,"));
+    assert!(client.contains("readonly #agentConfig: base.AgentConfigEntry[];"));
+    assert!(client.contains("config: this.#agentConfig,"));
     assert!(client.contains("base.createEphemeralRemoteMethod"));
+}
+
+#[test]
+fn ephemeral_agent_method_can_be_named_agent_config() {
+    GeneratedPackage::new(agent(
+        "EphemeralAgentConfig",
+        "typescript",
+        vec![],
+        vec![method("agentConfig", vec![], Some(SchemaType::string()))],
+        vec![],
+        AgentMode::Ephemeral,
+    ));
 }
 
 #[test]
