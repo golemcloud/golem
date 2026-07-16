@@ -73,9 +73,9 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 22] = &[
 
 /// Tick-duration buckets for the scheduler. Values are dense at low latencies
 /// because slow ticks directly add scheduling delay.
-const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 20] = &[
+const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
     0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
-    2.5, 3.0, 5.0, 10.0,
+    2.5, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0,
 ];
 
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
