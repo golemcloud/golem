@@ -300,6 +300,17 @@ impl SchedulerServiceDefault {
             }
         }
 
+        match self
+            .scheduler_storage
+            .count_due(Utc::now(), &assignment)
+            .await
+        {
+            Ok(backlog) => {
+                crate::metrics::scheduler::set_scheduler_due_action_backlog_after_tick(backlog)
+            }
+            Err(error) => warn!(error, "Failed to count due scheduled actions after tick"),
+        }
+
         crate::metrics::scheduler::record_scheduler_tick_duration(tick_start.elapsed());
         Ok(())
     }
@@ -338,7 +349,8 @@ impl SchedulerServiceDefault {
         now: DateTime<Utc>,
     ) -> Result<(), String> {
         let action_kind = crate::metrics::scheduler::action_kind_label(&claimed_action.action);
-        let lag = now.signed_duration_since(claimed_action.due_at);
+        let action_start_time = Utc::now();
+        let lag = action_start_time.signed_duration_since(claimed_action.due_at);
         let lag_secs = lag.num_milliseconds().max(0) as f64 / 1000.0;
         crate::metrics::scheduler::record_scheduled_action_lag(Duration::from_secs_f64(lag_secs));
 
