@@ -399,6 +399,7 @@ pub struct ApplicationPreload {
     pub application_name: WithSource<ApplicationName>,
     pub environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     pub local_server: Option<WithSource<app_raw::LocalServer>>,
+    pub version: Option<WithSource<app_raw::AppVersionSource>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2619,6 +2620,7 @@ mod app_builder {
         ResourceDefaults(EnvironmentName),
         Bridge,
         LocalServer,
+        Version,
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -2637,6 +2639,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
                 UniqueSourceCheckedEntityKey::LocalServer => property,
+                UniqueSourceCheckedEntityKey::Version => property,
             }
         }
 
@@ -2685,6 +2688,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::LocalServer => {
                     "localServer".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Version => {
+                    "version".log_color_highlight().to_string()
                 }
             }
         }
@@ -2856,6 +2862,7 @@ mod app_builder {
         environments: IndexMap<EnvironmentName, app_raw::Environment>,
         local_server: Option<WithSource<app_raw::LocalServer>>,
         deployment_domain_local_server: Option<WithSource<app_raw::LocalServer>>,
+        version: Option<WithSource<app_raw::AppVersionSource>>,
 
         // "Consts" for component templating
         app_root_dir_str: String,
@@ -3029,6 +3036,7 @@ mod app_builder {
                 application_name,
                 environments: builder.environments.into_iter().collect(),
                 local_server: builder.local_server,
+                version: builder.version,
             })
         }
 
@@ -3316,7 +3324,11 @@ mod app_builder {
                             for (target_language, sdk_targets) in
                                 self.bridge_sdks.value.for_all_languages()
                             {
-                                if target_language != crate::model::GuestLanguage::Rust
+                                if !matches!(
+                                    target_language,
+                                    crate::model::GuestLanguage::Rust
+                                        | crate::model::GuestLanguage::Scala
+                                )
                                     && sdk_targets.is_some_and(|targets| targets.internal.is_some())
                                 {
                                     validation.with_context(
@@ -3410,6 +3422,22 @@ mod app_builder {
                                 );
                                 self.local_server =
                                     Some(WithSource::new(app.source.clone(), local_server.clone()));
+                            }
+                        }
+                    }
+
+                    if let Some(version) = &app.application.version {
+                        match &self.version {
+                            Some(existing) => validation.add_error(format!(
+                                "{} {} is defined in multiple sources: {}, {}",
+                                UniqueSourceCheckedEntityKey::Version.entity_kind(),
+                                UniqueSourceCheckedEntityKey::Version.entity_name(),
+                                existing.source.log_color_highlight(),
+                                app.source.log_color_highlight()
+                            )),
+                            None => {
+                                self.version =
+                                    Some(WithSource::new(app.source.clone(), version.clone()));
                             }
                         }
                     }
@@ -4587,6 +4615,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = preload
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -4607,6 +4636,45 @@ mod test {
             errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
             "unexpected error: {}",
             errors[0]
+        );
+    }
+
+    #[test]
+    fn scala_guest_bridge_mode_is_accepted() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              scala:
+                internal:
+                  agents: SomeAgent
+                  outputDir: bridge/scala-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        let agent_type_name = parse_agent_type_name("SomeAgent");
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &agent_type_name,
+                crate::model::GuestLanguage::Scala,
+                BridgeMode::Guest
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge/scala-guest")
+                .join(bridge_client_directory_name(
+                    &agent_type_name,
+                    BridgeMode::Guest
+                ))
         );
     }
 
@@ -4644,6 +4712,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = preload
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5357,6 +5426,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5417,6 +5487,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5474,6 +5545,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5568,6 +5640,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -5629,6 +5702,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")

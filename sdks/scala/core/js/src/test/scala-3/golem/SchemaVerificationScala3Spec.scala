@@ -24,12 +24,7 @@ import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
 
-/**
- * Schema-verification cases that need `Schema.derived` for stdlib `Either`,
- * which the zio-blocks macro only supports on Scala 3 (the Scala 2.13 macro
- * cannot derive these stdlib generics). The cross-version cases live in
- * [[SchemaVerificationSpec]].
- */
+/** Schema-verification cases for stdlib `Either`. */
 object SchemaVerificationScala3Spec extends ZIOSpecDefault {
 
   implicit val eitherStringIntSchema: Schema[Either[String, Int]] = Schema.derived

@@ -28,7 +28,7 @@ import scala.util.Try
 object SchemaDerivationSpec extends ZIOSpecDefault {
   import SchemaTypeBody._
 
-  // ---- test types (defined at object scope for Scala 2.13 + 3 derivation) ----
+  // ---- test types ----------------------------------------------------------
 
   final case class Prims(
     b: Boolean,
@@ -90,10 +90,6 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
   object Pong {
     implicit val schema: Schema[Pong] = Schema.derived
   }
-
-  // zio-blocks ships built-in `Schema[Option]`/`List`/`Set`/`Map` but cannot
-  // derive stdlib `Either`/tuple schemas on Scala 2.13, so those derivation
-  // cases are covered in the Scala-3-only `SchemaDerivationScala3Spec`.
 
   // ---- helpers ----
 

@@ -45,7 +45,7 @@ private[macros] object AgentMetadataMacroTypes {
  * [[golem.runtime.AgentMetadata]] / [[golem.runtime.AgentType]] /
  * [[golem.runtime.AgentImplementationType]] on the `golem:agent@2.0.0` model:
  * method names, parameter ordering + per-parameter schema bodies, durability
- * mode capture, and method invocation kinds. Runs on both Scala 2.13 and 3.
+ * mode capture, and method invocation kinds.
  */
 object AgentMetadataMacroSpec extends ZIOSpecDefault {
   import AgentMetadataMacroTypes._

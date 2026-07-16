@@ -10,6 +10,7 @@ export default {
   "golem-add-env-vars": "Defining Environment Variables for Golem Agents",
   "golem-delete-agent": "Deleting an Agent",
   "golem-deploy": "Deploying a Golem Application with `golem deploy`",
+  "golem-deployment-version": "Deployment Versions",
   "golem-edit-manifest": "Editing the Golem Application Manifest (golem.yaml)",
   "golem-get-agent-metadata": "Getting Agent Metadata",
   "golem-cli-structured-output": "Golem CLI Structured Output",

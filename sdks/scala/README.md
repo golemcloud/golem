@@ -48,9 +48,8 @@ object Name {
 // Note on custom types:
 // - The SDK requires a `zio.blocks.schema.Schema[T]` for any input/output types used in agent methods.
 // - From it the SDK derives the `golem.schema.IntoSchema[T]` / `golem.schema.FromSchema[T]` instances automatically.
-// - If you see a compile error about a missing IntoSchema/FromSchema, add/derive an implicit `Schema[T]`:
-//   Scala 3: `final case class MyType(...) derives Schema`
-//   Scala 2: `implicit val schema: Schema[MyType] = Schema.derived`
+// - If you see a compile error about a missing IntoSchema/FromSchema, derive a `Schema[T]`:
+//   `final case class MyType(...) derives Schema`
 
 // Define your agent trait (typeName is optional; when omitted, it is derived from the trait name)
 @agentDefinition(mode = DurabilityMode.Durable)
@@ -118,7 +117,7 @@ agent.schedule.increment(Datetime.afterSeconds(5))
 
 Notes:
 
-- Works in Scala 2.13 and Scala 3.
+- Requires Scala 3.
 - `trigger.*` / `schedule.*` always return `Future[Unit]` by design.
 
 ### Custom data types (Schemas)

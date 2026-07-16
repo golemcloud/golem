@@ -25,41 +25,19 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
-import { getAgentValidationError } from './decorators/agent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 
-export { BaseAgent } from './baseAgent';
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
-export { description } from './decorators/description';
-export {
-  agent,
-  AgentDecoratorOptions,
-  SnapshottingOption,
-  clearAgentValidationError,
-} from './decorators/agent';
-export { prompt } from './decorators/prompt';
-export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
-export { readonly, ReadOnlyOptions, CachePolicyOption } from './decorators/readOnly';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
 export { Principal } from './principal';
-export {
-  Client,
-  EphemeralClient,
-  EphemeralAgentConstructor,
-  InvocationMetadata,
-  InvocationResult,
-  ScheduledInvocationReceipt,
-  CancelableScheduledInvocationReceipt,
-} from './baseAgent';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
@@ -67,10 +45,16 @@ export * from './host/guard';
 export * from './host/quota';
 export * from './host/retry';
 export * from './host/result';
-export * from './host/transaction';
+export * from './host/saga';
 export * from './host/checkpoint';
-export { Config, Secret } from './agentConfig';
-export { Path, Duration, Quantity } from './richTypes';
+export * from './host/durable';
+
+// The TypeScript agent authoring surface: `defineAgent` / `method`, the schema
+// markers `s`, `clientFor`, the typed host surfaces (keyvalue / blobstore /
+// websocket / rdbms), and the `http` helpers. Built on Standard Schema and
+// exported from the main entry so it is baked into the bundle injected into
+// `agent_guest.wasm` (sharing the runtime registries).
+export * from './fluent';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
@@ -118,6 +102,11 @@ async function initialize(
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
+  const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
+  if (registrationError) {
+    throw createCustomError(formatAgentRegistrationError(agentTypeName, registrationError));
+  }
+
   const initiator: AgentInitiator | undefined = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
@@ -128,9 +117,9 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = initiator.initiateFromWit
+  const initiateResult = await (initiator.initiateFromWit
     ? initiator.initiateFromWit(input, principal)
-    : initiator.initiate(schemaValueFromWit(input), principal);
+    : initiator.initiate(schemaValueFromWit(input), principal));
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = initiateResult.val;
@@ -182,13 +171,19 @@ async function invokeTool(
 
 async function discoverAgentTypes(): Promise<AgentType[]> {
   try {
-    // Check if there were any validation errors during agent registration
-    const validationError = getAgentValidationError();
-    if (validationError) {
-      // Don't return any agent types if there was a validation error
-      throw createCustomError(validationError.message);
+    const registrationErrors = AgentTypeRegistry.getRegistrationErrors();
+    if (registrationErrors.length > 0) {
+      // Discovery's WIT result cannot carry valid definitions and diagnostics
+      // together, so report all invalid agents in one structured error. Valid
+      // agents remain registered and can still be initialized independently.
+      throw createCustomError(
+        `Agent registration failed:\n${registrationErrors
+          .map(({ agentTypeName, messages }) =>
+            formatAgentRegistrationError(agentTypeName, messages),
+          )
+          .join('\n')}`,
+      );
     }
-
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
     // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>
@@ -198,6 +193,10 @@ async function discoverAgentTypes(): Promise<AgentType[]> {
       throw createCustomError(String(e));
     }
   }
+}
+
+function formatAgentRegistrationError(agentTypeName: string, messages: readonly string[]): string {
+  return `- Agent "${agentTypeName}": ${messages.join('; ')}`;
 }
 
 async function getDefinition(): Promise<AgentType> {
@@ -361,6 +360,13 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
+  if (registrationError) {
+    // The snapshot WIT interface returns `result<_, string>`, not AgentError.
+    throw formatAgentRegistrationError(agentTypeName, registrationError);
+  }
+
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
@@ -429,15 +435,13 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
   initializationPrincipal = principal;
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
-
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = initiator.initiate(agentParameters, principal);
+  const initiateResult = await initiator.initiate(agentParameters, principal);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;
@@ -463,11 +467,19 @@ export const golemAgent200Guest: GolemAgentGuest = {
   getDefinition,
 };
 
+// The current wasm-rquickjs wrapper looks up the guest export by the WIT interface
+// short name (`guest.discoverAgentTypes` of golem:agent/guest@2.0.0). Export `guest`
+// as an alias of golemAgent200Guest so the generated wrapper finds it.
+export const guest: GolemAgentGuest = golemAgent200Guest;
+
 export const golemTool010Guest: GolemToolGuest = {
   discoverTools,
   getTool,
   invoke: invokeTool,
 };
+
+// Likewise expose the tool guest by its short interface name.
+export const tool: GolemToolGuest = golemTool010Guest;
 
 export const saveSnapshot: SaveSnapshotGuest = {
   save,

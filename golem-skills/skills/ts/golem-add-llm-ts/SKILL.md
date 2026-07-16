@@ -90,14 +90,20 @@ Load the `golem-make-http-request-ts` skill for more details on making HTTP requ
 
 ## Setting API Keys
 
-Store provider API keys as **secrets** using Golem's typed config system. Load the `golem-add-secret-ts` skill for full details. In brief, declare the key in your config type:
+Store provider API keys as **secrets** using Golem's typed config system. Load the `golem-add-secret-ts` skill for full details. In brief, declare the key as a config field marked with `s.secret(...)`:
 
 ```typescript
-import { Config, Secret } from "@golemcloud/golem-ts-sdk";
+import { z } from 'zod';
+import { defineAgent, s } from '@golemcloud/golem-ts-sdk';
 
-type MyAgentConfig = {
-  apiKey: Secret<string>;
-};
+export const MyAgent = defineAgent({
+  name: 'MyAgent',
+  id: { name: z.string() },
+  config: {
+    apiKey: s.secret(z.string()),
+  },
+  methods: { /* ... */ },
+});
 ```
 
 Then manage it via the CLI:
@@ -106,43 +112,54 @@ Then manage it via the CLI:
 golem secret create apiKey --secret-type string --secret-value "sk-..."
 ```
 
-Access in code with `this.config.value.apiKey.get()`.
+Access it inside a handler with `this.config.apiKey.get()` — a secret field surfaces as a lazy `Secret<string>` handle; call `.get()` to reveal the current value.
 
 ## Complete Agent Example
 
 ```typescript
-import { BaseAgent, agent, endpoint } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
 import OpenAI from 'openai';
 
-@agent({ mount: '/chats/{chatName}' })
-class ChatAgent extends BaseAgent {
-  private messages: OpenAI.ChatCompletionMessageParam[] = [];
-  private client: OpenAI;
+export const ChatAgent = defineAgent({
+  name: 'ChatAgent',
+  id: { chatName: z.string() },
+  http: http.mount('/chats/{chatName}'),
+  config: {
+    apiKey: s.secret(z.string()),
+  },
+  methods: {
+    ask: method({ input: { question: z.string() }, returns: z.string(), http: http.post('/ask') }),
+  },
+});
 
-  constructor(readonly chatName: string) {
-    super();
-    this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    this.messages.push({
-      role: 'system',
-      content: `You are a helpful assistant for chat '${chatName}'`,
-    });
-  }
+export const ChatAgentImpl = ChatAgent.implement({
+  // `init` receives a context with `id`, `config`, `principal`, `phantomId`.
+  init: ({ id, config }) => {
+    const client = new OpenAI({ apiKey: config.apiKey.get() });
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'system', content: `You are a helpful assistant for chat '${id.chatName}'` },
+    ];
+    return { client, messages };
+  },
+  methods: {
+    async ask({ question }) {
+      this.messages.push({ role: 'user', content: question });
 
-  @endpoint({ post: '/ask' })
-  async ask(question: string): Promise<string> {
-    this.messages.push({ role: 'user', content: question });
+      const response = await this.client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: this.messages,
+      });
 
-    const response = await this.client.chat.completions.create({
-      model: process.env.LLM_MODEL ?? 'gpt-4o',
-      messages: this.messages,
-    });
-
-    const reply = response.choices[0]?.message?.content ?? '';
-    this.messages.push({ role: 'assistant', content: reply });
-    return reply;
-  }
-}
+      const reply = response.choices[0]?.message?.content ?? '';
+      this.messages.push({ role: 'assistant', content: reply });
+      return reply;
+    },
+  },
+});
 ```
+
+> **Note:** Inside a method handler, `this` is bound to the state returned by `init` plus SDK helpers (`this.config`, `this.getId()`, `this.getPrincipal()`). Inside `init`, read config/id from the context argument instead: `init: ({ id, config }) => ...`.
 
 ## Key Constraints
 

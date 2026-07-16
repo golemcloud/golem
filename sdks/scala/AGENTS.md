@@ -5,7 +5,7 @@
 This directory contains the Scala SDK for building Golem components using Scala.js:
 - `model/` - WIT value types, RPC types, annotations (cross JVM+JS)
 - `core/` - Agent framework, Scala.js host facades (JS only)
-- `macros/` - Scala 2/3 macros for agent definition/implementation
+- `macros/` - Scala 3 macros for agent definition/implementation
 - `codegen/` - Build-time code generation (shared between sbt/Mill plugins)
 - `sbt/` - sbt plugin (`GolemPlugin`)
 - `mill/` - Mill plugin
@@ -25,7 +25,6 @@ This directory contains the Scala SDK for building Golem components using Scala.
 ```shell
 sbt compile                    # Compile all projects
 sbt "++3.8.2; core/compile"    # Compile core (Scala 3)
-sbt "++2.13.18; core/compile"  # Compile core (Scala 2)
 ```
 
 ## Testing
@@ -33,17 +32,14 @@ sbt "++2.13.18; core/compile"  # Compile core (Scala 2)
 Tests use ZIO Test framework.
 
 ```shell
-sbt golemTestAll    # Run all tests (Scala 3 + Scala 2)
-sbt golemTest3      # Run tests (Scala 3 only)
-sbt golemTest2      # Run tests (Scala 2 only)
+sbt golemTestAll    # Run all tests
 ```
 
 ## Scala Versions
 
 - **Scala 3.8.2** — All SDK modules (model, core, macros)
-- **Scala 2.13.18** — Cross-build for Scala 2 users
 - **Scala 3.3.7** — Scala.js builds (Scala.js doesn't support 3.7+)
-- **Scala 2.12.21** — sbt plugin only
+- **Scala 2.12.21** — Internal sbt 1.x plugin implementation only; Scala 2 applications are not supported
 
 ## Code Style
 

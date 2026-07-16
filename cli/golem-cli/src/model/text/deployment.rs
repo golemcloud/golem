@@ -54,7 +54,16 @@ impl MessageWithFields for DeploymentNewView {
                 "Deployment Revision",
                 &self.deployment.revision,
                 format_main_id,
-            )
+            );
+
+        fields.fmt_field_optional(
+            "Deployment Version",
+            &self.deployment.version.0,
+            !self.deployment.version.0.is_empty(),
+            format_id,
+        );
+
+        fields
             .fmt_field("Hash", &self.deployment.deployment_hash, format_id)
             .field("Deploy Revision", &self.deployment.current_revision);
 

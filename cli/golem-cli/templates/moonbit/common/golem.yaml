@@ -4,10 +4,21 @@ manifestVersion: golem-manifest-version
 
 app: app-name
 
+version:
+  git:
+    tagPattern: "v*"
+    hashFallback: true
+    staticFallback: "v0.0.0"
+
 environments:
   local:
     server: local
     componentPresets: debug
+    version:
+      git:
+        allowDirty: true
   cloud:
     server: cloud
     componentPresets: release
+    deployment:
+      versionCheck: true

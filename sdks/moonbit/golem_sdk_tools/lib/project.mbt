@@ -22,6 +22,7 @@ let skip_dirs : Array[String] = [
 /// Generated files to exclude when scanning package source files.
 let generated_files : Array[String] = [
   "golem_agents.mbt", "golem_reexports.mbt", "golem_derive.mbt", "golem_clients.mbt",
+  "golem_tools.mbt", "golem_tool_clients.mbt",
 ]
 
 ///|
