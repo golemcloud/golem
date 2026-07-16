@@ -584,9 +584,6 @@ fn map_schedule_target_pattern(
     arg: DensityScheduleTargetPatternArg,
 ) -> integration_tests::benchmarks::density::ScheduleTargetPattern {
     match arg {
-        DensityScheduleTargetPatternArg::Fanin => {
-            integration_tests::benchmarks::density::ScheduleTargetPattern::Fanin
-        }
         DensityScheduleTargetPatternArg::Spread => {
             integration_tests::benchmarks::density::ScheduleTargetPattern::Spread
         }

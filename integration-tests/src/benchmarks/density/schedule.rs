@@ -140,7 +140,6 @@ fn validated_rates(rates: &[u32]) -> anyhow::Result<&[u32]> {
 
 fn target_count(pattern: ScheduleTargetPattern, rate: u32) -> u32 {
     match pattern {
-        ScheduleTargetPattern::Fanin => 1,
         ScheduleTargetPattern::Spread => rate,
         ScheduleTargetPattern::Realistic => REALISTIC_TARGET_COUNT,
     }

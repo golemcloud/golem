@@ -202,7 +202,6 @@ pub enum DensityScheduleTargetResidencyArg {
 /// Target distribution for schedule-density cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum DensityScheduleTargetPatternArg {
-    Fanin,
     Spread,
     Realistic,
 }

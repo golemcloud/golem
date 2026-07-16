@@ -17,10 +17,9 @@ defaultRateRamp:
 cells:
   # Primary scheduler-capacity cells. Targets and the shared component are
   # pre-warmed; poll is a no-op so scheduler lag is not confounded by guest work.
-  - name: sched-warm-d1-fanin
-    targetResidency: warm
-    contextSpans: 1
-    targetPattern: fanin
+  # Spread uses one target per offered action/second, so each selected target
+  # receives about one scheduled action per second. Realistic rotates actions
+  # through a fixed pool of 1,000 warm targets to model broad production load.
   - name: sched-warm-d1-spread
     targetResidency: warm
     contextSpans: 1
@@ -29,10 +28,6 @@ cells:
     targetResidency: warm
     contextSpans: 1
     targetPattern: realistic
-  - name: sched-warm-d50-fanin
-    targetResidency: warm
-    contextSpans: 50
-    targetPattern: fanin
   - name: sched-warm-d50-spread
     targetResidency: warm
     contextSpans: 50
@@ -41,10 +36,6 @@ cells:
     targetResidency: warm
     contextSpans: 50
     targetPattern: realistic
-  - name: sched-warm-d500-fanin
-    targetResidency: warm
-    contextSpans: 500
-    targetPattern: fanin
   - name: sched-warm-d500-spread
     targetResidency: warm
     contextSpans: 500

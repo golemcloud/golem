@@ -146,7 +146,6 @@ impl Display for ScheduleTargetResidency {
 /// How scheduled actions are distributed across target agents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ScheduleTargetPattern {
-    Fanin,
     Spread,
     Realistic,
 }
@@ -154,7 +153,6 @@ pub enum ScheduleTargetPattern {
 impl ScheduleTargetPattern {
     pub fn as_str(self) -> &'static str {
         match self {
-            ScheduleTargetPattern::Fanin => "fanin",
             ScheduleTargetPattern::Spread => "spread",
             ScheduleTargetPattern::Realistic => "realistic",
         }
