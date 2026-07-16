@@ -51,7 +51,7 @@ cells:
     contextSpans: 500
     targetPattern: realistic
 
-  # Temporary sustained-load controls. They hold 64 actions/second for 30
+  # Sustained-load controls. They hold 64 actions/second for 30
   # minutes to measure scheduler backlog growth after the regular ramp finds
   # its knee. Remove after the scheduler investigation.
   - name: sched-soak-d1-spread-64
