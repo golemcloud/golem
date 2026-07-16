@@ -52,6 +52,14 @@ pub trait SchedulerStorage: Debug {
         lease_ttl: Duration,
     ) -> Result<Vec<ClaimedScheduledAction>, String>;
 
+    /// Counts actions whose due time has passed and have not been acknowledged,
+    /// including actions currently leased by an in-flight scheduler tick.
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, String>;
+
     async fn extend_lease(
         &self,
         schedule_id: &ScheduleId,

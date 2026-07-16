@@ -117,6 +117,23 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         Ok(result)
     }
 
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, String> {
+        let now_ms = datetime_to_millis(now);
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| {
+                entry.due_at_ms <= now_ms && assignment.shard_ids.contains(&entry.shard_id)
+            })
+            .count() as u64)
+    }
+
     async fn extend_lease(
         &self,
         schedule_id: &ScheduleId,
