@@ -47,7 +47,15 @@ export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
 export { Principal } from './principal';
-export { Client } from './baseAgent';
+export {
+  Client,
+  EphemeralClient,
+  EphemeralAgentConstructor,
+  InvocationMetadata,
+  InvocationResult,
+  ScheduledInvocationReceipt,
+  CancelableScheduledInvocationReceipt,
+} from './baseAgent';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';

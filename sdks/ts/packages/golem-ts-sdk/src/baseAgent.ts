@@ -432,6 +432,42 @@ export type Client<T> = {
     : never;
 };
 
+export type InvocationMetadata = { agentId: string; idempotencyKey: string };
+export type InvocationResult<T> = { metadata: InvocationMetadata; value: T };
+export type ScheduledInvocationReceipt = { metadata: InvocationMetadata };
+export type CancelableScheduledInvocationReceipt = ScheduledInvocationReceipt & {
+  cancellationToken: CancellationToken;
+};
+
+/** Remote client surface for an ephemeral agent. Decorators cannot change a class's static
+ * TypeScript type, so cast the decorated class through `unknown` to
+ * `EphemeralAgentConstructor<typeof Agent>` when calling `newPhantom` from statically typed code. */
+export type EphemeralClient<T> = {
+  [K in Exclude<MethodKeys<T>, MethodKeys<BaseAgent>>]: T[K] extends (...args: infer A) => infer R
+    ? EphemeralRemoteMethod<TransformMethodArgs<A>, Awaited<R>>
+    : never;
+};
+
+export type EphemeralAgentConstructor<T extends new (...args: any[]) => BaseAgent> = (new (
+  ...args: ConstructorParameters<T>
+) => InstanceType<T>) &
+  Omit<
+    T,
+    | 'get'
+    | 'getWithConfig'
+    | 'getPhantom'
+    | 'getPhantomWithConfig'
+    | 'newPhantom'
+    | 'newPhantomWithConfig'
+  > & {
+    newPhantom(
+      ...args: TransformGetArgs<ConstructorParameters<T>>
+    ): EphemeralClient<InstanceType<T>>;
+    newPhantomWithConfig(
+      ...args: TransformGetArgsWithConfig<ConstructorParameters<T>>
+    ): EphemeralClient<InstanceType<T>>;
+  };
+
 export type RemoteMethod<Args extends unknown[], R> = {
   (...args: Args): Promise<R>;
   /**
@@ -446,6 +482,14 @@ export type RemoteMethod<Args extends unknown[], R> = {
   trigger: (...args: Args) => void;
   schedule: (ts: Datetime, ...args: Args) => void;
   scheduleCancelable: (ts: Datetime, ...args: Args) => CancellationToken;
+};
+
+export type EphemeralRemoteMethod<Args extends unknown[], R> = {
+  (...args: Args): Promise<InvocationResult<R>>;
+  abortable: (signal: AbortSignal, ...args: Args) => Promise<InvocationResult<R>>;
+  trigger: (...args: Args) => InvocationMetadata;
+  schedule: (ts: Datetime, ...args: Args) => ScheduledInvocationReceipt;
+  scheduleCancelable: (ts: Datetime, ...args: Args) => CancelableScheduledInvocationReceipt;
 };
 
 type IsPrincipal<T> = T extends Principal ? true : false;

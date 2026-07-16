@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bridge_gen::fixtures::{
-    agent, code_first_snippets_agent_type, field, method, multi_agent_wrapper_2_types,
+    agent, code_first_snippets_agent_type, def, field, method, multi_agent_wrapper_2_types, ref_to,
     single_agent_wrapper_types,
 };
 use crate::bridge_gen::type_naming::test_type_naming;
@@ -126,6 +126,35 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     let lib_rs = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
     assert!(lib_rs.contains("pub struct EphemeralConfigAgent"));
     assert!(!lib_rs.contains("pub async fn new("));
+    assert!(lib_rs.contains("pub async fn new_phantom("));
+    assert!(!lib_rs.contains("pub async fn get_phantom("));
+    assert!(!lib_rs.contains("Uuid::new_v4"));
+    assert!(lib_rs.contains(
+        "return Ok(Self {\n            constructor_parameters,\n            phantom_id: None,"
+    ));
+}
+
+#[test]
+fn bridge_rust_ephemeral_metadata_wrapper_does_not_collide_with_schema_type() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "AlphaAgent",
+        "typescript",
+        vec![],
+        vec![method(
+            "run",
+            vec![],
+            Some(ref_to("AlphaAgentInvocationResult")),
+        )],
+        vec![def(
+            "AlphaAgentInvocationResult",
+            SchemaType::record(vec![]),
+        )],
+        AgentMode::Ephemeral,
+    );
+
+    generate_and_compile(agent_type, target_dir);
 }
 
 #[test]

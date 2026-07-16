@@ -306,8 +306,7 @@ fn generates_client_surface() {
     assert!(client.contains("_root_.golem.bridge.client.agent1.Codecs.encodePerson(person)"));
 }
 
-/// An ephemeral agent omits the parameter-addressable `get` constructor but
-/// still exposes `getPhantom` and `newPhantom`.
+/// An ephemeral agent exposes only a local, metadata-bearing proxy constructor.
 #[test]
 fn ephemeral_agent_omits_get_constructor() {
     let pkg = GeneratedPackage::new(agent(
@@ -328,10 +327,14 @@ fn ephemeral_agent_omits_get_constructor() {
         !client.contains("def get("),
         "ephemeral agent must not expose get"
     );
-    assert!(client.contains("def getPhantom("));
+    assert!(!client.contains("def getPhantom("));
     assert!(client.contains("def newPhantom("));
-    // A Unit-returning method's apply yields Future[Unit].
-    assert!(client.contains("def apply(): _root_.scala.concurrent.Future[_root_.scala.Unit]"));
+    assert!(!client.contains("Uuid.random()"));
+    assert!(!client.contains("Bridge.createAgent("));
+    assert!(
+        client.contains("Future[_root_.golem.bridge.runtime.InvocationResult[_root_.scala.Unit]]")
+    );
+    assert!(client.contains("Future[_root_.golem.bridge.runtime.InvocationReceipt]"));
 
     cross_compile(pkg.package_dir().as_path());
 }
@@ -892,7 +895,7 @@ fn local_config_overrides_cross_compiles() {
 
 /// An ephemeral agent with local config overrides omits the parameter-
 /// addressable `getWithConfig` (it has no `get`) but still exposes the phantom
-/// config variants; and a durable agent without config declarations emits no
+/// config constructor; and a durable agent without config declarations emits no
 /// `…WithConfig` variants at all.
 #[test]
 fn config_override_constructors_respect_mode_and_absence() {
@@ -916,8 +919,11 @@ fn config_override_constructors_respect_mode_and_absence() {
         !ephemeral_client.contains("def getWithConfig("),
         "ephemeral agent must not expose getWithConfig"
     );
-    assert!(ephemeral_client.contains("def getPhantomWithConfig("));
+    assert!(!ephemeral_client.contains("def getPhantomWithConfig("));
     assert!(ephemeral_client.contains("def newPhantomWithConfig("));
+    assert!(
+        ephemeral_client.contains("parameters, _root_.scala.None, agentConfig, _root_.scala.None")
+    );
 
     let no_config = GeneratedPackage::new(agent(
         "PlainAgent",

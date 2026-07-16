@@ -99,7 +99,9 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const finalPhantomId = Uuid.generate();
+    // Ephemeral agents are logical targets. The host allocates their final
+    // invocation identity independently for every call.
+    const finalPhantomId = agentType.mode === 'ephemeral' ? undefined : Uuid.generate();
     const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
@@ -269,6 +271,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
   private readonly shared: WasmRpcProxyHandlerShared;
   private readonly agentId: ParsedAgentId;
   private readonly wasmRpc: WasmRpc;
+  private readonly ephemeral: boolean;
 
   private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
 
@@ -282,6 +285,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
   constructor(shared: WasmRpcProxyHandlerShared, rpcParams: WasmRpcParams) {
     this.shared = shared;
     this.agentId = new ParsedAgentId(rpcParams.agentIdString);
+    this.ephemeral = shared.agentType.mode === 'ephemeral';
 
     this.wasmRpc = new WasmRpc(
       rpcParams.agentTypeName,
@@ -298,9 +302,19 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     if (typeof val === 'function') {
       switch (propString) {
         case 'getId': {
+          if (this.ephemeral) {
+            throw new Error(
+              'An ephemeral client has no final agent ID before invocation; use the metadata returned by the call',
+            );
+          }
           return this.getIdMethod;
         }
         case 'phantomId': {
+          if (this.ephemeral) {
+            throw new Error(
+              'An ephemeral client has no phantom ID before invocation; use the metadata returned by the call',
+            );
+          }
           return this.phantomIdMethod;
         }
         case 'getAgentType': {
@@ -333,13 +347,15 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     const methodInfo = this.shared.getMethodInfo(prop);
     const agentIdString = this.agentId.value;
     const wasmRpc = this.wasmRpc;
+    const ephemeral = this.ephemeral;
 
     async function invokeAndAwaitInternal(fnArgs: any[], signal?: AbortSignal) {
       throwIfAborted(signal);
 
       const inputTree = serializeArgs(methodInfo.params, fnArgs);
 
-      const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(methodInfo.name, inputTree);
+      const invocation = wasmRpc.asyncInvokeAndAwait(methodInfo.name, inputTree);
+      const rpcResultFuture = invocation.future;
 
       const onAbort = signal
         ? () => {
@@ -372,7 +388,8 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
           throw new Error('Remote agent returned error result: ' + JSON.stringify(rpcResult.val));
         }
 
-        return deserializeRpcResult(rpcResult.val, methodInfo.returnType);
+        const value = deserializeRpcResult(rpcResult.val, methodInfo.returnType);
+        return ephemeral ? { metadata: invocation.metadata, value } : value;
       } finally {
         if (signal && onAbort) {
           signal.removeEventListener('abort', onAbort);
@@ -382,17 +399,20 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
     function invokeFireAndForget(...fnArgs: any[]) {
       const inputTree = serializeArgs(methodInfo.params, fnArgs);
-      wasmRpc.invoke(methodInfo.name, inputTree);
+      const metadata = wasmRpc.invoke(methodInfo.name, inputTree);
+      return ephemeral ? metadata : undefined;
     }
 
     function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
       const inputTree = serializeArgs(methodInfo.params, fnArgs);
-      wasmRpc.scheduleInvocation(ts, methodInfo.name, inputTree);
+      const receipt = wasmRpc.scheduleInvocation(ts, methodInfo.name, inputTree);
+      return ephemeral ? receipt : undefined;
     }
 
     function invokeScheduleCancelable(ts: Datetime, ...fnArgs: any[]) {
       const inputTree = serializeArgs(methodInfo.params, fnArgs);
-      return wasmRpc.scheduleCancelableInvocation(ts, methodInfo.name, inputTree);
+      const receipt = wasmRpc.scheduleCancelableInvocation(ts, methodInfo.name, inputTree);
+      return ephemeral ? receipt : receipt.cancellationToken;
     }
 
     const methodFn: any = (...args: any[]) => invokeAndAwaitInternal(args);

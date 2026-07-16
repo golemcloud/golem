@@ -360,13 +360,15 @@ export function agent(options?: AgentDecoratorOptions) {
       ctor,
       true,
     );
-    (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor, false);
-    (ctor as any).getPhantomWithConfig = getPhantomRemoteClient(
-      agentClassName,
-      agentType,
-      ctor,
-      true,
-    );
+    if (agentType.mode === 'durable') {
+      (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor, false);
+      (ctor as any).getPhantomWithConfig = getPhantomRemoteClient(
+        agentClassName,
+        agentType,
+        ctor,
+        true,
+      );
+    }
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiateFromWit: (constructorInput, principal: Principal) => {

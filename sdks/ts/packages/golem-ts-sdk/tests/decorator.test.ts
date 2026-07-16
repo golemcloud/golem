@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { describe, expect } from 'vitest';
+import ts from 'typescript';
 import {
   BarAgentClassName,
   FooAgentClassName,
@@ -30,9 +34,67 @@ import { EphemeralAgent, FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from '../src/uuid';
-import { AgentClassName, BaseAgent, ParsedAgentId } from '../src';
+import {
+  AgentClassName,
+  BaseAgent,
+  EphemeralAgentConstructor,
+  InvocationResult,
+  ParsedAgentId,
+} from '../src';
 import { v, schemaValueFromWit, schemaValueToWit } from '../src/internal/schema-model';
 import { paramNames, paramRoleTag, paramShape } from './agentTypeHelpers';
+
+function ephemeralClientSurfaceDiagnostics(): string[] {
+  const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+  const fixture = path.join(packageRoot, 'tests', '.ephemeral-client-surface.repro.ts');
+  fs.writeFileSync(
+    fixture,
+    `import { BaseAgent, EphemeralAgentConstructor } from '../src/baseAgent';
+
+class ExampleAgent extends BaseAgent {
+  greet(value: string): Promise<string> { return Promise.resolve(value); }
+}
+
+declare const agent: EphemeralAgentConstructor<typeof ExampleAgent>;
+const client = agent.newPhantom();
+client.greet('world');
+// @ts-expect-error an ephemeral proxy has no stable identity before invocation
+client.getId();
+// @ts-expect-error an ephemeral proxy has no phantom identity before invocation
+client.phantomId();
+// @ts-expect-error base-agent lifecycle methods are not remote methods
+client.getAgentType();
+`,
+  );
+
+  try {
+    const configFile = ts.readConfigFile(path.join(packageRoot, 'tsconfig.json'), ts.sys.readFile);
+    if (configFile.error) {
+      return [ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n')];
+    }
+    const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, packageRoot);
+    const sourceFiles = parsed.fileNames.filter((file) => {
+      const relative = path.relative(packageRoot, file);
+      return relative.startsWith(`src${path.sep}`) || relative.startsWith(`types${path.sep}`);
+    });
+    const program = ts.createProgram([...sourceFiles, fixture], {
+      ...parsed.options,
+      noEmit: true,
+      skipLibCheck: true,
+      types: [],
+    });
+
+    return ts
+      .getPreEmitDiagnostics(program)
+      .filter((diagnostic) => diagnostic.file?.fileName === fixture)
+      .map(
+        (diagnostic) =>
+          `TS${diagnostic.code}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`,
+      );
+  } finally {
+    fs.rmSync(fixture, { force: true });
+  }
+}
 
 // Shared structural shapes (in the compact `normalizeSchema` form produced by
 // `paramShape`). Named TypeScript types project to `ref`s into the agent's
@@ -699,11 +761,24 @@ describe('Annotated EphemeralAgent class', () => {
     expect(EphemeralAgent.getWithConfig).toBe(BaseAgent.getWithConfig);
   });
 
-  it('still exposes phantom constructors', () => {
-    expect(EphemeralAgent.getPhantom).toBeDefined();
-    expect(EphemeralAgent.getPhantom).toBeTypeOf('function');
+  it('only exposes the migration-named phantom constructor', () => {
+    expect(EphemeralAgent.getPhantom).toBe(BaseAgent.getPhantom);
+    expect(EphemeralAgent.getPhantomWithConfig).toBe(BaseAgent.getPhantomWithConfig);
     expect(EphemeralAgent.newPhantom).toBeDefined();
     expect(EphemeralAgent.newPhantom).toBeTypeOf('function');
+  });
+
+  it('has a metadata-bearing public client type', () => {
+    const ephemeral = EphemeralAgent as unknown as EphemeralAgentConstructor<typeof EphemeralAgent>;
+    if (false) {
+      const client = ephemeral.newPhantom('example');
+      const result: Promise<InvocationResult<string>> = client.greet('world');
+      void result;
+    }
+  });
+
+  it('does not advertise pre-invocation identity methods on ephemeral clients', () => {
+    expect(ephemeralClientSurfaceDiagnostics()).toEqual([]);
   });
 });
 

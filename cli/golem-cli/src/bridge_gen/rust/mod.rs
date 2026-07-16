@@ -107,6 +107,19 @@ impl RustRuntimeConfig {
                     pub use golem_client::bridge::ClientError;
                     pub use golem_client::bridge::GolemServer;
 
+                    #[derive(Debug, Clone)]
+                    pub struct EphemeralInvocationResult<T> {
+                        pub agent_id: golem_client::model::AgentId,
+                        pub idempotency_key: String,
+                        pub value: T,
+                    }
+
+                    #[derive(Debug, Clone)]
+                    pub struct EphemeralInvocationReceipt {
+                        pub agent_id: golem_client::model::AgentId,
+                        pub idempotency_key: String,
+                    }
+
                     pub mod schema {
                         pub use golem_common::schema::*;
                     }
@@ -119,6 +132,8 @@ impl RustRuntimeConfig {
             }
             RustBridgeMode::GuestWasmRpc => quote! {
                 pub mod __golem_bridge_runtime {
+                    pub use golem_rust::agentic::EphemeralInvocationResult;
+
                     #[derive(Debug, Clone)]
                     pub enum ClientError {
                         SchemaEncodeFailed { message: String },
@@ -421,21 +436,26 @@ impl RustBridgeGenerator {
         };
 
         let with_config_methods = if !local_configs.is_empty() {
-            quote! {
-                #get_with_config_method
-
+            let get_phantom_with_config = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
                 pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
                     Self::__create(constructor_parameters, Some(uuid), agent_config).await
                 }
+            });
+            let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
+                .then(|| quote! { Some(uuid::Uuid::new_v4()) })
+                .unwrap_or_else(|| quote! { None });
+            quote! {
+                #get_with_config_method
+                #get_phantom_with_config
 
                 pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::__create(constructor_parameters, Some(uuid::Uuid::new_v4()), agent_config).await
+                    Self::__create(constructor_parameters, #new_phantom_id, agent_config).await
                 }
             }
         } else {
@@ -454,6 +474,38 @@ impl RustBridgeGenerator {
         } else {
             quote! {}
         };
+        let get_phantom_method = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
+            pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                let constructor_parameters: serde_json::Value = #constructor_params_value;
+                Self::__create(constructor_parameters, Some(uuid), vec![]).await
+            }
+        });
+        let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
+            .then(|| quote! { Some(uuid::Uuid::new_v4()) })
+            .unwrap_or_else(|| quote! { None });
+        let agent_id_field = (self.agent_type.mode == AgentMode::Durable)
+            .then(|| quote! { agent_id: golem_client::model::AgentId, });
+        let agent_config_field = (self.agent_type.mode == AgentMode::Ephemeral).then(|| {
+            quote! { agent_config: Vec<golem_client::model::AgentConfigEntryDto>, }
+        });
+        let agent_id_accessor = (self.agent_type.mode == AgentMode::Durable).then(|| {
+            quote! {
+                pub fn agent_id(&self) -> &golem_client::model::AgentId { &self.agent_id }
+            }
+        });
+        let ephemeral_local_return = (self.agent_type.mode == AgentMode::Ephemeral).then(|| {
+            quote! {
+                return Ok(Self { constructor_parameters, phantom_id: None, agent_config });
+            }
+        });
+        let invocation_config = (self.agent_type.mode == AgentMode::Ephemeral)
+            .then(|| quote! { Some(self.agent_config.clone()) })
+            .unwrap_or_else(|| quote! { None });
+        let created_fields = (self.agent_type.mode == AgentMode::Durable)
+            .then(|| quote! { constructor_parameters, phantom_id, agent_id: response.agent_id })
+            .unwrap_or_else(|| {
+                quote! { constructor_parameters, phantom_id: None, agent_config }
+            });
 
         // Type definitions + codecs are generated last so all language /
         // mimetype / multimodal enums discovered while emitting methods are
@@ -477,28 +529,23 @@ impl RustBridgeGenerator {
             pub struct #client_struct_name {
                 constructor_parameters: serde_json::Value,
                 phantom_id: Option<uuid::Uuid>,
-                agent_id: golem_client::model::AgentId,
+                #agent_config_field
+                #agent_id_field
             }
 
             impl #client_struct_name {
                 #get_method
 
-                pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: serde_json::Value = #constructor_params_value;
-                    Self::__create(constructor_parameters, Some(uuid), vec![]).await
-                }
+                #get_phantom_method
 
                 pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: serde_json::Value = #constructor_params_value;
-                    Self::__create(constructor_parameters, Some(uuid::Uuid::new_v4()), vec![]).await
+                    Self::__create(constructor_parameters, #new_phantom_id, vec![]).await
                 }
 
                 #with_config_methods
 
-                /// Returns the agent's identity, containing the component ID and agent name.
-                pub fn agent_id(&self) -> &golem_client::model::AgentId {
-                    &self.agent_id
-                }
+                #agent_id_accessor
 
                 /// Returns the configured worker service URL.
                 pub fn worker_service_url() -> reqwest::Url {
@@ -515,6 +562,7 @@ impl RustBridgeGenerator {
                     phantom_id: Option<uuid::Uuid>,
                     agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
                 ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    #ephemeral_local_return
                     let config = CONFIG.get().expect("Configuration has not been set");
 
                     let client = reqwest_middleware::ClientWithMiddleware::from(
@@ -538,7 +586,7 @@ impl RustBridgeGenerator {
                         },
                     ).await?;
 
-                    Ok(Self { constructor_parameters, phantom_id, agent_id: response.agent_id })
+                    Ok(Self { #created_fields })
                 }
 
                 #(#methods)*
@@ -549,7 +597,7 @@ impl RustBridgeGenerator {
                     method_parameters: serde_json::Value,
                     mode: golem_client::model::AgentInvocationMode,
                     schedule_at: Option<chrono::DateTime<chrono::Utc>>,
-                ) -> Result<Option<golem_client::model::TypedSchemaValue>, crate::__golem_bridge_runtime::ClientError> {
+                ) -> Result<golem_client::model::AgentInvocationResult, crate::__golem_bridge_runtime::ClientError> {
                     let config = CONFIG.get().expect("Configuration has not been set");
 
                     let client = reqwest_middleware::ClientWithMiddleware::from(
@@ -570,6 +618,7 @@ impl RustBridgeGenerator {
                             agent_type_name: #agent_type_name.to_string(),
                             parameters: self.constructor_parameters.clone(),
                             phantom_id: self.phantom_id,
+                            config: #invocation_config,
                             method_name: method_name.to_string(),
                             method_parameters,
                             mode,
@@ -580,7 +629,7 @@ impl RustBridgeGenerator {
                         },
                     )
                     .await?;
-                    Ok(response.result)
+                    Ok(response)
                 }
             }
 
@@ -636,13 +685,15 @@ impl RustBridgeGenerator {
                 Self::ident_from_name(impl_names.fresh("get"))
             }
         });
-        let get_phantom_method_name = Self::ident_from_name(impl_names.fresh("get_phantom"));
+        let get_phantom_method_name = (self.agent_type.mode == AgentMode::Durable)
+            .then(|| Self::ident_from_name(impl_names.fresh("get_phantom")));
         let new_phantom_method_name = Self::ident_from_name(impl_names.fresh("new_phantom"));
         let get_with_config_method_name = (self.agent_type.mode == AgentMode::Durable
             && !local_configs.is_empty())
         .then(|| Self::ident_from_name(impl_names.fresh("get_with_config")));
-        let get_phantom_with_config_method_name = (!local_configs.is_empty())
-            .then(|| Self::ident_from_name(impl_names.fresh("get_phantom_with_config")));
+        let get_phantom_with_config_method_name = (self.agent_type.mode == AgentMode::Durable
+            && !local_configs.is_empty())
+        .then(|| Self::ident_from_name(impl_names.fresh("get_phantom_with_config")));
         let new_phantom_with_config_method_name = (!local_configs.is_empty())
             .then(|| Self::ident_from_name(impl_names.fresh("new_phantom_with_config")));
         let create_method_name = Self::ident_from_name(impl_names.fresh("__create"));
@@ -740,25 +791,32 @@ impl RustBridgeGenerator {
         };
 
         let with_config_methods = if !local_configs.is_empty() {
-            let get_phantom_with_config_method_name = get_phantom_with_config_method_name
-                .as_ref()
-                .expect("agents with local config allocate get_phantom_with_config");
             let new_phantom_with_config_method_name = new_phantom_with_config_method_name
                 .as_ref()
                 .expect("agents with local config allocate new_phantom_with_config");
+            let get_phantom_with_config_method = get_phantom_with_config_method_name
+                .as_ref()
+                .map(|get_phantom_with_config_method_name| {
+                    quote! {
+                        pub fn #get_phantom_with_config_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                            let mut #agent_config_values = Vec::new();
+                            #(#config_encode_stmts)*
+                            Self::#create_method_name(Some(#phantom_id_param), #agent_config_values, #(#constructor_param_refs),*)
+                        }
+                    }
+                });
+            let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
+                .then(|| quote! { Some(golem_rust::Uuid::new_v4()) })
+                .unwrap_or_else(|| quote! { None });
             quote! {
                 #get_with_config_method
 
-                pub fn #get_phantom_with_config_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let mut #agent_config_values = Vec::new();
-                    #(#config_encode_stmts)*
-                    Self::#create_method_name(Some(#phantom_id_param), #agent_config_values, #(#constructor_param_refs),*)
-                }
+                #get_phantom_with_config_method
 
                 pub fn #new_phantom_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let mut #agent_config_values = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::#create_method_name(Some(golem_rust::Uuid::new_v4()), #agent_config_values, #(#constructor_param_refs),*)
+                    Self::#create_method_name(#new_phantom_id, #agent_config_values, #(#constructor_param_refs),*)
                 }
             }
         } else {
@@ -777,6 +835,16 @@ impl RustBridgeGenerator {
         } else {
             quote! {}
         };
+        let get_phantom_method = get_phantom_method_name.as_ref().map(|get_phantom_method_name| {
+            quote! {
+                pub fn #get_phantom_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    Self::#create_method_name(Some(#phantom_id_param), Vec::new(), #(#constructor_param_refs),*)
+                }
+            }
+        });
+        let new_phantom_id = (self.agent_type.mode == AgentMode::Durable)
+            .then(|| quote! { Some(golem_rust::Uuid::new_v4()) })
+            .unwrap_or_else(|| quote! { None });
 
         let type_definitions = self.type_definitions()?;
         let multimodals = self.multimodals()?;
@@ -799,12 +867,10 @@ impl RustBridgeGenerator {
             impl #client_struct_name {
                 #get_method
 
-                pub fn #get_phantom_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::#create_method_name(Some(#phantom_id_param), Vec::new(), #(#constructor_param_refs),*)
-                }
+                #get_phantom_method
 
                 pub fn #new_phantom_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::#create_method_name(Some(golem_rust::Uuid::new_v4()), Vec::new(), #(#constructor_param_refs),*)
+                    Self::#create_method_name(#new_phantom_id, Vec::new(), #(#constructor_param_refs),*)
                 }
 
                 #with_config_methods
@@ -1030,12 +1096,26 @@ impl RustBridgeGenerator {
             self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
         let param_refs = self.input_param_refs_with_ident_names(&names.param_names);
         let name_lit = method.name.as_str();
+        let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
 
         match return_type {
+            Some(return_type) if ephemeral => Ok(quote! {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<#return_type>, crate::__golem_bridge_runtime::ClientError> {
+                    let (metadata, result) = self.#internal_name(#(#param_refs),*).await?;
+                    let value = result.ok_or_else(|| crate::__golem_bridge_runtime::ClientError::MissingResult { method: #name_lit.to_string() })?;
+                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { metadata, value })
+                }
+            }),
             Some(return_type) => Ok(quote! {
                 pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
                     let result = self.#internal_name(#(#param_refs),*).await?;
                     result.ok_or_else(|| crate::__golem_bridge_runtime::ClientError::MissingResult { method: #name_lit.to_string() })
+                }
+            }),
+            None if ephemeral => Ok(quote! {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<()>, crate::__golem_bridge_runtime::ClientError> {
+                    let (metadata, _) = self.#internal_name(#(#param_refs),*).await?;
+                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { metadata, value: () })
                 }
             }),
             None => Ok(quote! {
@@ -1059,12 +1139,25 @@ impl RustBridgeGenerator {
         let params_schema_value = self
             .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
 
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(quote! {
+                pub fn #name(&self, #(#param_defs),*) -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, crate::__golem_bridge_runtime::ClientError> {
+                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                    self.wasm_rpc.invoke(#name_lit, method_parameters)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
+                }
+            });
+        }
+
         Ok(quote! {
             pub fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
                 self.wasm_rpc.invoke(#name_lit, method_parameters)
+                    .map(|_| ())
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
             }
         })
@@ -1082,6 +1175,17 @@ impl RustBridgeGenerator {
         let name_lit = method.name.as_str();
         let params_schema_value = self
             .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
+
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(quote! {
+                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, crate::__golem_bridge_runtime::ClientError> {
+                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                    Ok(self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters).metadata)
+                }
+            });
+        }
 
         Ok(quote! {
             pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
@@ -1107,12 +1211,23 @@ impl RustBridgeGenerator {
         let params_schema_value = self
             .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
 
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(quote! {
+                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt, crate::__golem_bridge_runtime::ClientError> {
+                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                    Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters))
+                }
+            });
+        }
+
         Ok(quote! {
             pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, crate::__golem_bridge_runtime::ClientError> {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters))
+                Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters).cancellation_token)
             }
         })
     }
@@ -1129,8 +1244,32 @@ impl RustBridgeGenerator {
         let return_type = self.output_return_type(&method.output_schema)?;
         let params_schema_value = self
             .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
+        let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
 
         match return_type {
+            Some(return_type) if ephemeral => {
+                let decode_body = self.output_decode_expr(&method.output_schema)?;
+                Ok(quote! {
+                    async fn #name(&self, #(#param_defs),*) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
+                        let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                        let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                        let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                        let metadata = invocation.metadata;
+                        let response = golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await
+                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
+                        match response {
+                            Some(__value) => {
+                                let __decoded: #return_type = (|| -> Result<#return_type, String> {
+                                    #decode_body
+                                })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaDecodeFailed { message: __e })?;
+                                Ok((metadata, Some(__decoded)))
+                            }
+                            None => Ok((metadata, None)),
+                        }
+                    }
+                })
+            }
             Some(return_type) => {
                 let decode_body = self.output_decode_expr(&method.output_schema)?;
                 Ok(quote! {
@@ -1138,7 +1277,7 @@ impl RustBridgeGenerator {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                         let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                        let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                        let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters).future;
                         let response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
                         match response {
@@ -1153,12 +1292,24 @@ impl RustBridgeGenerator {
                     }
                 })
             }
+            None if ephemeral => Ok(quote! {
+                async fn #name(&self, #(#param_defs),*) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<()>), crate::__golem_bridge_runtime::ClientError> {
+                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
+                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
+                    let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                    let metadata = invocation.metadata;
+                    let _response = golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
+                    Ok((metadata, Some(())))
+                }
+            }),
             None => Ok(quote! {
                 async fn #name(&self, #(#param_defs),*) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters).future;
                     let _response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
                     Ok(Some(()))
@@ -1173,13 +1324,26 @@ impl RustBridgeGenerator {
         let return_type = self.output_return_type(&method.output_schema)?;
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let param_refs = self.input_param_refs(&method.input_schema)?;
+        let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
 
         match return_type {
+            Some(return_type) if ephemeral => Ok(quote! {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<#return_type>, crate::__golem_bridge_runtime::ClientError> {
+                    let (agent_id, idempotency_key, result) = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
+                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { agent_id, idempotency_key, value: result.unwrap() })
+                }
+            }),
             Some(return_type) => Ok(quote! {
                 pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
-                    let result = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
+                    let (_, _, result) = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
                     let result = result.unwrap(); // always Some because of Await
                     Ok(result)
+                }
+            }),
+            None if ephemeral => Ok(quote! {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<()>, crate::__golem_bridge_runtime::ClientError> {
+                    let (agent_id, idempotency_key, _) = self.#internal_name(golem_client::model::AgentInvocationMode::Await, None, #(#param_refs),*).await?;
+                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { agent_id, idempotency_key, value: () })
                 }
             }),
             None => Ok(quote! {
@@ -1197,6 +1361,14 @@ impl RustBridgeGenerator {
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let param_refs = self.input_param_refs(&method.input_schema)?;
 
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(quote! {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationReceipt, crate::__golem_bridge_runtime::ClientError> {
+                    let (agent_id, idempotency_key, _) = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
+                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationReceipt { agent_id, idempotency_key })
+                }
+            });
+        }
         Ok(quote! {
             pub async fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, None, #(#param_refs),*).await?;
@@ -1211,6 +1383,14 @@ impl RustBridgeGenerator {
         let param_defs = self.input_param_defs(&method.input_schema)?;
         let param_refs = self.input_param_refs(&method.input_schema)?;
 
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(quote! {
+                pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationReceipt, crate::__golem_bridge_runtime::ClientError> {
+                    let (agent_id, idempotency_key, _) = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
+                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationReceipt { agent_id, idempotency_key })
+                }
+            });
+        }
         Ok(quote! {
             pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
@@ -1230,30 +1410,29 @@ impl RustBridgeGenerator {
             Some(return_type) => {
                 let decode_body = self.output_decode_expr(&method.output_schema)?;
                 Ok(quote! {
-                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
+                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, String, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
                         let method_parameters: serde_json::Value = #params_value;
                         let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
-                        match response {
+                        let agent_id = response.agent_id;
+                        let idempotency_key = response.idempotency_key;
+                        match response.result {
                             Some(__typed) => {
                                 let (_, __value) = __typed.into_parts();
                                 let __decoded: #return_type = (|| -> Result<#return_type, String> {
                                     #decode_body
                                 })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to decode result value: {__e}") })?;
-                                Ok(Some(__decoded))
+                                Ok((agent_id, idempotency_key, Some(__decoded)))
                             }
-                            None => Ok(None),
+                            None => Ok((agent_id, idempotency_key, None)),
                         }
                     }
                 })
             }
             None => Ok(quote! {
-                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
+                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, String, Option<()>), crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: serde_json::Value = #params_value;
                     let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
-                    match response {
-                        Some(_) => Ok(Some(())),
-                        None => Ok(None),
-                    }
+                    Ok((response.agent_id, response.idempotency_key, response.result.map(|_| ())))
                 }
             }),
         }
@@ -3143,6 +3322,77 @@ pub fn decode_text(
     }
 
     #[test]
+    fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Ephemeral;
+        agent_type.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["api-key".to_string()],
+            value_type: SchemaType::string(),
+        });
+        agent_type.methods.push(AgentMethodSchema {
+            name: "run".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                "value",
+                SchemaType::s32(),
+            )]),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+        for ephemeral_shape in [
+            "pub use golem_rust::agentic::EphemeralInvocationResult",
+            "pub fn new_phantom(",
+            "pub fn new_phantom_with_config(",
+            "async_invoke_and_await",
+            ".invoke(",
+            "schedule_invocation",
+            "schedule_cancelable_invocation",
+        ] {
+            assert!(
+                lib_rs.contains(ephemeral_shape),
+                "missing ephemeral guest wasm-rpc API shape {ephemeral_shape}:\n{lib_rs}"
+            );
+        }
+        assert!(!lib_rs.contains("pub struct AlphaAgentInvocationResult"));
+        assert!(!lib_rs.contains("_with_metadata"));
+        assert!(!lib_rs.contains("pub fn get("));
+        assert!(!lib_rs.contains("pub fn get_phantom("));
+        assert!(!lib_rs.contains("pub fn get_with_config("));
+        assert!(!lib_rs.contains("pub fn get_phantom_with_config("));
+        assert!(!lib_rs.contains("Uuid::new_v4"));
+
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(&target_path)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "generated ephemeral guest crate failed cargo check\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn guest_generation_compiles_with_non_copy_constructor_parameters() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =
@@ -3644,7 +3894,7 @@ pub fn decode_text(
         let method_src = &lib_rs[method_start..method_end.expect("method body should close")];
 
         assert!(
-            method_src.contains("CancellationToken"),
+            method_src.contains("CancelableScheduledInvocationReceipt"),
             "schedule_cancelable_run should be the cancelable wrapper for run, not another method's plain schedule wrapper:\n{method_src}"
         );
         assert!(

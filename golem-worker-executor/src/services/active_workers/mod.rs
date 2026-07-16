@@ -52,7 +52,7 @@ use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -209,6 +209,35 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        self.get_or_add_with_freshness(
+            deps,
+            owned_agent_id,
+            worker_env,
+            worker_agent_config,
+            component_revision,
+            parent,
+            invocation_context_stack,
+            principal,
+            InvocationFreshnessDisposition::MayExist,
+        )
+        .await
+    }
+
+    pub async fn get_or_add_with_freshness<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        parent: Option<AgentId>,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+        freshness_disposition: InvocationFreshnessDisposition,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
         let agent_id = owned_agent_id.agent_id();
 
         let owned_agent_id = owned_agent_id.clone();
@@ -227,6 +256,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         parent,
                         &invocation_context_stack,
                         principal,
+                        freshness_disposition,
                     )
                     .in_current_span()
                     .await;

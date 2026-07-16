@@ -22,18 +22,39 @@ pub(all) struct AgentClient {
   rpc : @host.WasmRpc
 }
 pub fn AgentClient::drop(Self) -> Unit
+pub fn AgentClient::ephemeral(String, @types.SchemaValueTree) -> Self raise @common.AgentError
+pub fn AgentClient::ephemeral_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
 pub fn AgentClient::get(String, @types.SchemaValueTree) -> Self raise @common.AgentError
 pub fn AgentClient::get_agent_id(Self) -> String raise @common.AgentError
 pub fn AgentClient::get_phantom(String, @types.SchemaValueTree, @types.Uuid) -> Self raise @common.AgentError
 pub fn AgentClient::get_phantom_with_config(String, @types.SchemaValueTree, @types.Uuid, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
 pub fn AgentClient::get_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
-pub fn AgentClient::invoke(Self, String, @types.SchemaValueTree) -> Unit
-pub fn AgentClient::invoke_and_await(Self, String, @types.SchemaValueTree) -> @types.SchemaValueTree?
+pub fn AgentClient::invoke(Self, String, @types.SchemaValueTree) -> InvocationMetadata
+pub fn AgentClient::invoke_and_await(Self, String, @types.SchemaValueTree) -> InvocationResult[@types.SchemaValueTree?]
 pub fn AgentClient::new_phantom(String, @types.SchemaValueTree) -> Self raise @common.AgentError
 pub fn AgentClient::new_phantom_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
 pub fn AgentClient::phantom_id(Self) -> @types.Uuid?
-pub fn AgentClient::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> @host.CancellationToken
-pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> Unit
+pub fn AgentClient::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> CancelableScheduledInvocationReceipt
+pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> ScheduledInvocationReceipt
+
+pub(all) struct CancelableScheduledInvocationReceipt {
+  metadata : InvocationMetadata
+  cancellation_token : @host.CancellationToken
+}
+
+pub(all) struct InvocationMetadata {
+  agent_id : String
+  idempotency_key : String
+}
+
+pub(all) struct InvocationResult[T] {
+  metadata : InvocationMetadata
+  result : T
+}
+
+pub(all) struct ScheduledInvocationReceipt {
+  metadata : InvocationMetadata
+}
 
 // Type aliases
 

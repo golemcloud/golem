@@ -164,7 +164,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             match final_decision {
                 None | Some(RetryDecision::None) => {
                     debug!("Invocation queue loop notifying parent about being stopped");
-                    self.stop_unloaded().await;
+                    self.stop_unloaded(
+                        cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error),
+                    )
+                    .await;
                     if cleanup_ephemeral_worker {
                         self.parent.remove_from_active_workers().await;
                         self.archive_ephemeral_oplog();
@@ -179,7 +182,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         continue;
                     } else {
                         debug!("Invocation queue loop notifying parent about being stopped");
-                        self.stop_unloaded().await;
+                        self.stop_unloaded(None).await;
                         break;
                     }
                 }
@@ -202,7 +205,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     Some(command) => command,
                                     None => {
                                         debug!("Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_unloaded().await;
+                                        self.stop_unloaded(None).await;
                                         break 'outer;
                                     }
                                 };
@@ -218,7 +221,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            self.stop_unloaded().await;
+                                            self.stop_unloaded(None).await;
                                             break 'outer;
                                         }
                                         RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
@@ -265,15 +268,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         }
     }
 
-    async fn stop_unloaded(&self) {
+    async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
         self.parent
-            .stop_internal(
-                true,
-                None,
-                FinalWorkerState::Unloaded {
-                    startup_failure: None,
-                },
-            )
+            .stop_internal(true, None, FinalWorkerState::Unloaded { startup_failure })
             .await;
     }
 
@@ -1031,6 +1028,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             consumed_fuel: Some(consumed_fuel),
             invocation_status: None,
             component_revision: Some(component_revision),
+            agent_id: None,
+            idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
         };

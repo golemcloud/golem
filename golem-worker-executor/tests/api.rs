@@ -492,9 +492,6 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
         .store()
         .await?;
     let agent_id = agent_id!("EphemeralCounter", "test");
-    let _worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
 
     let _ = executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())

@@ -3800,6 +3800,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
+                                    agent_id: None,
+                                    idempotency_key: None,
                                     oplog_index: None,
                                     agent_fingerprint: None,
                                 };

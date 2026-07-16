@@ -615,9 +615,16 @@ impl ScalaBridgeGenerator {
 
         let invoke_args = param_names.join(", ");
 
-        // apply (await) returns the decoded result, or Unit.
+        // apply (await) returns metadata for ephemeral agents.
         let (ret_ty, decode_block) = self.output_return(&method.output_schema)?;
-        writer.line(format!("def apply({param_decls}): {FUTURE}[{ret_ty}] = {{"));
+        let awaited_ty = if self.agent_type.mode == AgentMode::Ephemeral {
+            format!("_root_.golem.bridge.runtime.InvocationResult[{ret_ty}]")
+        } else {
+            ret_ty.clone()
+        };
+        writer.line(format!(
+            "def apply({param_decls}): {FUTURE}[{awaited_ty}] = {{"
+        ));
         writer.indent();
         writer.line(format!(
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
@@ -627,7 +634,12 @@ impl ScalaBridgeGenerator {
             scala_string_literal(MODE_AWAIT)
         ));
         writer.indent();
-        writer.line(decode_block);
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line(format!("val __value = {decode_block}"));
+            writer.line("_root_.golem.bridge.runtime.InvocationResult(__result.agentId, __result.idempotencyKey, __value)");
+        } else {
+            writer.line(decode_block);
+        }
         writer.dedent();
         writer.line("}");
         writer.dedent();
@@ -635,14 +647,22 @@ impl ScalaBridgeGenerator {
         writer.blank();
 
         // trigger (schedule, no time) — fire-and-forget.
-        writer.line(format!("def trigger({param_decls}): {FUTURE}[{UNIT}] = {{"));
+        let receipt_ty = if self.agent_type.mode == AgentMode::Ephemeral {
+            "_root_.golem.bridge.runtime.InvocationReceipt"
+        } else {
+            UNIT
+        };
+        writer.line(format!(
+            "def trigger({param_decls}): {FUTURE}[{receipt_ty}] = {{"
+        ));
         writer.indent();
         writer.line(format!(
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
         ));
         writer.line(format!(
-            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.None).map(_ => ())",
-            scala_string_literal(MODE_SCHEDULE)
+            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.None).map({})",
+            scala_string_literal(MODE_SCHEDULE),
+            if self.agent_type.mode == AgentMode::Ephemeral { "r => _root_.golem.bridge.runtime.InvocationReceipt(r.agentId, r.idempotencyKey)" } else { "_ => ()" }
         ));
         writer.dedent();
         writer.line("}");
@@ -655,15 +675,16 @@ impl ScalaBridgeGenerator {
             format!("{param_decls}, when: {DATETIME}")
         };
         writer.line(format!(
-            "def scheduleAt({schedule_decls}): {FUTURE}[{UNIT}] = {{"
+            "def scheduleAt({schedule_decls}): {FUTURE}[{receipt_ty}] = {{"
         ));
         writer.indent();
         writer.line(format!(
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
         ));
         writer.line(format!(
-            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.Some(when.toIsoString)).map(_ => ())",
-            scala_string_literal(MODE_SCHEDULE)
+            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.Some(when.toIsoString)).map({})",
+            scala_string_literal(MODE_SCHEDULE),
+            if self.agent_type.mode == AgentMode::Ephemeral { "r => _root_.golem.bridge.runtime.InvocationReceipt(r.agentId, r.idempotencyKey)" } else { "_ => ()" }
         ));
         writer.dedent();
         writer.line("}");
@@ -683,7 +704,9 @@ impl ScalaBridgeGenerator {
     ) {
         writer.line(format!("trait {remote_name} {{"));
         writer.indent();
-        writer.line(format!("def agentId: {AGENT_ID}"));
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.line(format!("def agentId: {AGENT_ID}"));
+        }
         writer.line(format!("def agentTypeName: {STRING}"));
         for (val_name, class_name) in method_val_names.iter().zip(method_class_names) {
             writer.line(format!("val {val_name}: {class_name}"));
@@ -696,7 +719,9 @@ impl ScalaBridgeGenerator {
             "private def bindRemote(resolved: {RESOLVED_AGENT}): {remote_name} = new {remote_name} {{"
         ));
         writer.indent();
-        writer.line(format!("def agentId: {AGENT_ID} = resolved.agentId"));
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.line(format!("def agentId: {AGENT_ID} = resolved.agentId.get"));
+        }
         writer.line(format!(
             "def agentTypeName: {STRING} = resolved.agentTypeName"
         ));
@@ -769,31 +794,41 @@ impl ScalaBridgeGenerator {
             writer.blank();
         }
 
-        // `getPhantom`: resolve with an explicit phantom UUID.
-        let phantom_decls = if param_decls.is_empty() {
-            format!("phantom: {UUID}")
-        } else {
-            format!("{param_decls}, phantom: {UUID}")
-        };
         let phantom_some = format!("_root_.scala.Some({UUID}.toStandardString(phantom))");
-        writer.line(format!(
-            "def getPhantom({phantom_decls}): {FUTURE}[{remote_name}] = {{"
-        ));
-        writer.indent();
-        self.write_create_agent_body(writer, &invoke_args, &phantom_some, LIST_EMPTY);
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+        if self.agent_type.mode == AgentMode::Durable {
+            // `getPhantom`: resolve with an explicit phantom UUID.
+            let phantom_decls = if param_decls.is_empty() {
+                format!("phantom: {UUID}")
+            } else {
+                format!("{param_decls}, phantom: {UUID}")
+            };
+            writer.line(format!(
+                "def getPhantom({phantom_decls}): {FUTURE}[{remote_name}] = {{"
+            ));
+            writer.indent();
+            self.write_create_agent_body(writer, &invoke_args, &phantom_some, LIST_EMPTY);
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
 
-        // `newPhantom`: like `getPhantom` but with a fresh random phantom id.
-        let new_phantom_args = if invoke_args.is_empty() {
-            format!("{UUID}.random()")
-        } else {
-            format!("{invoke_args}, {UUID}.random()")
-        };
-        writer.line(format!(
+            // `newPhantom`: like `getPhantom` but with a fresh random phantom id.
+            let new_phantom_args = if invoke_args.is_empty() {
+                format!("{UUID}.random()")
+            } else {
+                format!("{invoke_args}, {UUID}.random()")
+            };
+            writer.line(format!(
             "def newPhantom({param_decls}): {FUTURE}[{remote_name}] = getPhantom({new_phantom_args})"
         ));
+        } else {
+            writer.line(format!(
+                "def newPhantom({param_decls}): {FUTURE}[{remote_name}] = {{"
+            ));
+            writer.indent();
+            self.write_local_ephemeral_body(writer, &invoke_args, "_root_.scala.None", LIST_EMPTY);
+            writer.dedent();
+            writer.line("}");
+        }
 
         // Config-override constructors, emitted only when the agent declares
         // local config. Each builds the `List[AgentConfigEntry]` inline from the
@@ -826,38 +861,71 @@ impl ScalaBridgeGenerator {
                 writer.line("}");
             }
 
-            // `getPhantomWithConfig`.
-            writer.blank();
-            writer.line(format!(
-                "def getPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
-                with_config_decls(&format!("phantom: {UUID}"))
-            ));
-            writer.indent();
-            self.write_config_list(writer, &config_param_names, &local_configs)?;
-            self.write_create_agent_body(writer, &invoke_args, &phantom_some, "agentConfig");
-            writer.dedent();
-            writer.line("}");
+            if self.agent_type.mode == AgentMode::Durable {
+                // `getPhantomWithConfig`.
+                writer.blank();
+                writer.line(format!(
+                    "def getPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
+                    with_config_decls(&format!("phantom: {UUID}"))
+                ));
+                writer.indent();
+                self.write_config_list(writer, &config_param_names, &local_configs)?;
+                self.write_create_agent_body(writer, &invoke_args, &phantom_some, "agentConfig");
+                writer.dedent();
+                writer.line("}");
+            } else {
+                writer.blank();
+                writer.line(format!(
+                    "def newPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
+                    with_config_decls("")
+                ));
+                writer.indent();
+                self.write_config_list(writer, &config_param_names, &local_configs)?;
+                self.write_local_ephemeral_body(
+                    writer,
+                    &invoke_args,
+                    "_root_.scala.None",
+                    "agentConfig",
+                );
+                writer.dedent();
+                writer.line("}");
+            }
 
-            // `newPhantomWithConfig`: like `getPhantomWithConfig` but with a
-            // fresh random phantom id.
-            writer.blank();
-            writer.line(format!(
-                "def newPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
-                with_config_decls("")
-            ));
-            writer.indent();
-            self.write_config_list(writer, &config_param_names, &local_configs)?;
-            self.write_create_agent_body(
-                writer,
-                &invoke_args,
-                &format!("_root_.scala.Some({UUID}.toStandardString({UUID}.random()))"),
-                "agentConfig",
-            );
-            writer.dedent();
-            writer.line("}");
+            if self.agent_type.mode == AgentMode::Durable {
+                // `newPhantomWithConfig`: like `getPhantomWithConfig` but with a fresh phantom id.
+                writer.blank();
+                writer.line(format!(
+                    "def newPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
+                    with_config_decls("")
+                ));
+                writer.indent();
+                self.write_config_list(writer, &config_param_names, &local_configs)?;
+                self.write_create_agent_body(
+                    writer,
+                    &invoke_args,
+                    &format!("_root_.scala.Some({UUID}.toStandardString({UUID}.random()))"),
+                    "agentConfig",
+                );
+                writer.dedent();
+                writer.line("}");
+            }
         }
 
         Ok(())
+    }
+
+    fn write_local_ephemeral_body(
+        &self,
+        writer: &mut ScalaWriter,
+        invoke_args: &str,
+        phantom: &str,
+        config: &str,
+    ) {
+        writer.line(format!("val configuration = {CONFIGURATION}.get"));
+        writer.line(format!(
+            "val parameters = constructorParameters({invoke_args})"
+        ));
+        writer.line(format!("{FUTURE}.successful(bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, parameters, {phantom}, {config}, _root_.scala.None)))"));
     }
 
     /// The agent's local (caller-overridable) config declarations, in order.
@@ -972,7 +1040,7 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         writer.line(format!(
-            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, parameters, phantomId, __response.agentId))"
+            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, parameters, phantomId, {LIST_EMPTY}, _root_.scala.Some(__response.agentId)))"
         ));
         writer.dedent();
         writer.line("}");

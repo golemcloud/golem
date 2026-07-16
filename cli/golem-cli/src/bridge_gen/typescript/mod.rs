@@ -592,7 +592,9 @@ impl TypeScriptBridgeGenerator {
         self.generate_ts_class_constructor(writer);
         self.generate_ts_constructor_methods(writer, class_name, config_var)?;
         self.generate_ts_config_getter(writer, config_var);
-        self.generate_ts_agent_id_getter(writer);
+        if self.agent_type.mode == AgentMode::Durable {
+            self.generate_ts_agent_id_getter(writer);
+        }
         self.generate_ts_get_configuration(writer, config_var);
         self.generate_ts_remote_methods(writer, class_name)?;
 
@@ -607,7 +609,12 @@ impl TypeScriptBridgeGenerator {
     fn generate_ts_class_fields(&self, writer: &mut TsWriter) {
         writer.declare_field("parameters", "base.SchemaValue", None);
         writer.declare_field("phantomId", "base.PhantomId | undefined", None);
-        writer.declare_field("_agentId", "base.AgentId", None);
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.declare_field("agentConfig", "base.AgentConfigEntry[]", None);
+        }
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.declare_field("_agentId", "base.AgentId", None);
+        }
     }
 
     /// Generates the private constructor of the agent class. The user-facing constructors
@@ -616,14 +623,25 @@ impl TypeScriptBridgeGenerator {
         let mut constructor = writer.begin_private_constructor();
         constructor.param("parameters", "base.SchemaValue");
         constructor.param("phantomId", "base.PhantomId | undefined");
-        constructor.param("agentId", "base.AgentId");
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            constructor.param("agentConfig", "base.AgentConfigEntry[]");
+        }
+        if self.agent_type.mode == AgentMode::Durable {
+            constructor.param("agentId", "base.AgentId");
+        }
         constructor.write_line("this.parameters = parameters;");
         constructor.write_line("this.phantomId = phantomId;");
-        constructor.write_line("this._agentId = agentId;");
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            constructor.write_line("this.agentConfig = agentConfig;");
+        }
+        if self.agent_type.mode == AgentMode::Durable {
+            constructor.write_line("this._agentId = agentId;");
+        }
     }
 
     /// Generates the static methods for constructing agent clients. For durable agents we
-    /// generate `get`, and for any agent we also generate `getPhantom` and `newPhantom`.
+    /// generate the durable constructors. Ephemeral agents only expose the migration-named
+    /// `newPhantom`, which creates a local logical proxy.
     fn generate_ts_constructor_methods(
         &self,
         writer: &mut TsWriter,
@@ -634,7 +652,9 @@ impl TypeScriptBridgeGenerator {
             self.generate_ts_constructor_get_method(writer, class_name, config_var)?;
         }
 
-        self.generate_ts_constructor_get_phantom_method(writer, class_name, config_var)?;
+        if self.agent_type.mode == AgentMode::Durable {
+            self.generate_ts_constructor_get_phantom_method(writer, class_name, config_var)?;
+        }
         self.generate_ts_constructor_new_phantom_method(writer, class_name, config_var)?;
 
         // Generate WithConfig variants if there are local config declarations
@@ -654,12 +674,14 @@ impl TypeScriptBridgeGenerator {
                     &local_configs,
                 )?;
             }
-            self.generate_ts_constructor_get_phantom_with_config_method(
-                writer,
-                class_name,
-                config_var,
-                &local_configs,
-            )?;
+            if self.agent_type.mode == AgentMode::Durable {
+                self.generate_ts_constructor_get_phantom_with_config_method(
+                    writer,
+                    class_name,
+                    config_var,
+                    &local_configs,
+                )?;
+            }
             self.generate_ts_constructor_new_phantom_with_config_method(
                 writer,
                 class_name,
@@ -752,11 +774,18 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        new_phantom.write_line("const phantomId = uuidv4();");
-        self.write_create_agent_call(&mut new_phantom, config_var, "[]");
-        new_phantom.write_line(format!(
-            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
-        ));
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            new_phantom.write_line("const phantomId = undefined;");
+            new_phantom.write_line(format!(
+                "return new {class_name}(parameters, phantomId, []);"
+            ));
+        } else {
+            new_phantom.write_line("const phantomId = uuidv4();");
+            self.write_create_agent_call(&mut new_phantom, config_var, "[]");
+            new_phantom.write_line(format!(
+                "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+            ));
+        }
 
         Ok(())
     }
@@ -874,12 +903,22 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        method.write_line("const phantomId = uuidv4();");
+        method.write_line(if self.agent_type.mode == AgentMode::Ephemeral {
+            "const phantomId = undefined;"
+        } else {
+            "const phantomId = uuidv4();"
+        });
         self.write_config_encoding(&mut method, local_configs)?;
-        self.write_create_agent_call(&mut method, config_var, "agentConfig");
-        method.write_line(format!(
-            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
-        ));
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            method.write_line(format!(
+                "return new {class_name}(parameters, phantomId, agentConfig);"
+            ));
+        } else {
+            self.write_create_agent_call(&mut method, config_var, "agentConfig");
+            method.write_line(format!(
+                "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+            ));
+        }
 
         Ok(())
     }
@@ -1009,12 +1048,17 @@ impl TypeScriptBridgeGenerator {
         writer.declare_field(
             &self.to_js_ident(&method_def.name),
             &format!(
-                "base.RemoteMethod<[{}], {}>",
+                "base.{}<[{}], {}>",
+                if self.agent_type.mode == AgentMode::Ephemeral {
+                    "EphemeralRemoteMethod"
+                } else {
+                    "RemoteMethod"
+                },
                 self.input_type_list(&method_def.input_schema)?,
                 self.output_result_type(&method_def.output_schema)?
             ),
             Some(&formatdoc! {"
-                base.createRemoteMethod(
+                base.{}(
                     {},
                     {},
                     {},
@@ -1022,6 +1066,7 @@ impl TypeScriptBridgeGenerator {
                     {},
                 )
             ",
+                if self.agent_type.mode == AgentMode::Ephemeral { "createEphemeralRemoteMethod" } else { "createRemoteMethod" },
                 get_server_config_fn.trim(),
                 get_around_invoke_hook_fn.trim(),
                 get_method_request_fn.trim(),
@@ -1060,6 +1105,9 @@ impl TypeScriptBridgeGenerator {
         ));
         get_method_request.write_line("parameters: this.parameters,");
         get_method_request.write_line("phantomId: this.phantomId,");
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            get_method_request.write_line("config: this.agentConfig,");
+        }
         get_method_request.write_line(format!("methodName: \"{}\",", method_def.name));
         get_method_request.write_line("mode: \"await\",");
         get_method_request

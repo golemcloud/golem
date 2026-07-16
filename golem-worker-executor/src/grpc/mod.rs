@@ -53,7 +53,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{
+    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -115,6 +117,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
 type ResponseResult<T> = Result<Response<T>, Status>;
 type ResponseStream = WorkerEventStream;
+
+fn decode_invocation_freshness_disposition(value: i32) -> InvocationFreshnessDisposition {
+    if value == golem::workerexecutor::v1::InvocationFreshnessDisposition::KnownFresh as i32 {
+        InvocationFreshnessDisposition::KnownFresh
+    } else {
+        InvocationFreshnessDisposition::MayExist
+    }
+}
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -836,8 +846,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        self.get_or_create_with_freshness(request, InvocationFreshnessDisposition::MayExist)
+            .await
+    }
+
+    async fn get_or_create_with_freshness<Req: CanStartWorker>(
+        &self,
+        request: &Req,
+        freshness_disposition: InvocationFreshnessDisposition,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         async {
-            let worker = self.get_or_create_pending(request).await?;
+            let worker = self
+                .get_or_create_pending_with_freshness(request, freshness_disposition)
+                .await?;
             Worker::start_if_needed(worker.clone()).await?;
             Ok(worker)
         }
@@ -848,7 +869,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_or_create_pending_for_lookup<Req: CanStartWorker>(
         &self,
         request: &Req,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+    ) -> Result<Option<Arc<Worker<Ctx>>>, WorkerExecutorError> {
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
 
@@ -856,6 +877,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, &agent_id))
             .await?;
         self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+
+        let component = self
+            .component_service()
+            .get_metadata(agent_id.component_id, None)
+            .await?;
+        let is_ephemeral =
+            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                .ok()
+                .and_then(|parsed_agent_id| {
+                    component
+                        .metadata
+                        .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
+                })
+                .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
+        if is_ephemeral
+            && Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+                .await
+                .is_none()
+        {
+            return Ok(None);
+        }
 
         let invocation_context = request
             .maybe_invocation_context()
@@ -868,18 +910,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.config(),
+            request.config()?,
             None,
             request.parent(),
             &invocation_context,
             request.principal(),
         )
         .await
+        .map(Some)
     }
 
-    async fn get_or_create_pending<Req: CanStartWorker>(
+    async fn get_or_create_pending_with_freshness<Req: CanStartWorker>(
         &self,
         request: &Req,
+        freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
@@ -889,9 +933,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
         self.ensure_worker_belongs_to_this_executor(&agent_id)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await;
+        let metadata = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+            None
+        } else {
+            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+        };
 
-        if let Some(metadata) = &metadata {
+        if let Some(metadata) = &metadata
+            && metadata.agent_mode != AgentMode::Ephemeral
+        {
             self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
                 .await?;
         }
@@ -901,15 +951,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .unwrap_or_else(InvocationContextStack::fresh);
         let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
 
-        Worker::get_or_create_suspended(
+        Worker::get_or_create_suspended_with_freshness(
             self,
             &owned_agent_id,
             request.env(),
-            request.config(),
+            request.config()?,
             None,
             request.parent(),
             &invocation_context,
             request.principal(),
+            freshness_disposition,
         )
         .await
     }
@@ -1861,26 +1912,49 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(Option<AgentInvocationOutput>, Option<i32>), WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
+        let freshness_disposition =
+            decode_invocation_freshness_disposition(request.freshness_disposition);
+
         let idempotency_key: Option<IdempotencyKey> =
             request.idempotency_key.clone().map(|k| k.into());
+
+        if freshness_disposition == InvocationFreshnessDisposition::KnownFresh
+            && idempotency_key.is_none()
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "KnownFresh requires an idempotency key",
+            ));
+        }
 
         let mode = request.mode();
 
         let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let final_agent_id: AgentId = request
+            .agent_id
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
 
         if matches!(
             mode,
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
         ) {
-            let worker = self.get_or_create_pending_for_lookup(&request).await?;
-            let lookup = worker.lookup_invocation_result(&ik).await;
-            let inv_status = match lookup {
-                crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
-                crate::model::LookupResult::Complete(Err(err)) => return Err(err),
-                crate::model::LookupResult::Pending => InvocationStatus::Pending,
-                crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
-                    InvocationStatus::Unknown
-                }
+            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                return Err(WorkerExecutorError::invalid_request(
+                    "KnownFresh cannot be used for an invocation lookup",
+                ));
+            }
+            let inv_status = match self.get_or_create_pending_for_lookup(&request).await? {
+                Some(worker) => match worker.lookup_invocation_result(&ik).await {
+                    crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                    crate::model::LookupResult::Complete(Err(err)) => return Err(err),
+                    crate::model::LookupResult::Pending => InvocationStatus::Pending,
+                    crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
+                        InvocationStatus::Unknown
+                    }
+                },
+                None => InvocationStatus::Unknown,
             };
             return Ok((
                 Some(AgentInvocationOutput {
@@ -1888,6 +1962,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     consumed_fuel: None,
                     invocation_status: Some(inv_status),
                     component_revision: None,
+                    agent_id: Some(final_agent_id),
+                    idempotency_key: Some(ik),
                     oplog_index: None,
                     agent_fingerprint: None,
                 }),
@@ -1931,6 +2007,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
+        Worker::<Ctx>::validate_invocation_freshness(
+            self,
+            &owned_agent_id,
+            &ik,
+            freshness_disposition,
+        )
+        .await?;
+
         let principal: Principal = request
             .principal
             .clone()
@@ -1943,6 +2027,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let invocation_context = self
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
+        let worker_creation_principal = principal.clone();
 
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: ik.clone(),
@@ -1959,33 +2044,97 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // on a cache hit (`ResultOrSubscription::Finished`) it returns without
                 // loading the agent. The Pending path starts the instance lazily so
                 // queued invocations still get processed.
-                let worker = self.get_or_create_pending(&request).await?;
-                let invocation_output = worker.invoke_and_await(invocation).await?;
+                let worker = self
+                    .get_or_create_pending_with_freshness(&request, freshness_disposition)
+                    .await?;
+                let mut invocation_output = worker.invoke_and_await(invocation).await?;
+                invocation_output.agent_id = Some(final_agent_id);
+                invocation_output.idempotency_key = Some(ik);
                 Ok((Some(invocation_output), None))
             }
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 match schedule_at {
                     Some(scheduled_time) => {
-                        let worker = self.get_or_create_pending(&request).await?;
-                        let target_worker_fingerprint =
-                            worker.get_initial_worker_metadata().fingerprint;
+                        let component = self
+                            .component_service()
+                            .get_metadata(owned_agent_id.component_id(), None)
+                            .await?;
+                        let parsed_agent_id = ParsedAgentId::parse(
+                            &owned_agent_id.agent_id.agent_id,
+                            &component.metadata,
+                        )
+                        .map_err(WorkerExecutorError::invalid_request)?;
+                        let agent_mode = component
+                            .metadata
+                            .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
+                            .map(|agent_type| agent_type.mode)
+                            .ok_or_else(|| {
+                                WorkerExecutorError::invalid_request(
+                                    "Scheduled invocation target is not a registered agent type",
+                                )
+                            })?;
+                        let action = if agent_mode == AgentMode::Ephemeral {
+                            ScheduledAction::InvokeEphemeral {
+                                account_id,
+                                owned_agent_id,
+                                invocation: Box::new(invocation),
+                                component_revision: component.revision,
+                                env: request.env().unwrap_or_default(),
+                                config: request.config()?,
+                                parent: request.parent(),
+                                creation_principal: worker_creation_principal,
+                            }
+                        } else {
+                            let worker = self
+                                .get_or_create_pending_with_freshness(
+                                    &request,
+                                    freshness_disposition,
+                                )
+                                .await?;
+                            let target_worker_fingerprint =
+                                worker.get_initial_worker_metadata().fingerprint;
+                            ScheduledAction::Invoke {
+                                account_id,
+                                owned_agent_id,
+                                invocation: Box::new(invocation),
+                                target_worker_fingerprint,
+                            }
+                        };
                         self.scheduler_service()
-                            .schedule(
-                                scheduled_time,
-                                ScheduledAction::Invoke {
-                                    account_id,
-                                    owned_agent_id,
-                                    invocation: Box::new(invocation),
-                                    target_worker_fingerprint,
-                                },
-                            )
+                            .schedule(scheduled_time, action)
                             .await;
-                        Ok((None, None))
+                        Ok((
+                            Some(AgentInvocationOutput {
+                                result: AgentInvocationResult::AgentInitialization,
+                                consumed_fuel: None,
+                                invocation_status: None,
+                                component_revision: None,
+                                agent_id: Some(final_agent_id),
+                                idempotency_key: Some(ik),
+                                oplog_index: None,
+                                agent_fingerprint: None,
+                            }),
+                            None,
+                        ))
                     }
                     None => {
-                        let worker = self.get_or_create(&request).await?;
+                        let worker = self
+                            .get_or_create_with_freshness(&request, freshness_disposition)
+                            .await?;
                         worker.invoke(invocation).await?;
-                        Ok((None, None))
+                        Ok((
+                            Some(AgentInvocationOutput {
+                                result: AgentInvocationResult::AgentInitialization,
+                                consumed_fuel: None,
+                                invocation_status: None,
+                                component_revision: None,
+                                agent_id: Some(final_agent_id),
+                                idempotency_key: Some(ik),
+                                oplog_index: None,
+                                agent_fingerprint: None,
+                            }),
+                            None,
+                        ))
                     }
                 }
             }
@@ -3052,6 +3201,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     invocation_status,
                     oplog_index,
                     agent_fingerprint,
+                    agent_id,
+                    idempotency_key,
                 ) = match result {
                     Some(output) => {
                         let value = match &output.result {
@@ -3070,9 +3221,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             proto_status,
                             output.oplog_index.map(u64::from),
                             output.agent_fingerprint.map(|fp| fp.0.into()),
+                            output.agent_id.map(Into::into),
+                            output.idempotency_key.map(Into::into),
                         )
                     }
-                    None => (None, None, None, None, None, None),
+                    None => (None, None, None, None, None, None, None, None),
                 };
                 record.succeed(Ok(Response::new(InvokeAgentResponse {
                     result: Some(
@@ -3084,6 +3237,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 status: invocation_status,
                                 oplog_index,
                                 agent_fingerprint,
+                                agent_id,
+                                idempotency_key,
                             },
                         ),
                     ),
@@ -3209,4 +3364,34 @@ fn extract_owned_agent_id<T>(
         .map_err(WorkerExecutorError::invalid_request)?;
 
     Ok(OwnedAgentId::new(environment_id, &agent_id))
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::decode_invocation_freshness_disposition;
+    use golem_common::model::agent::InvocationFreshnessDisposition;
+    use test_r::test;
+
+    #[test]
+    fn invocation_freshness_defaults_unknown_values_to_may_exist() {
+        assert_eq!(
+            decode_invocation_freshness_disposition(0),
+            InvocationFreshnessDisposition::MayExist
+        );
+        assert_eq!(
+            decode_invocation_freshness_disposition(i32::MAX),
+            InvocationFreshnessDisposition::MayExist
+        );
+    }
+
+    #[test]
+    fn invocation_freshness_decodes_known_fresh_explicitly() {
+        assert_eq!(
+            decode_invocation_freshness_disposition(
+                golem_api_grpc::proto::golem::workerexecutor::v1::InvocationFreshnessDisposition::KnownFresh
+                    as i32
+            ),
+            InvocationFreshnessDisposition::KnownFresh
+        );
+    }
 }
