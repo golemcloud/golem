@@ -14,18 +14,15 @@
 
 //! MoonBit bridge SDK generator.
 //!
-//! Like the Scala generator, and unlike the Rust and TypeScript generators
-//! (which depend on an external runtime library), the MoonBit generator emits a
-//! fully self-contained `moon` module. The static runtime lives in the
-//! `<agent-client>/runtime` package (embedded from
-//! `src/bridge_gen/moonbit/runtime`) and the per-agent generated client lives in
-//! the `<agent-client>/client` package. Deriving the module name from the agent
-//! type keeps multiple generated bridge modules usable from the same consuming
-//! MoonBit project. Keeping the static code in its own package makes it
-//! straightforward to extract into a published runtime library later.
+//! In external mode, the MoonBit generator emits a fully self-contained `moon`
+//! module. The static runtime lives in the `<agent-client>/runtime` package
+//! (embedded from `src/bridge_gen/moonbit/runtime`) and the per-agent generated
+//! client lives in the `<agent-client>/client` package. In guest mode, the
+//! client is a WASM library module that depends on the Golem MoonBit SDK and
+//! uses its RPC runtime instead of bundling the REST runtime.
 //!
-//! The generated module depends only on `moonbitlang/async` (for native HTTPS)
-//! and the MoonBit core library, and builds for the `native` target.
+//! Deriving the module name from the agent type keeps multiple generated bridge
+//! modules usable from the same consuming MoonBit project.
 
 pub mod mbt_writer;
 #[allow(clippy::module_inception)]
@@ -42,6 +39,7 @@ use crate::bridge_gen::moonbit::moonbit::{
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::fs;
+use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use crate::versions::moonbit_dep;
 use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -127,7 +125,6 @@ struct MultimodalEnum {
 pub struct MoonBitBridgeGenerator {
     target_path: Utf8PathBuf,
     agent_type: AgentTypeSchema,
-    #[allow(dead_code)]
     testing: bool,
     mode: MoonBitBridgeMode,
     same_language: bool,
@@ -328,37 +325,75 @@ impl MoonBitBridgeGenerator {
     // --- Project files ------------------------------------------------------
 
     fn write_module_file(&self) -> anyhow::Result<()> {
-        let mod_json = formatdoc! {r#"
-            {{
-              "name": "{module}",
-              "version": "0.0.1",
-              "deps": {{
-                "moonbitlang/async": "{async_version}"
-              }}
-            }}
-            "#,
-            module = self.module_name(),
-            async_version = moonbit_dep::ASYNC_VERSION,
+        let mod_json = match self.mode {
+            MoonBitBridgeMode::ExternalRest => formatdoc! {r#"
+                {{
+                  "name": "{module}",
+                  "version": "0.0.1",
+                  "deps": {{
+                    "moonbitlang/async": "{async_version}"
+                  }}
+                }}
+                "#,
+                module = self.module_name(),
+                async_version = moonbit_dep::ASYNC_VERSION,
+            },
+            MoonBitBridgeMode::GuestWasmRpc => {
+                let sdk_dep = if self.testing {
+                    let sdk_path = workspace_root()?.join("sdks/moonbit/golem_sdk");
+                    serde_json::json!({ "path": sdk_path })
+                } else {
+                    serde_json::from_str(&sdk_overrides()?.moonbit_sdk_dep())
+                        .context("failed to parse MoonBit SDK dependency override")?
+                };
+                let manifest = serde_json::json!({
+                    "name": self.module_name(),
+                    "version": "0.0.1",
+                    "deps": {
+                        "golemcloud/golem_sdk": sdk_dep,
+                    },
+                    "preferred-target": "wasm",
+                });
+                serde_json::to_string_pretty(&manifest)
+                    .context("failed to serialize generated MoonBit module manifest")?
+                    + "\n"
+            }
         };
         fs::write_str(self.target_path.join("moon.mod.json"), mod_json)?;
         Ok(())
     }
 
     fn write_runtime(&self) -> anyhow::Result<()> {
-        let runtime_root = self.target_path.join("runtime");
-        write_dir(&RUNTIME_DIR, &runtime_root)
+        match self.mode {
+            MoonBitBridgeMode::ExternalRest => {
+                let runtime_root = self.target_path.join("runtime");
+                write_dir(&RUNTIME_DIR, &runtime_root)
+            }
+            MoonBitBridgeMode::GuestWasmRpc => Ok(()),
+        }
     }
 
     fn write_client(&self) -> anyhow::Result<()> {
         let client_dir = self.target_path.join("client");
         fs::create_dir_all(&client_dir)?;
 
-        let moon_pkg = formatdoc! {r#"
-            import {{
-              "{module}/runtime" @runtime,
-            }}
-            "#,
-            module = self.module_name(),
+        let moon_pkg = match self.mode {
+            MoonBitBridgeMode::ExternalRest => formatdoc! {r#"
+                import {{
+                  "{module}/runtime" @runtime,
+                }}
+                "#,
+                module = self.module_name(),
+            },
+            MoonBitBridgeMode::GuestWasmRpc => formatdoc! {r#"
+                import {{
+                  "golemcloud/golem_sdk/agents",
+                  "golemcloud/golem_sdk/interface/golem/agent/common" @common,
+                  "golemcloud/golem_sdk/interface/golem/core/types" @types,
+                  "golemcloud/golem_sdk/rpc",
+                  "golemcloud/golem_sdk/schema_model" @model,
+                }}
+                "#},
         };
         fs::write_str(client_dir.join("moon.pkg"), moon_pkg)?;
 

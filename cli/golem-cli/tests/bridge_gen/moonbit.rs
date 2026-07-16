@@ -25,6 +25,7 @@ use golem_cli::bridge_gen::moonbit::moonbit::{
 use golem_cli::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode, MoonBitTypeName};
 use golem_cli::bridge_gen::type_naming::TypeName;
 use golem_cli::model::GuestLanguage;
+use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions, VariantCaseType};
@@ -162,11 +163,31 @@ fn explicit_external_mode_is_byte_identical_to_the_default() {
 }
 
 #[test]
-fn guest_mode_uses_guest_module_name() {
+fn guest_mode_generates_wasm_rpc_project_layout() {
     let guest = generate_without_check(counter_agent(), MoonBitBridgeMode::GuestWasmRpc);
-    let module = std::fs::read_to_string(guest.path().join("moon.mod.json")).unwrap();
+    let module: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(guest.path().join("moon.mod.json")).unwrap())
+            .unwrap();
+    let sdk_path = workspace_root().unwrap().join("sdks/moonbit/golem_sdk");
 
-    assert!(module.contains(r#""name": "counter-agent-guest-client""#));
+    assert_eq!(module["name"], "counter-agent-guest-client");
+    assert_eq!(module["preferred-target"], "wasm");
+    assert_eq!(
+        module["deps"]["golemcloud/golem_sdk"]["path"],
+        sdk_path.to_str().unwrap()
+    );
+    assert!(module["deps"].get("moonbitlang/async").is_none());
+    assert!(!guest.path().join("runtime").exists());
+
+    let moon_pkg = std::fs::read_to_string(guest.path().join("client/moon.pkg")).unwrap();
+    assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/agents""#));
+    assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/rpc""#));
+    assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/schema_model" @model"#));
+    assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/interface/golem/agent/common" @common"#));
+    assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/interface/golem/core/types" @types"#));
+    assert!(!moon_pkg.contains("moonbitlang/async"));
+    assert!(!moon_pkg.contains("/runtime"));
+    assert!(!moon_pkg.contains("golemcloud/golem_sdk/tool"));
 }
 
 /// An agent whose constructor and methods exercise every schema type kind the
