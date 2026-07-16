@@ -928,6 +928,7 @@ pub async fn create_worker_executor_impl<
         golem_config.scheduler.lease_ttl,
         golem_config.scheduler.max_batches_per_tick,
         golem_config.scheduler_storage_retry.clone(),
+        golem_config.scheduler.max_concurrent_action_processing,
         shutdown_token.clone(),
     );
 

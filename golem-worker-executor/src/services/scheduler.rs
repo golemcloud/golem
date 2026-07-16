@@ -25,6 +25,7 @@ use crate::worker::{INACTIVE_EPHEMERAL_AGENT_ERROR, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::stream::{StreamExt, TryStreamExt};
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
@@ -36,6 +37,7 @@ use golem_common::model::{
 use golem_common::retries::get_delay;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::HashMap;
 use std::future::Future;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
@@ -161,6 +163,7 @@ pub struct SchedulerServiceDefault {
     lease_ttl: Duration,
     max_batches_per_tick: u32,
     storage_retry: RetryConfig,
+    max_concurrent_action_processing: usize,
 }
 
 impl SchedulerServiceDefault {
@@ -176,6 +179,7 @@ impl SchedulerServiceDefault {
         lease_ttl: Duration,
         max_batches_per_tick: u32,
         storage_retry: RetryConfig,
+        max_concurrent_action_processing: u32,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
@@ -190,6 +194,7 @@ impl SchedulerServiceDefault {
             lease_ttl,
             max_batches_per_tick,
             storage_retry,
+            max_concurrent_action_processing: max_concurrent_action_processing.max(1) as usize,
         };
         let svc = Arc::new(svc);
         let background_handle = {
@@ -283,46 +288,12 @@ impl SchedulerServiceDefault {
                 .await?;
 
             let claimed_count = claimed.len();
+            crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
             if claimed.is_empty() {
                 break;
             }
 
-            crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
-
-            // ! Do not exit early from this loop because of failed actions, as it will cause all other actions to be skipped.
-            // ! Retryable failures are left unacknowledged and retried after lease expiry.
-            for claimed_action in claimed {
-                let action_kind =
-                    crate::metrics::scheduler::action_kind_label(&claimed_action.action);
-                // Observe the lag between scheduled_at (due_at) and actual fire time.
-                let lag = now.signed_duration_since(claimed_action.due_at);
-                let lag_secs = lag.num_milliseconds().max(0) as f64 / 1000.0;
-                crate::metrics::scheduler::record_scheduled_action_lag(Duration::from_secs_f64(
-                    lag_secs,
-                ));
-
-                let action_start = std::time::Instant::now();
-                let processed = self
-                    .process_claimed_action(claimed_action.clone(), now)
-                    .await;
-                crate::metrics::scheduler::record_scheduled_action_processing(
-                    action_kind,
-                    action_start.elapsed(),
-                );
-                if processed {
-                    let acked = self
-                        .scheduler_storage
-                        .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
-                        .await?;
-                    if !acked {
-                        warn!(
-                            schedule_id = %claimed_action.schedule_id,
-                            lease_owner = %claimed_action.lease_owner,
-                            "Failed to acknowledge scheduled action because the lease was lost"
-                        );
-                    }
-                }
-            }
+            self.process_claimed_actions(claimed, now).await?;
 
             if claimed_count < self.claim_batch_size as usize {
                 break;
@@ -330,6 +301,68 @@ impl SchedulerServiceDefault {
         }
 
         crate::metrics::scheduler::record_scheduler_tick_duration(tick_start.elapsed());
+        Ok(())
+    }
+
+    async fn process_claimed_actions(
+        &self,
+        claimed: Vec<ClaimedScheduledAction>,
+        now: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let mut actions_by_agent: HashMap<OwnedAgentId, Vec<ClaimedScheduledAction>> =
+            HashMap::new();
+        for action in claimed {
+            actions_by_agent
+                .entry(action.action.owned_agent_id())
+                .or_default()
+                .push(action);
+        }
+
+        futures::stream::iter(actions_by_agent.into_values())
+            .map(|actions| async move {
+                // A durable agent's scheduled actions must retain claim order.
+                for action in actions {
+                    self.process_and_ack_claimed_action(action, now).await?;
+                }
+                Ok::<(), String>(())
+            })
+            .buffer_unordered(self.max_concurrent_action_processing)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(())
+    }
+
+    async fn process_and_ack_claimed_action(
+        &self,
+        claimed_action: ClaimedScheduledAction,
+        now: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let action_kind = crate::metrics::scheduler::action_kind_label(&claimed_action.action);
+        let lag = now.signed_duration_since(claimed_action.due_at);
+        let lag_secs = lag.num_milliseconds().max(0) as f64 / 1000.0;
+        crate::metrics::scheduler::record_scheduled_action_lag(Duration::from_secs_f64(lag_secs));
+
+        let action_start = std::time::Instant::now();
+        let processed = self
+            .process_claimed_action(claimed_action.clone(), now)
+            .await;
+        crate::metrics::scheduler::record_scheduled_action_processing(
+            action_kind,
+            action_start.elapsed(),
+        );
+        if processed {
+            let acked = self
+                .scheduler_storage
+                .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
+                .await?;
+            if !acked {
+                warn!(
+                    schedule_id = %claimed_action.schedule_id,
+                    lease_owner = %claimed_action.lease_owner,
+                    "Failed to acknowledge scheduled action because the lease was lost"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -840,6 +873,43 @@ mod tests {
         }
     }
 
+    struct DelayedActiveWorkerAccessMock {
+        fingerprint: AgentFingerprint,
+        in_flight: Arc<AtomicUsize>,
+        max_in_flight: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
+        async fn active_worker_fingerprint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Option<AgentFingerprint> {
+            Some(self.fingerprint)
+        }
+
+        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+
+        async fn open_oplog(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_invocation(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+        ) -> Result<(), WorkerExecutorError> {
+            let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
     struct WorkerServiceMock;
 
     #[async_trait]
@@ -942,6 +1012,7 @@ mod tests {
             Duration::from_secs(30),
             10,
             RetryConfig::max_attempts_3(),
+            64,
             CancellationToken::new(),
         )
     }
@@ -1220,6 +1291,7 @@ mod tests {
             Duration::from_secs(30),
             10,
             RetryConfig::max_attempts_3(),
+            64,
             CancellationToken::new(),
         );
 
