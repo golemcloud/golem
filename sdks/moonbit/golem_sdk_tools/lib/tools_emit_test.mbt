@@ -56,12 +56,14 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   )
   assert_true(subtree_generated.contains("name: \"child\""))
   assert_true(subtree_generated.contains("fn __golem_tool_def_Child"))
+  assert_true(subtree_generated.contains("@tool.register_subtool_def_invoker"))
   let subtree_clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(@lib.parse_tools([("subtree.mbt", subtree)])),
   )
   assert_true(subtree_clients.contains("pub(all) struct RootChildClient"))
   assert_true(subtree_clients.contains("RootClient::child"))
   assert_true(subtree_clients.contains("RootChildClient::run"))
+  assert_false(subtree_clients.contains("pub fn ChildClient::new()"))
   let stdout =
     #|#derive.tool
     #|struct Out {}
@@ -263,6 +265,207 @@ test "subtree invoker uses the child tool wire name" {
   )
   assert_true(generated.contains("@tool.invoke_registered_subtool"))
   assert_true(generated.contains("\"wire-child\""))
+  assert_true(
+    generated.contains(
+      (
+        #|      __golem_tool_def_raw_Child(),
+        #|      "child",
+        #|      { options: [], flags: [] },
+        #|      Some("child"),
+      ),
+    ),
+  )
+  assert_true(
+    generated.contains(
+      "__golem_tool_def_raw_Child().normalize_inherited_globals()",
+    ),
+  )
+}
+
+///|
+test "grafted child root aliases are accepted by the parent invoker" {
+  let source =
+    #|#derive.tool
+    #|struct Parent {}
+    #|#derive.command(subtree="Child")
+    #|pub fn Parent::child() -> Unit { () }
+    #|#derive.tool
+    #|struct Child {}
+    #|#derive.command(alias="kid")
+    #|pub fn Child::child() -> String { "reached" }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("subtree.mbt", source)])),
+  )
+  assert_true(
+    generated.contains(
+      (
+        #|["child", "kid"].contains(
+        #|    __golem_command_path[0],
+        #|  )
+      ),
+    ),
+  )
+}
+
+///|
+test "grafted child root aliases cannot shadow parent commands" {
+  let source =
+    #|#derive.tool
+    #|struct Parent {}
+    #|#derive.command(subtree="Child")
+    #|pub fn Parent::child() -> Unit { () }
+    #|pub fn Parent::run() -> String { "parent" }
+    #|#derive.tool
+    #|struct Child {}
+    #|#derive.command(alias="run")
+    #|pub fn Child::child() -> String { "child" }
+  expect_tool_emit_error(source, "")
+}
+
+///|
+test "typed subtree client omits a child global captured by short name" {
+  let source =
+    #|#derive.tool
+    #|struct Parent {}
+    #|#derive.command(subtree="Child")
+    #|#derive.arg("parent_verbose", scope="global", short="v", kind="flag")
+    #|pub fn Parent::child(parent_verbose : Bool) -> Unit { () }
+    #|#derive.tool
+    #|struct Child {}
+    #|#derive.arg("child_verbose", scope="global", short="v", kind="flag")
+    #|pub fn Child::child(child_verbose : Bool) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(@lib.parse_tools([("subtree.mbt", source)])),
+  )
+  assert_true(generated.contains("ParentClient::child"))
+  assert_true(generated.contains("parent_verbose : Bool"))
+  assert_false(generated.contains("child_verbose : Bool"))
+}
+
+///|
+test "typed leaf client uses an inherited global captured by short name" {
+  let source =
+    #|#derive.tool
+    #|struct Root {}
+    #|#derive.arg("root_verbose", scope="global", short="v", kind="flag")
+    #|pub fn Root::root(root_verbose : Bool) -> Unit { () }
+    #|#derive.arg("leaf_verbose", scope="global", short="v", kind="flag")
+    #|pub fn Root::run(leaf_verbose : Bool) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(@lib.parse_tools([("short.mbt", source)])),
+  )
+  assert_true(generated.contains("RootClient::run"))
+  assert_true(generated.contains("root_verbose : Bool"))
+  assert_true(
+    generated.contains("(\"root-verbose\", @schema.to_value_as(root_verbose))"),
+  )
+  assert_false(generated.contains("leaf_verbose"))
+}
+
+///|
+test "invoker decodes a reverse-alias global through the inherited canonical name" {
+  let source =
+    #|#derive.tool
+    #|struct Root {}
+    #|#derive.arg("format", scope="global")
+    #|pub fn Root::root(format : String) -> Unit { () }
+    #|#derive.arg("count", scope="global", alias="format")
+    #|pub fn Root::run(count : String) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("alias.mbt", source)])),
+  )
+  assert_true(generated.contains("let count :String = try"))
+  assert_true(
+    generated.contains(
+      (
+        #|          "format",
+        #|          "tool root command run",
+      ),
+    ),
+  )
+}
+
+///|
+test "bug finder short-deprojected child root global does not shadow leaf input" {
+  let source =
+    #|#derive.tool
+    #|struct Parent {}
+    #|#derive.command(subtree="Child")
+    #|#derive.arg("count", scope="global", short="f")
+    #|pub fn Parent::child(count : String) -> Unit { () }
+    #|#derive.tool
+    #|struct Child {}
+    #|#derive.arg("format", scope="global", short="f")
+    #|pub fn Child::child(format : String) -> Unit { () }
+    #|#derive.arg("format", scope="option")
+    #|pub fn Child::run(format : String) -> Unit { () }
+  let tools = @lib.parse_tools([("subtree.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  ) catch {
+    @lib.ToolEmitError(message) =>
+      fail("valid grafted tool was rejected: " + message)
+  }
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  ) catch {
+    @lib.ToolEmitError(message) =>
+      fail("valid grafted client was rejected: " + message)
+  }
+  assert_true(registration.contains("@tool.register_subtool_def_invoker"))
+  assert_true(clients.contains("ParentClient::child"))
+  assert_true(clients.contains("count : String"))
+  assert_true(clients.contains("ParentChildClient::run"))
+  assert_true(clients.contains("format : String"))
+}
+
+///|
+test "distinct subtree paths do not emit duplicate client wrapper types" {
+  let source =
+    #|#derive.tool
+    #|struct Root {}
+    #|#derive.command(name="foo-bar", subtree="Leaf")
+    #|pub fn Root::direct() -> Unit { () }
+    #|#derive.command(name="foo", subtree="Middle")
+    #|pub fn Root::middle() -> Unit { () }
+    #|#derive.tool
+    #|struct Middle {}
+    #|#derive.command(name="bar", subtree="Leaf")
+    #|pub fn Middle::nested() -> Unit { () }
+    #|#derive.tool
+    #|struct Leaf {}
+    #|pub fn Leaf::run() -> Unit { () }
+  try
+    @lib.generate_tool_client_code(@lib.parse_tools([("subtree.mbt", source)]))
+  catch {
+    @lib.ToolEmitError(message) => {
+      assert_true(message.contains("RootFooBarClient"))
+      assert_true(message.contains("root/foo-bar"))
+      assert_true(message.contains("root/foo/bar"))
+      assert_true(message.contains("name="))
+    }
+    _ => fail("expected colliding generated client type error")
+  } noraise {
+    _ => fail("expected colliding generated client type error")
+  }
+}
+
+///|
+test "top-level and subtree-only tools cannot share a wire name" {
+  let source =
+    #|#derive.tool("same")
+    #|struct Child {}
+    #|pub fn Child::leaf() -> Unit { () }
+    #|
+    #|#derive.tool("root")
+    #|struct Root {}
+    #|#derive.command(subtree="Child")
+    #|pub fn Root::child() -> Unit { () }
+    #|
+    #|#derive.tool("same")
+    #|struct Standalone {}
+    #|pub fn Standalone::run() -> Unit { () }
+  expect_tool_emit_error(source, "same")
 }
 
 ///|
@@ -959,4 +1162,98 @@ test "child argument surfaces cannot shadow inherited globals" {
     #|#derive.arg("local_value", scope="option", name="token")
     #|pub fn Runner::run(local_value : String) -> Unit { () }
   expect_tool_emit_error(source, "token")
+}
+
+///|
+fn canonical_tool(tools : Array[@lib.ToolInfo], name : String) -> @lib.ToolInfo {
+  for tool in tools {
+    if tool.name == name {
+      return tool
+    }
+  }
+  abort("missing canonical tool: " + name)
+}
+
+///|
+fn canonical_command(
+  tool : @lib.ToolInfo,
+  name : String,
+) -> @lib.ToolCommandInfo {
+  for command in tool.commands {
+    if command.name == name {
+      return command
+    }
+  }
+  abort("missing canonical command: " + tool.name + " " + name)
+}
+
+///|
+test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
+  let package = @lib.PackageInfo::{
+    rel_path: "golem_moonbit_examples",
+    dir: "../golem_sdk_example1/golem_moonbit_examples",
+  }
+  let tools = @lib.parse_tools(@lib.scan_package(package).files)
+  assert_eq(tools.length(), 5)
+  let grep = canonical_tool(tools, "canonical-grep")
+  assert_eq(grep.version, Some("2.0.0"))
+  guard grep.root_command is Some(grep_root_index) else {
+    fail("canonical grep must have a root command")
+  }
+  let grep_root = grep.commands[grep_root_index]
+  assert_true(
+    grep_root.params.any(param => param.1 is @lib.Hidden(InputStream)),
+  )
+  assert_true(
+    grep_root.params.any(param => param.1 is @lib.Hidden(OutputStream)),
+  )
+  inspect(
+    grep_root.errors.map(error => "\{error.name}:\{error.exit_code}"),
+    content="[InvalidPattern:Some(2), NoMatch:Some(1)]",
+  )
+  let git = canonical_tool(tools, "canonical-git")
+  assert_true(git.root_command is None)
+  let commit = canonical_command(git, "commit")
+  assert_true(commit.aliases.contains("ci"))
+  assert_eq(commit.destructive, Some(true))
+  guard commit.result is Some(result) else {
+    fail("canonical commit must define result formatters")
+  }
+  inspect(result.formatters, content="[human, porcelain, json]")
+  inspect(result.defaults, content="[human]")
+  let log = canonical_command(git, "log")
+  assert_eq(log.read_only, Some(true))
+  assert_eq(log.idempotent, Some(true))
+  assert_eq(canonical_command(git, "remote").subtree, Some("CanonicalRemote"))
+  assert_eq(canonical_command(git, "stash").subtree, Some("CanonicalStash"))
+  let remote = canonical_tool(tools, "remote")
+  assert_true(canonical_command(remote, "remove").aliases.contains("rm"))
+  let set_url = canonical_command(remote, "set-url")
+  assert_true(
+    set_url.constraints.any(constraint => constraint.kind == "mutex_groups"),
+  )
+  let stash = canonical_tool(tools, "stash")
+  assert_true(stash.root_command is Some(_))
+  assert_true(stash.commands.any(command => command.name == "pop"))
+  let big = canonical_tool(tools, "canonical-big-bound")
+  let big_root = big.commands[big.root_command.unwrap()]
+  guard big_root.args[0].max is Some(max) else {
+    fail("canonical big bound must have a maximum")
+  }
+  assert_eq(max, "18446744073709551615")
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_eq(registration.split("@tool.register_tool_def_invoker").length(), 4)
+  assert_eq(
+    registration.split("@tool.register_subtool_def_invoker").length(),
+    3,
+  )
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_true(clients.contains("pub(all) struct CanonicalGitRemoteClient"))
+  assert_true(clients.contains("pub(all) struct CanonicalGitStashClient"))
+  assert_false(clients.contains("pub fn RemoteClient::new()"))
+  assert_false(clients.contains("pub fn StashClient::new()"))
 }

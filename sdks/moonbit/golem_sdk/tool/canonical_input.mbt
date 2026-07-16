@@ -151,22 +151,27 @@ pub fn ToolDef::canonical_input_fields(
       body_names[tail.name] = ()
     }
     for option in body.options {
-      add_surface_names(body_names, option.long, option.aliases)
+      add_surface_names(body_names, option.long, option.aliases, option.short)
     }
     for flag in body.flags {
-      add_surface_names(body_names, flag.long, flag.aliases)
+      add_surface_names(body_names, flag.long, flag.aliases, flag.short)
     }
   }
   let fields : Array[CanonicalInputField] = []
   for index in path {
     let node = self.commands[index]
     for option in node.globals.options {
-      if !surface_collides(body_names, option.long, option.aliases) {
+      if !surface_collides(
+          body_names,
+          option.long,
+          option.aliases,
+          option.short,
+        ) {
         fields.push(option.canonical_field())
       }
     }
     for flag in node.globals.flags {
-      if !surface_collides(body_names, flag.long, flag.aliases) {
+      if !surface_collides(body_names, flag.long, flag.aliases, flag.short) {
         fields.push(flag.canonical_field())
       }
     }
@@ -201,10 +206,14 @@ fn add_surface_names(
   names : Map[String, Unit],
   name : String,
   aliases : Array[String],
+  short : Char?,
 ) -> Unit {
   names[name] = ()
   for surface_alias in aliases {
     names[surface_alias] = ()
+  }
+  if short is Some(short) {
+    names[short.to_string()] = ()
   }
 }
 
@@ -213,11 +222,24 @@ fn surface_collides(
   names : Map[String, Unit],
   name : String,
   aliases : Array[String],
+  short : Char?,
 ) -> Bool {
   if names.contains(name) {
     return true
   }
-  aliases.any(surface_alias => names.contains(surface_alias))
+  if aliases.any(surface_alias => names.contains(surface_alias)) {
+    return true
+  }
+  short is Some(short) && names.contains(short.to_string())
+}
+
+///|
+fn canonical_aliases(aliases : Array[String], short : Char?) -> Array[String] {
+  let result = aliases.copy()
+  if short is Some(short) && !result.contains(short.to_string()) {
+    result.push(short.to_string())
+  }
+  result
 }
 
 ///|
@@ -227,7 +249,11 @@ fn OptionSpecDef::canonical_field(self : OptionSpecDef) -> CanonicalInputField {
     RepeatableList(shape) => list_graph(shape.item_type)
     RepeatableMap(shape) => shape.map_type
   }
-  { name: self.long, aliases: self.aliases, type_ }
+  {
+    name: self.long,
+    aliases: canonical_aliases(self.aliases, self.short),
+    type_,
+  }
 }
 
 ///|
@@ -240,7 +266,11 @@ fn @toolCommon.FlagSpec::canonical_field(
     @toolCommon.FlagShape::CountFlag(_) =>
       @model.schema_type(@model.SchemaTypeBody::U32(None))
   }
-  { name: self.long, aliases: self.aliases, type_: { defs: [], root } }
+  {
+    name: self.long,
+    aliases: canonical_aliases(self.aliases, self.short),
+    type_: { defs: [], root },
+  }
 }
 
 ///|
@@ -375,7 +405,9 @@ pub fn build_canonical_input(
     }
     match found {
       Some(value) =>
-        values.push(canonical_value_for_wire(field.type_, field.type_.root, value))
+        values.push(
+          canonical_value_for_wire(field.type_, field.type_.root, value),
+        )
       None => raise MissingCanonicalInputField(field.name)
     }
   }
@@ -396,7 +428,10 @@ fn canonical_value_for_wire(
       @model.SchemaValue::List(
         values.map(value => canonical_value_for_wire(graph, item, value)),
       )
-    (@model.SchemaTypeBody::FixedList(item, _), @model.SchemaValue::FixedList(values)) =>
+    (
+      @model.SchemaTypeBody::FixedList(item, _),
+      @model.SchemaValue::FixedList(values),
+    ) =>
       @model.SchemaValue::FixedList(
         values.map(value => canonical_value_for_wire(graph, item, value)),
       )
@@ -422,7 +457,10 @@ fn canonical_value_for_sdk(
       @model.SchemaValue::List(
         values.map(value => canonical_value_for_sdk(graph, item, value)),
       )
-    (@model.SchemaTypeBody::FixedList(item, _), @model.SchemaValue::FixedList(values)) =>
+    (
+      @model.SchemaTypeBody::FixedList(item, _),
+      @model.SchemaValue::FixedList(values),
+    ) =>
       @model.SchemaValue::FixedList(
         values.map(value => canonical_value_for_sdk(graph, item, value)),
       )
@@ -450,14 +488,16 @@ pub fn forward_canonical_input(
   for target in model.fields {
     let mut found : CanonicalInputValue? = None
     for candidate in fields {
-      if candidate.name == target.name ||
-        candidate.aliases.contains(target.name) ||
+      if candidate.name == target.name {
+        found = Some(candidate)
+        break
+      }
+      if candidate.aliases.contains(target.name) ||
+        target.aliases.contains(candidate.name) ||
         target.aliases.any(surface_alias => {
-          candidate.name == surface_alias ||
           candidate.aliases.contains(surface_alias)
         }) {
         found = Some(candidate)
-        break
       }
     }
     guard found is Some(found) else {

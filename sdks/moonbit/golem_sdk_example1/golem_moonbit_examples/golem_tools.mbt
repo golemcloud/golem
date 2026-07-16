@@ -401,7 +401,7 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with from_error_payload_v
 }
 
 ///|
-fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
+fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "2.0.0",
@@ -732,7 +732,16 @@ fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
         },
       ],
     }
-    def.normalize_inherited_globals()
+    def
+  } catch{
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
+  try {
+    __golem_tool_def_raw_CanonicalGrep().normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -977,7 +986,7 @@ fn __golem_tool_invoke_CanonicalGrep(
 }
 
 ///|
-fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
+fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
@@ -1450,7 +1459,7 @@ fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
       ],
     }
     let def = def.graft_subtree(
-      __golem_tool_def_CanonicalRemote(),
+      __golem_tool_def_raw_CanonicalRemote(),
       "remote",
       {
         options: [
@@ -1535,7 +1544,7 @@ fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
       Some(["rmt"]),
     )
     let def = def.graft_subtree(
-      __golem_tool_def_CanonicalStash(),
+      __golem_tool_def_raw_CanonicalStash(),
       "stash",
       {
         options: [
@@ -1591,7 +1600,16 @@ fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
       }),
       None,
     )
-    def.normalize_inherited_globals()
+    def
+  } catch{
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
+  try {
+    __golem_tool_def_raw_CanonicalGit().normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -1933,7 +1951,7 @@ fn __golem_tool_invoke_CanonicalGit(
 }
 
 ///|
-fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
+fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
@@ -2237,7 +2255,16 @@ fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
         },
       ],
     }
-    def.normalize_inherited_globals()
+    def
+  } catch{
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
+  try {
+    __golem_tool_def_raw_CanonicalRemote().normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -2498,7 +2525,7 @@ fn __golem_tool_invoke_CanonicalRemote(
 }
 
 ///|
-fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
+fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
@@ -2697,7 +2724,16 @@ fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
         },
       ],
     }
-    def.normalize_inherited_globals()
+    def
+  } catch{
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
+  try {
+    __golem_tool_def_raw_CanonicalStash().normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -2892,7 +2928,7 @@ fn __golem_tool_invoke_CanonicalStash(
 }
 
 ///|
-fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
+fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
       version: "0.0.0",
@@ -2950,7 +2986,16 @@ fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
         },
       ],
     }
-    def.normalize_inherited_globals()
+    def
+  } catch{
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
+  try {
+    __golem_tool_def_raw_CanonicalBigBound().normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -3039,11 +3084,11 @@ fn init {
       __golem_tool_def_CanonicalGit(),
       __golem_tool_invoke_CanonicalGit,
     )
-    @tool.register_tool_def_invoker(
+    @tool.register_subtool_def_invoker(
       __golem_tool_def_CanonicalRemote(),
       __golem_tool_invoke_CanonicalRemote,
     )
-    @tool.register_tool_def_invoker(
+    @tool.register_subtool_def_invoker(
       __golem_tool_def_CanonicalStash(),
       __golem_tool_invoke_CanonicalStash,
     )

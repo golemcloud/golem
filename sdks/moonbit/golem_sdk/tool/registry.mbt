@@ -25,6 +25,15 @@ priv struct ToolState {
 let state : ToolState = { tools: {}, defs: {}, invokers: {} }
 
 ///|
+fn ensure_tool_name_available(name : String) -> Unit {
+  if state.tools.contains(name) ||
+    state.defs.contains(name) ||
+    state.invokers.contains(name) {
+    abort("duplicate tool registration for tool name: " + name)
+  }
+}
+
+///|
 pub fn register_tool_def(tool : ToolDef) -> Unit raise ToolBuildError {
   let wire = tool.to_tool()
   let name = match tool.tool_name() {
@@ -50,6 +59,21 @@ pub fn register_tool_def_invoker(
 }
 
 ///|
+pub fn register_subtool_def_invoker(
+  tool : ToolDef,
+  invoker : ToolInvoker,
+) -> Unit raise ToolBuildError {
+  let _wire = tool.to_tool()
+  let name = match tool.tool_name() {
+    Ok(name) => name
+    Err(error) => raise error
+  }
+  ensure_tool_name_available(name)
+  state.defs[name] = tool
+  state.invokers[name] = invoker
+}
+
+///|
 pub fn register_wire_tool(tool : @toolCommon.Tool) -> Unit raise ToolBuildError {
   register_wire_tool_inner(tool, None)
 }
@@ -71,9 +95,7 @@ fn register_wire_tool_inner(
     Ok(name) => name
     Err(e) => raise e
   }
-  if state.tools.get(name) is Some(_) {
-    abort("duplicate tool registration for tool name: " + name)
-  }
+  ensure_tool_name_available(name)
   state.tools[name] = tool
   if invoker is Some(invoker) {
     state.invokers[name] = invoker
@@ -97,6 +119,20 @@ pub fn get_registered_tool(
 
 ///|
 pub fn invoke_registered_tool(
+  tool_name : String,
+  command_path : Array[String],
+  input : @types.TypedSchemaValue,
+  stdin : @streams.InputStream?,
+  principal : @agentCommon.Principal,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  if !state.tools.contains(tool_name) {
+    return Err(@toolCommon.ToolError::InvalidToolName(tool_name))
+  }
+  invoke_registered_invoker(tool_name, command_path, input, stdin, principal)
+}
+
+///|
+fn invoke_registered_invoker(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
@@ -128,5 +164,5 @@ pub fn invoke_registered_subtool(
   let input = forward_canonical_input(fields, def, index) catch {
     error => return Err(error)
   }
-  invoke_registered_tool(tool_name, command_path, input, stdin, principal)
+  invoke_registered_invoker(tool_name, command_path, input, stdin, principal)
 }

@@ -92,6 +92,7 @@ pub(all) struct ToolErrorCaseInfo {
 pub(all) struct ToolCommandInfo {
   source_name : String
   name : String
+  explicit_name : Bool
   aliases : Array[String]
   subtree : String?
   read_only : Bool?
@@ -204,6 +205,153 @@ fn attr_id(attr : @attribute.Attribute) -> (String?, String)? {
         }
       }
       None
+    }
+  }
+}
+
+///|
+fn tool_annotation_name(attr : @attribute.Attribute) -> String? {
+  match attr_id(attr) {
+    Some((Some("derive"), name)) =>
+      if ["tool", "arg", "constraint", "command", "result", "error", "example"].contains(
+          name,
+        ) {
+        Some(name)
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+fn reject_tool_annotations(
+  attrs : @list.List[@attribute.Attribute],
+  context : String,
+) -> Unit raise ToolParseError {
+  for attr in attrs {
+    if tool_annotation_name(attr) is Some(name) {
+      tool_fail("#derive." + name + " cannot annotate " + context)
+    }
+  }
+}
+
+///|
+fn validate_type_member_tool_annotations(
+  desc : @syntax.TypeDesc,
+  allow_error_case_annotations : Bool,
+) -> Unit raise ToolParseError {
+  match desc {
+    Record(fields~, constr_decl~) => {
+      for field in fields {
+        reject_tool_annotations(field.attrs, "a record field")
+      }
+      if constr_decl is Some(record_constructor) {
+        reject_tool_annotations(
+          record_constructor.attrs,
+          "a record constructor",
+        )
+      }
+    }
+    Variant(constrs) | Error(EnumPayload(constrs)) =>
+      for constr in constrs {
+        for attr in constr.attrs {
+          match tool_annotation_name(attr) {
+            Some("error" | "example") if allow_error_case_annotations => ()
+            None => ()
+            Some(name) =>
+              tool_fail("#derive." + name + " cannot annotate an enum case")
+          }
+        }
+      }
+    _ => ()
+  }
+}
+
+///|
+fn validate_local_type_tool_annotations(
+  local_types : @list.List[@syntax.LocalTypeDecl],
+) -> Unit raise ToolParseError {
+  for local_type in local_types {
+    validate_type_member_tool_annotations(local_type.components, false)
+  }
+}
+
+///|
+fn validate_decl_body_tool_annotations(
+  body : @syntax.DeclBody,
+) -> Unit raise ToolParseError {
+  match body {
+    DeclBody(local_types~, ..) =>
+      validate_local_type_tool_annotations(local_types)
+    DeclNone | DeclStubs(_) => ()
+  }
+}
+
+///|
+fn validate_unsupported_tool_annotations(
+  impl_ : @syntax.Impl,
+) -> Unit raise ToolParseError {
+  match impl_ {
+    TopTypeDef(decl) =>
+      validate_type_member_tool_annotations(decl.components, true)
+    TopFuncDef(decl_body~, ..) => validate_decl_body_tool_annotations(decl_body)
+    TopImpl(attrs~, body~, ..) => {
+      reject_tool_annotations(attrs, "a trait implementation")
+      validate_decl_body_tool_annotations(body)
+    }
+    TopImplRelation(attrs~, ..) =>
+      reject_tool_annotations(attrs, "a trait implementation")
+    TopLetDef(attrs~, ..) =>
+      reject_tool_annotations(attrs, "a value declaration")
+    TopTest(attrs~, local_types~, ..) => {
+      reject_tool_annotations(attrs, "a test")
+      validate_local_type_tool_annotations(local_types)
+    }
+    TopTrait(decl) => {
+      reject_tool_annotations(decl.attrs, "a trait")
+      for trait_method in decl.methods {
+        reject_tool_annotations(trait_method.attrs, "a trait method")
+      }
+    }
+    TopUsing(attrs~, ..) =>
+      reject_tool_annotations(attrs, "a using declaration")
+    TopView(attrs~, view_constrs~, ..) => {
+      reject_tool_annotations(attrs, "a view")
+      for constr in view_constrs {
+        reject_tool_annotations(constr.attrs, "a view case")
+      }
+    }
+    TopExpr(local_types~, ..) =>
+      validate_local_type_tool_annotations(local_types)
+  }
+}
+
+///|
+fn reject_orphan_error_case_annotations(
+  impls : Array[@syntax.Impl],
+  error_types : Map[String, Unit],
+) -> Unit raise ToolParseError {
+  for impl_ in impls {
+    guard impl_ is TopTypeDef(decl) && !error_types.contains(decl.tycon) else {
+      continue
+    }
+    match decl.components {
+      Variant(constrs) | Error(EnumPayload(constrs)) =>
+        for constr in constrs {
+          for attr in constr.attrs {
+            match tool_annotation_name(attr) {
+              Some("error" | "example") as annotation =>
+                tool_fail(
+                  "#derive." +
+                  annotation.unwrap() +
+                  " must annotate a case of an error type used by a tool command",
+                )
+              _ => ()
+            }
+          }
+        }
+      _ => ()
     }
   }
 }
@@ -1181,6 +1329,7 @@ fn parse_command(
   {
     source_name: decl.name.name,
     name,
+    explicit_name: name_override.val is Some(_),
     aliases,
     subtree: subtree.val,
     read_only: read_only.val,
@@ -1225,12 +1374,33 @@ pub fn parse_tools(
       }
     }
   }
+  for impl_ in impls {
+    validate_unsupported_tool_annotations(impl_)
+  }
   let result : Array[ToolInfo] = []
   let by_source : Map[String, Int] = {}
+  let by_wire : Map[String, String] = {}
   for item in impls {
     match item {
       TopTypeDef(decl) =>
         for attr in decl.attrs {
+          match attr_id(attr) {
+            Some((Some("derive"), "arg" | "constraint" | "command" | "result")) =>
+              tool_fail(
+                "#derive." +
+                attr_id(attr).unwrap().1 +
+                " must annotate a public method of a #derive.tool struct",
+              )
+            Some((Some("derive"), "error")) =>
+              tool_fail("#derive.error must annotate an error case")
+            Some((Some("derive"), "example")) =>
+              if !decl.attrs.any(attr => derive_props(attr, "tool") is Some(_)) {
+                tool_fail(
+                  "#derive.example must annotate a #derive.tool struct, public tool method, or error case",
+                )
+              }
+            _ => ()
+          }
           match derive_props(attr, "tool") {
             Some(props) => {
               if by_source.contains(decl.tycon) {
@@ -1271,6 +1441,18 @@ pub fn parse_tools(
               }
               let wire = name.unwrap_or(moonbit_name_to_kebab_case(decl.tycon))
               require_tool_identifier(wire, "tool", "tool " + decl.tycon)
+              if by_wire.get(wire) is Some(existing) {
+                tool_fail(
+                  "Duplicate tool wire name '" +
+                  wire +
+                  "' on '" +
+                  existing +
+                  "' and '" +
+                  decl.tycon +
+                  "'",
+                )
+              }
+              by_wire[wire] = decl.tycon
               by_source[decl.tycon] = result.length()
               result.push({
                 source_name: decl.tycon,
@@ -1290,7 +1472,38 @@ pub fn parse_tools(
   }
   for item in impls {
     match item {
-      TopFuncDef(fun_decl~, ..) =>
+      TopFuncDef(fun_decl~, ..) => {
+        let owner = match fun_decl.type_name {
+          Some({ name: Ident(name=owner), .. }) => Some(owner)
+          _ => None
+        }
+        for attr in fun_decl.attrs {
+          match attr_id(attr) {
+            Some((Some("derive"), "tool")) =>
+              tool_fail("#derive.tool must annotate an empty struct")
+            Some((Some("derive"), "error")) =>
+              tool_fail("#derive.error must annotate an error case")
+            Some(
+              (
+                Some("derive"),
+                "arg"
+                | "constraint"
+                | "command"
+                | "result"
+                | "example",
+              )
+            ) =>
+              if owner.flat_map(owner => by_source.get(owner)) is None ||
+                !(fun_decl.vis is Pub(..)) {
+                tool_fail(
+                  "#derive." +
+                  attr_id(attr).unwrap().1 +
+                  " must annotate a public method of a #derive.tool struct",
+                )
+              }
+            _ => ()
+          }
+        }
         match fun_decl.type_name {
           Some({ name: Ident(name=owner), .. }) =>
             match by_source.get(owner) {
@@ -1321,9 +1534,23 @@ pub fn parse_tools(
             }
           _ => ()
         }
+      }
       _ => ()
     }
   }
+  let used_error_types : Map[String, Unit] = {}
+  for tool in result {
+    for command in tool.commands {
+      if command.error_type is Some(Simple(name)) {
+        let bare = match decode_qualified(name) {
+          Some((_, id)) => id
+          None => name
+        }
+        used_error_types[bare] = ()
+      }
+    }
+  }
+  reject_orphan_error_case_annotations(impls, used_error_types)
   // Resolve subtree references after every local tool has been collected. A
   // qualified spelling denotes its final type segment; local type names are
   // unique by construction.

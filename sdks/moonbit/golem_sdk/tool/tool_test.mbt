@@ -94,6 +94,495 @@ fn[T] unwrap_tool_result(result : Result[T, ToolBuildError]) -> T {
 }
 
 ///|
+test "subtree-only tool cannot be invoked as a top-level tool" {
+  let def = canonical_test_def()
+  register_subtool_def_invoker(def, fn(_, _, _, _) {
+    Ok(invocation_result_empty())
+  })
+  assert_true(
+    get_registered_tool("root")
+    is Err(@toolCommon.ToolError::InvalidToolName("root")),
+  )
+  let input = @model.typed_schema_value_to_wit(
+    @schema.try_into_typed_schema_value(()),
+  )
+  assert_true(
+    invoke_registered_tool(
+      "root",
+      [],
+      input,
+      None,
+      @agentCommon.Principal::Anonymous,
+    )
+    is Err(@toolCommon.ToolError::InvalidToolName("root")),
+  )
+}
+
+///|
+test "grafted subtree forwards a global captured only by short name" {
+  let flag = fn(long : String) -> @toolCommon.FlagSpec {
+    {
+      long,
+      short: Some('v'),
+      aliases: [],
+      doc: doc(long),
+      shape: @toolCommon.FlagShape::BoolFlag({
+        default: false,
+        negatable: false,
+      }),
+      env_var: None,
+    }
+  }
+  let child : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "short-forward-child",
+        aliases: [],
+        doc: doc("short forward child"),
+        globals: { options: [], flags: [flag("child-verbose")] },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let parent_base : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "short-forward-parent",
+        aliases: [],
+        doc: doc("short forward parent"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  let parent = parent_base.graft_subtree(
+    child,
+    "short-forward-child",
+    { options: [], flags: [flag("parent-verbose")] },
+    None,
+    None,
+    None,
+  )
+  let parent_index = parent.command_index_by_path(["short-forward-child"])
+  guard parent_index is Some(parent_index) else {
+    fail("expected grafted child command")
+  }
+  let parent_fields = parent.canonical_input_fields(parent_index)
+  inspect(parent_fields.map(field => field.name), content="[parent-verbose]")
+  assert_true(parent_fields[0].aliases.contains("v"))
+  register_subtool_def_invoker(child, fn(command_path, input, _, _) {
+    guard command_path.length() == 0 else {
+      return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+    }
+    let decoded = decode_canonical_input(child, 0, input, "short child") catch {
+      error => return Err(error)
+    }
+    let verbose : Bool = decode_canonical_field(
+      decoded, "child-verbose", "short child",
+    ) catch {
+      error => return Err(error)
+    }
+    if verbose {
+      Ok(invocation_result_empty())
+    } else {
+      Err(@toolCommon.ToolError::InvalidInput("short flag was not forwarded"))
+    }
+  })
+  register_tool_def_invoker(parent, fn(command_path, input, stdin, principal) {
+    let index = match parent.command_index_by_path(command_path) {
+      Some(index) => index
+      None =>
+        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+    }
+    let decoded = decode_canonical_input(parent, index, input, "short parent") catch {
+      error => return Err(error)
+    }
+    invoke_registered_subtool(
+      "short-forward-child",
+      command_path[1:].to_array(),
+      decoded,
+      stdin,
+      principal,
+    )
+  })
+  let model = parent.canonical_input_model(parent_index)
+  let input = build_canonical_input(model, [
+    ("parent-verbose", @model.SchemaValue::Bool(true)),
+  ])
+  let wire = @model.typed_schema_value_to_wit(input)
+  assert_true(
+    invoke_registered_tool(
+      "short-forward-parent",
+      ["short-forward-child"],
+      wire,
+      None,
+      @agentCommon.Principal::Anonymous,
+    )
+    is Ok(_),
+  )
+}
+
+///|
+test "deprojected child global does not consume a descendant local input" {
+  let string = string_graph()
+  let option = fn(long : String, short : Char?) -> OptionSpecDef {
+    {
+      long,
+      short,
+      aliases: [],
+      doc: doc(long),
+      value_name: None,
+      shape: OptionShapeDef::Scalar(string),
+      default: None,
+      required: true,
+      env_var: None,
+    }
+  }
+  let child_raw : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "deproject-child",
+        aliases: [],
+        doc: doc("deproject child"),
+        globals: { options: [option("format", Some('f'))], flags: [] },
+        subcommands: [1],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+      {
+        name: "run",
+        aliases: [],
+        doc: doc("run"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [option("format", None)],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let child = child_raw.normalize_inherited_globals()
+  let parent_base : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "deproject-parent",
+        aliases: [],
+        doc: doc("deproject parent"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  let parent = parent_base
+    .graft_subtree(
+      child_raw,
+      "deproject-child",
+      { options: [option("count", Some('f'))], flags: [] },
+      None,
+      None,
+      None,
+    )
+    .normalize_inherited_globals()
+  let parent_index = parent.command_index_by_path(["deproject-child", "run"])
+  guard parent_index is Some(parent_index) else {
+    fail("expected grafted descendant command")
+  }
+  inspect(
+    parent.canonical_input_fields(parent_index).map(field => field.name),
+    content="[count, format]",
+  )
+  register_subtool_def_invoker(child, fn(command_path, input, _, _) {
+    let index = match child.command_index_by_path(command_path) {
+      Some(index) => index
+      None =>
+        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+    }
+    let decoded = decode_canonical_input(child, index, input, "deproject child") catch {
+      error => return Err(error)
+    }
+    let format : String = decode_canonical_field(
+      decoded, "format", "deproject child",
+    ) catch {
+      error => return Err(error)
+    }
+    if format == "local" {
+      Ok(invocation_result_empty())
+    } else {
+      Err(@toolCommon.ToolError::InvalidInput("descendant input was shadowed"))
+    }
+  })
+  let model = parent.canonical_input_model(parent_index)
+  let input = build_canonical_input(model, [
+    ("count", @model.SchemaValue::String("inherited")),
+    ("format", @model.SchemaValue::String("local")),
+  ])
+  let wire = @model.typed_schema_value_to_wit(input)
+  let fields = decode_canonical_input(
+    parent, parent_index, wire, "deproject parent",
+  )
+  assert_true(
+    invoke_registered_subtool(
+      "deproject-child",
+      ["run"],
+      fields,
+      None,
+      @agentCommon.Principal::Anonymous,
+    )
+    is Ok(_),
+  )
+}
+
+///|
+test "bug finder forwarding prefers surviving descendant over ancestor alias" {
+  let string = string_graph()
+  let option = fn(long : String, aliases : Array[String]) -> OptionSpecDef {
+    {
+      long,
+      short: None,
+      aliases,
+      doc: doc(long),
+      value_name: None,
+      shape: OptionShapeDef::Scalar(string),
+      default: None,
+      required: true,
+      env_var: None,
+    }
+  }
+  let child_raw : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "ranked-forward-child",
+        aliases: [],
+        doc: doc("ranked forward child"),
+        globals: { options: [option("format", ["leaf"])], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "run",
+        aliases: [],
+        doc: doc("run"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [option("leaf", [])],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let child = child_raw.normalize_inherited_globals()
+  inspect(
+    child.canonical_input_fields(1).map(field => field.name),
+    content="[format]",
+  )
+  let parent_base : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "ranked-forward-parent",
+        aliases: [],
+        doc: doc("ranked forward parent"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  let parent = parent_base
+    .graft_subtree(
+      child_raw,
+      "ranked-forward-child",
+      { options: [option("parent-value", ["format"])], flags: [] },
+      None,
+      None,
+      None,
+    )
+    .normalize_inherited_globals()
+  let parent_index = parent.command_index_by_path([
+    "ranked-forward-child", "run",
+  ])
+  guard parent_index is Some(parent_index) else {
+    fail("expected grafted descendant command")
+  }
+  inspect(
+    parent.canonical_input_fields(parent_index).map(field => field.name),
+    content="[parent-value, leaf]",
+  )
+  register_subtool_def_invoker(child, fn(command_path, input, _, _) {
+    let index = match child.command_index_by_path(command_path) {
+      Some(index) => index
+      None =>
+        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+    }
+    let decoded = decode_canonical_input(child, index, input, "ranked child") catch {
+      error => return Err(error)
+    }
+    let leaf : String = decode_canonical_field(
+      decoded, "format", "ranked child",
+    ) catch {
+      error => return Err(error)
+    }
+    if leaf == "local" {
+      Ok(invocation_result_empty())
+    } else {
+      Err(@toolCommon.ToolError::InvalidInput("ancestor alias won forwarding"))
+    }
+  })
+  let model = parent.canonical_input_model(parent_index)
+  let input = build_canonical_input(model, [
+    ("parent-value", @model.SchemaValue::String("ancestor")),
+    ("leaf", @model.SchemaValue::String("local")),
+  ])
+  let fields = decode_canonical_input(
+    parent,
+    parent_index,
+    @model.typed_schema_value_to_wit(input),
+    "ranked parent",
+  )
+  let result = invoke_registered_subtool(
+    "ranked-forward-child",
+    ["run"],
+    fields,
+    None,
+    @agentCommon.Principal::Anonymous,
+  )
+  guard result is Ok(_) else { fail("surviving descendant was not forwarded") }
+}
+
+///|
+test "reverse-alias deprojection retains the surviving canonical value" {
+  let string = string_graph()
+  let option = fn(long : String, aliases : Array[String]) -> OptionSpecDef {
+    {
+      long,
+      short: None,
+      aliases,
+      doc: doc(long),
+      value_name: None,
+      shape: OptionShapeDef::Scalar(string),
+      default: None,
+      required: true,
+      env_var: None,
+    }
+  }
+  let raw : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "reverse-alias",
+        aliases: [],
+        doc: doc("reverse alias"),
+        globals: { options: [option("format", [])], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "run",
+        aliases: [],
+        doc: doc("run"),
+        globals: { options: [option("count", ["format"])], flags: [] },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let def = raw.normalize_inherited_globals()
+  inspect(
+    def.canonical_input_fields(1).map(field => field.name),
+    content="[format]",
+  )
+  let input = build_canonical_input(def.canonical_input_model(1), [
+    ("format", @model.SchemaValue::String("7")),
+  ])
+  let decoded = decode_canonical_input(
+    def,
+    1,
+    @model.typed_schema_value_to_wit(input),
+    "reverse alias",
+  )
+  let format : String = decode_canonical_field(
+    decoded, "format", "reverse alias",
+  ) catch {
+    _ => fail("surviving canonical field was not decoded")
+  }
+  inspect(format, content="7")
+}
+
+///|
+test "panic top-level registration rejects an existing private subtool name" {
+  let def : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "registry-collision",
+        aliases: [],
+        doc: doc("registry collision"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  register_subtool_def_invoker(def, fn(_, _, _, _) {
+    Ok(invocation_result_empty())
+  })
+  register_tool_def(def)
+}
+
+///|
 test "help renders command names and inherited globals" {
   let tool = sample_tool()
   let root = unwrap_tool_result(render_help(tool, []))

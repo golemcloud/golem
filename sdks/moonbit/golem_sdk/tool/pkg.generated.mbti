@@ -79,6 +79,8 @@ pub fn refine_text(@schema_model.SchemaGraph, String?, UInt?, UInt?) -> @schema_
 
 pub fn refine_url(@schema_model.SchemaGraph, Array[String]?) -> @schema_model.SchemaGraph raise ToolBuildError
 
+pub fn register_subtool_def_invoker(ToolDef, (Array[String], @types.TypedSchemaValue, @streams.InputStream?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
+
 pub fn register_tool_def(ToolDef) -> Unit raise ToolBuildError
 
 pub fn register_tool_def_invoker(ToolDef, (Array[String], @types.TypedSchemaValue, @streams.InputStream?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError

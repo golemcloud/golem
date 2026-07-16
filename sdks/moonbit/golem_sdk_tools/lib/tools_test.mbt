@@ -36,6 +36,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|      {
       #|        source_name: "http_api",
       #|        name: "http-api",
+      #|        explicit_name: false,
       #|        aliases: [],
       #|        subtree: None,
       #|        read_only: None,
@@ -57,6 +58,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|      {
       #|        source_name: "list_items",
       #|        name: "list-items",
+      #|        explicit_name: false,
       #|        aliases: [],
       #|        subtree: None,
       #|        read_only: None,
@@ -280,4 +282,78 @@ test "a parameter cannot have duplicate derive.arg declarations" {
   assert_false(message == "NO ERROR")
   assert_true(message.contains("duplicate"))
   assert_true(message.contains("value"))
+}
+
+///|
+test "tool helper annotations reject invalid placement" {
+  inspect(
+    parse_error(
+      "#derive.arg(\"value\", scope=\"option\")\npub fn run(value : String) -> Unit { () }\n",
+    ),
+    content="#derive.arg must annotate a public method of a #derive.tool struct",
+  )
+  inspect(
+    parse_error("#derive.command(name=\"run\")\nstruct Runner {}\n"),
+    content="#derive.command must annotate a public method of a #derive.tool struct",
+  )
+  inspect(
+    parse_error("#derive.tool\npub fn run() -> Unit { () }\n"),
+    content="#derive.tool must annotate an empty struct",
+  )
+  assert_true(
+    parse_error("#derive.example(\"orphan\")\npub fn run() -> Unit { () }\n") !=
+    "NO ERROR",
+  )
+  assert_true(
+    parse_error(
+      "struct Payload {\n  #derive.example(\"orphan\")\n  value : String\n}\n",
+    ) !=
+    "NO ERROR",
+  )
+}
+
+///|
+test "orphan derive.example rejects an ordinary enum case" {
+  assert_true(
+    parse_error(
+      "enum Status {\n  #derive.example(\"status failed\")\n  Broken\n}\n",
+    ) !=
+    "NO ERROR",
+  )
+}
+
+///|
+test "orphan derive.error rejects an ordinary enum case" {
+  assert_true(
+    parse_error(
+      "enum Status {\n  #derive.error(kind=\"runtime-error\")\n  Broken\n}\n",
+    ) !=
+    "NO ERROR",
+  )
+}
+
+///|
+test "tool annotations reject fields of function-local records" {
+  assert_true(
+    parse_error(
+      "fn outer() -> Unit {\n  struct Payload {\n    #derive.command\n    value : String\n  }\n}\n",
+    ) !=
+    "NO ERROR",
+  )
+}
+
+///|
+test "root command invariants are rejected while parsing" {
+  inspect(
+    parse_error(
+      "#derive.tool(\"runner\")\nstruct Runner {}\n#derive.command(name=\"other\")\npub fn Runner::runner() -> Unit { () }\n",
+    ),
+    content="Root command 'Runner::runner' cannot override its wire name",
+  )
+  inspect(
+    parse_error(
+      "#derive.tool(\"runner\")\nstruct Runner {}\n#derive.command(name=\"runner\")\npub fn Runner::run() -> Unit { () }\n",
+    ),
+    content="Command 'Runner::run' cannot override itself into the tool root",
+  )
 }

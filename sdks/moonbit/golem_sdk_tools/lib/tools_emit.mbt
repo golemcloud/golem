@@ -57,6 +57,32 @@ priv struct ProjectedToolArg {
 }
 
 ///|
+fn argument_surface_names(
+  canonical : String,
+  aliases : Array[String],
+  short : Char?,
+) -> Array[String] {
+  let result = [canonical].concat(aliases)
+  if short is Some(short) {
+    result.push(short.to_string())
+  }
+  result
+}
+
+///|
+fn projected_arg_surface_names(arg : ProjectedToolArg) -> Array[String] {
+  if arg.placement is Hidden(_) {
+    []
+  } else {
+    argument_surface_names(
+      arg.canonical,
+      arg.aliases,
+      arg.info.flat_map(info => info.short),
+    )
+  }
+}
+
+///|
 fn emit_fail(message : String) -> Unit raise ToolEmitError {
   raise ToolEmitError(message)
 }
@@ -495,20 +521,6 @@ fn project_command(
           Some(i) => i.aliases
           None => []
         }
-        for surface in [canonical].concat(aliases) {
-          if surfaces.get(surface) is Some(previous) {
-            emit_fail(
-              "Duplicate tool argument surface name '" +
-              surface +
-              "' on '" +
-              previous +
-              "' and '" +
-              source +
-              "'",
-            )
-          }
-          surfaces[surface] = source
-        }
         let scope = info.flat_map(i => i.scope)
         let kind = info.flat_map(i => i.kind)
         let bool_flag = base == Simple("Bool") &&
@@ -679,12 +691,16 @@ fn project_command(
             )
           }
         }
-        if info.flat_map(i => i.short) is Some(short) {
-          let short_surface = short.to_string()
-          if surfaces.get(short_surface) is Some(previous) {
+        for
+          surface in argument_surface_names(
+            canonical,
+            aliases,
+            info.flat_map(i => i.short),
+          ) {
+          if surfaces.get(surface) is Some(previous) {
             emit_fail(
               "Duplicate tool argument surface name '" +
-              short_surface +
+              surface +
               "' on '" +
               previous +
               "' and '" +
@@ -692,7 +708,7 @@ fn project_command(
               "'",
             )
           }
-          surfaces[short_surface] = source
+          surfaces[surface] = source
         }
         let required_by_default = placement is Positional
         let required = !optional &&
@@ -1264,6 +1280,11 @@ fn descriptor_name(tool : ToolInfo) -> String {
 }
 
 ///|
+fn raw_descriptor_name(tool : ToolInfo) -> String {
+  "__golem_tool_def_raw_" + tool.source_name
+}
+
+///|
 fn subtree_target_name(target : String) -> String {
   let normalized = target.replace(old="::", new=".")
   let mut result = normalized
@@ -1327,13 +1348,21 @@ fn validate_subtree_cycles(tools : Array[ToolInfo]) -> Unit raise ToolEmitError 
 }
 
 ///|
-fn validate_sibling_commands(tool : ToolInfo) -> Unit raise ToolEmitError {
+fn validate_sibling_commands(
+  tools : Array[ToolInfo],
+  tool : ToolInfo,
+) -> Unit raise ToolEmitError {
   let surfaces : Map[String, String] = {}
   for index, command in tool.commands {
     if Some(index) == tool.root_command {
       continue
     }
-    for surface in [command.name].concat(command.aliases) {
+    let command_surfaces = match command.subtree {
+      Some(target) =>
+        subtree_dispatch_names(command, resolve_subtree_tool(tools, target))
+      None => [command.name].concat(command.aliases)
+    }
+    for surface in command_surfaces {
       match surfaces.get(surface) {
         Some(previous) =>
           emit_fail(
@@ -1355,18 +1384,27 @@ fn validate_sibling_commands(tool : ToolInfo) -> Unit raise ToolEmitError {
 fn projected_surfaces(args : Array[ProjectedToolArg]) -> Array[String] {
   let surfaces : Array[String] = []
   for arg in args {
-    if arg.placement is Hidden(_) {
-      continue
-    }
-    surfaces.push(arg.canonical)
-    for surface_alias in arg.aliases {
-      surfaces.push(surface_alias)
-    }
-    if arg.info.flat_map(info => info.short) is Some(short) {
-      surfaces.push(short.to_string())
+    for surface in projected_arg_surface_names(arg) {
+      surfaces.push(surface)
     }
   }
   surfaces
+}
+
+///|
+fn inherited_canonical_name(
+  arg : ProjectedToolArg,
+  inherited : Array[ProjectedToolArg],
+) -> String {
+  let surfaces = projected_arg_surface_names(arg)
+  for inherited_arg in inherited {
+    if projected_arg_surface_names(inherited_arg).any(surface => {
+        surfaces.contains(surface)
+      }) {
+      return inherited_arg.canonical
+    }
+  }
+  arg.canonical
 }
 
 ///|
@@ -1394,6 +1432,25 @@ fn validate_inherited_arg_surfaces(
 }
 
 ///|
+fn extend_inherited_global_surfaces(
+  inherited : Array[String],
+  args : Array[ProjectedToolArg],
+) -> Array[String] {
+  let result = inherited.copy()
+  for arg in args {
+    if arg.placement is GlobalOption || arg.placement is GlobalFlag {
+      let surfaces = projected_arg_surface_names(arg)
+      if !surfaces.any(surface => result.contains(surface)) {
+        for surface in surfaces {
+          result.push(surface)
+        }
+      }
+    }
+  }
+  result
+}
+
+///|
 fn validate_tool_inherited_surfaces(
   tools : Array[ToolInfo],
   tool : ToolInfo,
@@ -1408,13 +1465,7 @@ fn validate_tool_inherited_surfaces(
   if root is Some(index) {
     validate_inherited_arg_surfaces(tool.commands[index], root_args, inherited)
   }
-  let inherited_here = inherited.concat(
-    projected_surfaces(
-      root_args.filter(arg => {
-        arg.placement is GlobalOption || arg.placement is GlobalFlag
-      }),
-    ),
-  )
+  let inherited_here = extend_inherited_global_surfaces(inherited, root_args)
   for index, command in tool.commands {
     if Some(index) == root {
       continue
@@ -1424,7 +1475,7 @@ fn validate_tool_inherited_surfaces(
       validate_tool_inherited_surfaces(
         tools,
         resolve_subtree_tool(tools, target),
-        inherited_here.concat(projected_surfaces(plans[index])),
+        extend_inherited_global_surfaces(inherited_here, plans[index]),
       )
     }
   }
@@ -1434,8 +1485,11 @@ fn validate_tool_inherited_surfaces(
 fn validate_inherited_surfaces(
   tools : Array[ToolInfo],
 ) -> Unit raise ToolEmitError {
+  let subtree_sources = subtree_tool_sources(tools)
   for tool in tools {
-    validate_tool_inherited_surfaces(tools, tool, [])
+    if !subtree_sources.contains(tool.source_name) {
+      validate_tool_inherited_surfaces(tools, tool, [])
+    }
   }
 }
 
@@ -1500,7 +1554,7 @@ fn emit_descriptor(
   }
   buf.write_string(
     "///|\nfn " +
-    descriptor_name(tool) +
+    raw_descriptor_name(tool) +
     "() -> @tool.ToolDef {\n  try {\n    let def : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
     "\", commands: [\n",
@@ -1580,9 +1634,7 @@ fn emit_descriptor(
   for i, command in tool.commands {
     if command.subtree is Some(target) {
       let child = resolve_subtree_tool(tools, target)
-      let explicit_name = command.name !=
-        moonbit_name_to_kebab_case(command.source_name)
-      let override_name = if explicit_name {
+      let override_name = if command.explicit_name {
         "Some(\"" + escape_string_lit(command.name) + "\")"
       } else {
         "None"
@@ -1599,7 +1651,7 @@ fn emit_descriptor(
       }
       buf.write_string(
         "  let def = def.graft_subtree(" +
-        descriptor_name(child) +
+        raw_descriptor_name(child) +
         "(), \"" +
         escape_string_lit(command.name) +
         "\", " +
@@ -1615,7 +1667,11 @@ fn emit_descriptor(
     }
   }
   buf.write_string(
-    "    def.normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
+    "    def\n  } catch { error => abort(\"invalid generated raw tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
+    descriptor_name(tool) +
+    "() -> @tool.ToolDef {\n  try {\n    " +
+    raw_descriptor_name(tool) +
+    "().normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
   )
   emit_invoker(buf, tool, tools, plans, leaves)
 }
@@ -1726,6 +1782,19 @@ fn emit_success_call(command : ToolCommandInfo, call : String) -> String {
 }
 
 ///|
+fn subtree_dispatch_names(
+  command : ToolCommandInfo,
+  child : ToolInfo,
+) -> Array[String] {
+  let aliases = if command.aliases.is_empty() {
+    child.root_command.map(index => child.commands[index].aliases).unwrap_or([])
+  } else {
+    command.aliases
+  }
+  [command.name].concat(aliases)
+}
+
+///|
 fn emit_invoker(
   buf : StringBuilder,
   tool : ToolInfo,
@@ -1746,19 +1815,26 @@ fn emit_invoker(
   )
   for command in tool.commands {
     if command.subtree is Some(target) {
-      let child_name = resolve_subtree_tool(tools, target).name
-      let names = [command.name].concat(command.aliases)
+      let child = resolve_subtree_tool(tools, target)
+      let names = subtree_dispatch_names(command, child)
       buf.write_string(
         "  if __golem_command_path.length() > 0 && " +
         emit_strings(names) +
         ".contains(__golem_command_path[0]) {\n    return @tool.invoke_registered_subtool(\"" +
-        escape_string_lit(child_name) +
+        escape_string_lit(child.name) +
         "\", __golem_command_path[1:].to_array(), __golem_decoded, __golem_stdin, __golem_principal)\n  }\n",
       )
     }
   }
   buf.write_string("  match __golem_index {\n")
   let commands : Array[(Int, Int)] = []
+  let root_globals = tool.root_command
+    .map(index => {
+      plans[index].filter(arg => {
+        arg.placement is GlobalOption || arg.placement is GlobalFlag
+      })
+    })
+    .unwrap_or([])
   if tool.root_command is Some(root) {
     commands.push((0, root))
   }
@@ -1768,6 +1844,11 @@ fn emit_invoker(
   for pair in commands {
     let command = tool.commands[pair.1]
     let args = plans[pair.1]
+    let inherited = if Some(pair.1) == tool.root_command {
+      []
+    } else {
+      root_globals
+    }
     let command_context = "tool " + tool.name + " command " + command.name
     buf.write_string("    " + pair.0.to_string() + " => {\n")
     let call_args : Array[String] = []
@@ -1795,7 +1876,7 @@ fn emit_invoker(
             " : " +
             emit_type(arg.type_.unwrap()) +
             " = @tool.decode_canonical_field(__golem_decoded, \"" +
-            escape_string_lit(arg.canonical) +
+            escape_string_lit(inherited_canonical_name(arg, inherited)) +
             "\", \"" +
             escape_string_lit(command_context) +
             "\") catch { __golem_error => return Err(__golem_error) }\n",
@@ -1904,13 +1985,28 @@ fn emit_tool_error_schemas(
 }
 
 ///|
+fn subtree_tool_sources(
+  tools : Array[ToolInfo],
+) -> Map[String, Unit] raise ToolEmitError {
+  let sources : Map[String, Unit] = {}
+  for tool in tools {
+    for command in tool.commands {
+      if command.subtree is Some(target) {
+        sources[resolve_subtree_tool(tools, target).source_name] = ()
+      }
+    }
+  }
+  sources
+}
+
+///|
 pub fn generate_tool_registration(
   tools : Array[ToolInfo],
 ) -> @list.List[@syntax.Impl] raise ToolEmitError {
   validate_subtree_cycles(tools)
   validate_inherited_surfaces(tools)
   for tool in tools {
-    validate_sibling_commands(tool)
+    validate_sibling_commands(tools, tool)
   }
   let buf = StringBuilder::new()
   emit_tool_error_schemas(buf, tools)
@@ -1918,10 +2014,15 @@ pub fn generate_tool_registration(
     emit_descriptor(buf, tool, tools)
   }
   if tools.length() > 0 {
+    let subtree_sources = subtree_tool_sources(tools)
     buf.write_string("///|\nfn init {\n  try {\n")
     for tool in tools {
       buf.write_string(
-        "    @tool.register_tool_def_invoker(" +
+        (if subtree_sources.contains(tool.source_name) {
+          "    @tool.register_subtool_def_invoker("
+        } else {
+          "    @tool.register_tool_def_invoker("
+        }) +
         descriptor_name(tool) +
         "(), __golem_tool_invoke_" +
         tool.source_name +
@@ -1941,29 +2042,24 @@ fn client_args(
   inherited : Array[ProjectedToolArg],
 ) -> Array[ProjectedToolArg] {
   let result : Array[ProjectedToolArg] = []
-  let own_surfaces : Map[String, Unit] = {}
-  for arg in own {
-    own_surfaces[arg.canonical] = ()
-    for surface_alias in arg.aliases {
-      own_surfaces[surface_alias] = ()
-    }
-  }
+  let inherited_surfaces : Map[String, Unit] = {}
   for arg in inherited {
-    if !own_surfaces.contains(arg.canonical) && !(arg.placement is Hidden(_)) {
+    for surface in projected_arg_surface_names(arg) {
+      inherited_surfaces[surface] = ()
+    }
+    if !(arg.placement is Hidden(_)) {
       result.push(arg)
     }
   }
   for arg in own {
-    if !(arg.placement is Hidden(Principal | OutputStream)) {
+    if !projected_arg_surface_names(arg).any(surface => {
+        inherited_surfaces.contains(surface)
+      }) &&
+      !(arg.placement is Hidden(Principal | OutputStream)) {
       result.push(arg)
     }
   }
   result
-}
-
-///|
-fn arg_surface_names(arg : ProjectedToolArg) -> Array[String] {
-  [arg.canonical].concat(arg.aliases)
 }
 
 ///|
@@ -1972,7 +2068,7 @@ fn without_captured_args(
   captured : Array[String],
 ) -> Array[ProjectedToolArg] {
   args.filter(arg => {
-    !arg_surface_names(arg).any(name => captured.contains(name))
+    !projected_arg_surface_names(arg).any(name => captured.contains(name))
   })
 }
 
@@ -1983,7 +2079,7 @@ fn extend_captured(
 ) -> Array[String] {
   let result = captured.copy()
   for arg in args {
-    for name in arg_surface_names(arg) {
+    for name in projected_arg_surface_names(arg) {
       if !result.contains(name) {
         result.push(name)
       }
@@ -1995,6 +2091,74 @@ fn extend_captured(
 ///|
 fn wrapper_name(root : ToolInfo, path : Array[String]) -> String {
   root.client_pascal_case() + path.map(wire_to_pascal_case).join("") + "Client"
+}
+
+///|
+fn register_client_type_name(
+  generated : Map[String, Array[String]],
+  identifier : String,
+  path : Array[String],
+) -> Unit raise ToolEmitError {
+  match generated.get(identifier) {
+    Some(previous) if previous != path =>
+      emit_fail(
+        "Generated tool client type '" +
+        identifier +
+        "' collides for command paths '" +
+        previous.join("/") +
+        "' and '" +
+        path.join("/") +
+        "'; use a different name= override to disambiguate them",
+      )
+    _ => generated[identifier] = path
+  }
+}
+
+///|
+fn validate_client_scope_type_names(
+  root : ToolInfo,
+  current : ToolInfo,
+  tools : Array[ToolInfo],
+  path : Array[String],
+  generated : Map[String, Array[String]],
+) -> Unit raise ToolEmitError {
+  for index, command in current.commands {
+    if Some(index) == current.root_command {
+      continue
+    }
+    if command.subtree is Some(target) {
+      let command_path = path.concat([command.name])
+      register_client_type_name(
+        generated,
+        wrapper_name(root, command_path),
+        [root.name].concat(command_path),
+      )
+      validate_client_scope_type_names(
+        root,
+        resolve_subtree_tool(tools, target),
+        tools,
+        command_path,
+        generated,
+      )
+    }
+  }
+}
+
+///|
+fn validate_client_type_names(
+  tools : Array[ToolInfo],
+  subtree_sources : Map[String, Unit],
+) -> Unit raise ToolEmitError {
+  let generated : Map[String, Array[String]] = {}
+  for tool in tools {
+    if subtree_sources.contains(tool.source_name) {
+      continue
+    }
+    register_client_type_name(generated, tool.client_pascal_case() + "Client", [
+      tool.name,
+    ])
+    validate_client_scope_type_names(tool, tool, tools, [], generated)
+  }
 }
 
 ///|
@@ -2150,9 +2314,12 @@ fn emit_client_scope(
   }
   let root_globals = current.root_command
     .map(index => {
-      plans[index].filter(arg => {
-        arg.placement is GlobalOption || arg.placement is GlobalFlag
-      })
+      without_captured_args(
+        plans[index].filter(arg => {
+          arg.placement is GlobalOption || arg.placement is GlobalFlag
+        }),
+        captured,
+      )
     })
     .unwrap_or([])
   if current.root_command is Some(index) {
@@ -2215,10 +2382,15 @@ pub fn generate_tool_client_code(
   validate_subtree_cycles(tools)
   validate_inherited_surfaces(tools)
   for tool in tools {
-    validate_sibling_commands(tool)
+    validate_sibling_commands(tools, tool)
   }
+  let subtree_sources = subtree_tool_sources(tools)
+  validate_client_type_names(tools, subtree_sources)
   let buf = StringBuilder::new()
   for tool in tools {
+    if subtree_sources.contains(tool.source_name) {
+      continue
+    }
     let client = tool.client_pascal_case() + "Client"
     buf.write_string(
       "///|\npub(all) struct " +
