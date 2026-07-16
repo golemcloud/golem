@@ -20,6 +20,7 @@
 use super::agent::ExecutorProbe;
 use super::prep::PrepManifest;
 use super::{ScheduleTargetPattern, ScheduleTargetResidency};
+use futures::stream::{StreamExt, TryStreamExt};
 use golem_common::agent_id;
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::data_value;
@@ -241,13 +242,33 @@ async fn run_rate_period(
     rate: u32,
 ) -> anyhow::Result<PeriodOutcome> {
     let started = Instant::now();
-    let mut outcome = PeriodOutcome::default();
-    while started.elapsed() < RATE_PERIOD {
-        let batch = schedule_batch(user, component, emitters, targets, context_spans, rate).await?;
-        outcome.scheduled += batch.scheduled as u64;
-    }
-    outcome.registration_latency = started.elapsed();
-    Ok(outcome)
+    let due_start = SystemTime::now() + SCHEDULE_LEAD;
+    let scheduled = expected_actions(rate);
+    futures::stream::iter(0..scheduled)
+        .map(|index| {
+            let target_name = targets[index as usize % targets.len()].clone();
+            let emitter = &emitters[index as usize % emitters.len()];
+            let registration_at = started + Duration::from_secs_f64(index as f64 / rate as f64);
+            let due_at = due_start + Duration::from_secs_f64(index as f64 / rate as f64);
+            async move {
+                tokio::time::sleep_until(registration_at.into()).await;
+                let (seconds, nanoseconds) = scheduled_at(due_at);
+                user.invoke_and_await_agent(
+                    component,
+                    emitter,
+                    "schedule_poll_at",
+                    data_value!(target_name, seconds, nanoseconds, context_spans),
+                )
+                .await
+            }
+        })
+        .buffer_unordered(emitters.len())
+        .try_collect::<Vec<_>>()
+        .await?;
+    Ok(PeriodOutcome {
+        scheduled,
+        registration_latency: started.elapsed(),
+    })
 }
 
 fn expected_actions(rate: u32) -> u64 {
@@ -358,14 +379,24 @@ impl ScheduleOutcome {
         };
         let mut run_result = BenchmarkRunResult::new(run_config.clone());
         run_result.add(recorder);
-        info!(
-            "Density-schedule[{}]: scheduled {} of {} expected actions at max {} per second across {} targets",
-            config.cell_name(),
-            self.scheduled,
-            self.expected_scheduled,
-            self.max_rate,
-            targets
-        );
+        if self.expected_scheduled > 0 {
+            info!(
+                "Density-schedule[{}]: scheduled {} of {} expected actions at max {} per second across {} targets",
+                config.cell_name(),
+                self.scheduled,
+                self.expected_scheduled,
+                self.max_rate,
+                targets
+            );
+        } else {
+            info!(
+                "Density-schedule[{}]: scheduled {} actions at max {} per second across {} targets",
+                config.cell_name(),
+                self.scheduled,
+                self.max_rate,
+                targets
+            );
+        }
         BenchmarkResult {
             name: format!("density-schedule-{}", config.cell_name()),
             description: format!(
