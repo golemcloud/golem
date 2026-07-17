@@ -1,14 +1,14 @@
 /**
  * Helper namespace for the Postgres adapter — exposes the
  * `Pg.<helper>(...)` tagged-value constructors used inside
- * `effect-golem/postgres` tagged-template parameters to override the
+ * `@golemcloud/effect-golem/postgres` tagged-template parameters to override the
  * conservative default JS-value mapping with explicit Postgres types
  * (json, jsonb, uuid, array, range, composite, vector, numeric,
  * interval, inet, cidr, macaddr, bit, …).
  *
  * Sibling of {@link "../Postgres/PgClient".PgClient} — re-exported
  * by the facade so consumers reach both via
- * `import { Pg, PgClient } from "effect-golem/postgres"`.
+ * `import { Pg, PgClient } from "@golemcloud/effect-golem/postgres"`.
  *
  * @since 1.5.0
  */

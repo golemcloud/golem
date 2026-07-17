@@ -10,7 +10,7 @@
  * **Example**
  *
  * ```ts
- * import { Durability, Schema } from "effect-golem"
+ * import { Durability, Schema } from "@golemcloud/effect-golem"
  *
  * const result = yield* Durability.wrap(
  *   {

@@ -32,7 +32,7 @@
  *
  * ```ts
  * import { Effect, Schema } from "effect"
- * import { defineAgent, Http, method, Webhook } from "effect-golem"
+ * import { defineAgent, Http, method, Webhook } from "@golemcloud/effect-golem"
  *
  * const PaymentEvent = Schema.Struct({
  *   id: Schema.String,

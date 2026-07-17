@@ -3,7 +3,7 @@
  * in `golem.yaml`. Adapted from the official TS SDK template's
  * `rollup.config.component.mjs`, with these differences:
  *
- *   - Externalizes `effect-golem` (instead of `@golemcloud/golem-ts-sdk`)
+ *   - Externalizes `@golemcloud/effect-golem` (instead of `@golemcloud/golem-ts-sdk`)
  *     and all `golem:*` / `wasi:*` / `agent-guest` host module IDs. The
  *     resolved values come from the prebuilt base WASM at runtime.
  *   - Does not depend on `golem-typegen`-generated metadata: agents
@@ -31,11 +31,11 @@ if (!golemTemp) throw new Error("GOLEM_TEMP env var is not set")
 if (!appRootDir) throw new Error("GOLEM_APP_ROOT env var is not set")
 
 const externalPackages = (id) =>
-  id === "effect-golem" ||
-  id === "effect-golem/sqlite" ||
-  id === "effect-golem/postgres" ||
-  id === "effect-golem/mysql" ||
-  id === "effect-golem/ignite2" ||
+  id === "@golemcloud/effect-golem" ||
+  id === "@golemcloud/effect-golem/sqlite" ||
+  id === "@golemcloud/effect-golem/postgres" ||
+  id === "@golemcloud/effect-golem/mysql" ||
+  id === "@golemcloud/effect-golem/ignite2" ||
   id === "effect" ||
   id === "node:sqlite" ||
   id.startsWith("golem:") ||

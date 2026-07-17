@@ -177,7 +177,7 @@ export interface MethodSpec<
  * **Example** (all fields inline)
  *
  * ```ts
- * import { Http, method, Schema } from "effect-golem"
+ * import { Http, method, Schema } from "@golemcloud/effect-golem"
  *
  * const add = method({
  *   params: { by: Schema.Number },
@@ -192,7 +192,7 @@ export interface MethodSpec<
  * **Example** (minimal, then `.pipe(...)` for the rest)
  *
  * ```ts
- * import { Http, method, Schema, withDescription, withHttp } from "effect-golem"
+ * import { Http, method, Schema, withDescription, withHttp } from "@golemcloud/effect-golem"
  *
  * method({ params: { by: Schema.Number }, success: Schema.Number }).pipe(
  *   withHttp(Http.post("/add"), Http.get("/add?by={by}")),

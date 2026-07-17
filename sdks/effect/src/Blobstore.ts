@@ -6,7 +6,7 @@
  *
  * ```ts
  * import { Effect, Schema, Stream } from "effect"
- * import { Blobstore, defineAgent, method } from "effect-golem"
+ * import { Blobstore, defineAgent, method } from "@golemcloud/effect-golem"
  *
  * defineAgent({
  *   name: "Photos",

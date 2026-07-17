@@ -36,7 +36,7 @@
  * with the official `golem-ts-sdk`.
  */
 import { Effect, Ref, Schema } from "effect"
-import { defineAgent, method, Saga, Snapshot } from "effect-golem"
+import { defineAgent, method, Saga, Snapshot } from "@golemcloud/effect-golem"
 
 const RunResult = Schema.Struct({
   reserved: Schema.Number,

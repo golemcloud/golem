@@ -13,7 +13,7 @@
  *
  * ```ts
  * import { Effect, Schema } from "effect"
- * import { defineAgent, KeyValue, method } from "effect-golem"
+ * import { defineAgent, KeyValue, method } from "@golemcloud/effect-golem"
  *
  * const User = Schema.Struct({ id: Schema.String, name: Schema.String })
  *

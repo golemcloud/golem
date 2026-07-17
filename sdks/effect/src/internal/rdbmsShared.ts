@@ -1,6 +1,6 @@
 /**
- * Internal helpers shared by the `effect-golem/postgres`,
- * `effect-golem/mysql`, and `effect-golem/ignite2` adapters.
+ * Internal helpers shared by the `@golemcloud/effect-golem/postgres`,
+ * `@golemcloud/effect-golem/mysql`, and `@golemcloud/effect-golem/ignite2` adapters.
  *
  * Not part of the public API — sub-modules consume these via relative
  * imports. Kept deliberately small: only the pieces that genuinely

@@ -1,6 +1,9 @@
 {
-  "name": "effect-golem",
+  "name": "@golemcloud/effect-golem",
   "version": "1.5.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "Apache-2.0",
   "description": "Write Golem agents on top of Effect v4: Effect Schema-typed methods, durable execution, snapshots, sagas, RPC, HTTP, webhooks, KV/blob, and RDBMS adapters compiled to a Golem WASM component.",
   "repository": {

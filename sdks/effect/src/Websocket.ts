@@ -34,7 +34,7 @@
  * ```ts
  * import { Effect, Fiber } from "effect"
  * import { Socket } from "effect/unstable/socket"
- * import { Websocket } from "effect-golem"
+ * import { Websocket } from "@golemcloud/effect-golem"
  *
  * const drain = Effect.scoped(
  *   Effect.gen(function* () {

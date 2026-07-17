@@ -1,13 +1,13 @@
 /**
  * Helper namespace for the Ignite (Apache Ignite 2.x) adapter —
  * exposes the `Ignite.<helper>(...)` tagged-value constructors used
- * inside `effect-golem/ignite2` tagged-template parameters to override
+ * inside `@golemcloud/effect-golem/ignite2` tagged-template parameters to override
  * the conservative default JS-value mapping with explicit Ignite types
  * (uuid, decimal, date, timestamp, time, char, byte-array, etc.).
  *
  * Sibling of {@link "../Ignite/IgniteClient".IgniteClient} —
  * re-exported by the facade so consumers reach both via
- * `import { Ignite, IgniteClient } from "effect-golem/ignite2"`.
+ * `import { Ignite, IgniteClient } from "@golemcloud/effect-golem/ignite2"`.
  *
  * @since 1.5.0
  */

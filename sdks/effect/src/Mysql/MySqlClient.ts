@@ -3,7 +3,7 @@
  * `effect/unstable/sql/SqlClient` interface on top of Golem's
  * `golem:rdbms/mysql@1.5.0` host bindings.
  *
- * Consumed via the `effect-golem/mysql` sub-import. Inside the Golem
+ * Consumed via the `@golemcloud/effect-golem/mysql` sub-import. Inside the Golem
  * `wasm-rquickjs` runtime the bindings come from the embedded base
  * WASM; for Node tests they are aliased to in-memory fakes via
  * `vitest.config.ts`.
@@ -92,7 +92,7 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * Unique symbol stamped on every {@link MySqlClient} instance so
  * consumers can reliably distinguish a MySQL client. Keyed via
  * `Symbol.for` so multiple module copies (e.g. one bundled inside
- * `effect-golem` and one in the standalone `effect-golem/mysql`
+ * `effect-golem` and one in the standalone `@golemcloud/effect-golem/mysql`
  * sub-import) still agree on the same key.
  *
  * @since 1.5.0
@@ -555,7 +555,7 @@ const layer = (
   ).pipe(Layer.provide(Reactivity.layer))
 
 /**
- * Public namespace mirror used by `import { MySqlClient } from "effect-golem/mysql"`.
+ * Public namespace mirror used by `import { MySqlClient } from "@golemcloud/effect-golem/mysql"`.
  *
  * @since 1.5.0
  * @category constructors

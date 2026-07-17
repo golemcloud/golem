@@ -10,7 +10,7 @@
  * **Example**
  *
  * ```ts
- * import { Quota } from "effect-golem"
+ * import { Quota } from "@golemcloud/effect-golem"
  * import { Effect } from "effect"
  *
  * const useApi = Effect.gen(function* () {

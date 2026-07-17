@@ -17,8 +17,8 @@
  * client out of the box).
  */
 import { Effect, Schema } from "effect"
-import { defineAgent, Http, method, Snapshot } from "effect-golem"
-import { SqliteClient } from "effect-golem/sqlite"
+import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem"
+import { SqliteClient } from "@golemcloud/effect-golem/sqlite"
 
 export const SqliteCounter = defineAgent({
   name: "SqliteCounter",

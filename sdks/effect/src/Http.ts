@@ -44,7 +44,7 @@ export type {
  * **Example**
  *
  * ```ts
- * import { Http, defineAgent, method } from "effect-golem"
+ * import { Http, defineAgent, method } from "@golemcloud/effect-golem"
  *
  * defineAgent({
  *   name: "Counter",

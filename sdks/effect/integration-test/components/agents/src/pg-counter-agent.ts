@@ -23,8 +23,8 @@
  * postgres so the schema is `Schema.Struct({})`.
  */
 import { Effect, Redacted, Schema } from "effect"
-import { defineAgent, defineConfig, method, Snapshot } from "effect-golem"
-import { PgClient } from "effect-golem/postgres"
+import { defineAgent, defineConfig, method, Snapshot } from "@golemcloud/effect-golem"
+import { PgClient } from "@golemcloud/effect-golem/postgres"
 
 export class PgCounterConfig extends defineConfig("PgCounter.Config", {
   connectionAddress: Schema.Redacted(Schema.String),

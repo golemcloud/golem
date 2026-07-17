@@ -11,7 +11,7 @@
  * **Example**
  *
  * ```ts
- * import { Durability } from "effect-golem"
+ * import { Durability } from "@golemcloud/effect-golem"
  *
  * yield* Durability.atomically(doWork)
  * yield* Durability.withPersistenceLevel(Durability.PersistenceLevel.persistNothing, doWork)

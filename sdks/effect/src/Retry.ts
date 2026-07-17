@@ -10,7 +10,7 @@
  * **Example**
  *
  * ```ts
- * import { Retry } from "effect-golem"
+ * import { Retry } from "@golemcloud/effect-golem"
  * import { Duration, Effect } from "effect"
  *
  * const policy = Retry.NamedPolicy.named(

@@ -60,7 +60,7 @@ const sqlError = (cause: unknown, message: string, operation: string): SqlError 
  * `Symbol.for(...)` so multiple module copies (e.g. one bundled into
  * `effect-golem`'s main bundle for `src/snapshot.ts`'s relative
  * import of `./Sqlite.js`, and one in the standalone
- * `effect-golem/sqlite` sub-import) still agree on the same key.
+ * `@golemcloud/effect-golem/sqlite` sub-import) still agree on the same key.
  *
  * @since 1.5.0
  * @category symbols
@@ -424,7 +424,7 @@ const layer = (
   ).pipe(Layer.provide([Reactivity.layer, NodeSqliteLive]))
 
 /**
- * Public namespace mirror used by `import { SqliteClient } from "effect-golem/sqlite"`.
+ * Public namespace mirror used by `import { SqliteClient } from "@golemcloud/effect-golem/sqlite"`.
  *
  * @since 1.5.0
  * @category constructors

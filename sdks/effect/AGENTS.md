@@ -23,8 +23,8 @@ Unit tests (`npm test`) only cover the SDK in isolation against host mocks. They
 After **every** non-trivial change you must run the integration suite. The canonical drill:
 
 1. `npm test && npm run typecheck && npm run lint && npm run format:check` — gate the SDK changes.
-2. `npm run build:bundle` — refresh `dist/index.mjs` (the integration-test consumes `effect-golem` via `file:..` symlink, so this is what the embedded code sees).
-3. `WASI_SDK_PATH=/opt/wasi-sdk npm run build-agent-template` — rebuilds `wasm/agent_guest.wasm` so the new `dist/index.mjs` is embedded inside the base WASM. **Required whenever `dist/index.mjs` changes**, otherwise components will load against the old SDK and fail with "Could not find export X in module 'effect-golem'" or stale-behaviour bugs.
+2. `npm run build:bundle` — refresh `dist/index.mjs` (the integration-test consumes `@golemcloud/effect-golem` via `file:..` symlink, so this is what the embedded code sees).
+3. `WASI_SDK_PATH=/opt/wasi-sdk npm run build-agent-template` — rebuilds `wasm/agent_guest.wasm` so the new `dist/index.mjs` is embedded inside the base WASM. **Required whenever `dist/index.mjs` changes**, otherwise components will load against the old SDK and fail with "Could not find export X in module '@golemcloud/effect-golem'" or stale-behaviour bugs.
 4. `cd integration-test && npm install && npm run test:integration` — runs the harness under `test-infra/`. The harness brings up `docker compose` (Postgres + MySQL + Ignite), starts a fresh `golem server run`, runs `golem build && deploy`, then iterates the registered cases sequentially. **Preflight FAILS if a server is already on port 9881** — stop the existing server first, or pass `--no-server` to reuse it.
 
 The harness exposes per-feature flags via `tsx test-infra/run.ts ...`:
@@ -113,8 +113,8 @@ Direct host-call signatures (raw `(a, b) => Host.fn(a, b)` wrappers in `src/host
 - Strict TS (`noUnusedLocals`/`Parameters`, `noImplicitReturns`); ESM (`"type": "module"`); imports must end in `.js` (NodeNext); 2-space indent, no semicolons, double quotes, trailing commas (Prettier).
 - Public surface re-exported from `src/index.ts`; runtime hooks (`guest`, `saveSnapshot`, `loadSnapshot`) declared in `src/internal/guest.ts` with inlined types (no `import "agent-guest"` in published `.d.ts`) and flat-re-exported from the barrel.
 - Errors as Effect typed failures (e.g. `UnsupportedSchemaError`, `InvalidDataValueError`, `RemoteCallError`); avoid throwing.
-- The base WASM externalizes `effect`, `effect-golem`, `agent-guest`, all `golem:*`/`wasi:*`; user component bundles must externalize the same set so all components share one Effect runtime instance.
-- When adding deps to user code, prefer importing types/runtime from `effect` and APIs from `effect-golem`.
+- The base WASM externalizes `effect`, `@golemcloud/effect-golem`, `agent-guest`, all `golem:*`/`wasi:*`; user component bundles must externalize the same set so all components share one Effect runtime instance.
+- When adding deps to user code, prefer importing types/runtime from `effect` and APIs from `@golemcloud/effect-golem`.
 - HTTP routing metadata is authored through the `Http.*` namespace re-exported from `src/Http.ts` (mount on the agent, endpoints on each method).
 
 ## Module organisation conventions
@@ -124,12 +124,12 @@ Direct host-call signatures (raw `(a, b) => Host.fn(a, b)` wrappers in `src/host
 - **PascalCase filenames**, one module per file. Every public source file under `src/` is named `<ModuleName>.ts` (`Agent.ts`, `Http.ts`, `Quota.ts`, `WitCodec.ts`, `SelfAgentId.ts`, …). Compound names use PascalCase concatenation, no separators (`DurabilityMode`, `WitCodec`, not `Durability-Mode` or `Wit_Codec`). Files under `src/host/` follow the same rule (`AgentHostClient.ts`, `RpcClient.ts`).
 - **`src/index.ts` is a namespace-only barrel**. Each public module is surfaced via `export * as <Ns> from "./<Ns>.js"` — never `export * from "./<Ns>.js"` and never named hoists like `export { FooError } from "./Foo.js"`. Consumers always reach the API through its namespace: `Quota.acquireQuotaToken`, `Snapshot.define`, `Webhook.WebhookPayload`, `Http.mount`. This matches `effect`'s `Effect.map` / `Layer.provide` / `SqlClient.make` style. The barrel is hand-edited in this repo (we do not have `pnpm codegen`); keep its entries alphabetised inside each section.
 - **Flat DSL aliases — only three.** `defineAgent`, `defineConfig`, and `method` are also re-exported at the package root, in addition to being reachable through `Agent.defineAgent` / `Config.defineConfig` / `Method.method`. They are the canonical authoring constructors used in every `defineAgent({ ... })` call site, so keeping them un-namespaced matches the precedent set by `effect`'s flat `pipe` / `flow` re-exports. **No other symbol gets a flat alias.** When you add a new module, do not add a flat re-export of its error class, its constructor, or its types — make consumers reach them through the namespace (`Snapshot.InvalidSnapshotError`, `Quota.FailedReservationError`, `Webhook.WebhookPayload`).
-- **Sub-imports live in their own subtree.** The four RDBMS / SQLite adapters live under `src/<Adapter>/<AdapterName>Client.ts` (mirroring `@effect/sql-pg`'s `src/PgClient.ts` layout): `src/Sqlite/SqliteClient.ts`, `src/Postgres/PgClient.ts`, `src/Mysql/MySqlClient.ts`, `src/Ignite/IgniteClient.ts`. Each subtree is bundled separately by Rollup into `dist/{sqlite,postgres,mysql,ignite}.mjs` and exposed under the `effect-golem/{sqlite,postgres,mysql,ignite2}` package.json export names. The export name (kebab/lowercase, dictated by the npm convention) is independent of the source directory name (PascalCase). The three RDBMS adapters (Postgres / Mysql / Ignite) are each further split into three files within their subtree: `src/<Adapter>/<Helper>.ts` (the public helper namespace — `Pg.ts` / `MySql.ts` / `Ignite.ts` — exposing the `<Adapter>.<helper>(...)` tagged-value constructors plus the `<Adapter>ParamTag` symbol, `<Adapter>Param<T,V>` interface, `is<Adapter>Param` guard, and any helper-only types like `PgRange<T>` / `PgIp` / `IgniteUuid`), `src/<Adapter>/internal/codec.ts` (param encoding + row decoding — `encodeAllParams`, `decodeRows`, `decodeRowsValues` plus all per-type encoders/decoders and value-range constants; consumes the helper module's tag machinery and types), and `src/<Adapter>/<AdapterName>Client.ts` (the facade — TypeId, public types/interfaces, `Context.Service` class, `Connection` / `Target` / `TxTarget` abstractions, `buildConnection`, `makeImpl`, escape function, `make` / `layer`, the public `<Adapter>Client` namespace export, `is<Adapter>Client`, AND a top-of-file re-export of the helper namespace + helper types so consumers still get `import { Pg, PgClient } from "effect-golem/postgres"` unchanged). The Sqlite adapter stays as a single cohesive `src/Sqlite/SqliteClient.ts` file because it has no helper namespace and no `DbValue` codec — `node:sqlite` accepts plain JS values directly. When adding a new sub-import, follow the same shape: source under `src/Foo/FooClient.ts` (and, if it has a tagged-helper namespace + `DbValue` codec, also `src/Foo/Foo.ts` + `src/Foo/internal/codec.ts` from the start), rollup input `src/Foo/FooClient.ts`, output `dist/foo.mjs`, package.json `"./foo": { "types": "./dist/effect-golem-foo.d.ts", "import": "./dist/foo.mjs" }`, plus a matching `body` line in `scripts/build-types-entry.mjs`.
+- **Sub-imports live in their own subtree.** The four RDBMS / SQLite adapters live under `src/<Adapter>/<AdapterName>Client.ts` (mirroring `@effect/sql-pg`'s `src/PgClient.ts` layout): `src/Sqlite/SqliteClient.ts`, `src/Postgres/PgClient.ts`, `src/Mysql/MySqlClient.ts`, `src/Ignite/IgniteClient.ts`. Each subtree is bundled separately by Rollup into `dist/{sqlite,postgres,mysql,ignite}.mjs` and exposed under the `@golemcloud/effect-golem/{sqlite,postgres,mysql,ignite2}` package.json export names. The export name (kebab/lowercase, dictated by the npm convention) is independent of the source directory name (PascalCase). The three RDBMS adapters (Postgres / Mysql / Ignite) are each further split into three files within their subtree: `src/<Adapter>/<Helper>.ts` (the public helper namespace — `Pg.ts` / `MySql.ts` / `Ignite.ts` — exposing the `<Adapter>.<helper>(...)` tagged-value constructors plus the `<Adapter>ParamTag` symbol, `<Adapter>Param<T,V>` interface, `is<Adapter>Param` guard, and any helper-only types like `PgRange<T>` / `PgIp` / `IgniteUuid`), `src/<Adapter>/internal/codec.ts` (param encoding + row decoding — `encodeAllParams`, `decodeRows`, `decodeRowsValues` plus all per-type encoders/decoders and value-range constants; consumes the helper module's tag machinery and types), and `src/<Adapter>/<AdapterName>Client.ts` (the facade — TypeId, public types/interfaces, `Context.Service` class, `Connection` / `Target` / `TxTarget` abstractions, `buildConnection`, `makeImpl`, escape function, `make` / `layer`, the public `<Adapter>Client` namespace export, `is<Adapter>Client`, AND a top-of-file re-export of the helper namespace + helper types so consumers still get `import { Pg, PgClient } from "@golemcloud/effect-golem/postgres"` unchanged). The Sqlite adapter stays as a single cohesive `src/Sqlite/SqliteClient.ts` file because it has no helper namespace and no `DbValue` codec — `node:sqlite` accepts plain JS values directly. When adding a new sub-import, follow the same shape: source under `src/Foo/FooClient.ts` (and, if it has a tagged-helper namespace + `DbValue` codec, also `src/Foo/Foo.ts` + `src/Foo/internal/codec.ts` from the start), rollup input `src/Foo/FooClient.ts`, output `dist/foo.mjs`, package.json `"./foo": { "types": "./dist/effect-golem-foo.d.ts", "import": "./dist/foo.mjs" }`, plus a matching `body` line in `scripts/build-types-entry.mjs`.
 - **Mandatory guest hooks** (`guest`, `saveSnapshot`, `loadSnapshot`) are the WIT protocol bindings the generated `agent-guest` shim imports by name. They live in `src/internal/guest.ts` and are flat re-exported from the package barrel because the host requires them at the package root — they are not API. This is the only case where the barrel reaches into `internal/`. Do not rename them and do not move them into a namespace.
 - **Naming collisions are accepted.** A namespace and a value can share a name (e.g. `Principal.Principal` is the `Context.Service` class inside the `Principal` namespace). This matches `effect`'s `Effect.Effect`, `Cause.Cause`, `Schema.Schema` pattern. When `yield* X` would have worked before namespacing, it becomes `yield* X.X` after — that is the expected idiom, not a workaround.
 - **JSDoc on every public export.** Every `export` in a public module gets at minimum `@since 1.5.0` and `@category <…>` (use `models`, `constructors`, `errors`, `dsl`, `host services`, `modules`, `symbols`, etc.). The barrel itself documents each `export * as Ns` with one short paragraph plus `@since` + `@category modules`. This matches the rule documented in [`Effect-TS/effect`'s contributing section](https://github.com/Effect-TS/effect#contributing-via-pull-requests) — the only piece of the convention that is officially written down.
 - **`src/internal/` for impl-only modules.** Files that exist only to be consumed by other SDK modules — no user-facing surface — live under `src/internal/` with **camelCase** filenames, matching `effect`'s convention (public `Effect.ts` facade + private `internal/core.ts` implementation). The current internals are `pipeable.ts` (the `withPipe` helper), `multipart.ts` (multipart/mixed codec used only by `snapshotEnvelope.ts`), `witTree.ts` (graph codec consumed by `WitCodec`), `rdbmsShared.ts` (error classifier shared by the three RDBMS adapters), `snapshotEnvelope.ts` (snapshot wire-format codec used by the dispatcher), `durableFunction.ts` (the 850-line implementation behind the 30-line `Durability.ts` facade), `durabilityMode.ts` (the persistence-level / atomic-region surface, also re-exported through `Durability`), `agent.ts` (the dispatcher, the registry, and the `userRuntimeLayer` host-services seam — implementation behind the 20-line `Agent.ts` facade), `method.ts` (the `MethodSpec` / `MethodCodec` machinery and `compileMethodSpec` / `invokeDataValue` — implementation behind the 20-line `Method.ts` facade), and `guest.ts` (the WIT `agent-guest` protocol bindings: `guest`, `saveSnapshot`, `loadSnapshot`). When you add a new helper that has no public surface, drop it under `src/internal/` from the start — do not park it at the top level. Public modules that re-export an internal symbol go through their namespace (e.g. `Snapshot.SnapshotEnvelopeError` is re-exported from `Snapshot.ts` even though the class lives in `internal/snapshotEnvelope.ts`); the package barrel never reaches into `internal/` directly except for the three guest hooks (which are flat-exported because the WIT shim resolves them by name).
-- **Per-module deep imports are open by default; `internal/` and `host/` are blocked.** `package.json` has a `"./*": { "types": "./dist/src/*.d.ts", "import": "./dist/src/*.js" }` wildcard so consumers can deep-import any public module: `import { Quota } from "effect-golem/Quota"` resolves to `dist/src/Quota.js`, `import { PgClient } from "effect-golem/Postgres/PgClient"` resolves to `dist/src/Postgres/PgClient.js`, and so on. The four bundled sub-imports (`./sqlite`, `./postgres`, `./mysql`, `./ignite2`) keep their explicit entries pointing at the rolled-up `.mjs` bundles — exact matches in the exports map win over the wildcard, so the WASM-targeted bundles stay reachable for components embedded into the base WASM. Two prefixes are explicitly **blocked** with `null`: `"./internal/*": null` (impl-only modules; mirrors `effect`'s convention) and `"./host/*": null` (the WIT host-binding wrappers under `src/host/` are SDK-internal even though they have PascalCase names). Consumers attempting to import them get `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+- **Per-module deep imports are open by default; `internal/` and `host/` are blocked.** `package.json` has a `"./*": { "types": "./dist/src/*.d.ts", "import": "./dist/src/*.js" }` wildcard so consumers can deep-import any public module: `import { Quota } from "@golemcloud/effect-golem/Quota"` resolves to `dist/src/Quota.js`, `import { PgClient } from "@golemcloud/effect-golem/Postgres/PgClient"` resolves to `dist/src/Postgres/PgClient.js`, and so on. The four bundled sub-imports (`./sqlite`, `./postgres`, `./mysql`, `./ignite2`) keep their explicit entries pointing at the rolled-up `.mjs` bundles — exact matches in the exports map win over the wildcard, so the WASM-targeted bundles stay reachable for components embedded into the base WASM. Two prefixes are explicitly **blocked** with `null`: `"./internal/*": null` (impl-only modules; mirrors `effect`'s convention) and `"./host/*": null` (the WIT host-binding wrappers under `src/host/` are SDK-internal even though they have PascalCase names). Consumers attempting to import them get `ERR_PACKAGE_PATH_NOT_EXPORTED`.
 - **Facade / impl split for large modules.** When a top-level module's implementation grows past a comfortable read length, follow the `effect` pattern: keep the public types and re-exports in `src/<Module>.ts`, move the implementation to `src/internal/<module>.ts` (camelCase), and import siblings inside `internal/` as `type *` where needed to avoid runtime cycles. The first example of this in effect-golem is `Durability.ts` (30-line facade re-exporting `* from "./internal/durabilityMode.js"` + `* from "./internal/durableFunction.js"`); `Agent.ts` (20-line facade re-exporting `* from "./internal/agent.js"`) and `Method.ts` (20-line facade re-exporting `* from "./internal/method.js"`) follow the same shape.
 
 ## Agent definition vs implementation (`defineAgent` / `.implement(...)`)
@@ -137,7 +137,7 @@ Direct host-call signatures (raw `(a, b) => Host.fn(a, b)` wrappers in `src/host
 `defineAgent({...})` and `.implement(impl)` are split into two distinct steps. `defineAgent` returns a metadata-only `AgentSpec` that already carries a fully-typed RPC `client`; calling `.implement(impl)` on the spec is what actually registers the agent with the dispatcher.
 
 ```ts
-import { defineAgent, method, Schema } from "effect-golem"
+import { defineAgent, method, Schema } from "@golemcloud/effect-golem"
 import { Effect } from "effect"
 
 // Spec module — no `impl`, no registration. Can be imported by anyone who
@@ -201,7 +201,7 @@ Registration semantics:
 Authoring uses `Http.mount(...)` on the agent and `Http.<verb>(...)` (or `Http.endpoint(verb, ...)`) on each method:
 
 ```ts
-import { defineAgent, Http, method, Schema } from "effect-golem"
+import { defineAgent, Http, method, Schema } from "@golemcloud/effect-golem"
 
 defineAgent({
   name: "Counter",
@@ -304,7 +304,7 @@ Authoring uses `defineConfig(name, fields)` (a `Context.Service`-class) on the a
 
 ```ts
 import { Effect, Redacted, Schema } from "effect"
-import { defineAgent, defineConfig, method } from "effect-golem"
+import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
   greeting: Schema.String,
@@ -384,7 +384,7 @@ Test mocks: `test/mocks/golem-agent-host.ts` exposes a settable `getConfigValueI
 
 ```ts
 import { Effect, Schema } from "effect"
-import { defineAgent, Http, method, Webhook } from "effect-golem"
+import { defineAgent, Http, method, Webhook } from "@golemcloud/effect-golem"
 
 const PaymentEvent = Schema.Struct({ id: Schema.String, status: Schema.String })
 
@@ -467,7 +467,7 @@ Two variants:
 - **Custom** — `Snapshot.custom({ policy })`. `impl` receives `snap.register({ save, load })`; the user owns the bytes. Wire format is the binary v2 envelope (`mimeType: "application/octet-stream"`), with the principal embedded in a 5-byte header (`u8 version=2 + u32-be princLen + princJson + userBytes`).
 
 ```ts
-import { defineAgent, method, Schema, Snapshot } from "effect-golem"
+import { defineAgent, method, Schema, Snapshot } from "@golemcloud/effect-golem"
 import { Effect, Ref } from "effect"
 
 defineAgent({
@@ -519,8 +519,8 @@ Errors: `InvalidSnapshotError` (from `registerAgent`, e.g. `everyN(0)`), `Snapsh
 The auto variant can also capture one or more `node:sqlite` `DatabaseSync` handles. Pre-declare the names with a `const`-typed tuple and attach each one inside `impl`:
 
 ```ts
-import { defineAgent, method, Schema, Snapshot } from "effect-golem"
-import { SqliteClient } from "effect-golem/sqlite"
+import { defineAgent, method, Schema, Snapshot } from "@golemcloud/effect-golem"
+import { SqliteClient } from "@golemcloud/effect-golem/sqlite"
 import { Effect } from "effect"
 
 defineAgent({
@@ -563,12 +563,12 @@ Constraints (enforced strictly):
 
 ### SQLite caveat: use `node:sqlite`, not `better-sqlite3` / `@effect/sql-sqlite-node`
 
-The Golem runtime is `wasm-rquickjs`. It exposes Node's built-in `node:sqlite` (`DatabaseSync`/`StatementSync`) plus three host extensions (`serializeDatabaseSync`, `restoreDatabaseSync`, `isAutocommitDatabaseSync`). Native N-API addons such as `better-sqlite3` (which `@effect/sql-sqlite-node@4.0.0-beta.57` still depends on) cannot run inside the WASM runtime. The `effect-golem/sqlite` sub-import is a hand-rolled adapter targeting `node:sqlite` directly — use it instead.
+The Golem runtime is `wasm-rquickjs`. It exposes Node's built-in `node:sqlite` (`DatabaseSync`/`StatementSync`) plus three host extensions (`serializeDatabaseSync`, `restoreDatabaseSync`, `isAutocommitDatabaseSync`). Native N-API addons such as `better-sqlite3` (which `@effect/sql-sqlite-node@4.0.0-beta.57` still depends on) cannot run inside the WASM runtime. The `@golemcloud/effect-golem/sqlite` sub-import is a hand-rolled adapter targeting `node:sqlite` directly — use it instead.
 
 The adapter **implements the official `effect/unstable/sql` `SqlClient` interface** (in Effect v4 the `@effect/sql` core was merged into the main `effect` package and lives at `effect/unstable/sql/{SqlClient,Statement,SqlError,SqlConnection,Migrator,SqlSchema,SqlResolver,SqlStream,SqlModel}`), so users get `SqlSchema` / `SqlResolver` / `Migrator` / tagged-template queries (`yield* sql\`SELECT ...\``) for free against our adapter. Snippet:
 
 ```ts
-import { SqliteClient } from "effect-golem/sqlite"
+import { SqliteClient } from "@golemcloud/effect-golem/sqlite"
 
 const sql = yield * SqliteClient.make({ filename: ":memory:" })
 yield *
@@ -579,14 +579,14 @@ yield * sql`INSERT OR IGNORE INTO counters (id, count) VALUES (${name}, 0)`
 const rows = yield * sql`SELECT count FROM counters WHERE id = ${name}`
 ```
 
-`SqliteClient.make`/`SqliteClient.layer`/`SqliteClient.fromDatabase` return / provide both the `effect-golem/sqlite` `SqliteClient` extension (which adds `export: Effect<Uint8Array, SqlError>` for snapshotting and `exec(sql)` for parameter-less DDL/seed batches) and the canonical `Client.SqlClient` tag. `executeStream` is unimplemented (`Stream.die`) because `node:sqlite`'s `StatementSync` has no native cursor; everything else is wired through `Statement.makeCompilerSqlite` so the SQL dialect, placeholders, identifier escaping, and result-column transforms match the rest of the Effect SQL ecosystem.
+`SqliteClient.make`/`SqliteClient.layer`/`SqliteClient.fromDatabase` return / provide both the `@golemcloud/effect-golem/sqlite` `SqliteClient` extension (which adds `export: Effect<Uint8Array, SqlError>` for snapshotting and `exec(sql)` for parameter-less DDL/seed batches) and the canonical `Client.SqlClient` tag. `executeStream` is unimplemented (`Stream.die`) because `node:sqlite`'s `StatementSync` has no native cursor; everything else is wired through `Statement.makeCompilerSqlite` so the SQL dialect, placeholders, identifier escaping, and result-column transforms match the rest of the Effect SQL ecosystem.
 
 ## Durable function wrapper (`Durability.wrap` / `wrapInfallible`)
 
 `effect-golem` ships an Effect-idiomatic wrapper around the `golem:durability/durability@1.5.0` host interface, mirroring the Rust SDK's `Durability::new + is_live + persist + replay` triplet that every `golem-ai` library uses. The high-level entry point is `Durability.wrap` (and `Durability.wrapInfallible`):
 
 ```ts
-import { Durability, defineAgent, method, Schema } from "effect-golem"
+import { Durability, defineAgent, method, Schema } from "@golemcloud/effect-golem"
 import { Effect } from "effect"
 
 defineAgent({
@@ -644,7 +644,7 @@ The API mirrors `@effect/workflow`'s `Workflow.withCompensation` shape — the c
 
 ```ts
 import { Effect, Schema } from "effect"
-import { defineAgent, method, Saga } from "effect-golem"
+import { defineAgent, method, Saga } from "@golemcloud/effect-golem"
 
 // Reusable execute+compensate pair (parity with official Golem SDKs).
 const bookFlight = Saga.operation({
@@ -737,16 +737,16 @@ WIT / mocks: the integration imports `wasi:logging/logging` and `golem:api/conte
 
 `effect-golem` ships three sub-imports that wrap Golem's `golem:rdbms/*@1.5.0` host bindings as official `effect/unstable/sql/SqlClient` instances. Each adapter is a separate sub-import (NOT re-exported from `effect-golem`):
 
-- `effect-golem/postgres` — Postgres 14+ (`golem:rdbms/postgres@1.5.0`)
-- `effect-golem/mysql` — MySQL 8 / MariaDB (`golem:rdbms/mysql@1.5.0`)
-- `effect-golem/ignite2` — Apache Ignite 2.x (`golem:rdbms/ignite2@1.5.0`)
+- `@golemcloud/effect-golem/postgres` — Postgres 14+ (`golem:rdbms/postgres@1.5.0`)
+- `@golemcloud/effect-golem/mysql` — MySQL 8 / MariaDB (`golem:rdbms/mysql@1.5.0`)
+- `@golemcloud/effect-golem/ignite2` — Apache Ignite 2.x (`golem:rdbms/ignite2@1.5.0`)
 
 All three expose the full `SqlClient` API (tagged-template queries, `withTransaction`, `executeStream`, `SqlSchema` / `SqlResolver` / `Migrator` integration), brand themselves with a `Symbol.for`-keyed TypeId, and provide both a `make(config)` factory (`Effect<…, SqlError, Scope>`) and a `layer(config)` `Layer` that registers the client under both the adapter-specific `Context.Service` tag and the canonical `Client.SqlClient` tag.
 
 ```ts
-import { PgClient } from "effect-golem/postgres"
-import { MySqlClient } from "effect-golem/mysql"
-import { IgniteClient } from "effect-golem/ignite2"
+import { PgClient } from "@golemcloud/effect-golem/postgres"
+import { MySqlClient } from "@golemcloud/effect-golem/mysql"
+import { IgniteClient } from "@golemcloud/effect-golem/ignite2"
 
 const sqlPg = yield * PgClient.make({ connectionAddress: "postgres://user:pw@host:5432/db" })
 const sqlMy = yield * MySqlClient.make({ connectionAddress: "mysql://user:pw@host:3306/db" })
@@ -762,7 +762,7 @@ Address formats (passed verbatim to the host's `DbConnection.open(...)`):
 
 ### Why not `@effect/sql-pg` / `@effect/sql-mysql2` / native drivers?
 
-Inside Golem the user component runs in `wasm-rquickjs`. **Native N-API addons cannot load there** — `@effect/sql-pg` depends on `pg`, `@effect/sql-mysql2` depends on `mysql2`, etc. All three of those packages will throw at import time. The `effect-golem/{postgres,mysql,ignite2}` adapters delegate the actual wire protocol to the Golem host (which speaks each protocol itself) and only expose the JS-side `SqlClient` shim. **Always use the `effect-golem/*` adapters; never add `@effect/sql-pg` etc. as a dependency.**
+Inside Golem the user component runs in `wasm-rquickjs`. **Native N-API addons cannot load there** — `@effect/sql-pg` depends on `pg`, `@effect/sql-mysql2` depends on `mysql2`, etc. All three of those packages will throw at import time. The `@golemcloud/effect-golem/{postgres,mysql,ignite2}` adapters delegate the actual wire protocol to the Golem host (which speaks each protocol itself) and only expose the JS-side `SqlClient` shim. **Always use the `@golemcloud/effect-golem/*` adapters; never add `@effect/sql-pg` etc. as a dependency.**
 
 ### State is external — NOT covered by Golem snapshots
 
@@ -825,7 +825,7 @@ The shared classification logic lives in `src/RdbmsShared.ts` (`sqlErrorFor`, `e
 `effect-golem` ships an Effect-idiomatic façade over `golem:quota/types@1.5.0`, mirroring the `quota` surface of the official `golem-ts-sdk` / `golem-rust-sdk`. Authoring uses the `Quota` namespace re-exported from the package barrel:
 
 ```ts
-import { Quota } from "effect-golem"
+import { Quota } from "@golemcloud/effect-golem"
 import { Effect } from "effect"
 
 const useApi = Effect.gen(function* () {
@@ -879,7 +879,7 @@ Errors (exported from the package barrel and from `Quota.*`):
 `effect-golem` ships an Effect-typed wrapper around the eventually-consistent subset of `wasi:keyvalue@0.1.0` (`eventual` + `eventual-batch`). The `atomic` (`increment` / `compare-and-swap`) and `cache` interfaces are intentionally NOT wrapped — they are currently `unimplemented!` in the Golem host and would trap the worker on call. They will be added when the host gains support.
 
 ```ts
-import { defineAgent, KeyValue, method, Schema } from "effect-golem"
+import { defineAgent, KeyValue, method, Schema } from "@golemcloud/effect-golem"
 import { Effect } from "effect"
 
 const User = Schema.Struct({ id: Schema.String, name: Schema.String })
@@ -931,7 +931,7 @@ The integration test suite ships a `KvAgent` (`integration-test/components/agent
 `effect-golem` ships an Effect-typed wrapper around `wasi:blobstore/{blobstore,container,types}`. Container CRUD, object I/O (sync `Uint8Array`), object listing as a `Stream`, and a `forSchema(schema)` typed view per container are exposed. Object writes chunk into 4096-byte segments via `wasi:io/streams.blocking-write-and-flush`.
 
 ```ts
-import { Blobstore, defineAgent, method, Schema } from "effect-golem"
+import { Blobstore, defineAgent, method, Schema } from "@golemcloud/effect-golem"
 import { Effect, Stream } from "effect"
 
 const Photo = Schema.Struct({ filename: Schema.String, takenAtMillis: Schema.Number })

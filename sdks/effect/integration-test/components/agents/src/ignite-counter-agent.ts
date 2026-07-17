@@ -13,8 +13,8 @@
  *   transaction is single-level so this constraint does not bite us.
  */
 import { Effect, Redacted, Schema } from "effect"
-import { defineAgent, defineConfig, method, Snapshot } from "effect-golem"
-import { IgniteClient } from "effect-golem/ignite2"
+import { defineAgent, defineConfig, method, Snapshot } from "@golemcloud/effect-golem"
+import { IgniteClient } from "@golemcloud/effect-golem/ignite2"
 
 export class IgniteCounterConfig extends defineConfig("IgniteCounter.Config", {
   // Distinct from the other RDBMS counters so the local

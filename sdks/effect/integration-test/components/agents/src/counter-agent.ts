@@ -13,7 +13,14 @@
  * save/load every 10 invocations.
  */
 import { Effect, Redacted, Ref, Schema } from "effect"
-import { defineAgent, defineConfig, Http, method, Principal, Snapshot } from "effect-golem"
+import {
+  defineAgent,
+  defineConfig,
+  Http,
+  method,
+  Principal,
+  Snapshot,
+} from "@golemcloud/effect-golem"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
   greeting: Schema.String,

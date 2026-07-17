@@ -11,8 +11,8 @@
     "test:rdbms": "tsx test-infra/run.ts --filter '^(pg|mysql|ignite|sqlite)-counter$'"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.57",
-    "effect-golem": "file:.."
+    "@golemcloud/effect-golem": "file:..",
+    "effect": "4.0.0-beta.57"
   },
   "devDependencies": {
     "@effect/platform-node": "4.0.0-beta.57",

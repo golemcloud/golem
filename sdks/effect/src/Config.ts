@@ -386,7 +386,7 @@ export interface ConfigStatics<F extends ConfigFields> {
  * **Example**
  *
  * ```ts
- * import { defineConfig, Schema } from "effect-golem"
+ * import { defineConfig, Schema } from "@golemcloud/effect-golem"
  *
  * class CounterConfig extends defineConfig("Counter.Config", {
  *   greeting: Schema.String,

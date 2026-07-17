@@ -27,7 +27,7 @@
  * ```
  */
 import { Effect, Ref, Schema } from "effect"
-import { defineAgent, Http, method, Webhook } from "effect-golem"
+import { defineAgent, Http, method, Webhook } from "@golemcloud/effect-golem"
 
 interface PrimedWebhook {
   readonly url: string

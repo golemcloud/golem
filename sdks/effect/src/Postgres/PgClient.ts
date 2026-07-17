@@ -3,7 +3,7 @@
  * `effect/unstable/sql/SqlClient` interface on top of Golem's
  * `golem:rdbms/postgres@1.5.0` host bindings.
  *
- * The adapter is consumed via the `effect-golem/postgres` sub-import.
+ * The adapter is consumed via the `@golemcloud/effect-golem/postgres` sub-import.
  * Inside the Golem `wasm-rquickjs` runtime the bindings come from the
  * embedded base WASM; for Node tests they are aliased to in-memory
  * fakes via `vitest.config.ts`.
@@ -105,7 +105,7 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * Unique symbol stamped on every {@link PgClient} instance so consumers
  * can reliably distinguish a postgres client. Keyed via `Symbol.for`
  * so multiple module copies (e.g. one bundled inside `effect-golem`
- * and one in the standalone `effect-golem/postgres` sub-import) still
+ * and one in the standalone `@golemcloud/effect-golem/postgres` sub-import) still
  * agree on the same key.
  *
  * @since 1.5.0
@@ -583,7 +583,7 @@ const layer = (
   ).pipe(Layer.provide(Reactivity.layer))
 
 /**
- * Public namespace mirror used by `import { PgClient } from "effect-golem/postgres"`.
+ * Public namespace mirror used by `import { PgClient } from "@golemcloud/effect-golem/postgres"`.
  *
  * @since 1.5.0
  * @category constructors

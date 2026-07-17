@@ -2,11 +2,11 @@
 
 Write [Golem](https://golem.cloud) agents on top of [Effect v4](https://effect.website/) — declarative, schema-typed, end-to-end durable.
 
-`effect-golem` is a TypeScript SDK that lets you author Golem agents the same way you would author any other Effect application: `Effect.gen`, `Schema`, `Layer`, `Scope`, `Stream`. The library compiles your agent module into a Golem WASM component (by injecting your bundled JS into a prebuilt QuickJS-backed base WASM) and wires every Golem host capability — durable execution, oplog, snapshots, sagas, RPC, HTTP, webhooks, websockets, KV/Blob, RDBMS, quotas, retry policies, logging, tracing — into idiomatic Effect surface.
+`@golemcloud/effect-golem` is a TypeScript SDK that lets you author Golem agents the same way you would author any other Effect application: `Effect.gen`, `Schema`, `Layer`, `Scope`, `Stream`. The library compiles your agent module into a Golem WASM component (by injecting your bundled JS into a prebuilt QuickJS-backed base WASM) and wires every Golem host capability — durable execution, oplog, snapshots, sagas, RPC, HTTP, webhooks, websockets, KV/Blob, RDBMS, quotas, retry policies, logging, tracing — into idiomatic Effect surface.
 
 ```ts
 import { Effect, Ref, Schema } from "effect"
-import { defineAgent, Http, method, Snapshot } from "effect-golem"
+import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem"
 
 export const Counter = defineAgent({
   name: "Counter",
@@ -74,22 +74,22 @@ export const Counter = defineAgent({
 ## Installation
 
 ```bash
-npm install effect-golem effect
+npm install @golemcloud/effect-golem effect
 ```
 
-`effect-golem` ships its own bundled `effect` re-export so every component embedded in the base WASM shares one Effect runtime instance. The dependency on `effect` in your `package.json` is for type checking and IDE support.
+`@golemcloud/effect-golem` ships its own bundled `effect` re-export so every component embedded in the base WASM shares one Effect runtime instance. The dependency on `effect` in your `package.json` is for type checking and IDE support.
 
 The four database adapters live behind sub-imports so unused drivers do not bloat your bundle:
 
 ```bash
 # pick the ones you need:
-import { SqliteClient } from "effect-golem/sqlite"
-import { PgClient }     from "effect-golem/postgres"
-import { MySqlClient }  from "effect-golem/mysql"
-import { IgniteClient } from "effect-golem/ignite2"
+import { SqliteClient } from "@golemcloud/effect-golem/sqlite"
+import { PgClient }     from "@golemcloud/effect-golem/postgres"
+import { MySqlClient }  from "@golemcloud/effect-golem/mysql"
+import { IgniteClient } from "@golemcloud/effect-golem/ignite2"
 ```
 
-> **Important:** Inside Golem your component runs in `wasm-rquickjs`. Native N-API drivers (`pg`, `mysql2`, `better-sqlite3`, …) **cannot** load there. Always use the `effect-golem/*` adapters; they delegate the wire protocol to the Golem host and expose the canonical `effect/unstable/sql.SqlClient` interface so `SqlSchema` / `SqlResolver` / `Migrator` / tagged-template queries all just work.
+> **Important:** Inside Golem your component runs in `wasm-rquickjs`. Native N-API drivers (`pg`, `mysql2`, `better-sqlite3`, …) **cannot** load there. Always use the `@golemcloud/effect-golem/*` adapters; they delegate the wire protocol to the Golem host and expose the canonical `effect/unstable/sql.SqlClient` interface so `SqlSchema` / `SqlResolver` / `Migrator` / tagged-template queries all just work.
 
 ## Project layout
 
@@ -102,7 +102,7 @@ my-agent/
 │   ├── counter-agent.ts   ← defineAgent(...).implement(...)
 │   └── caller-agent.ts    ← defineAgent(...).implement(...)
 ├── tsconfig.json
-└── package.json           ← depends on `effect-golem` and `effect`
+└── package.json           ← depends on `@golemcloud/effect-golem` and `effect`
 ```
 
 Each top-level `defineAgent({...}).implement(...)` call registers the agent with the dispatcher; `main.ts` only needs to side-effect-import each implementation file. Components can host one agent or many.
@@ -113,7 +113,7 @@ Each top-level `defineAgent({...}).implement(...)` call registers the agent with
 
 ```ts
 import { Effect } from "effect"
-import { defineAgent, method, Schema } from "effect-golem"
+import { defineAgent, method, Schema } from "@golemcloud/effect-golem"
 
 defineAgent({
   name: "Greeter", // unique within this component
@@ -168,7 +168,7 @@ yield *
 `defineConfig` declares typed, host-managed configuration. Backed by `golem:agent/host.get-config-value` and the WasmRpc 4th `agent-config` argument:
 
 ```ts
-import { defineAgent, defineConfig, method } from "effect-golem"
+import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem"
 import { Effect, Redacted, Schema } from "effect"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
@@ -209,7 +209,7 @@ defineAgent({
 `effect-golem` supports the full Wasm Component Model agent surface, including unstructured text/binary references and multimodal payloads (mixed text + binary parts, à la chat messages with attachments). `Multimodal`, `Unstructured`, and `Element` namespaces compose with the rest of the schema DSL.
 
 ```ts
-import { Multimodal, Unstructured } from "effect-golem"
+import { Multimodal, Unstructured } from "@golemcloud/effect-golem"
 
 const ChatTurn = Multimodal.multimodal({
   text: Unstructured.UnstructuredText({ languageCode: "en" }),
@@ -237,7 +237,7 @@ JavaScript only has `number` and `bigint`, but the WIT type system (and therefor
 
 ```ts
 import { Schema } from "effect"
-import { WitTypes } from "effect-golem"
+import { WitTypes } from "@golemcloud/effect-golem"
 
 const Pixel = Schema.Struct({
   r: WitTypes.Uint8, // → WIT `u8`, range-checked
@@ -288,7 +288,7 @@ Composes naturally with `Effect.race`, `Effect.timeout`, `Effect.retry`, etc.
 `effect-golem` exposes routing metadata; the Golem host owns HTTP serving, decoding, auth and CORS. Authoring is declarative through the `Http` namespace:
 
 ```ts
-import { defineAgent, Http, method, Schema } from "effect-golem"
+import { defineAgent, Http, method, Schema } from "@golemcloud/effect-golem"
 
 defineAgent({
   name: "Counter",
@@ -343,7 +343,7 @@ When the `auth: true` option is set on a mount or endpoint, the host authenticat
 
 ```ts
 import { Effect } from "effect"
-import { defineAgent, Principal, SelfAgentId } from "effect-golem"
+import { defineAgent, Principal, SelfAgentId } from "@golemcloud/effect-golem"
 
 defineAgent({
   // ...
@@ -370,7 +370,7 @@ Opt-in via the `snapshot:` field. When set, the agent's WIT `snapshotting` metad
 ### Auto (schema-driven)
 
 ```ts
-import { defineAgent, method, Schema, Snapshot } from "effect-golem"
+import { defineAgent, method, Schema, Snapshot } from "@golemcloud/effect-golem"
 import { Effect, Ref } from "effect"
 
 defineAgent({
@@ -450,7 +450,7 @@ Strict constraints (enforced at save and load time, surfaced as typed errors):
 `Durability.wrap` records the result of a side-effecting block to the oplog so it replays deterministically.
 
 ```ts
-import { Durability, defineAgent, method, Schema } from "effect-golem"
+import { Durability, defineAgent, method, Schema } from "@golemcloud/effect-golem"
 import { Effect } from "effect"
 
 defineAgent({
@@ -536,7 +536,7 @@ yield *
 The `Saga` namespace ships an Effect-idiomatic saga combinator on top of the Golem oplog primitives. API mirrors `@effect/workflow.Workflow.withCompensation` shape.
 
 ```ts
-import { Saga } from "effect-golem"
+import { Saga } from "@golemcloud/effect-golem"
 import { Effect } from "effect"
 
 // Reusable execute+compensate pair:
@@ -576,7 +576,7 @@ The `Webhook` namespace bundles `Promises.create` + `golem:agent/host.create-web
 > **Prerequisite.** `Webhook.create` is only legal from an agent that is **currently deployed via an HTTP API**. Concretely the agent must declare `Http.mount(..., { webhookSuffix: "..." })` AND be listed under `httpApi.deployments.<env>.agents` in your `golem.yaml`. Calling `Webhook.create` from an agent without an active HTTP deployment traps with `WebhookHostError`.
 
 ```ts
-import { Webhook, defineAgent, Http, method, Schema } from "effect-golem"
+import { Webhook, defineAgent, Http, method, Schema } from "@golemcloud/effect-golem"
 
 defineAgent({
   name: "PaymentWatcher",
@@ -613,7 +613,7 @@ if (ready) yield * ready.decode(PaymentEvent)
 `Websocket.connect` returns the canonical `effect/unstable/socket.Socket`, so the same `runString` / writer / `Effect.scoped` patterns from a regular Effect application work against the host's `golem:websocket/client@1.5.0` binding.
 
 ```ts
-import { Websocket } from "effect-golem"
+import { Websocket } from "@golemcloud/effect-golem"
 
 yield *
   Effect.scoped(
@@ -644,7 +644,7 @@ For deeper integration, `Websocket.makeChannel(...)` returns the canonical Effec
 Wraps the eventually-consistent subset of `wasi:keyvalue@0.1.0` (`eventual` + `eventual-batch`).
 
 ```ts
-import { KeyValue, defineAgent, method, Schema } from "effect-golem"
+import { KeyValue, defineAgent, method, Schema } from "@golemcloud/effect-golem"
 
 const User = Schema.Struct({ id: Schema.String, name: Schema.String })
 
@@ -673,7 +673,7 @@ defineAgent({
 Wraps `wasi:blobstore/{blobstore,container,types}` — container CRUD, object I/O (writes chunked to 4 KB segments), object listing as a `Stream`, plus a `forSchema` typed view.
 
 ```ts
-import { Blobstore } from "effect-golem"
+import { Blobstore } from "@golemcloud/effect-golem"
 import { Stream } from "effect"
 
 const photos = yield * Blobstore.getOrCreateContainer("photos")
@@ -691,8 +691,8 @@ yield * meta.writeData("a.json", { filename: "a.png", size: bytes.length })
 All three adapters expose the **official `effect/unstable/sql.SqlClient`** interface, so tagged-template queries, `withTransaction`, `executeStream`, `SqlSchema` / `SqlResolver` / `Migrator` all compose unchanged.
 
 ```ts
-import { defineAgent, defineConfig, method, Schema, Snapshot } from "effect-golem"
-import { PgClient } from "effect-golem/postgres"
+import { defineAgent, defineConfig, method, Schema, Snapshot } from "@golemcloud/effect-golem"
+import { PgClient } from "@golemcloud/effect-golem/postgres"
 import { Effect, Redacted } from "effect"
 
 export class PgCounterConfig extends defineConfig("PgCounter.Config", {
@@ -749,10 +749,10 @@ Each adapter has a dialect helper namespace (`Pg.jsonb(...)`, `Pg.numeric(...)`,
 
 ## SQLite (`node:sqlite`)
 
-The `effect-golem/sqlite` adapter wraps Node's built-in `node:sqlite` (the only SQLite available inside `wasm-rquickjs`) and implements the same `SqlClient` interface as the RDBMS adapters. Adds `export: Effect<Uint8Array, SqlError>` and an `exec(sql)` helper for parameter-less DDL.
+The `@golemcloud/effect-golem/sqlite` adapter wraps Node's built-in `node:sqlite` (the only SQLite available inside `wasm-rquickjs`) and implements the same `SqlClient` interface as the RDBMS adapters. Adds `export: Effect<Uint8Array, SqlError>` and an `exec(sql)` helper for parameter-less DDL.
 
 ```ts
-import { SqliteClient } from "effect-golem/sqlite"
+import { SqliteClient } from "@golemcloud/effect-golem/sqlite"
 
 const sql = yield * SqliteClient.make({ filename: ":memory:" })
 yield * sql.exec(`CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER)`)
@@ -767,7 +767,7 @@ Pair with `Snapshot.define({ databases: [...] })` (above) to capture the on-disk
 Effect-typed wrapper over `golem:quota/types@1.5.0` for resource reservations.
 
 ```ts
-import { Quota } from "effect-golem"
+import { Quota } from "@golemcloud/effect-golem"
 
 const token = yield * Quota.acquireQuotaToken("api-calls", 1n)
 
@@ -803,7 +803,7 @@ yield * Quota.merge(token, child)
 For sending tokens across an RPC boundary as part of your own typed method schemas, embed the exported codecs directly:
 
 ```ts
-import { Quota } from "effect-golem"
+import { Quota } from "@golemcloud/effect-golem"
 
 const TransferQuotaInput = Schema.Struct({
   worker: Schema.String,
@@ -821,7 +821,7 @@ const Audit = Schema.Struct({ snapshot: Quota.QuotaTokenRecord })
 `golem:api/retry@1.5.0` exposed as a fluent DSL:
 
 ```ts
-import { Retry } from "effect-golem"
+import { Retry } from "@golemcloud/effect-golem"
 import { Duration, Effect } from "effect"
 
 const policy = Retry.NamedPolicy.named(
@@ -847,7 +847,7 @@ The same policy can also be **converted to an Effect `Schedule`** via `Retry.toS
 
 ```ts
 import { Effect } from "effect"
-import { Retry } from "effect-golem"
+import { Retry } from "@golemcloud/effect-golem"
 
 const schedule = Retry.toSchedule(policy, {
   // Project the failure into the property bag the predicate evaluates
@@ -865,7 +865,7 @@ Unlike `withPolicy`, the schedule runs entirely on the Effect side — the Golem
 Read and search the running agent's own oplog as a `Stream`:
 
 ```ts
-import { Oplog, SelfAgentId } from "effect-golem"
+import { Oplog, SelfAgentId } from "@golemcloud/effect-golem"
 import { Stream } from "effect"
 
 const idx = yield * Oplog.currentIndex
@@ -890,7 +890,7 @@ yield * Oplog.commit
 ## Self-agent metadata, fork, promises
 
 ```ts
-import { Agents, SelfAgentId } from "effect-golem"
+import { Agents, SelfAgentId } from "@golemcloud/effect-golem"
 import { Stream } from "effect"
 
 // --- Self / metadata ---
@@ -952,8 +952,8 @@ The `Logging` and `Tracing` namespaces are re-exported for users who want to rep
 `effect-golem` integrates with the standard `golem` CLI. A typical `golem.yaml` declares a custom `effect-golem-ts` componentTemplate that:
 
 1. Type-checks `src/` with `tsc`.
-2. Bundles `src/main.ts` with Rollup, externalising `effect`, `effect-golem`, `agent-guest`, and all `golem:*` / `wasi:*` host bindings.
-3. Injects the bundled JS into the prebuilt QuickJS-backed base WASM that ships with `effect-golem` (under `node_modules/effect-golem/wasm/agent_guest.wasm`) — no Rust/cargo toolchain required for downstream users.
+2. Bundles `src/main.ts` with Rollup, externalising `effect`, `@golemcloud/effect-golem`, `agent-guest`, and all `golem:*` / `wasi:*` host bindings.
+3. Injects the bundled JS into the prebuilt QuickJS-backed base WASM that ships with `@golemcloud/effect-golem` (under `node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm`) — no Rust/cargo toolchain required for downstream users.
 
 Then:
 

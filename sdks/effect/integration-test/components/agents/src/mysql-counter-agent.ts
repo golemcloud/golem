@@ -8,8 +8,8 @@
  * MySQL, so the snapshot schema is `Schema.Struct({})`.
  */
 import { Effect, Redacted, Schema } from "effect"
-import { defineAgent, defineConfig, method, Snapshot } from "effect-golem"
-import { MySqlClient } from "effect-golem/mysql"
+import { defineAgent, defineConfig, method, Snapshot } from "@golemcloud/effect-golem"
+import { MySqlClient } from "@golemcloud/effect-golem/mysql"
 
 export class MySqlCounterConfig extends defineConfig("MySqlCounter.Config", {
   // Distinct from PgCounter's `connectionAddress` so the local

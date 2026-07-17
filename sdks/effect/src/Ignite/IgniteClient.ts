@@ -3,7 +3,7 @@
  * exposes the official `effect/unstable/sql/SqlClient` interface on
  * top of Golem's `golem:rdbms/ignite2@1.5.0` host bindings.
  *
- * Consumed via the `effect-golem/ignite2` sub-import. Inside the
+ * Consumed via the `@golemcloud/effect-golem/ignite2` sub-import. Inside the
  * Golem `wasm-rquickjs` runtime the bindings come from the embedded
  * base WASM; for Node tests they are aliased to in-memory fakes via
  * `vitest.config.ts`.
@@ -551,7 +551,7 @@ const layer = (
   ).pipe(Layer.provide(Reactivity.layer))
 
 /**
- * Public namespace mirror used by `import { IgniteClient } from "effect-golem/ignite2"`.
+ * Public namespace mirror used by `import { IgniteClient } from "@golemcloud/effect-golem/ignite2"`.
  *
  * @since 1.5.0
  * @category constructors

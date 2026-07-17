@@ -30,7 +30,7 @@
  *   discriminator with `estimatedWaitNanos`.
  */
 import { Effect, Schema } from "effect"
-import { defineAgent, method, Quota } from "effect-golem"
+import { defineAgent, method, Quota } from "@golemcloud/effect-golem"
 
 const RESOURCE_NAME = "effect-golem-test-quota"
 

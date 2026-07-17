@@ -33,7 +33,7 @@
  * `receive()` round-trip is mapped 1:1 onto the host bindings.
  */
 import { Effect, Fiber, Queue, Schema } from "effect"
-import { defineAgent, method, Websocket } from "effect-golem"
+import { defineAgent, method, Websocket } from "@golemcloud/effect-golem"
 
 // `wss://ws.postman-echo.com/raw` is Postman's free WebSocket echo
 // service. It echoes every text or binary frame back verbatim with no

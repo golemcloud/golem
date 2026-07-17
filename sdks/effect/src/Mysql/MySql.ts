@@ -1,14 +1,14 @@
 /**
  * Helper namespace for the MySQL adapter — exposes the
  * `MySql.<helper>(...)` tagged-value constructors used inside
- * `effect-golem/mysql` tagged-template parameters to override the
+ * `@golemcloud/effect-golem/mysql` tagged-template parameters to override the
  * conservative default JS-value mapping with explicit MySQL types
  * (json, decimal, date, time, datetime, set, enumeration, bit, blob /
  * binary variants).
  *
  * Sibling of {@link "../Mysql/MySqlClient".MySqlClient} — re-exported
  * by the facade so consumers reach both via
- * `import { MySql, MySqlClient } from "effect-golem/mysql"`.
+ * `import { MySql, MySqlClient } from "@golemcloud/effect-golem/mysql"`.
  *
  * @since 1.5.0
  */

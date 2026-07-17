@@ -25,7 +25,7 @@
  * exercises the snapshot oplog entry alongside the saga drill.
  */
 import { Cause, Effect, Exit, Ref, Schema } from "effect"
-import { defineAgent, method, Saga, Snapshot } from "effect-golem"
+import { defineAgent, method, Saga, Snapshot } from "@golemcloud/effect-golem"
 
 const StepSchema = Schema.Literals(["flight", "hotel", "car"])
 

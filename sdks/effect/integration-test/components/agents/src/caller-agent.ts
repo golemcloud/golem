@@ -6,7 +6,7 @@
  */
 import { Cause, Effect, Exit, Fiber, Schema } from "effect"
 import { Counter } from "./counter-agent.js"
-import { defineAgent, method } from "effect-golem"
+import { defineAgent, method } from "@golemcloud/effect-golem"
 
 export const Caller = defineAgent({
   name: "Caller",

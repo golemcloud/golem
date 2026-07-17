@@ -23,7 +23,7 @@
  * the original SDK always produced).
  */
 import { Effect, Schema } from "effect"
-import { defineAgent, method } from "effect-golem"
+import { defineAgent, method } from "@golemcloud/effect-golem"
 
 export const NotFoundError = Schema.Struct({
   _tag: Schema.Literal("NotFoundError"),

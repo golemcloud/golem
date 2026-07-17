@@ -3,7 +3,7 @@
  * (`wasi:blobstore/*`) against the live Golem host.
  */
 import { Effect, Schema, Stream } from "effect"
-import { Blobstore, defineAgent, method } from "effect-golem"
+import { Blobstore, defineAgent, method } from "@golemcloud/effect-golem"
 
 const Photo = Schema.Struct({ filename: Schema.String, takenAtMillis: Schema.Number })
 

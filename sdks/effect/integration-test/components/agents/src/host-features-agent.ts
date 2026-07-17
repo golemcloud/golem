@@ -43,7 +43,15 @@
  * invocations.
  */
 import { Effect, Ref, Schema, Stream } from "effect"
-import { Agents, defineAgent, Durability, method, Oplog, SelfAgentId, Snapshot } from "effect-golem"
+import {
+  Agents,
+  defineAgent,
+  Durability,
+  method,
+  Oplog,
+  SelfAgentId,
+  Snapshot,
+} from "@golemcloud/effect-golem"
 import * as CoreTypes from "golem:core/types@1.5.0"
 
 const uuidToString = (uuid: { highBits: bigint; lowBits: bigint }): string =>

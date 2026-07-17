@@ -4,10 +4,10 @@
 # Inspired by golemcloud/golem cli/golem-cli/templates/ts/common/golem.yaml
 # and common-on-demand/golem.yaml, with the build pipeline adapted to:
 #   - skip golem-typegen (effect-golem agents are declared declaratively),
-#   - externalize `effect-golem` (and `effect`) instead of @golemcloud/golem-ts-sdk,
+#   - externalize `@golemcloud/effect-golem` (and `effect`) instead of @golemcloud/golem-ts-sdk,
 #   - inject into the base WASM produced by `npm run build-agent-template`
 #     in the parent `effect-golem` repo and exposed via the `effect-golem`
-#     npm dependency under node_modules/effect-golem/wasm/agent_guest.wasm.
+#     npm dependency under node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm.
 
 manifestVersion: 1.5.0
 
@@ -47,7 +47,7 @@ componentTemplates:
               - "{{ appRootDir }}/package.json"
             targets:
               - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
-          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/effect-golem/wasm/agent_guest.wasm"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
             module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
             into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
@@ -74,7 +74,7 @@ componentTemplates:
               - "{{ appRootDir }}/package.json"
             targets:
               - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
-          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/effect-golem/wasm/agent_guest.wasm"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
             module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
             into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
           - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
