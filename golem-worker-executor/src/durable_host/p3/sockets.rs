@@ -25,6 +25,7 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_read_access, run_read_access_classified, wasi_sockets_view,
 };
+use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::RetryContext;
@@ -731,6 +732,7 @@ struct TcpSocketSendTask<Ctx> {
     call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
     mode: TcpSendMode,
     result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
+    activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -739,11 +741,13 @@ impl<Ctx> TcpSocketSendTask<Ctx> {
         call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
         socket_result_rx: oneshot::Receiver<Result<(), types::ErrorCode>>,
         result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
+        activity: TailActivity,
     ) -> Self {
         Self {
             call,
             mode: TcpSendMode::Live { socket_result_rx },
             result_tx,
+            activity,
             _phantom: PhantomData,
         }
     }
@@ -753,11 +757,13 @@ impl<Ctx> TcpSocketSendTask<Ctx> {
         input_rx: oneshot::Receiver<Vec<u8>>,
         socket: Resource<TcpSocket>,
         result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
+        activity: TailActivity,
     ) -> Self {
         Self {
             call,
             mode: TcpSendMode::Replay { input_rx, socket },
             result_tx,
+            activity,
             _phantom: PhantomData,
         }
     }
@@ -773,14 +779,18 @@ where
             call,
             mode,
             result_tx,
+            activity,
             ..
         } = self;
         let result = match mode {
+            // Live: the wait on the transmission outcome stays *active* — its `Start` is already
+            // persisted, so its `End` must land before the invocation boundary (the guest exiting
+            // drops the send stream, which terminates the transmission and resolves the wait).
             TcpSendMode::Live { socket_result_rx } => {
                 complete_tcp_socket_send::<Ctx, U>(accessor, call, socket_result_rx).await
             }
             TcpSendMode::Replay { input_rx, socket } => {
-                replay_tcp_socket_send::<Ctx, U>(accessor, call, input_rx, socket).await
+                replay_tcp_socket_send::<Ctx, U>(accessor, call, input_rx, socket, &activity).await
             }
         };
         if !result_tx.is_closed() {
@@ -827,12 +837,14 @@ async fn replay_tcp_socket_send<Ctx, U>(
     call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
     input_rx: oneshot::Receiver<Vec<u8>>,
     socket: Resource<TcpSocket>,
+    activity: &TailActivity,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    let contents = input_rx.await.unwrap_or_default();
+    // Safe park: the captured bytes are re-produced by the replaying guest.
+    let contents = activity.park(input_rx).await.unwrap_or_default();
 
     match call
         .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
@@ -881,6 +893,7 @@ struct TcpSocketReceiveTask<Ctx> {
     socket: Resource<TcpSocket>,
     demand_rx: mpsc::UnboundedReceiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
+    activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -889,11 +902,13 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
         socket: Resource<TcpSocket>,
         demand_rx: mpsc::UnboundedReceiver<TcpReceiveDemand>,
         result_tx: oneshot::Sender<TcpReceiveResolution>,
+        activity: TailActivity,
     ) -> Self {
         Self {
             socket,
             demand_rx,
             result_tx,
+            activity,
             _phantom: PhantomData,
         }
     }
@@ -905,8 +920,14 @@ where
     U: Send + 'static,
 {
     async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        run_tcp_socket_receive::<Ctx, U>(accessor, self.socket, self.demand_rx, self.result_tx)
-            .await
+        run_tcp_socket_receive::<Ctx, U>(
+            accessor,
+            self.socket,
+            self.demand_rx,
+            self.result_tx,
+            self.activity,
+        )
+        .await
     }
 }
 
@@ -958,6 +979,7 @@ async fn run_tcp_socket_receive<Ctx, U>(
     socket: Resource<TcpSocket>,
     mut demand_rx: mpsc::UnboundedReceiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
+    activity: TailActivity,
 ) -> wasmtime::Result<()>
 where
     Ctx: WorkerCtx,
@@ -1027,7 +1049,8 @@ where
     let mut terminal: Result<(), types::ErrorCode> = Ok(());
 
     loop {
-        let demand = demand_rx.recv().await;
+        // Safe park: waiting for the guest to demand the next chunk.
+        let demand = activity.park(demand_rx.recv()).await;
 
         let child =
             match CallHandle::<P3SocketsTypesTcpSocketReceiveChunk, NotCancellable>::start_access(
@@ -1498,10 +1521,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             accessor.with(|mut store| {
                 socket_result_future
                     .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
+                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                    .tail_work_tracker()
+                    .activity();
                 store.spawn(TcpSocketSendTask::<Ctx>::live(
                     call,
                     socket_result_rx,
                     result_tx,
+                    activity,
                 ));
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
@@ -1511,8 +1538,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             let (input_tx, input_rx) = oneshot::channel();
             accessor.with(|mut store| {
                 data.pipe(&mut store, TcpSendCaptureConsumer::new(input_tx))?;
+                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                    .tail_work_tracker()
+                    .activity();
                 store.spawn(TcpSocketSendTask::<Ctx>::replay(
-                    call, input_rx, socket, result_tx,
+                    call, input_rx, socket, result_tx, activity,
                 ));
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
@@ -1556,8 +1586,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                     return Err(error);
                 }
             };
+            let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                .tail_work_tracker()
+                .activity();
             store.spawn(TcpSocketReceiveTask::<Ctx>::new(
-                socket, demand_rx, result_tx,
+                socket, demand_rx, result_tx, activity,
             ));
             Ok((stream, future))
         })

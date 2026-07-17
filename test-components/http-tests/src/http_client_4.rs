@@ -92,6 +92,11 @@ pub trait HttpClient4 {
     /// short body is a deterministic transmission error
     /// (`HttpRequestBodySize`), which must replay identically.
     async fn post_with_short_body_transmission_error(&self) -> String;
+
+    /// Spawns a guest task that performs a full HTTP GET (send and body read)
+    /// and returns from the export immediately without awaiting it: the
+    /// durable HTTP calls happen only after the export has returned.
+    async fn get_in_spawned_task_after_return(&self) -> String;
 }
 
 struct HttpClient4Impl;
@@ -210,6 +215,23 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn post_with_short_body_transmission_error(&self) -> String {
         do_post_with_short_body_transmission_error().await
+    }
+
+    async fn get_in_spawned_task_after_return(&self) -> String {
+        let port = std::env::var("PORT").unwrap_or("9999".to_string());
+        wit_bindgen::spawn_local(async move {
+            let response = wasi_fetch::Client::new()
+                .get(&format!("http://localhost:{port}/spawned"))
+                .send()
+                .await
+                .expect("Request failed");
+            let _ = response
+                .into_body()
+                .text()
+                .await
+                .expect("Response body read failed");
+        });
+        "spawned".to_string()
     }
 }
 

@@ -20,6 +20,7 @@ use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_
 use crate::durable_host::p3::{
     DurableP3, durable_worker_ctx, observe_function_call_store, wasi_http_view,
 };
+use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
@@ -968,7 +969,14 @@ pub(super) fn start_transmission_recording<Ctx, U>(
     U: Send + 'static,
 {
     if let Some(pending) = pending {
-        store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(pending));
+        let activity = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .tail_work_tracker()
+                .activity()
+        });
+        store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(
+            pending, activity,
+        ));
     }
 }
 
@@ -1025,15 +1033,17 @@ pub(super) struct HttpRequestBodyTransmissionTask<Ctx> {
     raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
     demand_rx: oneshot::Receiver<()>,
+    activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
-    fn new(pending: PendingHttpRequestBodyTransmission) -> Self {
+    fn new(pending: PendingHttpRequestBodyTransmission, activity: TailActivity) -> Self {
         Self {
             raw_rx: pending.raw_rx,
             resolution_tx: pending.resolution_tx,
             demand_rx: pending.demand_rx,
+            activity,
             _phantom: PhantomData,
         }
     }
@@ -1049,13 +1059,15 @@ where
             raw_rx,
             resolution_tx,
             demand_rx,
+            activity,
             ..
         } = self;
 
         // Gate all durable work on the guest's demand. A closed channel means
         // the guest dropped the transmission future without ever reading it:
-        // nothing to record, nothing to resolve.
-        if demand_rx.await.is_err() {
+        // nothing to record, nothing to resolve. Safe park: waiting for guest
+        // demand, which may never come.
+        if activity.park(demand_rx).await.is_err() {
             return Ok(());
         }
 
@@ -1114,7 +1126,10 @@ where
 
         // Live (or incomplete-replay re-execution): await the raw result and
         // record it before resolving the guest future, so the guest never
-        // observes a transmission outcome that is not yet durable.
+        // observes a transmission outcome that is not yet durable. This wait
+        // stays *active* (no safe park): the `Start` is already persisted, so
+        // the `End` must land before the invocation boundary — and the guest
+        // exiting terminates the transmission, which resolves the wait.
         let raw = raw_rx.await.unwrap_or(Ok(()));
         let trap_context = handle.trap_context();
         match handle
@@ -1148,14 +1163,16 @@ where
 pub(super) struct HttpRequestTransmissionPassthroughTask<Ctx> {
     raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
+    activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> HttpRequestTransmissionPassthroughTask<Ctx> {
-    fn new(pending: PendingHttpRequestBodyTransmission) -> Self {
+    fn new(pending: PendingHttpRequestBodyTransmission, activity: TailActivity) -> Self {
         Self {
             raw_rx: pending.raw_rx,
             resolution_tx: pending.resolution_tx,
+            activity,
             _phantom: PhantomData,
         }
     }
@@ -1167,7 +1184,10 @@ where
     U: 'static,
 {
     async fn run(self, _accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        let result = self.raw_rx.await.unwrap_or(Ok(()));
+        // Safe park: the raw value is a pure function of guest behaviour (a
+        // guest-side `consume-body` or `drop`), and forwarding it writes no
+        // durable entries.
+        let result = self.activity.park(self.raw_rx).await.unwrap_or(Ok(()));
         let _ = self
             .resolution_tx
             .send(HttpTransmissionResolution::Outcome(result));
@@ -1192,7 +1212,15 @@ pub(super) fn detach_request_transmission_passthrough<Ctx: WorkerCtx, U: Send + 
             .remove(&request_rep)
     };
     if let Some(pending) = pending {
-        store.spawn(HttpRequestTransmissionPassthroughTask::<Ctx>::new(pending));
+        let activity = {
+            let mut store_ctx = store.as_context_mut();
+            durable_worker_ctx::<Ctx, U>(store_ctx.data_mut())
+                .tail_work_tracker()
+                .activity()
+        };
+        store.spawn(HttpRequestTransmissionPassthroughTask::<Ctx>::new(
+            pending, activity,
+        ));
     }
 }
 

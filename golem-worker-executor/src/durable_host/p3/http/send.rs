@@ -233,12 +233,21 @@ where
     };
 
     if !handle.is_live() {
+        // The guest may drop this send future at any await point below (e.g.
+        // it cancels the response future after losing a race) while the future
+        // still owns the replayed request resource. Arm a store-owned leak
+        // guard that consumes the request in that case — see
+        // `ReplayedRequestLeakGuard`. Both arms below hand request ownership
+        // over (inline consume / live re-execution) and disarm it first.
+        let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
+        spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
         match handle
             .replay_access(store, durable_worker_ctx::<Ctx, U>)
             .await
             .map_err(HttpError::trap)?
         {
             CallReplayOutcome::Replayed(response) => {
+                let _ = disarm_leak_guard_tx.send(());
                 // The live path consumes the request inside `WasiHttp::send`.
                 // On replay we never call `send`, so consume it here (delete
                 // it, drain its outgoing body) before returning the recorded
@@ -333,7 +342,10 @@ where
                     }
                 }
             }
-            CallReplayOutcome::Incomplete(live_handle) => handle = live_handle,
+            CallReplayOutcome::Incomplete(live_handle) => {
+                let _ = disarm_leak_guard_tx.send(());
+                handle = live_handle
+            }
         }
     }
 

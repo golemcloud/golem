@@ -34,6 +34,7 @@ pub mod rdbms;
 mod replay_state;
 mod sockets;
 mod suspendable_wait;
+pub mod tail_work;
 pub mod wasm_rpc;
 pub mod websocket;
 
@@ -2581,6 +2582,12 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Activity tracker for Golem-spawned store background tasks; see
+    /// [`tail_work::TailWorkTracker`].
+    pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
+        self.state.tail_work_tracker()
+    }
+
     pub(crate) fn register_open_websocket(
         &mut self,
         rep: u32,
@@ -5077,6 +5084,11 @@ struct PrivateDurableWorkerState {
     /// detect when all in-flight work is parked in waits that can safely suspend the worker.
     live_host_calls: Arc<AtomicUsize>,
 
+    /// Activity tracking for Golem-spawned store background tasks. The invocation completion
+    /// path drains the store's event loop until no spawned task is active (see
+    /// [`tail_work::TailWorkTracker`]) before `AgentInvocationFinished` is written.
+    tail_work: tail_work::TailWorkTracker,
+
     /// Suspend-capable waits currently parked by P3 sleep / promise APIs. The value is the wall
     /// clock deadline for a scheduled wake, if the wait has one; pure promise waits have no
     /// deadline and are woken by promise completion.
@@ -5292,6 +5304,7 @@ impl PrivateDurableWorkerState {
             active_atomic_regions: Vec::new(),
             active_durable_scopes: Vec::new(),
             live_host_calls: Arc::new(AtomicUsize::new(0)),
+            tail_work: tail_work::TailWorkTracker::new(),
             suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
             next_suspendable_wait_id: AtomicU64::new(1),
             dropped_call_events,
@@ -5525,6 +5538,12 @@ impl PrivateDurableWorkerState {
     /// durable call's `Start`/`End` pair may straddle.
     pub fn has_in_flight_live_host_calls(&self) -> bool {
         self.live_host_calls.load(Ordering::Acquire) > 0
+    }
+
+    /// Activity tracker for Golem-spawned store background tasks; used to delay invocation
+    /// completion until every spawned task is either finished or parked in a recognized safe wait.
+    pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
+        self.tail_work.clone()
     }
 
     fn suspendable_waits(&self) -> Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>> {

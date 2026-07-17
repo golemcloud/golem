@@ -33,6 +33,7 @@ use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value, encode_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{Instrument, Level, debug, span};
+use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Describes how an invocation is being executed with respect to the oplog.
@@ -159,6 +160,84 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     call_result
 }
 
+/// Upper bound on the post-completion tail-work drain of a guest call: how long
+/// [`run_guest_call_settled`] keeps the store's event loop running after the guest export has
+/// returned, waiting for still-active Golem-spawned store tasks (see
+/// [`tail_work`](crate::durable_host::tail_work)) to finish or reach a safe park point.
+///
+/// The drain normally settles as soon as the tasks' pending durable appends and I/O complete;
+/// this bound only fires when such work is stuck (e.g. an unresponsive peer without its own
+/// timeout). Hitting it fails the guest call like a trap: the invocation is torn down without an
+/// `AgentInvocationFinished` entry and normal retry handling replays it, re-executing any calls
+/// left incomplete — the same contract as a crash at this point.
+const TAIL_WORK_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
+/// returning.
+///
+/// Plain `run_concurrent` returns as soon as the root future resolves, while store-spawned
+/// durable tasks (HTTP body recorders, TCP stream drivers, stdio/filesystem consumers) may still
+/// be active — their durable `Start`/`End` entries would then land after (or never before)
+/// `AgentInvocationFinished`, breaking positional replay. This wrapper uses
+/// `run_concurrent_and_settle`: after the root future completes, the event loop keeps running
+/// until, at an idle observation point (all runnable host futures polled, no queued work, no
+/// remaining guest tasks), no tracked task is active — every Golem-spawned store task has either
+/// finished or parked at a designated safe park point (a wait on future guest action, which may
+/// legitimately span invocations). Safe-parked tasks are left parked in the store.
+///
+/// Settlement additionally requires that no task holds an open replay-cursor transaction: a task
+/// suspended inside one keeps the fair cursor lock held, which would deadlock the cursor reads
+/// the completion path performs outside the event loop (e.g. reading `AgentInvocationFinished`
+/// after a replayed invocation). Tracked tasks park only outside cursor transactions, so this is
+/// a redundant safety net that keeps the invariant explicit even if a future task's accounting
+/// regresses.
+///
+/// The drain phase is bounded by [`TAIL_WORK_SETTLE_TIMEOUT`]; see its documentation for the
+/// timeout semantics.
+async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
+) -> wasmtime::Result<R> {
+    let tracker = store.data().durable_ctx().tail_work_tracker();
+    let tracker_for_error = tracker.clone();
+    let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let fun = {
+        let drain_started = drain_started.clone();
+        async move |accessor: &Accessor<Ctx>| {
+            let result = fun(accessor).await;
+            // The root future has completed: everything from here on is the (bounded) drain
+            // phase. Arm the timeout here rather than in the settlement predicate — the
+            // predicate is only consulted at idle observation points, which are never reached
+            // if e.g. a guest task lingers, and the drain must stay bounded even then.
+            drain_started.notify_one();
+            result
+        }
+    };
+    let mut settled = move |store: StoreContextMut<'_, Ctx>| {
+        let active = tracker.active_count();
+        let replay_cursor_open = store
+            .data()
+            .durable_ctx()
+            .has_open_replay_cursor_transaction();
+        tracing::debug!(
+            "invocation tail-work settlement check: {active} spawned task(s) active, replay cursor open: {replay_cursor_open}"
+        );
+        active == 0 && !replay_cursor_open
+    };
+    let drain_timeout = async {
+        drain_started.notified().await;
+        tokio::time::sleep(TAIL_WORK_SETTLE_TIMEOUT).await;
+    };
+    tokio::select! {
+        biased;
+        result = store.as_context_mut().run_concurrent_and_settle(fun, &mut settled) => result,
+        _ = drain_timeout => Err(wasmtime::Error::msg(format!(
+            "invocation tail work did not settle within {TAIL_WORK_SETTLE_TIMEOUT:?}: {} spawned task(s) still active",
+            tracker_for_error.active_count()
+        ))),
+    }
+}
+
 /// Dispatches a single lowered invocation to the matching typed guest export
 /// accessor (`golem:agent/guest@2.0.0`, `golem:api/save-snapshot`,
 /// `golem:api/load-snapshot`, or `golem:api/oplog-processor`) and maps its
@@ -177,15 +256,13 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = store
-                .as_context_mut()
-                .run_concurrent(async |accessor| {
-                    guest
-                        .call_initialize(accessor, agent_type, input, principal)
-                        .await
-                })
-                .await
-                .and_then(|result| result);
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest
+                    .call_initialize(accessor, agent_type, input, principal)
+                    .await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -204,15 +281,13 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = store
-                .as_context_mut()
-                .run_concurrent(async |accessor| {
-                    guest
-                        .call_invoke(accessor, method_name, input, principal)
-                        .await
-                })
-                .await
-                .and_then(|result| result);
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest
+                    .call_invoke(accessor, method_name, input, principal)
+                    .await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -230,11 +305,10 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         LoweredCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = store
-                .as_context_mut()
-                .run_concurrent(async |accessor| guest.call_save(accessor).await)
-                .await
-                .and_then(|result| result);
+            let result =
+                run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
+                    .await
+                    .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -250,11 +324,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         LoweredCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = store
-                .as_context_mut()
-                .run_concurrent(async |accessor| guest.call_load(accessor, snapshot).await)
-                .await
-                .and_then(|result| result);
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest.call_load(accessor, snapshot).await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -288,6 +362,14 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     &entries,
                 )
                 .await;
+            // `call_process` uses the non-accessor async bindgen: it runs on the store's event
+            // loop but returns as soon as the export completes, before spawned tail work (or an
+            // open replay-cursor transaction) settles. Drain it with a no-op root the same way
+            // the accessor-based guest calls above drain theirs.
+            let result = match run_guest_call_settled(store, async |_| {}).await {
+                Ok(()) => result,
+                Err(settle_err) => result.and(Err(settle_err)),
+            };
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -468,67 +550,10 @@ cached_guest_loader!(
     "failed to load oplog-processor export"
 );
 
-/// Keeps the store's event loop alive after a guest call returned, until no store-spawned task
-/// holds an open replay-cursor transaction.
-///
-/// `run_concurrent` returns as soon as the invocation's root future resolves, leaving any still
-/// pending store-spawned tasks (durable background work such as HTTP body consumption) suspended
-/// wherever their last poll left them — they are only polled again inside the next event loop.
-/// A task suspended *inside* a replay-cursor transaction (which awaits oplog reads) would keep
-/// the fair cursor lock held, deadlocking the cursor reads the completion path performs outside
-/// the event loop (e.g. reading `AgentInvocationFinished` after a replayed invocation).
-///
-/// This is deliberately *not* a full drain of spawned tasks: tasks parked outside a cursor
-/// transaction (on demand channels or replay suspension) are left parked, so tasks that never
-/// finish cannot hang the invocation. It terminates because the only suspension points while
-/// holding a cursor transaction are oplog reads and payload I/O (e.g. downloading a payload
-/// while applying commit effects); resolver and cursor-progress waits release the transaction
-/// before suspending.
-///
-/// The probe loop sleeps briefly between checks instead of `yield_now`-ing: a `yield_now`ed
-/// future self-wakes immediately, so while the lock holder awaits slow oplog/payload I/O the
-/// settlement root would stay continuously runnable and spin the whole event loop on a core.
-/// The holder is re-polled whenever its own I/O wakes it; the timer is only a bounded fallback
-/// wake for re-probing the lock.
-async fn settle_replay_cursor<Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'_, Ctx>,
-) -> Result<(), WorkerExecutorError> {
-    if !store
-        .data()
-        .durable_ctx()
-        .has_open_replay_cursor_transaction()
-    {
-        return Ok(());
-    }
-    store
-        .as_context_mut()
-        .run_concurrent(async |accessor| {
-            loop {
-                let open = accessor.with(|mut access| {
-                    access
-                        .get()
-                        .durable_ctx()
-                        .has_open_replay_cursor_transaction()
-                });
-                if !open {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        })
-        .await
-        .map_err(|err| {
-            WorkerExecutorError::runtime(format!(
-                "failed to settle replay cursor after invocation: {err}"
-            ))
-        })
-}
-
 async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) -> Result<u64, WorkerExecutorError> {
-    settle_replay_cursor(store).await?;
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level);
 

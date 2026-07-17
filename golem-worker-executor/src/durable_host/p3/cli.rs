@@ -20,6 +20,7 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store,
 };
+use crate::durable_host::tail_work::TailActivity;
 use crate::model::event::InternalWorkerEvent;
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
@@ -166,6 +167,7 @@ struct StdioWriteTask<Ctx> {
     stream: StandardStream,
     bytes_rx: oneshot::Receiver<Vec<u8>>,
     result_tx: oneshot::Sender<wasmtime::Result<Result<(), ErrorCode>>>,
+    activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -175,15 +177,23 @@ where
     U: 'static,
 {
     async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        let contents = self.bytes_rx.await.unwrap_or_default();
+        let Self {
+            stream,
+            bytes_rx,
+            result_tx,
+            activity,
+            _phantom,
+        } = self;
+        // Safe park: the captured bytes only arrive once the guest-produced stream ends.
+        let contents = activity.park(bytes_rx).await.unwrap_or_default();
         if !contents.is_empty() {
-            let event = match self.stream {
+            let event = match stream {
                 StandardStream::Stdout => InternalWorkerEvent::stdout(contents),
                 StandardStream::Stderr => InternalWorkerEvent::stderr(contents),
             };
             emit_log_event_access::<Ctx, U>(accessor, event).await;
         }
-        let _ = self.result_tx.send(Ok(Ok(())));
+        let _ = result_tx.send(Ok(Ok(())));
         Ok(())
     }
 }
@@ -292,10 +302,14 @@ where
     let (result_tx, result_rx) = oneshot::channel();
     accessor.with(|mut store| {
         data.pipe(&mut store, CapturingOutputStreamConsumer::new(bytes_tx))?;
+        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+            .tail_work_tracker()
+            .activity();
         store.spawn(StdioWriteTask::<Ctx> {
             stream,
             bytes_rx,
             result_tx,
+            activity,
             _phantom: PhantomData,
         });
         FutureReader::new(&mut store, wait_stdio_task_result(result_rx))

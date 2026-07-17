@@ -498,6 +498,7 @@ dependencies = [
  "wasi",
  "wasi-fetch",
  "wasi-logger",
+ "wit-bindgen 0.58.0",
 ]
 
 [[package]]

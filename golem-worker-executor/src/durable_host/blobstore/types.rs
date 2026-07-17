@@ -32,6 +32,7 @@ use wasmtime::component::{
 use wasmtime_wasi::IoView;
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
+use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 
 use crate::preview2::wasi::blobstore::types::{
@@ -122,6 +123,9 @@ impl<D> StreamProducer<D> for DeferredIncomingValueStreamProducer {
 struct IncomingValueConsumeTask<Ctx> {
     contents: Vec<u8>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+    /// The task's whole run is durable work with no guest-driven wait, so it
+    /// stays active (no safe park point) from spawn to finish.
+    _activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -129,10 +133,12 @@ impl<Ctx> IncomingValueConsumeTask<Ctx> {
     fn new(
         contents: Vec<u8>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+        activity: TailActivity,
     ) -> Self {
         Self {
             contents,
             result_tx,
+            _activity: activity,
             _phantom: PhantomData,
         }
     }
@@ -325,7 +331,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
         };
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        host.spawn(IncomingValueConsumeTask::<Ctx>::new(contents, result_tx));
+        let activity = host.get().tail_work_tracker().activity();
+        host.spawn(IncomingValueConsumeTask::<Ctx>::new(
+            contents, result_tx, activity,
+        ));
         Ok(Ok(StreamReader::new(
             &mut host,
             DeferredIncomingValueStreamProducer::new(result_rx),

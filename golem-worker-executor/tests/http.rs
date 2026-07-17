@@ -1279,3 +1279,140 @@ async fn outgoing_http_contains_idempotency_key(
 
     Ok(())
 }
+
+/// A guest task `spawn`ed during an invocation that performs its durable HTTP call only after
+/// the export has returned must be drained before the invocation completes: the durable
+/// `Start`/`End` entries of the spawned task's `http::client::send` land *before* the
+/// `AgentInvocationFinished` entry, and the recorded run replays successfully after a restart.
+#[test]
+#[tracing::instrument]
+async fn spawned_guest_task_durable_call_lands_before_invocation_finished(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/spawned",
+                axum::routing::get(|| async { "spawned-response" }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_in_spawned_task_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "spawned");
+
+    // The spawned task's durable send must be recorded *within* the method invocation: a
+    // completed `Start`(http::client::send)/`End` pair between the method's
+    // `AgentInvocationStarted` and its `AgentInvocationFinished` entry (there is also an earlier
+    // agent-initialization invocation pair in the oplog, so anchor on the method's own window).
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let started_index = oplog
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(m)
+                    if m.method_name.replace('-', "_") == "get_in_spawned_task_after_return" =>
+                {
+                    Some(e.oplog_index)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("expected an AgentInvocationStarted entry for the method invocation");
+    let finished_index = oplog
+        .iter()
+        .find_map(|e| {
+            (e.oplog_index > started_index
+                && matches!(e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .then_some(e.oplog_index)
+        })
+        .expect("expected an AgentInvocationFinished entry for the method invocation");
+    let send_start_index = oplog
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "http::client::send"
+                    && e.oplog_index > started_index
+                    && e.oplog_index < finished_index =>
+            {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+        .expect(
+            "expected a durable http::client::send Start entry within the method invocation \
+             window",
+        );
+    let send_end_index = oplog
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::End(params) if params.start_index == send_start_index => {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("expected a matching End entry for the spawned task's send");
+    assert!(
+        send_end_index < finished_index,
+        "the spawned task's durable send must complete within the method invocation \
+         (AgentInvocationStarted at {started_index}, Start at {send_start_index}, End at \
+         {send_end_index}, AgentInvocationFinished at {finished_index})"
+    );
+
+    // Restart the executor to force a full oplog replay of the recorded invocation (including
+    // the spawned task's durable calls), then run a fresh live invocation on top of it.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let replayed_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_in_spawned_task_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(replayed_result, "spawned");
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}

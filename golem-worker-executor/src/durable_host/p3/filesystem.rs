@@ -26,6 +26,7 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_read_access, wasi_filesystem_view,
 };
+use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
 use cap_std::fs::FileExt;
 use golem_common::model::oplog::host_functions::{
@@ -148,6 +149,7 @@ struct FilesystemWriteTask<Ctx> {
     mode: FilesystemWriteMode,
     chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
+    activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -157,12 +159,14 @@ impl<Ctx> FilesystemWriteTask<Ctx> {
         mode: FilesystemWriteMode,
         chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
+        activity: TailActivity,
     ) -> Self {
         Self {
             file,
             mode,
             chunks_rx,
             result_tx,
+            activity,
             _phantom: PhantomData,
         }
     }
@@ -179,10 +183,17 @@ where
             mode,
             mut chunks_rx,
             result_tx,
+            activity,
             _phantom,
         } = self;
-        let result =
-            run_streaming_filesystem_write::<Ctx, U>(accessor, &file, mode, &mut chunks_rx).await;
+        let result = run_streaming_filesystem_write::<Ctx, U>(
+            accessor,
+            &file,
+            mode,
+            &mut chunks_rx,
+            &activity,
+        )
+        .await;
         if !result_tx.is_closed() {
             let _ = result_tx.send(result);
         }
@@ -658,6 +669,7 @@ async fn run_streaming_filesystem_write<Ctx, U>(
     file: &File,
     mode: FilesystemWriteMode,
     chunks_rx: &mut tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
+    activity: &TailActivity,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>>
 where
     Ctx: WorkerCtx,
@@ -669,7 +681,8 @@ where
         FilesystemWriteMode::Append => None,
     };
 
-    while let Some(chunk) = chunks_rx.recv().await {
+    // Safe park: each chunk is guest-produced stream data.
+    while let Some(chunk) = activity.park(chunks_rx.recv()).await {
         if result.is_ok() {
             let chunk_mode = match position {
                 Some(offset) => FilesystemWriteMode::At(offset),
@@ -864,11 +877,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         accessor.with(|mut store| {
+            let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                .tail_work_tracker()
+                .activity();
             store.spawn(FilesystemWriteTask::<Ctx>::new(
                 file,
                 FilesystemWriteMode::At(offset),
                 chunks_rx,
                 result_tx,
+                activity,
             ));
 
             FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
@@ -906,11 +923,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         accessor.with(|mut store| {
+            let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                .tail_work_tracker()
+                .activity();
             store.spawn(FilesystemWriteTask::<Ctx>::new(
                 file,
                 FilesystemWriteMode::Append,
                 chunks_rx,
                 result_tx,
+                activity,
             ));
 
             FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))

@@ -31,6 +31,7 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, wasi_http_view,
 };
+use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::RetryContext;
@@ -655,6 +656,7 @@ pub(super) struct HttpConsumeBodyTask<Ctx> {
     /// the parent terminal, mirroring the P2 `end_http_request` span
     /// lifecycle. `None` for responses that did not come from `client::send`.
     response_state: Option<OpenP3HttpResponseState>,
+    activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -664,12 +666,14 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         demand_rx: mpsc::UnboundedReceiver<HttpBodyDemand>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
         response_state: Option<OpenP3HttpResponseState>,
+        activity: TailActivity,
     ) -> Self {
         Self {
             body,
             demand_rx,
             trailers_tx,
             response_state,
+            activity,
             _phantom: PhantomData,
         }
     }
@@ -686,6 +690,7 @@ where
             mut demand_rx,
             trailers_tx,
             response_state,
+            activity,
             ..
         } = self;
 
@@ -760,7 +765,8 @@ where
         let mut cancel_ack: Option<oneshot::Sender<()>> = None;
 
         loop {
-            let (demand, cancel_rx, read_cancel_ack) = match demand_rx.recv().await {
+            // Safe park: waiting for the guest to demand the next body chunk.
+            let (demand, cancel_rx, read_cancel_ack) = match activity.park(demand_rx.recv()).await {
                 Some(HttpBodyDemand::Read {
                     reply,
                     cancel,
@@ -1432,11 +1438,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             }
         };
 
+        let activity = {
+            let mut store_ctx = store.as_context_mut();
+            durable_worker_ctx::<Ctx, U>(store_ctx.data_mut())
+                .tail_work_tracker()
+                .activity()
+        };
         store.spawn(HttpConsumeBodyTask::<Ctx>::new(
             body,
             demand_rx,
             trailers_tx,
             response_state,
+            activity,
         ));
         Ok((stream, trailers))
     }
