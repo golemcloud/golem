@@ -27,6 +27,7 @@
 pub mod mbt_writer;
 #[allow(clippy::module_inception)]
 pub mod moonbit;
+pub mod tool;
 pub mod type_name;
 
 pub use type_name::MoonBitTypeName;
@@ -46,7 +47,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::Role;
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
-use golem_common::schema::graph::{SchemaTypeDef, reachable_defs};
+use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     DiscriminatorRule, NumericBound, NumericRestrictions, QuantityValue, SchemaType,
@@ -1919,8 +1920,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         match output {
             OutputSchema::Unit => Ok(("Unit".to_string(), None)),
             OutputSchema::Single(ty) => {
-                let ret_ty = self.type_reference(ty)?;
-                let decode = self.decode_expr("value", ty, 0)?;
+                let ret_ty = self.type_reference_with_multimodal(ty)?;
+                let decode = self.decode_expr_with_multimodal("value", ty)?;
                 Ok((ret_ty, Some(decode)))
             }
         }
@@ -1971,6 +1972,39 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             .iter()
             .find(|m| m.cases == pairs)
             .ok_or_else(|| anyhow::anyhow!("Multimodal enum not precomputed for cases: {pairs:?}"))
+    }
+
+    fn multimodal_for_type(&self, typ: &SchemaType) -> anyhow::Result<Option<&MultimodalEnum>> {
+        if let Some(cases) = multimodal_variant_cases(self.type_naming.graph(), typ)? {
+            let pairs = multimodal_pairs(cases)?;
+            Ok(Some(self.multimodal_by_cases(&pairs)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn type_reference_with_multimodal(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(multimodal) = self.multimodal_for_type(typ)? {
+            Ok(format!("Array[{}]", multimodal.name))
+        } else {
+            self.type_reference(typ)
+        }
+    }
+
+    fn encode_expr_with_multimodal(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(multimodal) = self.multimodal_for_type(typ)? {
+            Ok(format!("encode_{}({value})", multimodal.name))
+        } else {
+            self.encode_expr(value, typ, 0)
+        }
+    }
+
+    fn decode_expr_with_multimodal(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(multimodal) = self.multimodal_for_type(typ)? {
+            Ok(format!("decode_{}({value})", multimodal.name))
+        } else {
+            self.decode_expr(value, typ, 0)
+        }
     }
 
     /// Unique MoonBit parameter identifiers for the given input fields,
@@ -2642,17 +2676,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
     }
 
     fn resolve_ref<'a>(&'a self, typ: &'a SchemaType) -> &'a SchemaType {
-        match typ {
-            SchemaType::Ref { id, .. } => {
-                let def: &SchemaTypeDef = self
-                    .type_naming
-                    .graph()
-                    .lookup(id)
-                    .expect("Ref points to a def in the shared graph");
-                &def.body
-            }
-            other => other,
-        }
+        self.type_naming
+            .graph()
+            .resolve_ref(typ)
+            .expect("bridge schemas contain only resolvable references")
     }
 }
 
@@ -3194,6 +3221,7 @@ mod tests {
     use super::*;
     use golem_common::model::Empty;
     use golem_common::model::agent::{AgentTypeName, Snapshotting};
+    use golem_common::schema::graph::SchemaTypeDef;
     use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec};
     use golem_common::schema::{AgentConstructorSchema, MetadataEnvelope, Role, SchemaGraph};
 

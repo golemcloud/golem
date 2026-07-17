@@ -543,7 +543,13 @@ impl<TN: TypeName> TypeNaming<TN> {
                     )
                 })?;
                 let (owner, name) = split_type_id(&id.0, def.name.as_deref());
-                Ok((name, owner, def.body.clone()))
+                let body = self.graph.resolve_ref(typ).map_err(|error| {
+                    anyhow::anyhow!(
+                        "Failed to resolve SchemaType::Ref `{}` while collecting agent bridge types: {error}",
+                        id.0
+                    )
+                })?;
+                Ok((name, owner, body.clone()))
             }
             other => Ok((None, None, other.clone())),
         }
