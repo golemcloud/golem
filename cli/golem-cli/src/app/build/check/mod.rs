@@ -677,8 +677,8 @@ mod test {
     #[test]
     fn exact_dependency_check_rejects_semver_ranges() {
         let compliance = evaluate_dependency_spec_compliance(
-            "^4.0.0-beta.57",
-            &ExpectedDependencyKind::ExactValue("4.0.0-beta.57".to_string()),
+            "^4.0.0-beta.98",
+            &ExpectedDependencyKind::ExactValue("4.0.0-beta.98".to_string()),
             DependencyMatcherSemantics::TypeScript,
         )
         .unwrap();
@@ -690,7 +690,7 @@ mod test {
     fn exact_dependency_check_rejects_dist_tags() {
         let compliance = evaluate_dependency_spec_compliance(
             "latest",
-            &ExpectedDependencyKind::ExactValue("4.0.0-beta.57".to_string()),
+            &ExpectedDependencyKind::ExactValue("4.0.0-beta.98".to_string()),
             DependencyMatcherSemantics::TypeScript,
         )
         .unwrap();
