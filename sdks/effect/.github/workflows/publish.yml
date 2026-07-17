@@ -1,0 +1,91 @@
+name: Publish
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_RQUICKJS_VERSION: "0.3.6"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - uses: bytecodealliance/setup-wasi-sdk-action@v1
+        with:
+          version: "25"
+
+      - uses: cargo-bins/cargo-binstall@v1.21.0
+
+      - name: Install wasm-rquickjs
+        run: cargo binstall --force --locked "wasm-rquickjs-cli@${WASM_RQUICKJS_VERSION}"
+
+      - name: Update npm
+        run: npm install --global npm@latest
+
+      - name: Set package version from release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          case "$RELEASE_TAG" in
+            v*) VERSION=${RELEASE_TAG#v} ;;
+            *)
+              echo "::error::Release tag must use the v<semver> format (for example, v1.5.1)"
+              exit 1
+              ;;
+          esac
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Build agent template WASM
+        run: npm run build-agent-template
+
+      - name: Publish package
+        env:
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            npm publish --access public --tag next
+          else
+            npm publish --access public
+          fi
