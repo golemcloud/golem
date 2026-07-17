@@ -25,7 +25,7 @@ use crate::worker::{INACTIVE_EPHEMERAL_AGENT_ERROR, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::StreamExt;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
@@ -293,7 +293,7 @@ impl SchedulerServiceDefault {
                 break;
             }
 
-            self.process_claimed_actions(claimed, now).await?;
+            self.process_claimed_actions(claimed, now).await;
 
             if claimed_count < self.claim_batch_size as usize {
                 break;
@@ -319,7 +319,7 @@ impl SchedulerServiceDefault {
         &self,
         claimed: Vec<ClaimedScheduledAction>,
         now: DateTime<Utc>,
-    ) -> Result<(), String> {
+    ) {
         let mut actions_by_agent: HashMap<OwnedAgentId, Vec<ClaimedScheduledAction>> =
             HashMap::new();
         for action in claimed {
@@ -333,21 +333,21 @@ impl SchedulerServiceDefault {
             .map(|actions| async move {
                 // A durable agent's scheduled actions must retain claim order.
                 for action in actions {
-                    self.process_and_ack_claimed_action(action, now).await?;
+                    if !self.process_and_ack_claimed_action(action, now).await {
+                        break;
+                    }
                 }
-                Ok::<(), String>(())
             })
             .buffer_unordered(self.max_concurrent_action_processing)
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(())
+            .collect::<Vec<_>>()
+            .await;
     }
 
     async fn process_and_ack_claimed_action(
         &self,
         claimed_action: ClaimedScheduledAction,
         now: DateTime<Utc>,
-    ) -> Result<(), String> {
+    ) -> bool {
         let action_kind = crate::metrics::scheduler::action_kind_label(&claimed_action.action);
         let action_start_time = Utc::now();
         let lag = action_start_time.signed_duration_since(claimed_action.due_at);
@@ -362,20 +362,35 @@ impl SchedulerServiceDefault {
             action_kind,
             action_start.elapsed(),
         );
-        if processed {
-            let acked = self
-                .scheduler_storage
-                .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
-                .await?;
-            if !acked {
+        if !processed {
+            return true;
+        }
+
+        match self
+            .scheduler_storage
+            .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
+            .await
+        {
+            Ok(acked) => {
+                if !acked {
+                    warn!(
+                        schedule_id = %claimed_action.schedule_id,
+                        lease_owner = %claimed_action.lease_owner,
+                        "Failed to acknowledge scheduled action because the lease was lost"
+                    );
+                }
+                true
+            }
+            Err(error) => {
                 warn!(
                     schedule_id = %claimed_action.schedule_id,
                     lease_owner = %claimed_action.lease_owner,
-                    "Failed to acknowledge scheduled action because the lease was lost"
+                    error = %error,
+                    "Failed to acknowledge scheduled action; stopping its agent lane"
                 );
+                false
             }
         }
-        Ok(())
     }
 
     async fn with_lease_renewal<T, F>(
