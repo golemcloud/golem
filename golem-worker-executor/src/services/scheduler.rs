@@ -25,7 +25,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::StreamExt;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{
@@ -241,7 +241,7 @@ impl SchedulerServiceDefault {
                 break;
             }
 
-            self.process_claimed_actions(claimed, now).await?;
+            self.process_claimed_actions(claimed, now).await;
 
             if claimed_count < self.claim_batch_size as usize {
                 break;
@@ -267,7 +267,7 @@ impl SchedulerServiceDefault {
         &self,
         claimed: Vec<ClaimedScheduledAction>,
         now: DateTime<Utc>,
-    ) -> Result<(), String> {
+    ) {
         let mut actions_by_agent: HashMap<OwnedAgentId, Vec<ClaimedScheduledAction>> =
             HashMap::new();
         for action in claimed {
@@ -281,21 +281,21 @@ impl SchedulerServiceDefault {
             .map(|actions| async move {
                 // A durable agent's scheduled actions must retain claim order.
                 for action in actions {
-                    self.process_and_ack_claimed_action(action, now).await?;
+                    if !self.process_and_ack_claimed_action(action, now).await {
+                        break;
+                    }
                 }
-                Ok::<(), String>(())
             })
             .buffer_unordered(self.max_concurrent_action_processing)
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(())
+            .collect::<Vec<_>>()
+            .await;
     }
 
     async fn process_and_ack_claimed_action(
         &self,
         claimed_action: ClaimedScheduledAction,
         now: DateTime<Utc>,
-    ) -> Result<(), String> {
+    ) -> bool {
         let action_kind = crate::metrics::scheduler::action_kind_label(&claimed_action.action);
         let action_start_time = Utc::now();
         let lag = action_start_time.signed_duration_since(claimed_action.due_at);
@@ -310,20 +310,35 @@ impl SchedulerServiceDefault {
             action_kind,
             action_start.elapsed(),
         );
-        if processed {
-            let acked = self
-                .scheduler_storage
-                .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
-                .await?;
-            if !acked {
+        if !processed {
+            return true;
+        }
+
+        match self
+            .scheduler_storage
+            .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
+            .await
+        {
+            Ok(acked) => {
+                if !acked {
+                    warn!(
+                        schedule_id = %claimed_action.schedule_id,
+                        lease_owner = %claimed_action.lease_owner,
+                        "Failed to acknowledge scheduled action because the lease was lost"
+                    );
+                }
+                true
+            }
+            Err(error) => {
                 warn!(
                     schedule_id = %claimed_action.schedule_id,
                     lease_owner = %claimed_action.lease_owner,
-                    "Failed to acknowledge scheduled action because the lease was lost"
+                    error = %error,
+                    "Failed to acknowledge scheduled action; stopping its agent lane"
                 );
+                false
             }
         }
-        Ok(())
     }
 
     async fn with_lease_renewal<T, F>(
@@ -611,10 +626,10 @@ mod tests {
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
-    use crate::storage::scheduler::SchedulerStorage;
     use crate::storage::scheduler::memory::InMemorySchedulerStorage;
+    use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage};
     use async_trait::async_trait;
-    use chrono::DateTime;
+    use chrono::{DateTime, Utc};
     use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue};
@@ -733,6 +748,69 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailFirstAckSchedulerStorage {
+        inner: Arc<InMemorySchedulerStorage>,
+        failures_remaining: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for FailFirstAckSchedulerStorage {
+        async fn insert(
+            &self,
+            schedule_id: ScheduleId,
+            due_at: DateTime<Utc>,
+            shard_id: ShardId,
+            action: &ScheduledAction,
+        ) -> Result<(), String> {
+            self.inner
+                .insert(schedule_id, due_at, shard_id, action)
+                .await
+        }
+
+        async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String> {
+            self.inner.cancel(schedule_id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            lease_ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, String> {
+            self.inner
+                .claim_due(now, assignment, limit, lease_ttl)
+                .await
+        }
+
+        async fn count_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, String> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn extend_lease(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+            lease_until: DateTime<Utc>,
+        ) -> Result<bool, String> {
+            self.inner
+                .extend_lease(schedule_id, lease_owner, lease_until)
+                .await
+        }
+
+        async fn ack(&self, schedule_id: &ScheduleId, lease_owner: Uuid) -> Result<bool, String> {
+            if self.failures_remaining.swap(0, Ordering::SeqCst) > 0 {
+                return Err("simulated transient acknowledgement failure".to_string());
+            }
+            self.inner.ack(schedule_id, lease_owner).await
         }
     }
 
@@ -1100,6 +1178,65 @@ mod tests {
             .unwrap();
 
         assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn acknowledgement_failure_does_not_cancel_sibling_agent_lanes() {
+        let inner = Arc::new(InMemorySchedulerStorage::new());
+        let storage: Arc<dyn SchedulerStorage + Send + Sync> =
+            Arc::new(FailFirstAckSchedulerStorage {
+                inner: inner.clone(),
+                failures_remaining: AtomicUsize::new(1),
+            });
+        let promise_service = create_promise_service_mock();
+        let fingerprint = AgentFingerprint::new();
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(DelayedActiveWorkerAccessMock {
+                fingerprint,
+                in_flight: in_flight.clone(),
+                max_in_flight: Arc::new(AtomicUsize::new(0)),
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            promise_service.clone(),
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            2,
+            CancellationToken::new(),
+        );
+
+        let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+        let promise_id = promise(agent("fast"), 1);
+        svc.schedule(due_at, complete_promise_action(promise_id.clone()))
+            .await;
+        svc.schedule(
+            due_at,
+            ScheduledAction::Invoke {
+                account_id: AccountId::new(),
+                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("slow")),
+                invocation: Box::new(agent_method_invocation()),
+                target_worker_fingerprint: fingerprint,
+            },
+        )
+        .await;
+
+        let now = DateTime::from_str("2023-07-17T10:15:00Z").unwrap();
+        svc.process(now).await.unwrap();
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        assert!(promise_service.all_completed().await.contains(&promise_id));
+        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
+        assert_eq!(inner.count_due(now, &assignment).await.unwrap(), 1);
     }
 
     #[test]
