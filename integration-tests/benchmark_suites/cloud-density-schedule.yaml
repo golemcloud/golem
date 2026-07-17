@@ -11,7 +11,8 @@ section: schedule
 defaultRateRamp:
   # First offered schedule-registration rate, in actions per second.
   initialPerSec: 1
-  # Time each offered rate runs before moving to the next doubled rate.
+  # Time each offered rate runs before moving to the next doubled rate through
+  # 256 actions per second.
   doublingPeriodSecs: 60
 
 cells:
@@ -21,46 +22,47 @@ cells:
   # receives about one scheduled action per second. Realistic rotates actions
   # through a fixed pool of 1,000 warm targets to model broad production load.
   - name: sched-warm-d1-spread
-    enabled: false
+    enabled: true
     targetResidency: warm
     contextSpans: 1
     targetPattern: spread
   - name: sched-warm-d1-realistic
-    enabled: false
+    enabled: true
     targetResidency: warm
     contextSpans: 1
     targetPattern: realistic
   - name: sched-warm-d50-spread
-    enabled: false
+    enabled: true
     targetResidency: warm
     contextSpans: 50
     targetPattern: spread
   - name: sched-warm-d50-realistic
-    enabled: false
+    enabled: true
     targetResidency: warm
     contextSpans: 50
     targetPattern: realistic
   - name: sched-warm-d500-spread
-    enabled: false
+    enabled: true
     targetResidency: warm
     contextSpans: 500
     targetPattern: spread
   - name: sched-warm-d500-realistic
-    enabled: false
+    enabled: true
     targetResidency: warm
     contextSpans: 500
     targetPattern: realistic
 
-  # Sustained-load controls. They hold 128 actions/second for 15
-  # minutes to measure scheduler backlog growth after the regular ramp finds
-  # its knee. Remove after the scheduler investigation.
+  # Temporary sustained-load controls. Keep disabled outside scheduler
+  # investigations; regular ramp cells cover the current capacity check.
   - name: sched-soak-d1-spread-128
+    enabled: false
     targetResidency: warm
     contextSpans: 1
     targetPattern: spread
     ramp: [128]
     ratePeriodSecs: 900
   - name: sched-soak-d1-realistic-128
+    enabled: false
     targetResidency: warm
     contextSpans: 1
     targetPattern: realistic

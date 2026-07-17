@@ -38,7 +38,7 @@ pub const SCHEDULE_TARGET_AGENT_TYPE: &str = "ScheduleCounter";
 pub const SCHEDULE_EMITTER_AGENT_TYPE: &str = "ScheduleEmitter";
 pub const REALISTIC_TARGET_COUNT: u32 = 1_000;
 
-const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64];
+const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const SCHEDULE_LEAD: Duration = Duration::from_secs(2);
 const DELIVERY_GRACE: Duration = Duration::from_secs(2);
 pub const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
@@ -436,7 +436,7 @@ mod tests {
                 .iter()
                 .map(|rate| expected_actions(*rate, DEFAULT_RATE_PERIOD))
                 .sum::<u64>(),
-            7_620
+            30_660
         );
     }
 }
