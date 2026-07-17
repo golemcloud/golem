@@ -121,6 +121,20 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         ))
     }
 
+    async fn open_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        Arc::new(CompressedOplogArchive::new(
+            owned_agent_id.agent_id(),
+            agent_mode,
+            self.indexed_storage.clone(),
+            self.level,
+            self.retry_config.clone(),
+        ))
+    }
+
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         let is = self.indexed_storage.clone();
         let agent_id = owned_agent_id.agent_id();

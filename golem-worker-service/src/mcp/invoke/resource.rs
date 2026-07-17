@@ -70,16 +70,13 @@ pub async fn invoke_resource(
         constructor_values,
     );
 
-    let parsed_agent_id = ParsedAgentId::new_auto_phantom(
-        mcp_resource.agent_type_name.clone(),
-        parameters,
-        None,
-        mcp_resource.agent_mode,
-    )
-    .map_err(|e| {
-        tracing::error!("Failed to parse agent id: {}", e);
-        ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
-    })?;
+    let parsed_agent_id =
+        ParsedAgentId::try_new(mcp_resource.agent_type_name.clone(), parameters, None).map_err(
+            |e| {
+                tracing::error!("Failed to parse agent id: {}", e);
+                ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
+            },
+        )?;
 
     // A resource method has no user-supplied input parameters.
     let method_parameters = SchemaValue::Record { fields: vec![] };
@@ -106,6 +103,9 @@ pub async fn invoke_resource(
             None,
             None,
             None,
+            false,
+            golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+            Vec::new(),
             auth_ctx,
             proto_principal,
             None,
@@ -571,14 +571,19 @@ mod tests {
 
     #[test]
     async fn invoke_resource_auto_generates_phantom_for_ephemeral_agents() {
-        let harness = InvocationHarness::new(AgentInvocationOutput {
-            result: golem_common::model::AgentInvocationResult::AgentInitialization,
-            consumed_fuel: None,
-            invocation_status: None,
-            component_revision: None,
-            oplog_index: None,
-            agent_fingerprint: None,
-        });
+        let harness = InvocationHarness::new_with_agent_mode(
+            AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            },
+            AgentMode::Ephemeral,
+        );
         let resource = AgentMcpResource {
             kind: AgentMcpResourceKind::Static(Annotated::new(
                 RawResource {

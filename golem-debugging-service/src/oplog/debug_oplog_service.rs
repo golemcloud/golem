@@ -64,6 +64,18 @@ impl OplogService for DebugOplogService {
         panic!("Cannot create a new oplog when debugging")
     }
 
+    async fn create_fresh(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _initial_entry: OplogEntry,
+        _initial_worker_metadata: AgentMetadata,
+        _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    ) -> Arc<dyn Oplog> {
+        panic!("Cannot create a new oplog when debugging")
+    }
+
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,

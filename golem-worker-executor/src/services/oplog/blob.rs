@@ -72,6 +72,19 @@ impl OplogArchiveService for BlobOplogArchiveService {
         )
     }
 
+    async fn open_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        Arc::new(BlobOplogArchive::new_fresh(
+            owned_agent_id.clone(),
+            agent_mode,
+            self.blob_storage.clone(),
+            self.level,
+        ))
+    }
+
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         self.blob_storage
             .delete_dir(
@@ -274,6 +287,23 @@ impl BlobOplogArchive {
             level,
             created,
             entries,
+            cache: RwLock::new(EvictingCacheMap::new()),
+        }
+    }
+
+    pub fn new_fresh(
+        owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        level: usize,
+    ) -> Self {
+        BlobOplogArchive {
+            owned_agent_id,
+            agent_mode,
+            blob_storage,
+            level,
+            created: Arc::new(async_lock::RwLock::new(false)),
+            entries: Arc::new(RwLock::new(BTreeMap::new())),
             cache: RwLock::new(EvictingCacheMap::new()),
         }
     }

@@ -47,6 +47,14 @@ fn wasmImportMethodWebsocketConnectionClose(
 fn wasmImportMethodWebsocketConnectionSubscribe(p0 : Int) -> Int = "golem:websocket/client@1.5.0" "[method]websocket-connection.subscribe"
 
 ///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0)
@@ -59,8 +67,8 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #| local.get 0)
 
 ///|
-extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load16_u)
 
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
@@ -70,6 +78,15 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1)
 
 ///|
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+
+///|
 extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
   #|(func (param i32) (param i32) (result i32)
   #| local.get 0
@@ -77,22 +94,5 @@ extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
   #| local.get 0)
 
 ///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
-
-///|
 extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
-extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load16_u)

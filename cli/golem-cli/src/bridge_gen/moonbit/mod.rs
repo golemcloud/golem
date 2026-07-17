@@ -777,14 +777,16 @@ impl MoonBitBridgeGenerator {
         writer.line("}");
         writer.blank();
 
-        writer.line(format!(
-            "pub fn {agent}::agent_id(self : {agent}) -> @runtime.AgentId {{"
-        ));
-        writer.indent();
-        writer.line("self.resolved.agent_id");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.line(format!(
+                "pub fn {agent}::agent_id(self : {agent}) -> @runtime.AgentId {{"
+            ));
+            writer.indent();
+            writer.line("self.resolved.agent_id.unwrap()");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
 
         self.write_constructors(writer, &agent, &agent_type_name)?;
 
@@ -832,34 +834,59 @@ impl MoonBitBridgeGenerator {
             writer.blank();
         }
 
-        // get_phantom
+        // Explicit phantom identities are supported only by durable agents.
         let phantom_decls = append_param("phantom : String", &param_decls);
-        writer.doc("Gets (creating if necessary) the agent with the given explicit phantom id.");
-        writer.line(format!(
-            "pub async fn {agent}::get_phantom({phantom_decls}) -> {agent} raise {{"
-        ));
-        writer.indent();
-        self.write_create_agent_body(
-            writer,
-            agent,
-            agent_type_name,
-            &input,
-            "Some(phantom)",
-            "Some(phantom)",
-            "[]",
-        )?;
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+        if self.agent_type.mode == AgentMode::Durable {
+            writer
+                .doc("Gets (creating if necessary) the agent with the given explicit phantom id.");
+            writer.line(format!(
+                "pub async fn {agent}::get_phantom({phantom_decls}) -> {agent} raise {{"
+            ));
+            writer.indent();
+            self.write_create_agent_body(
+                writer,
+                agent,
+                agent_type_name,
+                &input,
+                "Some(phantom)",
+                "Some(phantom)",
+                "[]",
+            )?;
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
 
-        // new_phantom: like get_phantom but with a fresh random phantom id.
-        writer.doc("Creates a new agent instance with a fresh random phantom id.");
+        writer.doc(if self.agent_type.mode == AgentMode::Durable {
+            "Creates a new agent instance with a fresh random phantom id."
+        } else {
+            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        });
         writer.line(format!(
             "pub async fn {agent}::new_phantom({param_decls}) -> {agent} raise {{"
         ));
         writer.indent();
-        let phantom_call_args = append_arg("@runtime.random_uuid()", &param_names);
-        writer.line(format!("{agent}::get_phantom({phantom_call_args})"));
+        if self.agent_type.mode == AgentMode::Durable {
+            let phantom_call_args = append_arg("@runtime.random_uuid()", &param_names);
+            writer.line(format!("{agent}::get_phantom({phantom_call_args})"));
+        } else {
+            writer.line("let configuration = @runtime.get_configuration()");
+            self.write_param_record(writer, &input)?;
+            writer.line(format!("{agent}::{{"));
+            writer.indent();
+            writer.line("resolved: @runtime.ResolvedAgent::{");
+            writer.indent();
+            writer.line("configuration,");
+            writer.line(format!("agent_type_name: {agent_type_name},"));
+            writer.line("parameters,");
+            writer.line("phantom_id: None,");
+            writer.line("config: [],");
+            writer.line("agent_id: None,");
+            writer.dedent();
+            writer.line("},");
+            writer.dedent();
+            writer.line("}");
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -926,29 +953,31 @@ impl MoonBitBridgeGenerator {
             writer.blank();
         }
 
-        // get_phantom_with_config
+        // get_phantom_with_config (durable only)
         let phantom_config_decls = append_param(
             &config_decls,
             &append_param("phantom : String", param_decls),
         );
-        writer.doc("Gets (creating if necessary) the agent with an explicit phantom id, overriding the given configuration values.");
-        writer.line(format!(
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.doc("Gets (creating if necessary) the agent with an explicit phantom id, overriding the given configuration values.");
+            writer.line(format!(
             "pub async fn {agent}::get_phantom_with_config({phantom_config_decls}) -> {agent} raise {{"
-        ));
-        writer.indent();
-        self.write_config_array(writer, &configs, &config_names)?;
-        self.write_create_agent_body(
-            writer,
-            agent,
-            agent_type_name,
-            input,
-            "Some(phantom)",
-            "Some(phantom)",
-            "agent_config",
-        )?;
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+            ));
+            writer.indent();
+            self.write_config_array(writer, &configs, &config_names)?;
+            self.write_create_agent_body(
+                writer,
+                agent,
+                agent_type_name,
+                input,
+                "Some(phantom)",
+                "Some(phantom)",
+                "agent_config",
+            )?;
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
 
         // new_phantom_with_config: a fresh random phantom id, delegating to
         // get_phantom_with_config so config overrides are applied.
@@ -958,13 +987,20 @@ impl MoonBitBridgeGenerator {
             "pub async fn {agent}::new_phantom_with_config({decls}) -> {agent} raise {{"
         ));
         writer.indent();
-        let call_args = append_arg_list(
-            param_names,
-            &std::iter::once("@runtime.random_uuid()".to_string())
-                .chain(config_names.iter().cloned())
-                .collect::<Vec<_>>(),
-        );
-        writer.line(format!("{agent}::get_phantom_with_config({call_args})"));
+        if self.agent_type.mode == AgentMode::Durable {
+            let call_args = append_arg_list(
+                param_names,
+                &std::iter::once("@runtime.random_uuid()".to_string())
+                    .chain(config_names.iter().cloned())
+                    .collect::<Vec<_>>(),
+            );
+            writer.line(format!("{agent}::get_phantom_with_config({call_args})"));
+        } else {
+            writer.line("let configuration = @runtime.get_configuration()");
+            self.write_param_record(writer, input)?;
+            self.write_config_array(writer, &configs, &config_names)?;
+            writer.line(format!("{agent}::{{ resolved: @runtime.ResolvedAgent::{{ configuration, agent_type_name: {agent_type_name}, parameters, phantom_id: None, config: agent_config, agent_id: None }} }}"));
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1094,7 +1130,8 @@ impl MoonBitBridgeGenerator {
         writer.line(format!("agent_type_name: {agent_type_name},"));
         writer.line("parameters,");
         writer.line(format!("phantom_id: {resolved_phantom_expr},"));
-        writer.line("agent_id: response.agent_id,");
+        writer.line("config: [],");
+        writer.line("agent_id: Some(response.agent_id),");
         writer.dedent();
         writer.line("},");
         writer.dedent();
@@ -1115,8 +1152,13 @@ impl MoonBitBridgeGenerator {
 
         // await
         let (ret_ty, decode) = self.output_return(&method.output_schema)?;
+        let await_ret_ty = if self.agent_type.mode == AgentMode::Ephemeral {
+            format!("@runtime.InvocationResponse[{ret_ty}]")
+        } else {
+            ret_ty.clone()
+        };
         writer.line(format!(
-            "pub async fn {agent}::{base}(self : {}) -> {ret_ty} raise {{",
+            "pub async fn {agent}::{base}(self : {}) -> {await_ret_ty} raise {{",
             prepend_self_decl(agent, &param_decls)
         ));
         writer.indent();
@@ -1135,13 +1177,21 @@ impl MoonBitBridgeGenerator {
                 );
                 writer.dedent();
                 writer.line("}");
-                writer.line(decode_block);
+                if self.agent_type.mode == AgentMode::Ephemeral {
+                    writer.line(format!("let decoded = {decode_block}"));
+                    writer.line("@runtime.InvocationResponse::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, value: decoded, component_revision: result.component_revision }");
+                } else {
+                    writer.line(decode_block);
+                }
             }
             None => {
                 writer.line(format!(
-                    "let _ = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
+                    "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
                     moonbit_string_literal(MODE_AWAIT)
                 ));
+                if self.agent_type.mode == AgentMode::Ephemeral {
+                    writer.line("@runtime.InvocationResponse::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, value: (), component_revision: result.component_revision }");
+                }
             }
         }
         writer.dedent();
@@ -1150,15 +1200,23 @@ impl MoonBitBridgeGenerator {
 
         // trigger (schedule, fire-and-forget)
         writer.line(format!(
-            "pub async fn {agent}::trigger_{base}(self : {}) -> Unit raise {{",
-            prepend_self_decl(agent, &param_decls)
+            "pub async fn {agent}::trigger_{base}(self : {}) -> {} raise {{",
+            prepend_self_decl(agent, &param_decls),
+            if self.agent_type.mode == AgentMode::Ephemeral {
+                "@runtime.InvocationReceipt"
+            } else {
+                "Unit"
+            }
         ));
         writer.indent();
         self.write_param_record(writer, &method.input_schema)?;
         writer.line(format!(
-            "let _ = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
+            "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
             moonbit_string_literal(MODE_SCHEDULE)
         ));
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line("@runtime.InvocationReceipt::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, component_revision: result.component_revision }");
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1166,15 +1224,23 @@ impl MoonBitBridgeGenerator {
         // schedule_at
         let schedule_decls = prepend_param("when : String", &param_decls);
         writer.line(format!(
-            "pub async fn {agent}::schedule_{base}(self : {}) -> Unit raise {{",
-            prepend_self_decl(agent, &schedule_decls)
+            "pub async fn {agent}::schedule_{base}(self : {}) -> {} raise {{",
+            prepend_self_decl(agent, &schedule_decls),
+            if self.agent_type.mode == AgentMode::Ephemeral {
+                "@runtime.InvocationReceipt"
+            } else {
+                "Unit"
+            }
         ));
         writer.indent();
         self.write_param_record(writer, &method.input_schema)?;
         writer.line(format!(
-            "let _ = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
+            "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
             moonbit_string_literal(MODE_SCHEDULE)
         ));
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line("@runtime.InvocationReceipt::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, component_revision: result.component_revision }");
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();

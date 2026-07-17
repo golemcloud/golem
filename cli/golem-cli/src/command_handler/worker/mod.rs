@@ -398,7 +398,15 @@ impl WorkerCommandHandler {
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
-        let agent_id = normalize_public_agent_id(&agent_id, &agent_type)?;
+        validate_public_invocation_agent_id(&agent_id, &agent_type)?;
+        let stream_agent_id =
+            if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+                agent_id
+                    .with_ephemeral_invocation_phantom(&idempotency_key)
+                    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?
+            } else {
+                agent_id.clone()
+            };
 
         let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
         let method_name = match matched_method_name {
@@ -489,7 +497,7 @@ impl WorkerCommandHandler {
                 self.ctx.worker_service_url().clone(),
                 self.ctx.auth_token().await?,
                 &component.id,
-                agent_id.to_string(),
+                stream_agent_id.to_string(),
                 stream_args.into(),
                 self.ctx.allow_insecure(),
                 self.ctx.format(),
@@ -515,6 +523,7 @@ impl WorkerCommandHandler {
             agent_type_name: agent_id.agent_type.0.clone(),
             parameters: serde_json::to_value(agent_id.parameters.value())?,
             phantom_id: agent_id.phantom_id,
+            config: None,
             method_name: method_name.clone(),
             method_parameters: serde_json::to_value(method_parameters)?,
             mode,
@@ -621,7 +630,12 @@ impl WorkerCommandHandler {
             anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
         let typed_parameters = typed_constructor_parameters(&agent_type.agent_type, value);
-        let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
+        let agent_id = build_repl_agent_id(
+            &agent_type.agent_type,
+            typed_parameters,
+            phantom_id,
+            &idempotency_key,
+        )?;
         let agent_name = RawAgentId(agent_id.to_string());
 
         let connection = WorkerConnection::new(
@@ -3083,14 +3097,19 @@ fn build_repl_agent_id(
     agent_type: &AgentTypeSchema,
     typed_parameters: TypedSchemaValue,
     phantom_id: Option<Uuid>,
+    idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<ParsedAgentId> {
-    ParsedAgentId::new_auto_phantom(
-        agent_type.type_name.clone(),
-        typed_parameters,
-        phantom_id,
-        agent_type.mode,
-    )
-    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+    let agent_id =
+        ParsedAgentId::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
+            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+
+    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+        agent_id
+            .with_ephemeral_invocation_phantom(idempotency_key)
+            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+    } else {
+        Ok(agent_id)
+    }
 }
 
 fn normalize_public_agent_id(
@@ -3106,15 +3125,25 @@ fn normalize_public_agent_id(
     .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
 }
 
+fn validate_public_invocation_agent_id(
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentTypeSchema,
+) -> anyhow::Result<()> {
+    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
+        bail!("Explicit phantom IDs cannot be used to invoke ephemeral agents");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_schema_value, split_agent_name,
+        parse_method_argument_schema_value, split_agent_name, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::{Empty, IdempotencyKey};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
@@ -3222,15 +3251,25 @@ mod tests {
     }
 
     #[test]
-    fn repl_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_id = build_repl_agent_id(
+    fn repl_agent_id_derives_stable_phantom_for_ephemeral_invocation() {
+        let idempotency_key = IdempotencyKey::new("repl-invocation".to_string());
+        let first = build_repl_agent_id(
             &test_agent_type_schema(AgentMode::Ephemeral),
             empty_typed_parameters(),
             None,
+            &idempotency_key,
+        )
+        .unwrap();
+        let second = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
+            None,
+            &idempotency_key,
         )
         .unwrap();
 
-        assert!(agent_id.phantom_id.is_some());
+        assert!(first.phantom_id.is_some());
+        assert_eq!(first.phantom_id, second.phantom_id);
     }
 
     #[test]
@@ -3239,6 +3278,7 @@ mod tests {
             &test_agent_type_schema(AgentMode::Durable),
             empty_typed_parameters(),
             None,
+            &IdempotencyKey::new("repl-invocation".to_string()),
         )
         .unwrap();
 
@@ -3252,6 +3292,7 @@ mod tests {
             &test_agent_type_schema(AgentMode::Ephemeral),
             empty_typed_parameters(),
             Some(explicit_phantom_id),
+            &IdempotencyKey::new("repl-invocation".to_string()),
         )
         .unwrap();
 
@@ -3270,6 +3311,24 @@ mod tests {
         let normalized = normalize_public_agent_id(&agent_id, &agent_type).unwrap();
 
         assert!(normalized.phantom_id.is_some());
+    }
+
+    #[test]
+    fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
+        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
+        let agent_id = ParsedAgentId::try_new(
+            AgentTypeName("repl-agent".to_string()),
+            empty_typed_parameters(),
+            Some(Uuid::new_v4()),
+        )
+        .unwrap();
+
+        let error = validate_public_invocation_agent_id(&agent_id, &agent_type).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Explicit phantom IDs cannot be used to invoke ephemeral agents"
+        );
     }
 
     #[test]

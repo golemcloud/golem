@@ -399,8 +399,13 @@ fn ephemeral_agent_omits_get_constructor() {
         !client.contains("pub async fn EphemeralAgent::get("),
         "ephemeral agent must not expose a parameter-addressable get"
     );
-    assert!(client.contains("pub async fn EphemeralAgent::get_phantom("));
+    assert!(!client.contains("pub async fn EphemeralAgent::get_phantom("));
     assert!(client.contains("pub async fn EphemeralAgent::new_phantom("));
+    assert!(!client.contains("pub fn EphemeralAgent::agent_id("));
+    assert!(!client.contains("@runtime.create_agent("));
+    assert!(client.contains("-> @runtime.InvocationResponse[Unit] raise"));
+    assert!(client.contains("-> @runtime.InvocationReceipt raise"));
+    assert!(client.contains("idempotency_key: result.idempotency_key"));
 }
 
 /// Method names that are MoonBit keywords, fields whose names need
@@ -632,8 +637,9 @@ fn ephemeral_config_constructors_omit_get_with_config() {
     let client = pkg.client_source();
 
     assert!(!client.contains("pub async fn EphemeralConfigAgent::get_with_config("));
-    assert!(client.contains("pub async fn EphemeralConfigAgent::get_phantom_with_config("));
+    assert!(!client.contains("pub async fn EphemeralConfigAgent::get_phantom_with_config("));
     assert!(client.contains("pub async fn EphemeralConfigAgent::new_phantom_with_config("));
+    assert!(!client.contains("@runtime.create_agent("));
 }
 
 /// A constructor parameter whose normalized name collides with a generated

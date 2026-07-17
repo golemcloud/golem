@@ -13,11 +13,15 @@
 // limitations under the License.
 
 use crate::base_model::Empty;
+use crate::base_model::IdempotencyKey;
 use crate::base_model::agent::{
     AgentMode, AgentTypeName, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic,
 };
-use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
+use crate::model::agent::{
+    AgentTypeSchemaResolver, InvocationFreshnessDisposition, ParsedAgentId,
+    ephemeral_invocation_phantom_id,
+};
 use crate::schema::{
     AgentConstructorSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, MetadataEnvelope,
     NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TextRestrictions,
@@ -804,6 +808,96 @@ fn new_auto_phantom_ephemeral_some() {
         id.phantom_id,
         Some(supplied),
         "Ephemeral agent should preserve supplied phantom_id"
+    );
+}
+
+#[test]
+fn ephemeral_invocation_phantom_id_has_stable_known_value() {
+    let key = IdempotencyKey::new("ephemeral-test-key".to_string());
+
+    assert_eq!(
+        ephemeral_invocation_phantom_id(&key),
+        Uuid::parse_str("24c6f96b-c066-5786-8903-e930c04ee32c").unwrap()
+    );
+}
+
+#[test]
+fn invocation_freshness_defaults_to_may_exist() {
+    assert_eq!(
+        InvocationFreshnessDisposition::default(),
+        InvocationFreshnessDisposition::MayExist
+    );
+}
+
+#[test]
+fn ephemeral_invocation_identity_is_deterministic_and_preserves_logical_target() {
+    let logical = ParsedAgentId::try_new(
+        AgentTypeName("test-agent".to_string()),
+        data_value!("constructor-parameter"),
+        None,
+    )
+    .unwrap();
+    let key = IdempotencyKey::new("same".to_string());
+
+    let first = logical.with_ephemeral_invocation_phantom(&key).unwrap();
+    let second = logical.with_ephemeral_invocation_phantom(&key).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(first.agent_type, logical.agent_type);
+    assert_eq!(first.parameters, logical.parameters);
+    assert_eq!(
+        first.phantom_id,
+        Some(Uuid::parse_str("5c610db3-26c7-5b64-8d71-2797bb32b481").unwrap())
+    );
+}
+
+#[test]
+fn different_idempotency_keys_produce_different_ephemeral_invocation_identities() {
+    let logical =
+        ParsedAgentId::try_new(AgentTypeName("test-agent".to_string()), data_value!(), None)
+            .unwrap();
+
+    let first = logical
+        .with_ephemeral_invocation_phantom(&IdempotencyKey::new("same".to_string()))
+        .unwrap();
+    let second = logical
+        .with_ephemeral_invocation_phantom(&IdempotencyKey::new("different".to_string()))
+        .unwrap();
+
+    assert_ne!(first.phantom_id, second.phantom_id);
+}
+
+#[test]
+fn ephemeral_invocation_identity_rejects_an_existing_phantom() {
+    let logical = ParsedAgentId::try_new(
+        AgentTypeName("test-agent".to_string()),
+        data_value!(),
+        Some(Uuid::new_v4()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        logical
+            .with_ephemeral_invocation_phantom(&IdempotencyKey::new("same".to_string()))
+            .unwrap_err(),
+        "Cannot derive an ephemeral invocation identity from an agent ID that already has a phantom ID"
+    );
+}
+
+#[test]
+fn ephemeral_invocation_identity_preserves_agent_id_length_validation() {
+    let logical = ParsedAgentId::try_new(
+        AgentTypeName("t".to_string()),
+        data_value!("a".repeat(507)),
+        None,
+    )
+    .unwrap();
+
+    assert!(
+        logical
+            .with_ephemeral_invocation_phantom(&IdempotencyKey::new("same".to_string()))
+            .unwrap_err()
+            .starts_with("Agent id is too long:")
     );
 }
 

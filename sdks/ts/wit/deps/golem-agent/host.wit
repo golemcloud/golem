@@ -49,6 +49,36 @@ interface host {
       remote-agent-error(agent-error)
     }
 
+    /// Final identity allocated for one remote invocation. For an ephemeral
+    /// target, `agent-id` contains the generated one-shot phantom ID.
+    record invocation-metadata {
+      agent-id: string,
+      idempotency-key: string,
+    }
+
+    /// Result of an awaited invocation together with its final identity.
+    record invocation-result-with-metadata {
+      metadata: invocation-metadata,
+      %result: option<schema-value-tree>,
+    }
+
+    /// Asynchronous invocation handle together with its final identity.
+    record async-invocation-with-metadata {
+      metadata: invocation-metadata,
+      %future: future-invoke-result,
+    }
+
+    /// Receipt returned when an invocation has been scheduled.
+    record scheduled-invocation-receipt {
+      metadata: invocation-metadata,
+    }
+
+    /// Receipt for a scheduled invocation that can still be cancelled.
+    record cancelable-scheduled-invocation-receipt {
+      metadata: invocation-metadata,
+      cancellation-token: cancellation-token,
+    }
+
     /// An RPC client for invoking remote agents
     resource wasm-rpc {
       /// Constructs the RPC client connecting to the given target agent.
@@ -59,24 +89,27 @@ interface host {
 
       /// Invokes a remote method with the given parameters, and awaits the result.
       ///
-      /// `input` encodes the method's parameter list; the result is `none` for
-      /// a `unit` output and `some(value)` for a `single` output.
-      invoke-and-await: func(method-name: string, input: schema-value-tree) -> result<option<schema-value-tree>, rpc-error>;
+      /// `input` encodes the method's parameter list. The returned result is
+      /// `none` for a `unit` output and `some(value)` for a `single` output.
+      invoke-and-await: func(method-name: string, input: schema-value-tree) -> result<invocation-result-with-metadata, rpc-error>;
 
-      /// Triggers the invocation of a remote method with the given parameters, and returns immediately.
-      invoke: func(method-name: string, input: schema-value-tree) -> result<_, rpc-error>;
+      /// Triggers the invocation of a remote method with the given parameters,
+      /// and returns its final identity immediately.
+      invoke: func(method-name: string, input: schema-value-tree) -> result<invocation-metadata, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
-      /// be polled for the result.
+      /// be polled for the result together with the final invocation identity.
       ///
       /// With this function it is possible to call multiple (different) agents simultaneously.
-      async-invoke-and-await: func(method-name: string, input: schema-value-tree) -> future-invoke-result;
+      async-invoke-and-await: func(method-name: string, input: schema-value-tree) -> async-invocation-with-metadata;
 
-      /// Schedule invocation for later
-      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree);
+      /// Schedules an invocation for later and returns its final identity.
+      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree) -> scheduled-invocation-receipt;
 
-      /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
-      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree) -> cancellation-token;
+      /// Schedules an invocation for later and returns its final identity and
+      /// cancellation capability. Call cancel on the returned resource to
+      /// cancel the invocation before the scheduled time.
+      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree) -> cancelable-scheduled-invocation-receipt;
     }
 
     /// Represents a pollable invocation result

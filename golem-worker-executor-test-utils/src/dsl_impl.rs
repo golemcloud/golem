@@ -34,7 +34,7 @@ use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
+use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
@@ -62,6 +62,27 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::Streaming;
 use uuid::Uuid;
+
+fn invocation_agent_id(
+    component: &ComponentDto,
+    agent_id: &ParsedAgentId,
+    idempotency_key: &IdempotencyKey,
+) -> anyhow::Result<AgentId> {
+    let is_ephemeral = component
+        .metadata
+        .find_agent_type_by_name_ref(&agent_id.agent_type)
+        .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
+    let agent_id = if is_ephemeral && agent_id.phantom_id.is_none() {
+        agent_id
+            .with_ephemeral_invocation_phantom(idempotency_key)
+            .map_err(|err| anyhow!("Invalid ephemeral agent id: {err}"))?
+    } else {
+        agent_id.clone()
+    };
+
+    AgentId::from_agent_id(component.id, &agent_id)
+        .map_err(|err| anyhow!("Invalid agent id: {err}"))
+}
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
@@ -420,8 +441,7 @@ impl TestDsl for TestWorkerExecutor {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
-        let agent_id = AgentId::from_agent_id(component.id, agent_id)
-            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+        let agent_id = invocation_agent_id(component, agent_id, idempotency_key)?;
 
         let (_graph, value) = params.into_parts();
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
@@ -442,6 +462,9 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
                 principal: None,
+                freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+                    as i32,
+                config: Vec::new(),
             })
             .await;
 
@@ -469,11 +492,10 @@ impl TestDsl for TestWorkerExecutor {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
-            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
         let key = idempotency_key
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
+        let worker_agent_id = invocation_agent_id(component, agent_id, &key)?;
 
         let (_graph, value) = params.into_parts();
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
@@ -494,6 +516,9 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
                 principal: principal.map(Into::into),
+                freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+                    as i32,
+                config: Vec::new(),
             })
             .await;
 

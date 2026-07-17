@@ -2392,6 +2392,11 @@ components:
         phantomId:
           type: string
           format: uuid
+        config:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
         methodName:
           type: string
         methodParameters: {}
@@ -2412,9 +2417,12 @@ components:
       title: AgentInvocationResult
       required:
       - agentId
+      - idempotencyKey
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
+        idempotencyKey:
+          type: string
         result:
           $ref: '#/components/schemas/TypedSchemaValue'
         componentRevision:

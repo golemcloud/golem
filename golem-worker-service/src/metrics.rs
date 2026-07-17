@@ -15,6 +15,20 @@
 use golem_common::golem_version;
 use golem_service_base::metrics::VERSION_INFO;
 use prometheus::*;
+use std::sync::LazyLock;
+
+static EPHEMERAL_EXPLICIT_PHANTOM_INVOCATION_REJECTION_TOTAL: LazyLock<IntCounter> =
+    LazyLock::new(|| {
+        register_int_counter!(
+            "ephemeral_explicit_phantom_invocation_rejection_total",
+            "Number of ephemeral invocation requests rejected for selecting a phantom ID"
+        )
+        .unwrap()
+    });
+
+pub fn record_ephemeral_explicit_phantom_invocation_rejection() {
+    EPHEMERAL_EXPLICIT_PHANTOM_INVOCATION_REJECTION_TOTAL.inc();
+}
 
 pub fn register_all() -> Registry {
     VERSION_INFO.with_label_values(&[golem_version()]).inc();
