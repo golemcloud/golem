@@ -36,10 +36,6 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
-    #[tagged_as("agent_rpc_rust")]
-    PrecompiledComponent
-);
-inherit_test_dep!(
     #[tagged_as("constructor_parameter_echo_unnamed")]
     PrecompiledComponent
 );
@@ -54,23 +50,23 @@ inherit_test_dep!(Tracing);
 async fn agent_self_rpc_is_not_allowed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let agent_id = agent_id!("RustSelfRpcAgent", "worker-name");
+    let agent_id = agent_id!("SelfRpcAgent", "worker-name");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "self_rpc", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "selfRpc", data_value!())
         .await;
 
     let err = result.expect_err("Expected an error");
