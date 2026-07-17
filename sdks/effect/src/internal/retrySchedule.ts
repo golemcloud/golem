@@ -6,7 +6,7 @@
  * @since 1.5.0
  */
 
-import { Duration, Effect, Random, Schedule } from "effect"
+import { Cause, Duration, Effect, Random, Schedule } from "effect"
 import type * as RetryHost from "golem:api/retry@1.5.0"
 import {
   Policy,
@@ -313,18 +313,18 @@ const buildSchedule = <In>(
       return erase(makeFibonacciSchedule(node.val.first, node.val.second))
     case "count-box": {
       const inner = buildSchedule<In>(policy, node.val.inner, props)
-      return erase(Schedule.both(inner, Schedule.recurs(node.val.maxRetries)))
+      return erase(Schedule.max([inner, Schedule.recurs(node.val.maxRetries)]))
     }
     case "time-box": {
       const inner = buildSchedule<In>(policy, node.val.inner, props)
-      return erase(Schedule.both(inner, Schedule.during(nanosToDuration(node.val.limit))))
+      return erase(withinElapsed(inner, nanosToDuration(node.val.limit)))
     }
     case "clamp-delay": {
       const inner = buildSchedule<In>(policy, node.val.inner, props)
       const minimum = nanosToDuration(node.val.minDelay)
       const maximum = nanosToDuration(node.val.maxDelay)
       return erase(
-        Schedule.modifyDelay(inner, (_o, delay) =>
+        Schedule.modifyDelay(inner, ({ duration: delay }) =>
           Effect.succeed(Duration.clamp(Duration.fromInputUnsafe(delay), { minimum, maximum })),
         ),
       )
@@ -338,7 +338,7 @@ const buildSchedule = <In>(
       const inner = buildSchedule<In>(policy, node.val.inner, props)
       const factor = node.val.factor
       return erase(
-        Schedule.modifyDelay(inner, (_o, delay) =>
+        Schedule.modifyDelay(inner, ({ duration: delay }) =>
           Effect.map(Random.next, (r) => {
             // r ∈ [0, 1) → scale ∈ [1-f, 1+f)
             const scale = Math.max(0, 1 - factor + r * 2 * factor)
@@ -365,15 +365,30 @@ const buildSchedule = <In>(
     case "policy-union": {
       const left = buildSchedule<In>(policy, node.val[0], props)
       const right = buildSchedule<In>(policy, node.val[1], props)
-      return erase(Schedule.either(left, right))
+      return erase(Schedule.min([left, right]) as Schedule.Schedule<Duration.Duration, In>)
     }
     case "policy-intersect": {
       const left = buildSchedule<In>(policy, node.val[0], props)
       const right = buildSchedule<In>(policy, node.val[1], props)
-      return erase(Schedule.both(left, right))
+      return erase(Schedule.max([left, right]) as Schedule.Schedule<Duration.Duration, In>)
     }
   }
 }
+
+const withinElapsed = <Out, In, E, R>(
+  inner: Schedule.Schedule<Out, In, E, R>,
+  limit: Duration.Duration,
+): Schedule.Schedule<Out, In, E, R> =>
+  Schedule.fromStep(
+    Effect.map(Schedule.toStep(inner), (step) => {
+      const limitMillis = Duration.toMillis(limit)
+      let start: number | undefined
+      return (now: number, input: In) => {
+        if (start === undefined) start = now
+        return now - start > limitMillis ? Cause.done(undefined as Out) : step(now, input)
+      }
+    }),
+  )
 
 /**
  * Two-seed Fibonacci: emits `first`, `second`, `first+second`,

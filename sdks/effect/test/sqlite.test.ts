@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
+import { DatabaseSync } from "node:sqlite"
 import { SqliteClient } from "../src/Sqlite/SqliteClient.js"
 
 describe("SqliteClient (mocked node:sqlite)", () => {
@@ -65,6 +66,59 @@ describe("SqliteClient (mocked node:sqlite)", () => {
       // transformer doesn't throw and the query runs.
       const rows = yield* sql`SELECT 1 AS x`
       expect(Array.isArray(rows)).toBe(true)
+    }),
+  )
+
+  it.effect("valuesUnprepared returns rows from INSERT RETURNING", () =>
+    Effect.gen(function* () {
+      const db = new DatabaseSync(":memory:")
+      const originalPrepare = db.prepare.bind(db)
+      db.prepare = (sourceSql) => {
+        const statement = originalPrepare(sourceSql)
+        statement.columns = () => [{} as never]
+        statement.all = () => [{ id: 1, name: "alice" }]
+        return statement
+      }
+      const sql = yield* SqliteClient.fromDatabase(db)
+
+      const rows = yield* sql`
+        INSERT INTO t (name) VALUES (${"alice"})
+        RETURNING id, name
+      `.valuesUnprepared
+
+      expect(rows).toEqual([[1, "alice"]])
+    }),
+  )
+
+  it.effect("valuesUnprepared preserves duplicate columns positionally", () =>
+    Effect.gen(function* () {
+      const db = new DatabaseSync(":memory:")
+      const originalPrepare = db.prepare.bind(db)
+      db.prepare = (sourceSql) => {
+        const statement = originalPrepare(sourceSql)
+        let returnArrays = false
+        statement.setReturnArrays = (enabled) => {
+          returnArrays = enabled
+          return statement
+        }
+        statement.all = () => (returnArrays ? [[1, 2]] : [{ x: 2 }]) as never
+        return statement
+      }
+      const sql = yield* SqliteClient.fromDatabase(db)
+
+      const rows = yield* sql`SELECT 1 AS x, 2 AS x`.valuesUnprepared
+
+      expect(rows).toEqual([[1, 2]])
+    }),
+  )
+
+  it.effect("raw writes are not classified as RETURNING from a string literal", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqliteClient.make({ filename: ":memory:" })
+
+      const result = yield* sql.unsafe(`INSERT INTO t (name) VALUES ('RETURNING')`).raw
+
+      expect(result).toEqual({ changes: 0, lastInsertRowid: 0 })
     }),
   )
 })

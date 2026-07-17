@@ -182,21 +182,14 @@ interface SqliteConnection extends Connection {
   readonly exec: (sql: string) => Effect.Effect<void, SqlError>
 }
 
-/**
- * Cheap heuristic for routing a prepared statement to `.all()`
- * (returns rows) vs. `.run()` (returns `{ changes, lastInsertRowid }`).
- * `node:sqlite`'s `StatementSync` does not expose better-sqlite3's
- * `.reader` flag, so we look at the SQL prefix instead. Anything that
- * starts with a select-like keyword goes through `.all()`; everything
- * else goes through `.run()`.
- */
-const READ_PREFIX_RE = /^\s*(?:SELECT|WITH|PRAGMA|EXPLAIN|VALUES)\b/i
-const isReader = (sql: string): boolean => READ_PREFIX_RE.test(sql)
-
 interface PreparedLike {
   readonly all: (...params: Array<SQLInputValue>) => unknown
   readonly run: (...params: Array<SQLInputValue>) => unknown
+  readonly columns: () => ReadonlyArray<unknown>
+  readonly setReturnArrays: (enabled: boolean) => void
 }
+
+const isReader = (stmt: PreparedLike): boolean => stmt.columns().length > 0
 
 const makeImpl = (
   config: SqliteClientConfig,
@@ -247,14 +240,13 @@ const makeImpl = (
 
     const runPrepared = (
       stmt: PreparedLike,
-      sql: string,
       params: ReadonlyArray<unknown>,
       raw: boolean,
     ): Effect.Effect<ReadonlyArray<unknown>, SqlError> =>
       Effect.try({
         try: () => {
           const args = params as Array<SQLInputValue>
-          if (isReader(sql)) {
+          if (isReader(stmt)) {
             return stmt.all(...args) as ReadonlyArray<unknown>
           }
           const result = stmt.run(...args) as {
@@ -267,25 +259,31 @@ const makeImpl = (
       })
 
     const run = (sql: string, params: ReadonlyArray<unknown>, raw = false) =>
-      Effect.flatMap(Cache.get(prepareCache, sql), (stmt) => runPrepared(stmt, sql, params, raw))
+      Effect.flatMap(Cache.get(prepareCache, sql), (stmt) => runPrepared(stmt, params, raw))
+
+    const runValuesPrepared = (stmt: PreparedLike, params: ReadonlyArray<unknown>) =>
+      Effect.try({
+        try: () => {
+          const args = params as Array<SQLInputValue>
+          if (isReader(stmt)) {
+            stmt.setReturnArrays(true)
+            try {
+              const rows = stmt.all(...args) as Array<
+                ReadonlyArray<unknown> | Record<string, unknown>
+              >
+              return rows.map((row) => (Array.isArray(row) ? row : Object.values(row)))
+            } finally {
+              stmt.setReturnArrays(false)
+            }
+          }
+          stmt.run(...args)
+          return [] as ReadonlyArray<ReadonlyArray<unknown>>
+        },
+        catch: (cause) => sqlError(cause, "Failed to execute statement", "executeValues"),
+      })
 
     const runValues = (sql: string, params: ReadonlyArray<unknown>) =>
-      Effect.flatMap(Cache.get(prepareCache, sql), (stmt) =>
-        Effect.try({
-          try: () => {
-            const args = params as Array<SQLInputValue>
-            if (isReader(sql)) {
-              const rows = stmt.all(...args) as Array<Record<string, unknown>>
-              // node:sqlite has no `statement.raw(true)` toggle; emulate
-              // by extracting the column values in declaration order.
-              return rows.map((row) => Object.values(row)) as ReadonlyArray<ReadonlyArray<unknown>>
-            }
-            stmt.run(...args)
-            return [] as ReadonlyArray<ReadonlyArray<unknown>>
-          },
-          catch: (cause) => sqlError(cause, "Failed to execute statement", "executeValues"),
-        }),
-      )
+      Effect.flatMap(Cache.get(prepareCache, sql), (stmt) => runValuesPrepared(stmt, params))
 
     const connection: SqliteConnection = {
       execute(sql, params, transform) {
@@ -298,13 +296,22 @@ const makeImpl = (
       executeValues(sql, params) {
         return runValues(sql, params)
       },
+      executeValuesUnprepared(sql, params) {
+        return Effect.flatMap(
+          Effect.try({
+            try: () => db.prepare(sql) as unknown as PreparedLike,
+            catch: (cause) => sqlError(cause, "Failed to prepare statement", "prepareUnprepared"),
+          }),
+          (stmt) => runValuesPrepared(stmt, params),
+        )
+      },
       executeUnprepared(sql, params, transform) {
         const eff = Effect.flatMap(
           Effect.try({
             try: () => db.prepare(sql) as unknown as PreparedLike,
             catch: (cause) => sqlError(cause, "Failed to prepare statement", "prepareUnprepared"),
           }),
-          (stmt) => runPrepared(stmt, sql, params ?? [], false),
+          (stmt) => runPrepared(stmt, params ?? [], false),
         ) as Effect.Effect<ReadonlyArray<object>, SqlError>
         return transform ? Effect.map(eff, transform) : eff
       },
