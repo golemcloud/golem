@@ -225,7 +225,7 @@ const gitImplementation: ToolImplementation<typeof gitDef> = {
     return ok([]);
   },
 };
-void gitImplementation;
+void gitDef.implement(gitImplementation);
 
 const grepDef = toolDefinition('grep')
   .body((body) =>
@@ -260,7 +260,7 @@ const grepImplementation: ToolImplementation<typeof grepDef> = {
     'dry-run': async () => ok(true),
   }),
 };
-void grepImplementation;
+void grepDef.implement(grepImplementation);
 
 const payloadlessErrorDef = toolDefinition('payloadless-error').body((body) =>
   body.returns(z.void()).error('plain-error', { kind: 'runtime', exitCode: 1 }),

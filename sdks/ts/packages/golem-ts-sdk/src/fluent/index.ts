@@ -61,6 +61,7 @@ export type {
   GlobalCountFlagOptions,
   GlobalFlagOptions,
   GlobalValueOptions,
+  ImplementedTool,
   NestedCommandImplementation,
   OptionOptions,
   PositionalOptions,

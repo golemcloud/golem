@@ -32,6 +32,7 @@ import {
   type ExtendedOptionSpec,
   type ExtendedRef,
   type ExtendedResultSpec,
+  type ExtendedToolRuntime,
   ExtendedToolType,
   codecValue,
   emptyDoc,
@@ -41,6 +42,7 @@ import {
   normalizeExtendedTool,
   toolBuildError,
 } from '../internal/tool';
+import { ToolRegistry } from '../internal/registry/toolRegistry';
 import { compileSchema } from './schema/adapter';
 import type { FluentCodec } from './schema/codec';
 import type { StandardSchemaV1 } from './schema/standardSchema';
@@ -239,7 +241,10 @@ export function command<Body, Children extends object>(
 ): NestedCommandImplementation<Body | undefined, Children> {
   const body = maybeChildren === undefined ? undefined : (bodyOrChildren as Body);
   const children = (maybeChildren === undefined ? bodyOrChildren : maybeChildren) as Children;
-  const result = { ...children } as NestedCommandImplementation<Body | undefined, Children>;
+  const result = Object.create(
+    Object.getPrototypeOf(children),
+    Object.getOwnPropertyDescriptors(children),
+  ) as NestedCommandImplementation<Body | undefined, Children>;
   Object.defineProperty(result, COMMAND_IMPLEMENTATION, {
     value: { body },
     enumerable: false,
@@ -289,6 +294,10 @@ type RootImplementation<Model> =
     : never;
 
 export type ToolImplementation<Definition> = RootImplementation<ToolCommandModelOf<Definition>>;
+
+export interface ImplementedTool<Name extends string = string> {
+  readonly name: Name;
+}
 
 export type DocInput = string | Partial<Doc>;
 export type RepeatableMode = 'repeated' | 'delimited' | 'either';
@@ -673,6 +682,8 @@ export class CommandBuilder<
   Children = {},
   Root extends boolean = false,
 > {
+  private implemented = false;
+
   private constructor(
     readonly name: Name,
     private readonly node: ExtendedCommandNode,
@@ -803,6 +814,33 @@ export class CommandBuilder<
     });
   }
 
+  implement(
+    this: CommandBuilder<Name, Globals, Body, Children, true>,
+    implementation: ToolImplementation<CommandBuilder<Name, Globals, Body, Children, true>>,
+  ): ImplementedTool<Name> {
+    if (this.implemented) {
+      ToolRegistry.recordRegistrationError(
+        this.name,
+        'Implementation failed: implement() was called more than once for this definition',
+      );
+      return { name: this.name };
+    }
+    this.implemented = true;
+    try {
+      ToolRegistry.registerImplementation(this.name, () => {
+        const tool = this[BUILD_TOOL]();
+        const runtime = bindToolImplementation(tool, implementation as object);
+        return { tool, runtime };
+      });
+    } catch (error) {
+      ToolRegistry.recordRegistrationError(
+        this.name,
+        `Implementation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return { name: this.name };
+  }
+
   private next<NextGlobals, NextBody extends AnyToolBodyModel | undefined, NextChildren>(
     node: ExtendedCommandNode,
   ): CommandBuilder<Name, NextGlobals, NextBody, NextChildren, Root> {
@@ -844,6 +882,97 @@ export function getExtendedToolDefinition<Definition extends ToolDefinition>(
   definition: Definition,
 ): ExtendedToolType {
   return definition[BUILD_TOOL]();
+}
+
+function bindToolImplementation(
+  tool: ExtendedToolType,
+  implementation: object,
+): ExtendedToolRuntime {
+  if (!isImplementationObject(implementation)) {
+    throw new Error(`tool "${tool.toolName}" implementation must be an object`);
+  }
+
+  const bindings: ExtendedToolRuntime['bindings'][number][] = [];
+
+  const visit = (
+    node: ExtendedCommandNode,
+    commandPath: readonly string[],
+    nodeImplementation: unknown,
+    root: boolean,
+  ): void => {
+    const commandName = [tool.toolName, ...commandPath].join(' ');
+    let childrenImplementation: Record<PropertyKey, unknown> | undefined;
+    let handler: unknown;
+
+    if (root) {
+      childrenImplementation = implementation;
+      handler = node.body ? getImplementationProperty(implementation, node.name).value : undefined;
+    } else if (node.body && node.subcommands.length === 0) {
+      handler = nodeImplementation;
+    } else {
+      if (!isNestedCommandImplementation(nodeImplementation)) {
+        throw new Error(
+          `tool command "${commandName}" implementation must be created with command(...)`,
+        );
+      }
+      childrenImplementation = nodeImplementation;
+      handler = nodeImplementation[COMMAND_IMPLEMENTATION].body;
+    }
+
+    if (node.body) {
+      if (typeof handler !== 'function') {
+        throw new Error(`tool command "${commandName}" implementation must be a function`);
+      }
+      bindings.push({
+        commandPath: [...commandPath],
+        handler: handler as ExtendedToolRuntime['bindings'][number]['handler'],
+      });
+    } else if (handler !== undefined) {
+      throw new Error(`tool dispatcher "${commandName}" cannot have a body implementation`);
+    }
+
+    for (const child of node.subcommands) {
+      const childImplementation = childrenImplementation
+        ? getImplementationProperty(childrenImplementation, child.name)
+        : { found: false as const, value: undefined };
+      if (!childImplementation.found) {
+        throw new Error(`missing implementation for tool command "${commandName} ${child.name}"`);
+      }
+      visit(child, [...commandPath, child.name], childImplementation.value, false);
+    }
+  };
+
+  visit(tool.root, [], implementation, true);
+  return { bindings, subtreeForwards: [] };
+}
+
+function isImplementationObject(value: unknown): value is Record<PropertyKey, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getImplementationProperty(
+  implementation: Record<PropertyKey, unknown>,
+  name: PropertyKey,
+): { readonly found: boolean; readonly value: unknown } {
+  let current: object | null = implementation;
+  while (current !== null && current !== Object.prototype) {
+    if (hasOwn(current, name)) {
+      return {
+        found: true,
+        value: (current as Record<PropertyKey, unknown>)[name],
+      };
+    }
+    current = Object.getPrototypeOf(current) as object | null;
+  }
+  return { found: false, value: undefined };
+}
+
+function isNestedCommandImplementation(value: unknown): value is Record<PropertyKey, unknown> & {
+  readonly [COMMAND_IMPLEMENTATION]: { readonly body: unknown };
+} {
+  if (!isImplementationObject(value) || !(COMMAND_IMPLEMENTATION in value)) return false;
+  const marker = value[COMMAND_IMPLEMENTATION];
+  return isImplementationObject(marker) && hasOwn(marker, 'body');
 }
 
 function emptyCommand(name: string): ExtendedCommandNode {
