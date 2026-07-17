@@ -127,7 +127,7 @@ impl PluginCommandHandler {
             .with_context(|| anyhow!("Failed to decode plugin manifest"))?;
 
         let icon: Base64 = std::fs::read(&manifest.icon)
-            .with_context(|| anyhow!("Failed to read plugin icon: {}", &manifest.icon.display()))?
+            .with_context(|| anyhow!("Failed to read plugin icon: {}", manifest.icon.display()))?
             .into();
 
         {
