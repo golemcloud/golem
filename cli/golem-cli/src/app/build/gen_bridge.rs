@@ -1045,7 +1045,8 @@ mod tests {
 
     #[test]
     fn validate_supported_bridge_targets_rejects_unsupported_guest_languages() {
-        for unsupported_language in [GuestLanguage::TypeScript] {
+        {
+            let unsupported_language = GuestLanguage::TypeScript;
             let targets = vec![bridge_sdk_target_with_mode(
                 "AlphaAgent",
                 unsupported_language,
@@ -1134,7 +1135,8 @@ mod tests {
 
     #[test]
     fn validate_supported_bridge_targets_rejects_unsupported_tool_targets() {
-        for unsupported_language in [GuestLanguage::TypeScript] {
+        {
+            let unsupported_language = GuestLanguage::TypeScript;
             let targets = vec![BridgeSdkTarget {
                 component_name: ComponentName("component".to_string()),
                 kind: BridgeSdkTargetKind::Tool(tool("MyTool")),
