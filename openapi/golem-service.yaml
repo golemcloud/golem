@@ -10550,6 +10550,11 @@ components:
         phantomId:
           type: string
           format: uuid
+        config:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
         methodName:
           type: string
         methodParameters: {}
@@ -10579,6 +10584,8 @@ components:
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
+        idempotencyKey:
+          type: string
         result:
           $ref: '#/components/schemas/TypedSchemaValue'
         componentRevision:
@@ -10586,6 +10593,7 @@ components:
           format: uint64
       required:
       - agentId
+      - idempotencyKey
     AgentMetadataDto:
       title: AgentMetadataDto
       type: object

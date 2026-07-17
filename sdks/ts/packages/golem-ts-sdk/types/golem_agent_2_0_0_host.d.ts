@@ -58,30 +58,33 @@ declare module 'golem:agent/host@2.0.0' {
     constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
     /**
      * Invokes a remote method with the given parameters, and awaits the result.
-     * `input` encodes the method's parameter list; the result is `none` for
-     * a `unit` output and `some(value)` for a `single` output.
+     * `input` encodes the method's parameter list. The returned result is
+     * `none` for a `unit` output and `some(value)` for a `single` output.
      * @throws RpcError
      */
-    invokeAndAwait(methodName: string, input: SchemaValueTree): SchemaValueTree | undefined;
+    invokeAndAwait(methodName: string, input: SchemaValueTree): InvocationResultWithMetadata;
     /**
-     * Triggers the invocation of a remote method with the given parameters, and returns immediately.
+     * Triggers the invocation of a remote method with the given parameters,
+     * and returns its final identity immediately.
      * @throws RpcError
      */
-    invoke(methodName: string, input: SchemaValueTree): void;
+    invoke(methodName: string, input: SchemaValueTree): InvocationMetadata;
     /**
      * Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
-     * be polled for the result.
+     * be polled for the result together with the final invocation identity.
      * With this function it is possible to call multiple (different) agents simultaneously.
      */
-    asyncInvokeAndAwait(methodName: string, input: SchemaValueTree): FutureInvokeResult;
+    asyncInvokeAndAwait(methodName: string, input: SchemaValueTree): AsyncInvocationWithMetadata;
     /**
-     * Schedule invocation for later
+     * Schedules an invocation for later and returns its final identity.
      */
-    scheduleInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree): void;
+    scheduleInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree): ScheduledInvocationReceipt;
     /**
-     * Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
+     * Schedules an invocation for later and returns its final identity and
+     * cancellation capability. Call cancel on the returned resource to
+     * cancel the invocation before the scheduled time.
      */
-    scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree): CancellationToken;
+    scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree): CancelableScheduledInvocationReceipt;
   }
   export class FutureInvokeResult {
     /**
@@ -144,6 +147,41 @@ declare module 'golem:agent/host@2.0.0' {
   {
     tag: 'remote-agent-error'
     val: AgentError
+  };
+  /**
+   * Final identity allocated for one remote invocation. For an ephemeral
+   * target, `agent-id` contains the generated one-shot phantom ID.
+   */
+  export type InvocationMetadata = {
+    agentId: string;
+    idempotencyKey: string;
+  };
+  /**
+   * Result of an awaited invocation together with its final identity.
+   */
+  export type InvocationResultWithMetadata = {
+    metadata: InvocationMetadata;
+    result?: SchemaValueTree;
+  };
+  /**
+   * Receipt returned when an invocation has been scheduled.
+   */
+  export type ScheduledInvocationReceipt = {
+    metadata: InvocationMetadata;
+  };
+  /**
+   * Asynchronous invocation handle together with its final identity.
+   */
+  export type AsyncInvocationWithMetadata = {
+    metadata: InvocationMetadata;
+    future: FutureInvokeResult;
+  };
+  /**
+   * Receipt for a scheduled invocation that can still be cancelled.
+   */
+  export type CancelableScheduledInvocationReceipt = {
+    metadata: InvocationMetadata;
+    cancellationToken: CancellationToken;
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

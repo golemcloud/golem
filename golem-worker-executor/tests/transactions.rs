@@ -842,10 +842,6 @@ async fn idempotency_keys_in_ephemeral_workers(
         .await?;
 
     let agent_id = agent_id!("HostFunctionTests", "idempotency_keys_in_ephemeral_workers");
-    let _worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 

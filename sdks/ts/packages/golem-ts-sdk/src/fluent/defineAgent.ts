@@ -171,10 +171,12 @@ export interface AgentDefinition<
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
 > {
   readonly name: string;
   readonly id: Id;
   readonly methods: Methods;
+  readonly mode: Mode;
   /** The agent's config schema (used by `clientFor` to encode config overrides). */
   readonly config?: Config;
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
@@ -221,14 +223,12 @@ interface AgentSpecBase<
   description?: string;
   /** Optional `prompt-hint`, surfaced as `agent-constructor.prompt-hint`. */
   promptHint?: string;
-  /** Execution mode; defaults to `'durable'`. Surfaced as `agent-type.mode`. */
-  mode?: 'durable' | 'ephemeral';
   /**
    * Other agent definitions this agent depends on. Each is emitted as an
    * `agent-dependency` record built from the dependency's already-registered
    * `AgentType`. The dependency MUST have been `defineAgent`-ed before this one.
    */
-  dependencies?: AgentDefinition<any, any>[];
+  dependencies?: AgentDefinition<any, any, any, any, any>[];
   /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
   snapshotting?: SnapshottingSpec<StateSchema>;
   /**
@@ -239,6 +239,10 @@ interface AgentSpecBase<
    */
   config?: Config;
 }
+
+type AgentModeSpec<Mode extends 'durable' | 'ephemeral'> = {
+  mode?: Mode;
+} & (Mode extends 'ephemeral' ? { mode: 'ephemeral' } : { mode?: 'durable' });
 
 /**
  * HTTP mount for the agent: required when any method declares HTTP endpoints,
@@ -264,7 +268,10 @@ export type AgentSpec<
   MV extends string = keyof Id & string,
   WV extends string = never,
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
-> = AgentSpecBase<Id, Methods, Config, StateSchema> & AgentHttpSpec<Id, Methods, MV, WV>;
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> = AgentSpecBase<Id, Methods, Config, StateSchema> &
+  AgentModeSpec<Mode> &
+  AgentHttpSpec<Id, Methods, MV, WV>;
 
 /**
  * Define an agent. Registers the agent's `AgentType` metadata immediately (so
@@ -297,9 +304,10 @@ export function defineAgent<
   MV extends string = keyof Id & string,
   WV extends string = never,
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
 >(
-  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema>,
-): AgentDefinition<Id, Methods, Config, StateSchema> {
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode> {
   const name = spec.name;
   let registered: RegisteredAgent | undefined;
   try {
@@ -325,6 +333,7 @@ export function defineAgent<
     name,
     id: spec.id,
     methods: spec.methods,
+    mode: spec.mode ?? ('durable' as Mode),
     // Expose the config schema on the def so `clientFor` can encode config
     // overrides for RPC (config-on-RPC); undefined when the agent has no config.
     config: spec.config,

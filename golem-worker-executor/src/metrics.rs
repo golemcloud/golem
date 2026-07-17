@@ -718,7 +718,7 @@ pub mod scheduler {
         match action {
             ScheduledAction::CompletePromise { .. } => "complete_promise",
             ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
-            ScheduledAction::Invoke { .. } => "invoke",
+            ScheduledAction::Invoke { .. } | ScheduledAction::InvokeEphemeral { .. } => "invoke",
             ScheduledAction::Resume { .. } => "resume",
         }
     }
@@ -953,6 +953,7 @@ pub mod resources {
 }
 
 pub mod ephemeral {
+    use golem_common::model::agent::InvocationFreshnessDisposition;
     use lazy_static::lazy_static;
     use prometheus::*;
 
@@ -966,6 +967,27 @@ pub mod ephemeral {
             "ephemeral_non_suspending_failure_total",
             "Number of ephemeral failures that replace suspension",
             &["reason"]
+        )
+        .unwrap();
+        static ref EPHEMERAL_INVOCATION_ATTEMPT_TOTAL: CounterVec = register_counter_vec!(
+            "ephemeral_invocation_attempt_total",
+            "Number of ephemeral invocation attempts by freshness disposition",
+            &["disposition"]
+        )
+        .unwrap();
+        static ref EPHEMERAL_KNOWN_FRESH_VALIDATION_FAILURE_TOTAL: Counter = register_counter!(
+            "ephemeral_known_fresh_validation_failure_total",
+            "Number of rejected KnownFresh invocation requests"
+        )
+        .unwrap();
+        static ref EPHEMERAL_LOWER_OPLOG_EXISTENCE_READ_TOTAL: Counter = register_counter!(
+            "ephemeral_lower_oplog_existence_read_total",
+            "Number of lower oplog existence reads for ephemeral agents"
+        )
+        .unwrap();
+        static ref EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL: Counter = register_counter!(
+            "ephemeral_inactive_invocation_failure_total",
+            "Number of attempts to invoke or resume inactive ephemeral agents"
         )
         .unwrap();
     }
@@ -982,6 +1004,28 @@ pub mod ephemeral {
         EPHEMERAL_NON_SUSPENDING_FAILURE_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_invocation_attempt(disposition: InvocationFreshnessDisposition) {
+        let disposition = match disposition {
+            InvocationFreshnessDisposition::MayExist => "may-exist",
+            InvocationFreshnessDisposition::KnownFresh => "known-fresh",
+        };
+        EPHEMERAL_INVOCATION_ATTEMPT_TOTAL
+            .with_label_values(&[disposition])
+            .inc();
+    }
+
+    pub fn record_known_fresh_validation_failure() {
+        EPHEMERAL_KNOWN_FRESH_VALIDATION_FAILURE_TOTAL.inc();
+    }
+
+    pub fn record_lower_oplog_existence_read() {
+        EPHEMERAL_LOWER_OPLOG_EXISTENCE_READ_TOTAL.inc();
+    }
+
+    pub fn record_inactive_invocation_failure() {
+        EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL.inc();
     }
 }
 

@@ -25,6 +25,8 @@ import {
   Datetime,
   CancellationToken,
   TypedAgentConfigValue,
+  InvocationMetadata,
+  CancelableScheduledInvocationReceipt,
 } from 'golem:agent/host@2.0.0';
 import {
   schemaValueToWit,
@@ -32,6 +34,7 @@ import {
   typedSchemaValueToWit,
   v,
 } from '../internal/schema-model';
+import type { SchemaGraph, SchemaType, SchemaValue } from '../internal/schema-model';
 import { awaitPollable, throwIfAborted } from '../internal/pollableUtils';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from '../uuid';
@@ -61,8 +64,8 @@ type CallerInput<Input extends Record<string, StandardSchemaV1>> = Omit<
   AutoInjectedKeys<Input>
 >;
 
-/** The async remote signature for a method spec (no-arg when caller input is empty). */
-type RemoteMethodFor<M> =
+/** The async remote signature for a durable method spec (no-arg when caller input is empty). */
+type DurableRemoteMethodFor<M> =
   M extends MethodSpec<infer Input, infer Output, boolean>
     ? keyof CallerInput<Input> extends never
       ? {
@@ -80,14 +83,47 @@ type RemoteMethodFor<M> =
         }
     : never;
 
+/** Result of invoking an ephemeral agent, including its per-invocation identity. */
+export interface EphemeralInvocationResult<T> {
+  metadata: InvocationMetadata;
+  value: T;
+}
+
+/** The async remote signature for an ephemeral method spec. */
+type EphemeralRemoteMethodFor<M> =
+  M extends MethodSpec<infer Input, infer Output, boolean>
+    ? keyof CallerInput<Input> extends never
+      ? {
+          (options?: RemoteCallOptions): Promise<EphemeralInvocationResult<Output>>;
+          trigger(): InvocationMetadata;
+          schedule(at: Datetime): CancelableScheduledInvocationReceipt;
+        }
+      : {
+          (
+            input: InferRecord<CallerInput<Input>>,
+            options?: RemoteCallOptions,
+          ): Promise<EphemeralInvocationResult<Output>>;
+          trigger(input: InferRecord<CallerInput<Input>>): InvocationMetadata;
+          schedule(
+            at: Datetime,
+            input: InferRecord<CallerInput<Input>>,
+          ): CancelableScheduledInvocationReceipt;
+        }
+    : never;
+
 /** Options for an awaited remote call. */
 export interface RemoteCallOptions {
   signal?: AbortSignal;
 }
 
 /** A typed remote client: one async method per declared method on the def. */
-export type RemoteClient<Methods extends MethodsRecord> = {
-  [K in keyof Methods]: RemoteMethodFor<Methods[K]>;
+export type RemoteClient<
+  Methods extends MethodsRecord,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> = {
+  [K in keyof Methods]: Mode extends 'ephemeral'
+    ? EphemeralRemoteMethodFor<Methods[K]>
+    : DurableRemoteMethodFor<Methods[K]>;
 };
 
 /** A newly generated phantom client together with its reusable phantom id. */
@@ -98,8 +134,23 @@ export interface PhantomClientDetails<Methods extends MethodsRecord> {
 
 /** Address existing agents or create a fresh phantom agent client. */
 export interface RemoteClientFactory<Id extends IdRecord, Methods extends MethodsRecord> {
-  (id: InferRecord<Id>, phantomId?: Uuid, config?: Record<string, unknown>): RemoteClient<Methods>;
-  newPhantom(id: InferRecord<Id>, config?: Record<string, unknown>): PhantomClientDetails<Methods>;
+  (
+    id: InferRecord<CallerInput<Id>>,
+    phantomId?: Uuid,
+    config?: Record<string, unknown>,
+  ): RemoteClient<Methods>;
+  newPhantom(
+    id: InferRecord<CallerInput<Id>>,
+    config?: Record<string, unknown>,
+  ): PhantomClientDetails<Methods>;
+}
+
+/** Creates logical ephemeral clients whose final identity is allocated per invocation. */
+export interface EphemeralRemoteClientFactory<Id extends IdRecord, Methods extends MethodsRecord> {
+  newPhantom(
+    id: InferRecord<CallerInput<Id>>,
+    config?: Record<string, unknown>,
+  ): RemoteClient<Methods, 'ephemeral'>;
 }
 
 interface NamedCodec {
@@ -122,6 +173,22 @@ function encodeRecord(codecs: NamedCodec[], input: Record<string, unknown>) {
   return schemaValueToWit(v.record(codecs.map((c) => c.codec.toValue(input[c.name]))));
 }
 
+function assertValueMatchesType(value: SchemaValue, type: SchemaType, graph: SchemaGraph): void {
+  let body = type.body;
+  const seenRefs = new Set<string>();
+  while (body.tag === 'ref') {
+    if (seenRefs.has(body.id)) throw new Error(`Cyclic schema reference ${body.id}`);
+    seenRefs.add(body.id);
+    const def = graph.defs.get(body.id);
+    if (!def) throw new Error(`Missing schema definition ${body.id}`);
+    body = def.body.body;
+  }
+
+  if (value.tag !== body.tag) {
+    throw new Error(`Expected schema value ${body.tag}, got ${value.tag}`);
+  }
+}
+
 /** Walk a nested object by path; `present` is false if any segment is missing. */
 function getAtPath(
   obj: Record<string, unknown>,
@@ -129,7 +196,10 @@ function getAtPath(
 ): { present: boolean; value?: unknown } {
   let cur: unknown = obj;
   for (const seg of path) {
-    if (cur === null || typeof cur !== 'object' || !(seg in (cur as Record<string, unknown>))) {
+    if (cur === null || typeof cur !== 'object') {
+      throw new Error(`Expected object while traversing config path ${path.join('.')}`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(cur, seg)) {
       return { present: false };
     }
     cur = (cur as Record<string, unknown>)[seg];
@@ -179,12 +249,16 @@ export function clientFor<
   Methods extends MethodsRecord,
   Config extends ConfigSpec,
   StateSchema extends StandardSchemaV1,
->(def: AgentDefinition<Id, Methods, Config, StateSchema>): RemoteClientFactory<Id, Methods> {
+  Mode extends 'durable' | 'ephemeral',
+>(
+  def: AgentDefinition<Id, Methods, Config, StateSchema, Mode>,
+): Mode extends 'ephemeral'
+  ? EphemeralRemoteClientFactory<Id, Methods>
+  : RemoteClientFactory<Id, Methods> {
   // Compile the def's id + method codecs once (cached in this closure).
-  const idCodecs: NamedCodec[] = Object.keys(def.id).map((k) => ({
-    name: k,
-    codec: compileSchema(def.id[k]),
-  }));
+  const idCodecs: NamedCodec[] = Object.keys(def.id)
+    .map((k) => ({ name: k, codec: compileSchema(def.id[k]) }))
+    .filter((nc) => nc.codec.autoInjected !== 'principal');
   const methodCodecs: CompiledRemoteMethod[] = Object.entries(def.methods).map(([name, spec]) => {
     // Skip auto-injected `s.principal()` params: the callee's host injects the
     // caller principal, so the RPC caller encodes no wire field for them (the
@@ -203,20 +277,31 @@ export function clientFor<
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
 
   const createClient = (
-    id: InferRecord<Id>,
+    id: InferRecord<CallerInput<Id>>,
     phantomId?: Uuid,
     config?: Record<string, unknown>,
-  ): RemoteClient<Methods> => {
+  ): RemoteClient<Methods, Mode> => {
     const constructorTree = encodeRecord(idCodecs, id as Record<string, unknown>);
     const agentId = makeAgentId(def.name, constructorTree, phantomId);
     const agentConfig = config ? encodeConfigOverrides(configDecls, config) : [];
     const wasmRpc = new WasmRpc(def.name, constructorTree, phantomId, agentConfig);
 
     const decodeOutput = (mc: CompiledRemoteMethod, val: unknown): unknown => {
-      if (mc.output.tag === 'unit' || val === undefined) return undefined;
-      return mc.output.codec.fromValue(
-        schemaValueFromWit(val as Parameters<typeof schemaValueFromWit>[0]),
-      );
+      if (mc.output.tag === 'unit') return undefined;
+      if (val === undefined) {
+        throw new RemoteCallError(
+          `Remote agent ${agentId}.${mc.name} returned no value for a non-unit output`,
+        );
+      }
+      try {
+        const decoded = schemaValueFromWit(val as Parameters<typeof schemaValueFromWit>[0]);
+        assertValueMatchesType(decoded, mc.output.codec.graph.root, mc.output.codec.graph);
+        return mc.output.codec.fromValue(decoded);
+      } catch (error) {
+        throw new RemoteCallError(
+          `Remote agent ${agentId}.${mc.name} returned an invalid output: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     };
 
     const client: Record<string, unknown> = {};
@@ -224,7 +309,8 @@ export function clientFor<
       const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
         throwIfAborted(signal);
         const inputTree = encodeRecord(mc.inputCodecs, input);
-        const future = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree);
+        const invocation = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree);
+        const future = invocation.future;
         let onAbort: (() => void) | undefined;
         if (signal) {
           onAbort = () => {
@@ -247,10 +333,13 @@ export function clientFor<
         }
         if (result.tag === 'err') {
           throw new RemoteCallError(
-            `Remote agent ${agentId}.${mc.name} errored: ${JSON.stringify(result.val)}`,
+            `Remote agent ${agentId}.${mc.name} errored: ${JSON.stringify(result.val, (_, value) =>
+              typeof value === 'bigint' ? value.toString() : value,
+            )}`,
           );
         }
-        return decodeOutput(mc, result.val);
+        const value = decodeOutput(mc, result.val);
+        return def.mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
       };
       const methodFn =
         mc.inputCodecs.length === 0
@@ -259,22 +348,34 @@ export function clientFor<
               invoke(input, options?.signal);
       client[mc.name] = Object.assign(methodFn, {
         trigger: (input: Record<string, unknown> = {}) => {
-          wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input));
+          const metadata = wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input));
+          return def.mode === 'ephemeral' ? metadata : undefined;
         },
-        schedule: (at: Datetime, input: Record<string, unknown> = {}) =>
-          wasmRpc.scheduleCancelableInvocation(at, mc.name, encodeRecord(mc.inputCodecs, input)),
+        schedule: (at: Datetime, input: Record<string, unknown> = {}) => {
+          const receipt = wasmRpc.scheduleCancelableInvocation(
+            at,
+            mc.name,
+            encodeRecord(mc.inputCodecs, input),
+          );
+          return def.mode === 'ephemeral' ? receipt : receipt.cancellationToken;
+        },
       });
     }
-    return client as RemoteClient<Methods>;
+    return client as RemoteClient<Methods, Mode>;
   };
 
   createClient.newPhantom = (
-    id: InferRecord<Id>,
+    id: InferRecord<CallerInput<Id>>,
     config?: Record<string, unknown>,
-  ): PhantomClientDetails<Methods> => {
+  ): PhantomClientDetails<Methods> | RemoteClient<Methods, 'ephemeral'> => {
+    if (def.mode === 'ephemeral') {
+      return createClient(id, undefined, config) as RemoteClient<Methods, 'ephemeral'>;
+    }
     const phantomId = Uuid.generate();
-    return { client: createClient(id, phantomId, config), phantomId };
+    return { client: createClient(id, phantomId, config) as RemoteClient<Methods>, phantomId };
   };
 
-  return createClient;
+  return createClient as Mode extends 'ephemeral'
+    ? EphemeralRemoteClientFactory<Id, Methods>
+    : RemoteClientFactory<Id, Methods>;
 }

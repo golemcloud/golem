@@ -14,10 +14,11 @@
 
 use crate::Tracing;
 
-use golem_common::model::AgentId;
+use golem_api_grpc::proto::golem::workerexecutor;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::{AgentId, IdempotencyKey, InvocationStatus};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -60,7 +61,7 @@ async fn agent_self_rpc_is_not_allowed(
         .store()
         .await?;
     let agent_id = agent_id!("SelfRpcAgent", "worker-name");
-    let _worker_id = executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -73,6 +74,26 @@ async fn agent_self_rpc_is_not_allowed(
         err.to_string()
             .contains("RPC calls to the same agent are not supported")
     );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let scope_starts: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.request.is_none() => Some(entry.oplog_index),
+            _ => None,
+        })
+        .collect();
+    for start_index in scope_starts {
+        assert!(
+            oplog.iter().any(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == start_index
+                )
+            }),
+            "durable scope opened at {start_index} was not closed"
+        );
+    }
 
     Ok(())
 }
@@ -285,25 +306,27 @@ async fn ephemeral_agent_works(
         .await?;
 
     let agent_id1 = agent_id!("EphemeralEchoAgent", "param1");
-    let worker_id1 = executor
-        .start_agent(&component.id, agent_id1.clone())
-        .await?;
-
     let agent_id2 = agent_id!("EphemeralEchoAgent", "param2");
-    let worker_id2 = executor
-        .start_agent(&component.id, agent_id2.clone())
-        .await?;
-
-    executor.log_output(&worker_id1).await?;
-    executor.log_output(&worker_id2).await?;
-
+    let idempotency_key = IdempotencyKey::fresh();
     let result1 = executor
-        .invoke_and_await_agent(&component, &agent_id1, "changeAndGet", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id1,
+            &idempotency_key,
+            "changeAndGet",
+            data_value!(),
+        )
         .await?
         .into_typed::<String>()?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component, &agent_id1, "changeAndGet", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id1,
+            &idempotency_key,
+            "changeAndGet",
+            data_value!(),
+        )
         .await?
         .into_typed::<String>()?;
 
@@ -317,11 +340,200 @@ async fn ephemeral_agent_works(
         .await?
         .into_typed::<String>()?;
 
-    // As the agent is ephemeral, no matter how many times we call changeAndGet it always starts from scratch (no additional '!' suffix)
     assert_eq!(result1, "param1!");
     assert_eq!(result2, "param1!");
     assert_eq!(result3, "param2!");
     assert_eq!(result4, "param2!");
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralEchoAgent", "immediate-schedule-retry");
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let initial_result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &logical_agent_id,
+            &idempotency_key,
+            "changeAndGet",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(initial_result, "immediate-schedule-retry!");
+
+    let final_agent_id = logical_agent_id
+        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let worker_id =
+        AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
+
+    executor
+        .client
+        .clone()
+        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+            agent_id: Some(worker_id.into()),
+            method_name: Some("changeAndGet".to_string()),
+            method_parameters: Some(SchemaValue::Tuple { elements: vec![] }.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: None,
+            idempotency_key: Some(idempotency_key.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            context: None,
+            principal: None,
+            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+                as i32,
+            config: Vec::new(),
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let final_agent_id = agent_id!("EphemeralEchoAgent", "unknown-lookup")
+        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let worker_id =
+        AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
+
+    let response = executor
+        .client
+        .clone()
+        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+            agent_id: Some(worker_id.clone().into()),
+            method_name: None,
+            method_parameters: None,
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+            schedule_at: None,
+            idempotency_key: Some(idempotency_key.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            context: None,
+            principal: None,
+            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+                as i32,
+            config: Vec::new(),
+        })
+        .await?
+        .into_inner();
+
+    let success = match response.result {
+        Some(workerexecutor::v1::invoke_agent_response::Result::Success(success)) => success,
+        other => anyhow::bail!("unexpected lookup response: {other:?}"),
+    };
+    assert_eq!(
+        success.status,
+        Some(
+            golem_api_grpc::proto::golem::worker::InvocationStatus::from(InvocationStatus::Unknown,)
+                as i32
+        )
+    );
+    assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let final_agent_id = agent_id!("EphemeralEchoAgent", "scheduled-revision")
+        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let worker_id =
+        AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
+
+    executor
+        .client
+        .clone()
+        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+            agent_id: Some(worker_id.clone().into()),
+            method_name: Some("changeAndGet".to_string()),
+            method_parameters: Some(SchemaValue::Tuple { elements: vec![] }.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: Some(prost_types::Timestamp {
+                seconds: chrono::Utc::now().timestamp() + 3,
+                nanos: 0,
+            }),
+            idempotency_key: Some(idempotency_key.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            context: None,
+            principal: None,
+            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+                as i32,
+            config: Vec::new(),
+        })
+        .await?;
+
+    let updated_component = executor
+        .update_component(&component.id, &constructor_parameter_echo_unnamed.wasm_name)
+        .await?;
+    assert_ne!(component.revision, updated_component.revision);
+
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+
     Ok(())
 }
 
@@ -400,14 +612,22 @@ async fn create_oplog_entry_persists_ephemeral_agent_mode(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("EphemeralEchoAgent", "persistence-test");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let logical_agent_id = agent_id!("EphemeralEchoAgent", "persistence-test");
+    let idempotency_key = IdempotencyKey::fresh();
+    let agent_id = logical_agent_id
+        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
 
     // Trigger an invocation so the worker has actually been instantiated and Create persisted.
     executor
-        .invoke_and_await_agent(&component, &agent_id, "changeAndGet", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "changeAndGet",
+            data_value!(),
+        )
         .await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;

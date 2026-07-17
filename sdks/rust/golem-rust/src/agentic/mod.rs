@@ -36,6 +36,12 @@ pub use unstructured_binary::*;
 pub use unstructured_text::*;
 pub use webhook::*;
 
+#[derive(Debug)]
+pub struct EphemeralInvocationResult<T> {
+    pub metadata: crate::golem_agentic::golem::agent::host::InvocationMetadata,
+    pub value: T,
+}
+
 mod agent;
 mod agent_config;
 mod agent_impl;

@@ -450,7 +450,7 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
     }
     Err(payload47) => {
       mbt_ffi_store8(return_area + 0, 1)
-      __wit_bindgen_lower_t421(return_area + 4, payload47)
+      __wit_bindgen_lower_t420(return_area + 4, payload47)
 
       ()
     }
@@ -1511,7 +1511,7 @@ pub fn wasmExportInvokeGolemAgentGuest(p0 : Int) -> Int {
     }
     Err(payload49) => {
       mbt_ffi_store8(return_area + 0, 1)
-      __wit_bindgen_lower_t421(return_area + 4, payload49)
+      __wit_bindgen_lower_t420(return_area + 4, payload49)
 
       ()
     }
@@ -2176,7 +2176,7 @@ pub fn wasmExportInvokeGolemAgentGuestPostReturn(p0 : Int) -> Unit {
 pub fn wasmExportGetDefinition() -> Int {
   let result : @common.AgentType = get_definition()
   let return_area = mbt_ffi_malloc(176)
-  __wit_bindgen_lower_t418(return_area + 0, result)
+  __wit_bindgen_lower_t417(return_area + 0, result)
   let ret = return_area
   return ret
 }
@@ -3662,7 +3662,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
       for index = 0; index < payload.length(); index = index + 1 {
         let iter_elem : @common.AgentType = payload[index]
         let iter_base = address + index * 176
-        __wit_bindgen_lower_t418(iter_base + 0, iter_elem)
+        __wit_bindgen_lower_t417(iter_base + 0, iter_elem)
       }
       mbt_ffi_store32(return_area + 8, payload.length())
       mbt_ffi_store32(return_area + 4, address)
@@ -3671,7 +3671,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
     }
     Err(payload0) => {
       mbt_ffi_store8(return_area + 0, 1)
-      __wit_bindgen_lower_t421(return_area + 4, payload0)
+      __wit_bindgen_lower_t420(return_area + 4, payload0)
 
       ()
     }
@@ -7415,7 +7415,7 @@ fn __wit_bindgen_lower_t74(ptr : Int, value : @types.TypedSchemaValue) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t377(ptr : Int, value : @common.FieldSource) -> Unit {
+fn __wit_bindgen_lower_t376(ptr : Int, value : @common.FieldSource) -> Unit {
   match value {
     UserSupplied => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -7433,18 +7433,18 @@ fn __wit_bindgen_lower_t377(ptr : Int, value : @common.FieldSource) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t378(ptr : Int, value : @common.NamedField) -> Unit {
+fn __wit_bindgen_lower_t377(ptr : Int, value : @common.NamedField) -> Unit {
   let ptr0 = mbt_ffi_str2ptr(value.name)
   mbt_ffi_store32(ptr + 4, value.name.length())
   mbt_ffi_store32(ptr + 0, ptr0)
-  __wit_bindgen_lower_t377(ptr + 8, value.source)
+  __wit_bindgen_lower_t376(ptr + 8, value.source)
   mbt_ffi_store32(ptr + 12, value.schema)
   __wit_bindgen_lower_t20(ptr + 16, value.metadata)
 }
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t380(ptr : Int, value : @common.InputSchema) -> Unit {
+fn __wit_bindgen_lower_t379(ptr : Int, value : @common.InputSchema) -> Unit {
   match value {
     Parameters(payload) => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -7453,7 +7453,7 @@ fn __wit_bindgen_lower_t380(ptr : Int, value : @common.InputSchema) -> Unit {
       for index = 0; index < payload.length(); index = index + 1 {
         let iter_elem : @common.NamedField = payload[index]
         let iter_base = address + index * 72
-        __wit_bindgen_lower_t378(iter_base + 0, iter_elem)
+        __wit_bindgen_lower_t377(iter_base + 0, iter_elem)
       }
       mbt_ffi_store32(ptr + 8, payload.length())
       mbt_ffi_store32(ptr + 4, address)
@@ -7465,7 +7465,7 @@ fn __wit_bindgen_lower_t380(ptr : Int, value : @common.InputSchema) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t381(ptr : Int, value : @common.OutputSchema) -> Unit {
+fn __wit_bindgen_lower_t380(ptr : Int, value : @common.OutputSchema) -> Unit {
   match value {
     Unit => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -7483,7 +7483,7 @@ fn __wit_bindgen_lower_t381(ptr : Int, value : @common.OutputSchema) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t382(ptr : Int, value : @common.CachePolicy) -> Unit {
+fn __wit_bindgen_lower_t381(ptr : Int, value : @common.CachePolicy) -> Unit {
   match value {
     NoCache => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -7506,14 +7506,14 @@ fn __wit_bindgen_lower_t382(ptr : Int, value : @common.CachePolicy) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t383(ptr : Int, value : @common.ReadOnlyConfig) -> Unit {
-  __wit_bindgen_lower_t382(ptr + 0, value.cache_policy)
+fn __wit_bindgen_lower_t382(ptr : Int, value : @common.ReadOnlyConfig) -> Unit {
+  __wit_bindgen_lower_t381(ptr + 0, value.cache_policy)
   mbt_ffi_store8(ptr + 16, if value.uses_principal { 1 } else { 0 })
 }
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t385(ptr : Int, value : @common.CorsOptions) -> Unit {
+fn __wit_bindgen_lower_t384(ptr : Int, value : @common.CorsOptions) -> Unit {
   let address = mbt_ffi_malloc(value.allowed_patterns.length() * 8)
   for index = 0; index < value.allowed_patterns.length(); index = index + 1 {
     let iter_elem : String = value.allowed_patterns[index]
@@ -7529,7 +7529,7 @@ fn __wit_bindgen_lower_t385(ptr : Int, value : @common.CorsOptions) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t386(ptr : Int, value : @common.HttpMethod) -> Unit {
+fn __wit_bindgen_lower_t385(ptr : Int, value : @common.HttpMethod) -> Unit {
   match value {
     Get => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -7590,7 +7590,7 @@ fn __wit_bindgen_lower_t386(ptr : Int, value : @common.HttpMethod) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t388(ptr : Int, value : @common.PathVariable) -> Unit {
+fn __wit_bindgen_lower_t387(ptr : Int, value : @common.PathVariable) -> Unit {
   let ptr0 = mbt_ffi_str2ptr(value.variable_name)
   mbt_ffi_store32(ptr + 4, value.variable_name.length())
   mbt_ffi_store32(ptr + 0, ptr0)
@@ -7598,7 +7598,7 @@ fn __wit_bindgen_lower_t388(ptr : Int, value : @common.PathVariable) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t389(ptr : Int, value : @common.PathSegment) -> Unit {
+fn __wit_bindgen_lower_t388(ptr : Int, value : @common.PathSegment) -> Unit {
   match value {
     Literal(payload) => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -7617,13 +7617,13 @@ fn __wit_bindgen_lower_t389(ptr : Int, value : @common.PathSegment) -> Unit {
     }
     PathVariable(payload2) => {
       mbt_ffi_store8(ptr + 0, 2)
-      __wit_bindgen_lower_t388(ptr + 4, payload2)
+      __wit_bindgen_lower_t387(ptr + 4, payload2)
 
       ()
     }
     RemainingPathVariable(payload3) => {
       mbt_ffi_store8(ptr + 0, 3)
-      __wit_bindgen_lower_t388(ptr + 4, payload3)
+      __wit_bindgen_lower_t387(ptr + 4, payload3)
 
       ()
     }
@@ -7632,7 +7632,7 @@ fn __wit_bindgen_lower_t389(ptr : Int, value : @common.PathSegment) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t390(ptr : Int, value : @common.HeaderVariable) -> Unit {
+fn __wit_bindgen_lower_t389(ptr : Int, value : @common.HeaderVariable) -> Unit {
   let ptr0 = mbt_ffi_str2ptr(value.header_name)
   mbt_ffi_store32(ptr + 4, value.header_name.length())
   mbt_ffi_store32(ptr + 0, ptr0)
@@ -7644,7 +7644,7 @@ fn __wit_bindgen_lower_t390(ptr : Int, value : @common.HeaderVariable) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t391(ptr : Int, value : @common.QueryVariable) -> Unit {
+fn __wit_bindgen_lower_t390(ptr : Int, value : @common.QueryVariable) -> Unit {
   let ptr0 = mbt_ffi_str2ptr(value.query_param_name)
   mbt_ffi_store32(ptr + 4, value.query_param_name.length())
   mbt_ffi_store32(ptr + 0, ptr0)
@@ -7656,13 +7656,13 @@ fn __wit_bindgen_lower_t391(ptr : Int, value : @common.QueryVariable) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t392(ptr : Int, value : @common.AuthDetails) -> Unit {
+fn __wit_bindgen_lower_t391(ptr : Int, value : @common.AuthDetails) -> Unit {
   mbt_ffi_store8(ptr + 0, if value.required { 1 } else { 0 })
 }
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t395(
+fn __wit_bindgen_lower_t394(
   ptr : Int,
   value : @common.HttpMountDetails,
 ) -> Unit {
@@ -7670,7 +7670,7 @@ fn __wit_bindgen_lower_t395(
   for index = 0; index < value.path_prefix.length(); index = index + 1 {
     let iter_elem : @common.PathSegment = value.path_prefix[index]
     let iter_base = address + index * 12
-    __wit_bindgen_lower_t389(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t388(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 4, value.path_prefix.length())
   mbt_ffi_store32(ptr + 0, address)
@@ -7683,19 +7683,19 @@ fn __wit_bindgen_lower_t395(
     }
     Some(payload0) => {
       mbt_ffi_store8(ptr + 8, 1)
-      __wit_bindgen_lower_t392(ptr + 9, payload0)
+      __wit_bindgen_lower_t391(ptr + 9, payload0)
 
       ()
     }
   }
   mbt_ffi_store8(ptr + 10, if value.phantom_agent { 1 } else { 0 })
-  __wit_bindgen_lower_t385(ptr + 12, value.cors_options)
+  __wit_bindgen_lower_t384(ptr + 12, value.cors_options)
 
   let address1 = mbt_ffi_malloc(value.webhook_suffix.length() * 12)
   for index2 = 0; index2 < value.webhook_suffix.length(); index2 = index2 + 1 {
     let iter_elem : @common.PathSegment = value.webhook_suffix[index2]
     let iter_base = address1 + index2 * 12
-    __wit_bindgen_lower_t389(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t388(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 24, value.webhook_suffix.length())
   mbt_ffi_store32(ptr + 20, address1)
@@ -7703,17 +7703,17 @@ fn __wit_bindgen_lower_t395(
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t398(
+fn __wit_bindgen_lower_t397(
   ptr : Int,
   value : @common.HttpEndpointDetails,
 ) -> Unit {
-  __wit_bindgen_lower_t386(ptr + 0, value.http_method)
+  __wit_bindgen_lower_t385(ptr + 0, value.http_method)
 
   let address = mbt_ffi_malloc(value.path_suffix.length() * 12)
   for index = 0; index < value.path_suffix.length(); index = index + 1 {
     let iter_elem : @common.PathSegment = value.path_suffix[index]
     let iter_base = address + index * 12
-    __wit_bindgen_lower_t389(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t388(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 16, value.path_suffix.length())
   mbt_ffi_store32(ptr + 12, address)
@@ -7722,7 +7722,7 @@ fn __wit_bindgen_lower_t398(
   for index1 = 0; index1 < value.header_vars.length(); index1 = index1 + 1 {
     let iter_elem : @common.HeaderVariable = value.header_vars[index1]
     let iter_base = address0 + index1 * 16
-    __wit_bindgen_lower_t390(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t389(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 24, value.header_vars.length())
   mbt_ffi_store32(ptr + 20, address0)
@@ -7731,7 +7731,7 @@ fn __wit_bindgen_lower_t398(
   for index3 = 0; index3 < value.query_vars.length(); index3 = index3 + 1 {
     let iter_elem : @common.QueryVariable = value.query_vars[index3]
     let iter_base = address2 + index3 * 16
-    __wit_bindgen_lower_t391(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t390(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 32, value.query_vars.length())
   mbt_ffi_store32(ptr + 28, address2)
@@ -7744,17 +7744,17 @@ fn __wit_bindgen_lower_t398(
     }
     Some(payload4) => {
       mbt_ffi_store8(ptr + 36, 1)
-      __wit_bindgen_lower_t392(ptr + 37, payload4)
+      __wit_bindgen_lower_t391(ptr + 37, payload4)
 
       ()
     }
   }
-  __wit_bindgen_lower_t385(ptr + 40, value.cors_options)
+  __wit_bindgen_lower_t384(ptr + 40, value.cors_options)
 }
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t402(ptr : Int, value : @common.AgentMethod) -> Unit {
+fn __wit_bindgen_lower_t401(ptr : Int, value : @common.AgentMethod) -> Unit {
   let ptr0 = mbt_ffi_str2ptr(value.name)
   mbt_ffi_store32(ptr + 4, value.name.length())
   mbt_ffi_store32(ptr + 0, ptr0)
@@ -7767,7 +7767,7 @@ fn __wit_bindgen_lower_t402(ptr : Int, value : @common.AgentMethod) -> Unit {
   for index = 0; index < value.http_endpoint.length(); index = index + 1 {
     let iter_elem : @common.HttpEndpointDetails = value.http_endpoint[index]
     let iter_base = address + index * 48
-    __wit_bindgen_lower_t398(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t397(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 20, value.http_endpoint.length())
   mbt_ffi_store32(ptr + 16, address)
@@ -7788,8 +7788,8 @@ fn __wit_bindgen_lower_t402(ptr : Int, value : @common.AgentMethod) -> Unit {
       ()
     }
   }
-  __wit_bindgen_lower_t380(ptr + 36, value.input_schema)
-  __wit_bindgen_lower_t381(ptr + 48, value.output_schema)
+  __wit_bindgen_lower_t379(ptr + 36, value.input_schema)
+  __wit_bindgen_lower_t380(ptr + 48, value.output_schema)
 
   match value.read_only {
     None => {
@@ -7799,7 +7799,7 @@ fn __wit_bindgen_lower_t402(ptr : Int, value : @common.AgentMethod) -> Unit {
     }
     Some(payload5) => {
       mbt_ffi_store8(ptr + 56, 1)
-      __wit_bindgen_lower_t383(ptr + 64, payload5)
+      __wit_bindgen_lower_t382(ptr + 64, payload5)
 
       ()
     }
@@ -7808,7 +7808,7 @@ fn __wit_bindgen_lower_t402(ptr : Int, value : @common.AgentMethod) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t408(
+fn __wit_bindgen_lower_t407(
   ptr : Int,
   value : @common.AgentConstructor,
 ) -> Unit {
@@ -7849,12 +7849,12 @@ fn __wit_bindgen_lower_t408(
       ()
     }
   }
-  __wit_bindgen_lower_t380(ptr + 32, value.input_schema)
+  __wit_bindgen_lower_t379(ptr + 32, value.input_schema)
 }
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t410(ptr : Int, value : @common.AgentDependency) -> Unit {
+fn __wit_bindgen_lower_t409(ptr : Int, value : @common.AgentDependency) -> Unit {
   let ptr0 = mbt_ffi_str2ptr(value.type_name)
   mbt_ffi_store32(ptr + 4, value.type_name.length())
   mbt_ffi_store32(ptr + 0, ptr0)
@@ -7876,13 +7876,13 @@ fn __wit_bindgen_lower_t410(ptr : Int, value : @common.AgentDependency) -> Unit 
     }
   }
   __wit_bindgen_lower_t56(ptr + 20, value.schema)
-  __wit_bindgen_lower_t408(ptr + 40, value.constructor_)
+  __wit_bindgen_lower_t407(ptr + 40, value.constructor_)
 
   let address = mbt_ffi_malloc(value.methods.length() * 88)
   for index = 0; index < value.methods.length(); index = index + 1 {
     let iter_elem : @common.AgentMethod = value.methods[index]
     let iter_base = address + index * 88
-    __wit_bindgen_lower_t402(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t401(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 88, value.methods.length())
   mbt_ffi_store32(ptr + 84, address)
@@ -7890,7 +7890,7 @@ fn __wit_bindgen_lower_t410(ptr : Int, value : @common.AgentDependency) -> Unit 
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t411(
+fn __wit_bindgen_lower_t410(
   ptr : Int,
   value : @common.SnapshottingConfig,
 ) -> Unit {
@@ -7917,7 +7917,7 @@ fn __wit_bindgen_lower_t411(
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t412(ptr : Int, value : @common.Snapshotting) -> Unit {
+fn __wit_bindgen_lower_t411(ptr : Int, value : @common.Snapshotting) -> Unit {
   match value {
     Disabled => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -7926,7 +7926,7 @@ fn __wit_bindgen_lower_t412(ptr : Int, value : @common.Snapshotting) -> Unit {
     }
     Enabled(payload0) => {
       mbt_ffi_store8(ptr + 0, 1)
-      __wit_bindgen_lower_t411(ptr + 8, payload0)
+      __wit_bindgen_lower_t410(ptr + 8, payload0)
 
       ()
     }
@@ -7935,7 +7935,7 @@ fn __wit_bindgen_lower_t412(ptr : Int, value : @common.Snapshotting) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t414(
+fn __wit_bindgen_lower_t413(
   ptr : Int,
   value : @common.AgentConfigDeclaration,
 ) -> Unit {
@@ -7957,7 +7957,7 @@ fn __wit_bindgen_lower_t414(
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t418(ptr : Int, value : @common.AgentType) -> Unit {
+fn __wit_bindgen_lower_t417(ptr : Int, value : @common.AgentType) -> Unit {
   let ptr0 = mbt_ffi_str2ptr(value.type_name)
   mbt_ffi_store32(ptr + 4, value.type_name.length())
   mbt_ffi_store32(ptr + 0, ptr0)
@@ -7970,13 +7970,13 @@ fn __wit_bindgen_lower_t418(ptr : Int, value : @common.AgentType) -> Unit {
   mbt_ffi_store32(ptr + 20, value.source_language.length())
   mbt_ffi_store32(ptr + 16, ptr2)
   __wit_bindgen_lower_t56(ptr + 24, value.schema)
-  __wit_bindgen_lower_t408(ptr + 44, value.constructor_)
+  __wit_bindgen_lower_t407(ptr + 44, value.constructor_)
 
   let address = mbt_ffi_malloc(value.methods.length() * 88)
   for index = 0; index < value.methods.length(); index = index + 1 {
     let iter_elem : @common.AgentMethod = value.methods[index]
     let iter_base = address + index * 88
-    __wit_bindgen_lower_t402(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t401(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 92, value.methods.length())
   mbt_ffi_store32(ptr + 88, address)
@@ -7985,7 +7985,7 @@ fn __wit_bindgen_lower_t418(ptr : Int, value : @common.AgentType) -> Unit {
   for index4 = 0; index4 < value.dependencies.length(); index4 = index4 + 1 {
     let iter_elem : @common.AgentDependency = value.dependencies[index4]
     let iter_base = address3 + index4 * 92
-    __wit_bindgen_lower_t410(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t409(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 100, value.dependencies.length())
   mbt_ffi_store32(ptr + 96, address3)
@@ -7999,18 +7999,18 @@ fn __wit_bindgen_lower_t418(ptr : Int, value : @common.AgentType) -> Unit {
     }
     Some(payload5) => {
       mbt_ffi_store8(ptr + 108, 1)
-      __wit_bindgen_lower_t395(ptr + 112, payload5)
+      __wit_bindgen_lower_t394(ptr + 112, payload5)
 
       ()
     }
   }
-  __wit_bindgen_lower_t412(ptr + 144, value.snapshotting)
+  __wit_bindgen_lower_t411(ptr + 144, value.snapshotting)
 
   let address6 = mbt_ffi_malloc(value.config.length() * 16)
   for index7 = 0; index7 < value.config.length(); index7 = index7 + 1 {
     let iter_elem : @common.AgentConfigDeclaration = value.config[index7]
     let iter_base = address6 + index7 * 16
-    __wit_bindgen_lower_t414(iter_base + 0, iter_elem)
+    __wit_bindgen_lower_t413(iter_base + 0, iter_elem)
   }
   mbt_ffi_store32(ptr + 172, value.config.length())
   mbt_ffi_store32(ptr + 168, address6)
@@ -8018,7 +8018,7 @@ fn __wit_bindgen_lower_t418(ptr : Int, value : @common.AgentType) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t421(ptr : Int, value : @common.AgentError) -> Unit {
+fn __wit_bindgen_lower_t420(ptr : Int, value : @common.AgentError) -> Unit {
   match value {
     InvalidInput(payload) => {
       mbt_ffi_store8(ptr + 0, 0)
@@ -8066,85 +8066,27 @@ fn __wit_bindgen_lower_t421(ptr : Int, value : @common.AgentError) -> Unit {
 }
 
 ///|
-extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_s)
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
 
 ///|
-extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
-  #|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
-
-///|
-extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
-  #|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
-
-///|
-extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
-  #|(func (param i32) (result f64) local.get 0 f64.load)
-
-///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
+extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
+  #|(func (param i32) (param i32) (result i32)
+  #| local.get 0
+  #| local.get 1 call $moonbit.init_array16
+  #| local.get 0)
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 call $moonbit.decref)
 
 ///|
-extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
-  #|(func (param i32) (result i32) (local i32)
-  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-  #| local.tee 1 i32.const 0 call $moonbit.init_array8
-  #| local.get 1)
-
-///|
-extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
-  #|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
-
-///|
-extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.extend16_s)
-
-///|
 extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.extend8_s)
 
 ///|
-extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
 extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load16_u)
-
-///|
-extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load16_s)
-
-///|
-extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
-  #|(func (param i32) (result f32) local.get 0 f32.load)
-
-///|
-extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
-  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
-
-///|
-extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
-  #|(func (param i32) (result i64) local.get 0 i64.load)
-
-///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
@@ -8154,12 +8096,70 @@ extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
   #| local.get 0)
 
 ///|
+extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
+  #|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
+
+///|
+extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.extend16_s)
+
+///|
+extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
+  #|(func (param i32) (result i32) (local i32)
+  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
+  #| local.tee 1 i32.const 0 call $moonbit.init_array8
+  #| local.get 1)
+
+///|
+extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
+  #|(func (param i32) (result i64) local.get 0 i64.load)
+
+///|
+extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
+  #|(func (param i32) (result f32) local.get 0 f32.load)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
+  #|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
 extern "wasm" fn mbt_ffi_store16(offset : Int, value : Int) =
   #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store16)
 
 ///|
-extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
-  #|(func (param i32) (param i32) (result i32)
-  #| local.get 0
-  #| local.get 1 call $moonbit.init_array16
-  #| local.get 0)
+extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+
+///|
+extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_s)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
+  #|(func (param i32) (result f64) local.get 0 f64.load)
+
+///|
+extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load16_s)
+
+///|
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
+  #|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
