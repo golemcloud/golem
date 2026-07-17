@@ -22,6 +22,7 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::moonbit::moonbit::{
     to_moonbit_constructor_ident, to_moonbit_term_ident, unique_idents, unique_idents_with_reserved,
 };
+use golem_cli::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use golem_cli::bridge_gen::moonbit::{
     MoonBitBridgeGenerator, MoonBitBridgeMode, MoonBitTypeName, emit_schema_graph_literal,
 };
@@ -35,11 +36,16 @@ use golem_common::schema::schema_type::{
     PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, SecretSpec,
     TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
+use golem_common::schema::tool::{
+    CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind, Formatter,
+    Globals, Positional, Positionals, ResultSpec as ToolResultSpec, StreamSpec, Tool,
+};
 use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
 use golem_common::schema::{
-    AgentTypeSchema, MetadataEnvelope, ResultSpec, Role, SchemaGraph, SchemaType,
+    AgentTypeSchema, MetadataEnvelope, ResultSpec, Role, SchemaGraph, SchemaType, SchemaTypeDef,
+    TypeId,
 };
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -148,6 +154,210 @@ fn generated_files(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)>
     files
 }
 
+fn moon_check_wasm(path: &std::path::Path) {
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(path)
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "moon check failed in {}:\nstdout:\n{}\nstderr:\n{}",
+        path.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn tool_doc(summary: &str) -> Doc {
+    Doc {
+        summary: summary.to_string(),
+        description: String::new(),
+        examples: vec![],
+    }
+}
+
+fn empty_tool_body() -> CommandBody {
+    CommandBody {
+        positionals: Positionals::default(),
+        options: vec![],
+        flags: vec![],
+        constraints: vec![],
+        stdin: None,
+        stdout: None,
+        result: None,
+        errors: vec![],
+        annotations: None,
+    }
+}
+
+fn tool_positional(name: &str, type_: SchemaType) -> Positional {
+    Positional {
+        name: name.to_string(),
+        doc: tool_doc(name),
+        value_name: None,
+        type_,
+        default: None,
+        required: true,
+        accepts_stdio: false,
+    }
+}
+
+fn tool_node(name: &str) -> CommandNode {
+    CommandNode {
+        name: name.to_string(),
+        aliases: vec![],
+        doc: tool_doc(name),
+        globals: Globals::default(),
+        subcommands: vec![],
+        body: None,
+    }
+}
+
+fn phase_eight_tool() -> Tool {
+    let recursive_id = TypeId::new("phase-eight.Recursive");
+    let tuple_8 = SchemaType::tuple(vec![SchemaType::string(); 8]);
+    let tuple_9 = SchemaType::tuple(vec![SchemaType::string(); 9]);
+
+    let mut root = tool_node("new");
+    root.subcommands = vec![CommandIndex(1), CommandIndex(2), CommandIndex(3)];
+    root.body = Some(CommandBody {
+        positionals: Positionals {
+            fixed: vec![
+                tool_positional(
+                    "text",
+                    unstructured_text_schema_type(TextRestrictions {
+                        languages: Some(vec!["en".into(), "de".into()]),
+                        ..Default::default()
+                    }),
+                ),
+                tool_positional("items", SchemaType::list(SchemaType::string())),
+                tool_positional(
+                    "fixed-items",
+                    SchemaType::fixed_list(SchemaType::string(), 2),
+                ),
+                tool_positional("empty-tuple", SchemaType::tuple(vec![])),
+                tool_positional(
+                    "single-tuple",
+                    SchemaType::tuple(vec![SchemaType::string()]),
+                ),
+                tool_positional("tuple-eight", tuple_8),
+                tool_positional("tuple-nine", tuple_9),
+                tool_positional(
+                    "path",
+                    SchemaType::path(PathSpec {
+                        direction: PathDirection::InOut,
+                        kind: PathKind::Any,
+                        allowed_mime_types: None,
+                        allowed_extensions: None,
+                    }),
+                ),
+                tool_positional("url", SchemaType::url(UrlRestrictions::default())),
+                tool_positional("datetime", SchemaType::datetime()),
+                tool_positional("duration", SchemaType::duration()),
+                tool_positional("recursive", SchemaType::ref_to(recursive_id.clone())),
+            ],
+            tail: None,
+        },
+        stdin: Some(StreamSpec {
+            doc: tool_doc("stdin"),
+            mime: vec!["text/plain".into()],
+            required: false,
+        }),
+        stdout: Some(StreamSpec {
+            doc: tool_doc("stdout"),
+            mime: vec!["text/plain".into()],
+            required: false,
+        }),
+        result: Some(ToolResultSpec {
+            type_: SchemaType::string(),
+            doc: tool_doc("result"),
+            formatters: vec![Formatter {
+                name: "text".into(),
+                doc: tool_doc("text"),
+            }],
+            default_formatter: "text".into(),
+        }),
+        errors: vec![
+            ErrorCase {
+                name: "error".into(),
+                doc: tool_doc("text error"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "error".into(),
+                doc: tool_doc("restricted text error"),
+                kind: ErrorKind::UsageError,
+                exit_code: 2,
+                payload: Some(unstructured_text_schema_type(TextRestrictions {
+                    languages: Some(vec!["fr".into()]),
+                    ..Default::default()
+                })),
+            },
+        ],
+        ..empty_tool_body()
+    });
+
+    let mut required_streams = tool_node("drop");
+    required_streams.body = Some(CommandBody {
+        stdin: Some(StreamSpec {
+            doc: tool_doc("stdin"),
+            mime: vec![],
+            required: true,
+        }),
+        stdout: Some(StreamSpec {
+            doc: tool_doc("stdout"),
+            mime: vec![],
+            required: true,
+        }),
+        ..empty_tool_body()
+    });
+
+    let mut result_only = tool_node("client");
+    result_only.body = Some(CommandBody {
+        result: Some(ToolResultSpec {
+            type_: SchemaType::u64(),
+            doc: tool_doc("result"),
+            formatters: vec![],
+            default_formatter: String::new(),
+        }),
+        ..empty_tool_body()
+    });
+
+    let mut optional_stdout = tool_node("new");
+    optional_stdout.body = Some(CommandBody {
+        stdout: Some(StreamSpec {
+            doc: tool_doc("stdout"),
+            mime: vec![],
+            required: false,
+        }),
+        ..empty_tool_body()
+    });
+
+    Tool {
+        version: "1".into(),
+        commands: CommandTree {
+            nodes: vec![root, required_streams, result_only, optional_stdout],
+        },
+        schema: SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: recursive_id.clone(),
+                name: Some("Recursive".into()),
+                body: SchemaType::record(vec![named_field(
+                    "next",
+                    SchemaType::option(SchemaType::ref_to(recursive_id)),
+                )]),
+            }],
+            root: SchemaType::record(vec![]),
+        },
+    }
+}
+
 fn counter_agent() -> AgentTypeSchema {
     agent(
         "CounterAgent",
@@ -196,6 +406,70 @@ fn guest_mode_generates_wasm_rpc_project_layout() {
     assert!(!moon_pkg.contains("moonbitlang/async"));
     assert!(!moon_pkg.contains("/runtime"));
     assert!(!moon_pkg.contains("golemcloud/golem_sdk/tool"));
+}
+
+#[test]
+fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut generator = MoonBitToolBridgeGenerator::new(phase_eight_tool(), target, true).unwrap();
+    generator.generate().unwrap();
+
+    let module: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(target.join("moon.mod.json")).unwrap())
+            .unwrap();
+    assert_eq!(module["name"], "new-tool-guest-client");
+    assert_eq!(module["preferred-target"], "wasm");
+    assert!(!target.join("runtime").exists());
+
+    let pkg = std::fs::read_to_string(target.join("client/moon.pkg")).unwrap();
+    let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+    assert!(!pkg.contains("/runtime"));
+    assert!(!source.contains("@runtime"));
+    for expected in [
+        "pub(all) struct NewClient",
+        "pub fn NewClient::new_2(",
+        "pub fn NewClient::drop_2(",
+        "pub fn NewClient::client(",
+        "stdin : @streams.InputStream?",
+        "stdin : @streams.InputStream",
+        "@streams.OutputStream?",
+        "@streams.OutputStream",
+        "pub(all) enum NewError",
+        "Error(String)",
+        "Error_2(UnstructuredText)",
+        "@tool.CanonicalInputModel::{ fields:",
+        "body: @model.FixedList",
+        "body: @model.List",
+        "body: @model.Path",
+        "body: @model.Url",
+        "body: @model.Datetime",
+        "body: @model.Duration",
+        "\"phase-eight.Recursive\"",
+        "[\"en\", \"de\"]",
+        "[\"fr\"]",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+
+    std::fs::create_dir(target.join("consumer")).unwrap();
+    std::fs::write(
+        target.join("consumer/moon.pkg"),
+        "import {\n  \"new-tool-guest-client/client\" @client,\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        target.join("consumer/consumer.mbt"),
+        r#"pub fn consume() -> Unit {
+  let client = @client.NewClient::new()
+  ignore(client.client())
+  client.drop()
+}
+"#,
+    )
+    .unwrap();
+
+    moon_check_wasm(dir.path());
 }
 
 #[test]
@@ -311,6 +585,26 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     assert!(source.contains("@types.Signed(9L)"));
     assert!(source.contains("Some(\"attempts\")"));
     assert!(!source.contains("typed_config_value"));
+
+    std::fs::create_dir(guest.path().join("consumer")).unwrap();
+    std::fs::write(
+        guest.path().join("consumer/moon.pkg"),
+        "import {\n  \"configured-counter-guest-client/client\" @client,\n  \"golemcloud/golem_sdk/interface/golem/agent/common\" @common,\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        guest.path().join("consumer/consumer.mbt"),
+        r#"pub fn call_provider(name : String) -> Int64 raise @common.AgentError {
+  @client.ConfiguredCounterClient::scoped(
+    name,
+    fn(provider) raise @common.AgentError {
+      provider.read(1)
+    },
+  )
+}
+"#,
+    )
+    .unwrap();
 
     let output = std::process::Command::new("moon")
         .arg("-C")
