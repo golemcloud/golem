@@ -244,6 +244,8 @@ interface IntPin {
   big: boolean;
 }
 
+function intMarker(pin: IntPin & { big: false }, opts?: NumericOpts): MarkerSchema<number>;
+function intMarker(pin: IntPin & { big: true }, opts?: NumericOpts): MarkerSchema<bigint>;
 function intMarker(pin: IntPin, opts?: NumericOpts): MarkerSchema<number | bigint> {
   const { tag, min: typeMin, max: typeMax, big } = pin;
   const kind: BoundKind = tag.startsWith('s') ? 'signed' : 'unsigned';

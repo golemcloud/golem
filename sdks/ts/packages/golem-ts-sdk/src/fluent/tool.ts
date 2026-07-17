@@ -1,0 +1,1023 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import type {
+  CommandAnnotations,
+  Doc,
+  DuplicateKeyPolicy,
+  Formatter,
+  Quantifier,
+  Repetition,
+  StreamSpec,
+} from 'golem:tool/common@0.1.0';
+import type { Principal } from '../principal';
+import {
+  type ExtendedCommandBody,
+  type ExtendedCommandNode,
+  type ExtendedConstraint,
+  type ExtendedErrorCase,
+  type ExtendedGlobals,
+  type ExtendedOptionShape,
+  type ExtendedOptionSpec,
+  type ExtendedRef,
+  type ExtendedResultSpec,
+  ExtendedToolType,
+  codecValue,
+  emptyDoc,
+  emptyGlobals,
+  emptyPositionals,
+  listCodec,
+  normalizeExtendedTool,
+  toolBuildError,
+} from '../internal/tool';
+import { compileSchema } from './schema/adapter';
+import type { FluentCodec } from './schema/codec';
+import type { StandardSchemaV1 } from './schema/standardSchema';
+
+export type CamelCase<Name extends string> = Name extends `${infer Head}-${infer Tail}`
+  ? `${Head}${Capitalize<CamelCase<Tail>>}`
+  : Name;
+
+type Simplify<Value> = { [Key in keyof Value]: Value[Key] } & {};
+type SchemaOutput<Schema extends StandardSchemaV1> = StandardSchemaV1.InferOutput<Schema>;
+type SuccessOutput<Schema extends StandardSchemaV1> = [SchemaOutput<Schema>] extends [void]
+  ? undefined
+  : SchemaOutput<Schema>;
+type StreamPresence = 'none' | 'optional' | 'required';
+declare const TAIL_ARGUMENT: unique symbol;
+
+type AddArgument<Args, Name extends string, Value, Required extends boolean> = Args &
+  (Required extends true
+    ? { [Key in CamelCase<Name>]: Value }
+    : { [Key in CamelCase<Name>]?: Value });
+type TailArgumentKey<Args> = Args extends { readonly [TAIL_ARGUMENT]: infer Key }
+  ? Extract<Key, PropertyKey>
+  : never;
+type ReplaceTailArgument<Args, Name extends string, Value> = Omit<
+  Args,
+  TailArgumentKey<Args> | typeof TAIL_ARGUMENT
+> & { [Key in CamelCase<Name>]: Value } & { readonly [TAIL_ARGUMENT]: CamelCase<Name> };
+type PublicArguments<Args> = Omit<Args, typeof TAIL_ARGUMENT>;
+
+type HasDefault<Options> = Options extends { readonly default: unknown } ? true : false;
+type IsRequired<Options, Default extends boolean> = Options extends {
+  readonly required: infer Required;
+}
+  ? Required extends true
+    ? true
+    : Required extends false
+      ? false
+      : Default
+  : Default;
+type IsRepeatable<Options> = Options extends { readonly repeatable: RepeatableMode } ? true : false;
+type OptionIsRequired<Options> =
+  IsRepeatable<Options> extends true
+    ? true
+    : HasDefault<Options> extends true
+      ? true
+      : IsRequired<Options, false>;
+type PositionalIsRequired<Options> =
+  HasDefault<Options> extends true ? true : IsRequired<Options, true>;
+type FlagValue<Options> = Options extends { readonly kind: 'count-flag' } ? number : boolean;
+type SchemaProducesMap<Schema extends StandardSchemaV1> =
+  SchemaOutput<Schema> extends ReadonlyMap<unknown, unknown>
+    ? true
+    : Schema extends { readonly keyType: unknown; readonly valueType: unknown }
+      ? true
+      : false;
+type OptionValue<Schema extends StandardSchemaV1, Options> =
+  IsRepeatable<Options> extends true
+    ? SchemaProducesMap<Schema> extends true
+      ? SchemaOutput<Schema>
+      : SchemaOutput<Schema>[]
+    : Options extends { readonly optionalScalar: true }
+      ? HasDefault<Options> extends true
+        ? SchemaOutput<Schema>
+        : SchemaOutput<Schema> | undefined
+      : SchemaOutput<Schema>;
+type StreamState<Options> = Options extends { readonly required: true } ? 'required' : 'optional';
+
+export interface ToolBodyModel<
+  Args = {},
+  Success = undefined,
+  Errors = never,
+  Stdin extends StreamPresence = 'none',
+  Stdout extends StreamPresence = 'none',
+> {
+  readonly args: Args;
+  readonly success: Success;
+  readonly errors: Errors;
+  readonly stdin: Stdin;
+  readonly stdout: Stdout;
+}
+
+type AnyToolBodyModel = ToolBodyModel<any, any, any, any, any>;
+
+export interface ToolCommandModel<
+  Name extends string = string,
+  Globals = {},
+  Body extends AnyToolBodyModel | undefined = AnyToolBodyModel | undefined,
+  Children = {},
+> {
+  readonly name: Name;
+  readonly globals: Globals;
+  readonly body: Body;
+  readonly children: Children;
+}
+
+type BodyModelOf<Builder> =
+  Builder extends BodyBuilder<infer Args, infer Success, infer Errors, infer Stdin, infer Stdout>
+    ? ToolBodyModel<Args, Success, Errors, Stdin, Stdout>
+    : never;
+
+export type ToolCommandModelOf<Builder> =
+  Builder extends CommandBuilder<infer Name, infer Globals, infer Body, infer Children, boolean>
+    ? ToolCommandModel<Name, Globals, Body, Children>
+    : never;
+
+type BodyArgs<Body> =
+  Body extends ToolBodyModel<infer Args, unknown, unknown, any, any> ? PublicArguments<Args> : {};
+type BodySuccess<Body> =
+  Body extends ToolBodyModel<unknown, infer Success, unknown, any, any> ? Success : never;
+type BodyErrors<Body> =
+  Body extends ToolBodyModel<unknown, unknown, infer Errors, any, any> ? Errors : never;
+type BodyStdin<Body> =
+  Body extends ToolBodyModel<unknown, unknown, unknown, infer Stdin, any> ? Stdin : 'none';
+type BodyStdout<Body> =
+  Body extends ToolBodyModel<unknown, unknown, unknown, any, infer Stdout> ? Stdout : 'none';
+
+type StreamContextField<
+  Name extends string,
+  Presence extends StreamPresence,
+  Stream,
+> = Presence extends 'required'
+  ? { readonly [Key in Name]: Stream }
+  : Presence extends 'optional'
+    ? { readonly [Key in Name]?: Stream }
+    : {};
+
+export type ToolInvocationContext<
+  Stdin extends StreamPresence = StreamPresence,
+  Stdout extends StreamPresence = StreamPresence,
+> = Simplify<
+  { readonly principal: Principal } & StreamContextField<
+    'stdin',
+    Stdin,
+    ReadableStream<Uint8Array>
+  > &
+    StreamContextField<'stdout', Stdout, WritableStream<Uint8Array>>
+>;
+
+export interface ToolOk<Value> {
+  readonly tag: 'ok';
+  readonly value: Value;
+}
+
+export type ToolErr<Name extends string, Payload = never> = [Payload] extends [never]
+  ? {
+      readonly tag: 'err';
+      readonly name: Name;
+      readonly hasPayload: false;
+      readonly payload?: never;
+    }
+  : {
+      readonly tag: 'err';
+      readonly name: Name;
+      readonly hasPayload: true;
+      readonly payload: Payload;
+    };
+
+export type ToolResult<Success, Errors = never> = ToolOk<Success> | Errors;
+
+export function ok<Value>(value: Value): ToolOk<Value> {
+  return { tag: 'ok', value };
+}
+
+export function err<const Name extends string>(name: Name): ToolErr<Name>;
+export function err<const Name extends string, Payload>(
+  name: Name,
+  payload: Payload,
+): ToolErr<Name, Payload>;
+export function err(name: string, payload?: unknown): ToolErr<string, unknown> | ToolErr<string> {
+  return arguments.length === 1
+    ? { tag: 'err', name, hasPayload: false }
+    : { tag: 'err', name, hasPayload: true, payload };
+}
+
+export type ToolHandler<Args, Success, Errors, Context> = (
+  args: Simplify<Args>,
+  context: Context,
+) => ToolResult<Success, Errors> | Promise<ToolResult<Success, Errors>>;
+
+const COMMAND_IMPLEMENTATION = Symbol('golem.tool.commandImplementation');
+
+export type NestedCommandImplementation<Body, Children> = Children & {
+  readonly [COMMAND_IMPLEMENTATION]: { readonly body: Body };
+};
+
+export function command<const Children extends object>(
+  children: Children,
+): NestedCommandImplementation<undefined, Children>;
+export function command<Body, const Children extends object>(
+  body: Body,
+  children: Children,
+): NestedCommandImplementation<Body, Children>;
+export function command<Body, Children extends object>(
+  bodyOrChildren: Body | Children,
+  maybeChildren?: Children,
+): NestedCommandImplementation<Body | undefined, Children> {
+  const body = maybeChildren === undefined ? undefined : (bodyOrChildren as Body);
+  const children = (maybeChildren === undefined ? bodyOrChildren : maybeChildren) as Children;
+  const result = { ...children } as NestedCommandImplementation<Body | undefined, Children>;
+  Object.defineProperty(result, COMMAND_IMPLEMENTATION, {
+    value: { body },
+    enumerable: false,
+  });
+  return result;
+}
+
+type HandlerFor<Model, Inherited> =
+  Model extends ToolCommandModel<string, infer Globals, infer Body, object>
+    ? Body extends AnyToolBodyModel
+      ? ToolHandler<
+          Inherited & Globals & BodyArgs<Body>,
+          BodySuccess<Body>,
+          BodyErrors<Body>,
+          ToolInvocationContext<BodyStdin<Body>, BodyStdout<Body>>
+        >
+      : never
+    : never;
+
+type ChildImplementations<Children, Inherited> = {
+  [Name in keyof Children]: NodeImplementation<Children[Name], Inherited>;
+};
+
+type NodeImplementation<Model, Inherited> =
+  Model extends ToolCommandModel<string, infer Globals, infer Body, infer Children>
+    ? keyof Children extends never
+      ? Body extends AnyToolBodyModel
+        ? HandlerFor<Model, Inherited>
+        : NestedCommandImplementation<undefined, {}>
+      : Body extends AnyToolBodyModel
+        ? NestedCommandImplementation<
+            HandlerFor<Model, Inherited>,
+            ChildImplementations<Children, Inherited & Globals>
+          >
+        : NestedCommandImplementation<
+            undefined,
+            ChildImplementations<Children, Inherited & Globals>
+          >
+    : never;
+
+type RootImplementation<Model> =
+  Model extends ToolCommandModel<infer Name, infer Globals, infer Body, infer Children>
+    ? Simplify<
+        (Body extends AnyToolBodyModel ? { [Key in Name]: HandlerFor<Model, {}> } : {}) &
+          ChildImplementations<Children, Globals>
+      >
+    : never;
+
+export type ToolImplementation<Definition> = RootImplementation<ToolCommandModelOf<Definition>>;
+
+export type DocInput = string | Partial<Doc>;
+export type RepeatableMode = 'repeated' | 'delimited' | 'either';
+
+interface SurfaceOptions {
+  readonly short?: string;
+  readonly aliases?: readonly string[];
+  readonly doc?: DocInput;
+  readonly env?: string;
+}
+
+interface ValueOptions extends SurfaceOptions {
+  readonly valueName?: string;
+  readonly required?: boolean;
+}
+
+type RepeatableDefault<Value, MapLike extends boolean> = MapLike extends true ? Value : Value[];
+
+export type OptionOptions<
+  Value,
+  MapLike extends boolean = Value extends ReadonlyMap<unknown, unknown> ? true : false,
+> =
+  | (ValueOptions & {
+      readonly repeatable?: undefined;
+      readonly delim?: never;
+      readonly default?: Value;
+      readonly optionalScalar?: boolean;
+      readonly duplicateKeyPolicy?: never;
+    })
+  | (ValueOptions & {
+      readonly repeatable: 'repeated';
+      readonly delim?: never;
+      readonly default?: RepeatableDefault<Value, MapLike>;
+      readonly optionalScalar?: never;
+      readonly duplicateKeyPolicy?: DuplicateKeyPolicy;
+    })
+  | (ValueOptions & {
+      readonly repeatable: 'delimited' | 'either';
+      readonly delim: string;
+      readonly default?: RepeatableDefault<Value, MapLike>;
+      readonly optionalScalar?: never;
+      readonly duplicateKeyPolicy?: DuplicateKeyPolicy;
+    });
+
+export interface PositionalOptions<Value> {
+  readonly doc?: DocInput;
+  readonly valueName?: string;
+  readonly required?: boolean;
+  readonly default?: Value;
+  readonly acceptsStdio?: boolean;
+}
+
+export interface TailOptions {
+  readonly doc?: DocInput;
+  readonly valueName?: string;
+  readonly min?: number;
+  readonly max?: number;
+  readonly separator?: string;
+  readonly verbatim?: boolean;
+  readonly acceptsStdio?: boolean;
+}
+
+interface BooleanFlagOptions extends SurfaceOptions {
+  readonly kind?: 'flag';
+  readonly default?: boolean;
+  readonly negatable?: boolean;
+  readonly max?: never;
+}
+
+interface CountFlagOptions extends SurfaceOptions {
+  readonly kind: 'count-flag';
+  readonly max?: number;
+  readonly default?: never;
+  readonly negatable?: never;
+}
+
+export type FlagOptions = BooleanFlagOptions | CountFlagOptions;
+
+export type GlobalValueOptions<Value, MapLike extends boolean = false> = OptionOptions<
+  Value,
+  MapLike
+> & {
+  readonly kind?: 'option';
+};
+
+export type GlobalFlagOptions = Omit<BooleanFlagOptions, 'kind'> & { readonly kind: 'flag' };
+
+export type GlobalCountFlagOptions = CountFlagOptions;
+
+export interface StreamOptions {
+  readonly doc?: DocInput;
+  readonly mime?: readonly string[];
+  readonly required?: boolean;
+}
+
+export type FormatterInput =
+  | string
+  | ({ readonly name: string } & Partial<Omit<Formatter, 'name'>>);
+
+export interface ReturnsOptions {
+  readonly doc?: DocInput;
+  readonly formatters?: readonly FormatterInput[];
+  readonly defaultFormatter?: string;
+}
+
+interface ErrorOptionsBase {
+  readonly kind: 'usage' | 'runtime';
+  readonly exitCode: number;
+  readonly doc?: DocInput;
+}
+
+export type ErrorOptions<Payload extends StandardSchemaV1 | undefined = undefined> =
+  ErrorOptionsBase & { readonly payload?: Payload };
+
+export type ConstraintRef = ExtendedRef;
+export type ToolConstraint = ExtendedConstraint;
+
+type ConstraintSide = ConstraintRef | readonly ConstraintRef[];
+
+function refs(side: ConstraintSide): readonly ConstraintRef[] {
+  return Array.isArray(side) ? [...side] : [side as ConstraintRef];
+}
+
+export const c = {
+  present(name: string): ConstraintRef {
+    return { tag: 'present', name };
+  },
+  valueIs(name: string, value: unknown): ConstraintRef {
+    return { tag: 'value-is', name, value: { tag: 'deferred', value } };
+  },
+  requiresAll(values: readonly ConstraintRef[]): ToolConstraint {
+    return { tag: 'requires-all', refs: [...values] };
+  },
+  allOrNone(values: readonly ConstraintRef[]): ToolConstraint {
+    return { tag: 'all-or-none', refs: [...values] };
+  },
+  requiresAny(values: readonly ConstraintRef[]): ToolConstraint {
+    return { tag: 'requires-any', refs: [...values] };
+  },
+  mutexGroups(groups: readonly (readonly ConstraintRef[])[]): ToolConstraint {
+    return { tag: 'mutex-groups', groups: groups.map((group) => [...group]) };
+  },
+  implies(options: {
+    readonly lhs: ConstraintSide;
+    readonly rhs: ConstraintSide;
+    readonly lhsQuant?: Quantifier;
+    readonly rhsQuant?: Quantifier;
+  }): ToolConstraint {
+    return {
+      tag: 'implies',
+      lhsQuant: options.lhsQuant ?? 'all',
+      lhs: refs(options.lhs),
+      rhsQuant: options.rhsQuant ?? 'all',
+      rhs: refs(options.rhs),
+    };
+  },
+  forbids(options: {
+    readonly lhs: ConstraintSide;
+    readonly rhs: ConstraintSide;
+    readonly lhsQuant?: Quantifier;
+  }): ToolConstraint {
+    return {
+      tag: 'forbids',
+      lhsQuant: options.lhsQuant ?? 'all',
+      lhs: refs(options.lhs),
+      rhs: refs(options.rhs),
+    };
+  },
+} as const;
+
+export class BodyBuilder<
+  Args = {},
+  Success = undefined,
+  Errors = never,
+  Stdin extends StreamPresence = 'none',
+  Stdout extends StreamPresence = 'none',
+> {
+  private constructor(private readonly value: ExtendedCommandBody) {}
+
+  static start(): BodyBuilder {
+    return new BodyBuilder({
+      positionals: emptyPositionals(),
+      options: [],
+      flags: [],
+      constraints: [],
+      errors: [],
+    });
+  }
+
+  positional<
+    const Name extends string,
+    Schema extends StandardSchemaV1,
+    const Options extends PositionalOptions<SchemaOutput<Schema>> = {},
+  >(
+    name: Name,
+    schema: Schema,
+    options?: Options,
+  ): BodyBuilder<
+    AddArgument<Args, Name, SchemaOutput<Schema>, PositionalIsRequired<Options>>,
+    Success,
+    Errors,
+    Stdin,
+    Stdout
+  > {
+    const codec = compileSchema(schema);
+    const defaultValue = hasOwn(options, 'default')
+      ? codecValue(codec, options?.default)
+      : undefined;
+    return this.next({
+      ...this.value,
+      positionals: {
+        ...this.value.positionals,
+        fixed: [
+          ...this.value.positionals.fixed,
+          {
+            name,
+            doc: normalizeDoc(options?.doc),
+            valueName: options?.valueName,
+            codec,
+            default: defaultValue,
+            required: options?.required ?? true,
+            acceptsStdio: options?.acceptsStdio ?? false,
+          },
+        ],
+      },
+    });
+  }
+
+  tail<const Name extends string, Schema extends StandardSchemaV1>(
+    name: Name,
+    schema: Schema,
+    options: TailOptions = {},
+  ): BodyBuilder<
+    ReplaceTailArgument<Args, Name, SchemaOutput<Schema>[]>,
+    Success,
+    Errors,
+    Stdin,
+    Stdout
+  > {
+    return this.next({
+      ...this.value,
+      positionals: {
+        ...this.value.positionals,
+        tail: {
+          name,
+          doc: normalizeDoc(options.doc),
+          valueName: options.valueName,
+          itemCodec: compileSchema(schema),
+          min: options.min ?? 0,
+          max: options.max,
+          separator: options.separator,
+          verbatim: options.verbatim ?? false,
+          acceptsStdio: options.acceptsStdio ?? false,
+        },
+      },
+    });
+  }
+
+  option<
+    const Name extends string,
+    Schema extends StandardSchemaV1,
+    const Options extends OptionOptions<SchemaOutput<Schema>, SchemaProducesMap<Schema>> = {},
+  >(
+    name: Name,
+    schema: Schema,
+    options?: Options,
+  ): BodyBuilder<
+    AddArgument<Args, Name, OptionValue<Schema, Options>, OptionIsRequired<Options>>,
+    Success,
+    Errors,
+    Stdin,
+    Stdout
+  > {
+    return this.next({
+      ...this.value,
+      options: [...this.value.options, buildOption(name, schema, options)],
+    });
+  }
+
+  flag<const Name extends string, const Options extends FlagOptions = {}>(
+    name: Name,
+    options?: Options,
+  ): BodyBuilder<
+    AddArgument<Args, Name, FlagValue<Options>, true>,
+    Success,
+    Errors,
+    Stdin,
+    Stdout
+  > {
+    return this.next({
+      ...this.value,
+      flags: [...this.value.flags, buildFlag(name, options)],
+    });
+  }
+
+  constraint(constraint: ToolConstraint): BodyBuilder<Args, Success, Errors, Stdin, Stdout> {
+    return this.next({
+      ...this.value,
+      constraints: [...this.value.constraints, constraint],
+    });
+  }
+
+  stdin<const Options extends StreamOptions>(
+    options: Options,
+  ): BodyBuilder<Args, Success, Errors, StreamState<Options>, Stdout> {
+    return this.next({ ...this.value, stdin: buildStream(options) });
+  }
+
+  stdout<const Options extends StreamOptions>(
+    options: Options,
+  ): BodyBuilder<Args, Success, Errors, Stdin, StreamState<Options>> {
+    return this.next({ ...this.value, stdout: buildStream(options) });
+  }
+
+  returns<Schema extends StandardSchemaV1>(
+    schema: Schema,
+    options: ReturnsOptions = {},
+  ): BodyBuilder<Args, SuccessOutput<Schema>, Errors, Stdin, Stdout> {
+    const codec = compileSchema(schema);
+    let result: ExtendedResultSpec | undefined;
+    if (codec.isUnit) {
+      if (options.formatters !== undefined || options.defaultFormatter !== undefined) {
+        toolBuildError('invalid-metadata-value', 'unit tool results cannot declare formatters');
+      }
+    } else {
+      const formatters = (options.formatters ?? ['default']).map(normalizeFormatter);
+      result = {
+        codec,
+        doc: normalizeDoc(options.doc),
+        formatters,
+        defaultFormatter: options.defaultFormatter ?? formatters[0]?.name ?? 'default',
+      };
+    }
+    return this.next({ ...this.value, result });
+  }
+
+  error<const Name extends string>(
+    name: Name,
+    options: ErrorOptions,
+  ): BodyBuilder<Args, Success, Errors | ToolErr<Name>, Stdin, Stdout>;
+  error<const Name extends string, Payload extends StandardSchemaV1>(
+    name: Name,
+    options: ErrorOptions<Payload> & { readonly payload: Payload },
+  ): BodyBuilder<Args, Success, Errors | ToolErr<Name, SchemaOutput<Payload>>, Stdin, Stdout>;
+  error(
+    name: string,
+    options: ErrorOptions<StandardSchemaV1 | undefined>,
+  ): BodyBuilder<Args, Success, Errors | ToolErr<string, unknown>, Stdin, Stdout> {
+    const errorCase: ExtendedErrorCase = {
+      name,
+      doc: normalizeDoc(options.doc),
+      kind: options.kind === 'usage' ? 'usage-error' : 'runtime-error',
+      exitCode: options.exitCode,
+      payloadCodec: options.payload ? compileSchema(options.payload) : undefined,
+    };
+    return this.next({ ...this.value, errors: [...this.value.errors, errorCase] });
+  }
+
+  private next<
+    NextArgs,
+    NextSuccess,
+    NextErrors,
+    NextStdin extends StreamPresence,
+    NextStdout extends StreamPresence,
+  >(
+    value: ExtendedCommandBody,
+  ): BodyBuilder<NextArgs, NextSuccess, NextErrors, NextStdin, NextStdout> {
+    return new BodyBuilder(value);
+  }
+
+  build(): ExtendedCommandBody {
+    return this.value;
+  }
+}
+
+const BUILD_TOOL = Symbol('golem.tool.build');
+
+export class CommandBuilder<
+  Name extends string,
+  Globals = {},
+  Body extends AnyToolBodyModel | undefined = undefined,
+  Children = {},
+  Root extends boolean = false,
+> {
+  private constructor(
+    readonly name: Name,
+    private readonly node: ExtendedCommandNode,
+    private readonly toolVersion: string,
+    private readonly commandAnnotations?: CommandAnnotations,
+  ) {}
+
+  static root<const Name extends string>(
+    name: Name,
+  ): CommandBuilder<Name, {}, undefined, {}, true> {
+    return new CommandBuilder(name, emptyCommand(name), '0.0.0');
+  }
+
+  private static child<const Name extends string>(name: Name): CommandBuilder<Name> {
+    return new CommandBuilder(name, emptyCommand(name), '0.0.0');
+  }
+
+  version(
+    this: CommandBuilder<Name, Globals, Body, Children, true>,
+    version: string,
+  ): CommandBuilder<Name, Globals, Body, Children, true> {
+    return new CommandBuilder(this.name, this.node, version, this.commandAnnotations);
+  }
+
+  doc(doc: DocInput): CommandBuilder<Name, Globals, Body, Children, Root> {
+    return this.next({ ...this.node, doc: normalizeDoc(doc) });
+  }
+
+  aliases(...aliases: readonly string[]): CommandBuilder<Name, Globals, Body, Children, Root> {
+    return this.next({ ...this.node, aliases: [...this.node.aliases, ...aliases] });
+  }
+
+  annotations(
+    annotations: Partial<CommandAnnotations>,
+  ): CommandBuilder<Name, Globals, Body, Children, Root> {
+    return new CommandBuilder(
+      this.name,
+      this.node,
+      this.toolVersion,
+      normalizeAnnotations(annotations),
+    );
+  }
+
+  global<
+    const ArgumentName extends string,
+    Schema extends StandardSchemaV1,
+    const Options extends GlobalValueOptions<SchemaOutput<Schema>, SchemaProducesMap<Schema>> = {},
+  >(
+    name: ArgumentName,
+    schema: Schema,
+    options?: Options,
+  ): CommandBuilder<
+    Name,
+    AddArgument<Globals, ArgumentName, OptionValue<Schema, Options>, OptionIsRequired<Options>>,
+    Body,
+    Children,
+    Root
+  >;
+  global<const ArgumentName extends string, Schema extends StandardSchemaV1<unknown, boolean>>(
+    name: ArgumentName,
+    schema: Schema,
+    options: GlobalFlagOptions,
+  ): CommandBuilder<Name, AddArgument<Globals, ArgumentName, boolean, true>, Body, Children, Root>;
+  global<const ArgumentName extends string, const Options extends GlobalCountFlagOptions>(
+    name: ArgumentName,
+    options: Options,
+  ): CommandBuilder<Name, AddArgument<Globals, ArgumentName, number, true>, Body, Children, Root>;
+  global(
+    name: string,
+    schemaOrOptions: StandardSchemaV1 | GlobalCountFlagOptions,
+    options?: GlobalValueOptions<unknown> | GlobalFlagOptions,
+  ): CommandBuilder<Name, object, Body, Children, Root> {
+    let globals: ExtendedGlobals;
+    if (isStandardSchema(schemaOrOptions)) {
+      if (options?.kind === 'flag') {
+        globals = {
+          ...this.node.globals,
+          flags: [...this.node.globals.flags, buildFlag(name, options)],
+        };
+      } else {
+        globals = {
+          ...this.node.globals,
+          options: [
+            ...this.node.globals.options,
+            buildOption(name, schemaOrOptions, options as GlobalValueOptions<unknown>),
+          ],
+        };
+      }
+    } else {
+      globals = {
+        ...this.node.globals,
+        flags: [...this.node.globals.flags, buildFlag(name, schemaOrOptions)],
+      };
+    }
+    return this.next({ ...this.node, globals });
+  }
+
+  body<Built extends BodyBuilder<any, any, any, any, any>>(
+    build: (body: BodyBuilder) => Built,
+  ): CommandBuilder<Name, Globals, BodyModelOf<Built>, Children, Root> {
+    const body = build(BodyBuilder.start());
+    if (!(body instanceof BodyBuilder)) {
+      toolBuildError('invalid-metadata-value', 'tool body callback must return its body builder');
+    }
+    return this.next({ ...this.node, body: body.build() });
+  }
+
+  command<const ChildName extends string, Built extends CommandBuilder<any, any, any, any, false>>(
+    name: ChildName,
+    build: (command: CommandBuilder<ChildName>) => Built,
+  ): CommandBuilder<
+    Name,
+    Globals,
+    Body,
+    Children & { [Key in ChildName]: ToolCommandModelOf<Built> },
+    Root
+  > {
+    const child = build(CommandBuilder.child(name));
+    if (!(child instanceof CommandBuilder) || child.name !== name) {
+      toolBuildError(
+        'invalid-metadata-value',
+        `tool command callback for "${name}" must return that command's builder`,
+      );
+    }
+    return this.next({
+      ...this.node,
+      subcommands: [...this.node.subcommands, child.finalizeNode()],
+    });
+  }
+
+  private next<NextGlobals, NextBody extends AnyToolBodyModel | undefined, NextChildren>(
+    node: ExtendedCommandNode,
+  ): CommandBuilder<Name, NextGlobals, NextBody, NextChildren, Root> {
+    return new CommandBuilder(this.name, node, this.toolVersion, this.commandAnnotations);
+  }
+
+  private finalizeNode(): ExtendedCommandNode {
+    if (this.commandAnnotations && !this.node.body) {
+      toolBuildError(
+        'invalid-metadata-value',
+        `command "${this.name}" declares annotations but has no body`,
+      );
+    }
+    return this.node.body
+      ? { ...this.node, body: { ...this.node.body, annotations: this.commandAnnotations } }
+      : this.node;
+  }
+
+  [BUILD_TOOL](this: CommandBuilder<Name, Globals, Body, Children, true>): ExtendedToolType {
+    const tool = normalizeExtendedTool(new ExtendedToolType(this.toolVersion, this.finalizeNode()));
+    validateTypeScriptProjection(tool);
+    return tool;
+  }
+}
+
+export type ToolDefinition<
+  Name extends string = string,
+  Globals = {},
+  Body extends AnyToolBodyModel | undefined = undefined,
+  Children = {},
+> = CommandBuilder<Name, Globals, Body, Children, true>;
+
+export function toolDefinition<const Name extends string>(name: Name): ToolDefinition<Name> {
+  return CommandBuilder.root(name);
+}
+
+/** Finalize a fluent definition into the shared extended model used by tool runtime layers. */
+export function getExtendedToolDefinition<Definition extends ToolDefinition>(
+  definition: Definition,
+): ExtendedToolType {
+  return definition[BUILD_TOOL]();
+}
+
+function emptyCommand(name: string): ExtendedCommandNode {
+  return {
+    name,
+    aliases: [],
+    doc: emptyDoc(),
+    globals: emptyGlobals(),
+    subcommands: [],
+  };
+}
+
+function normalizeDoc(input?: DocInput): Doc {
+  if (typeof input === 'string') return { summary: input, description: '', examples: [] };
+  return {
+    summary: input?.summary ?? '',
+    description: input?.description ?? '',
+    examples: input?.examples ? input.examples.map((example) => ({ ...example })) : [],
+  };
+}
+
+function normalizeAnnotations(input: Partial<CommandAnnotations>): CommandAnnotations {
+  return {
+    readOnly: input.readOnly ?? false,
+    destructive: input.destructive ?? true,
+    idempotent: input.idempotent ?? false,
+    openWorld: input.openWorld ?? true,
+  };
+}
+
+function normalizeFormatter(input: FormatterInput): Formatter {
+  return typeof input === 'string'
+    ? { name: input, doc: emptyDoc() }
+    : { name: input.name, doc: normalizeDoc(input.doc) };
+}
+
+function buildStream(options: StreamOptions): StreamSpec {
+  return {
+    doc: normalizeDoc(options.doc),
+    mime: options.mime ? [...options.mime] : [],
+    required: options.required ?? false,
+  };
+}
+
+function buildOption<Schema extends StandardSchemaV1>(
+  name: string,
+  schema: Schema,
+  options: SurfaceOptions & {
+    readonly valueName?: string;
+    readonly required?: boolean;
+    readonly default?: unknown;
+    readonly repeatable?: RepeatableMode;
+    readonly delim?: string;
+    readonly optionalScalar?: boolean;
+    readonly duplicateKeyPolicy?: DuplicateKeyPolicy;
+  } = {},
+): ExtendedOptionSpec {
+  const codec = compileSchema(schema);
+  const shape = buildOptionShape(codec, options);
+  const collectedCodec = shape.tag === 'repeatable-list' ? listCodec(codec) : codec;
+  return {
+    long: name,
+    short: options.short,
+    aliases: options.aliases ? [...options.aliases] : [],
+    doc: normalizeDoc(options.doc),
+    valueName: options.valueName,
+    shape,
+    default: hasOwn(options, 'default') ? codecValue(collectedCodec, options.default) : undefined,
+    required: options.required ?? false,
+    envVar: options.env,
+  };
+}
+
+function buildOptionShape(
+  codec: FluentCodec,
+  options: {
+    readonly repeatable?: RepeatableMode;
+    readonly delim?: string;
+    readonly optionalScalar?: boolean;
+    readonly duplicateKeyPolicy?: DuplicateKeyPolicy;
+  },
+): ExtendedOptionShape {
+  if (options.repeatable) {
+    const repetition = buildRepetition({
+      repeatable: options.repeatable,
+      delim: options.delim,
+    });
+    if (codec.mapValue) {
+      return {
+        tag: 'repeatable-map',
+        repetition,
+        mapCodec: codec,
+        valueCodec: codec.mapValue,
+        duplicateKeyPolicy: options.duplicateKeyPolicy ?? 'reject',
+      };
+    }
+    return { tag: 'repeatable-list', repetition, itemCodec: codec };
+  }
+  return options.optionalScalar ? { tag: 'optional-scalar', codec } : { tag: 'scalar', codec };
+}
+
+function buildRepetition(options: {
+  readonly repeatable: RepeatableMode;
+  readonly delim?: string;
+}): Repetition {
+  if (options.repeatable === 'repeated') return { tag: 'repeated' };
+  if (options.delim === undefined) {
+    toolBuildError(
+      'invalid-metadata-value',
+      `${options.repeatable} repeatable options require a delimiter`,
+    );
+  }
+  return { tag: options.repeatable, val: options.delim };
+}
+
+function buildFlag(name: string, options: FlagOptions | GlobalCountFlagOptions = {}) {
+  return {
+    long: name,
+    short: options.short,
+    aliases: options.aliases ? [...options.aliases] : [],
+    doc: normalizeDoc(options.doc),
+    shape:
+      options.kind === 'count-flag'
+        ? ({ tag: 'count-flag', val: options.max } as const)
+        : ({
+            tag: 'bool-flag',
+            val: {
+              default_: options.default ?? false,
+              negatable: options.negatable ?? false,
+            },
+          } as const),
+    envVar: options.env,
+  };
+}
+
+function isStandardSchema(value: unknown): value is StandardSchemaV1 {
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    '~standard' in value
+  );
+}
+
+function hasOwn(value: object | undefined, key: PropertyKey): boolean {
+  return value !== undefined && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function camelCase(name: string): string {
+  return name.replace(/-([a-z0-9])/g, (_, char: string) => char.toUpperCase());
+}
+
+function validateTypeScriptProjection(tool: ExtendedToolType): void {
+  const visit = (commandNode: ExtendedCommandNode): void => {
+    if (commandNode.body) {
+      const projected = new Map<string, string>();
+      tool.canonicalInputFields(commandNode).forEach((field) => {
+        const key = camelCase(field.name);
+        const previous = projected.get(key);
+        if (previous !== undefined) {
+          toolBuildError(
+            'duplicate-name',
+            `tool arguments "${previous}" and "${field.name}" both project to TypeScript key "${key}"`,
+          );
+        }
+        projected.set(key, field.name);
+      });
+    }
+    commandNode.subcommands.forEach(visit);
+  };
+  if (tool.root.body && tool.root.subcommands.some((child) => child.name === tool.root.name)) {
+    toolBuildError(
+      'duplicate-name',
+      `root body and subcommand both use implementation key "${tool.root.name}"`,
+    );
+  }
+  visit(tool.root);
+}

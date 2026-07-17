@@ -464,7 +464,7 @@ export class ExtendedToolType {
             ? {
                 name: entry.option.long,
                 aliases: entry.option.aliases,
-                codec: optionCollectedCodec(entry.option.shape),
+                codec: canonicalOptionCodec(entry.option),
               }
             : {
                 name: entry.flag.long,
@@ -478,7 +478,7 @@ export class ExtendedToolType {
       ...body.positionals.fixed.map((positional) => ({
         name: positional.name,
         aliases: [],
-        codec: positional.codec,
+        codec: canonicalPositionalCodec(positional),
       })),
       ...(body.positionals.tail
         ? [
@@ -492,7 +492,7 @@ export class ExtendedToolType {
       ...body.options.map((option) => ({
         name: option.long,
         aliases: option.aliases,
-        codec: optionCollectedCodec(option.shape),
+        codec: canonicalOptionCodec(option),
       })),
       ...body.flags.map((flag) => ({
         name: flag.long,
@@ -592,6 +592,39 @@ export function optionCollectedCodec(shape: ExtendedOptionShape): FluentCodec {
     case 'repeatable-map':
       return shape.mapCodec;
   }
+}
+
+function canonicalOptionCodec(option: ExtendedOptionSpec): FluentCodec {
+  const collected = optionCollectedCodec(option.shape);
+  return !option.required && option.default === undefined && !isRepeatable(option.shape)
+    ? optionalCanonicalFieldCodec(collected)
+    : collected;
+}
+
+function canonicalPositionalCodec(positional: ExtendedPositional): FluentCodec {
+  return !positional.required && positional.default === undefined
+    ? optionalCanonicalFieldCodec(positional.codec)
+    : positional.codec;
+}
+
+function isRepeatable(shape: ExtendedOptionShape): boolean {
+  return shape.tag === 'repeatable-list' || shape.tag === 'repeatable-map';
+}
+
+/**
+ * Optional tool arguments keep their declared inner graph but carry an option
+ * value at invocation time. This matches the canonical Rust tool contract and
+ * preserves graph equality when forwarding inherited arguments.
+ */
+export function optionalCanonicalFieldCodec(inner: FluentCodec): FluentCodec {
+  return {
+    graph: inner.graph,
+    toValue: (input) => v.option(input === undefined ? undefined : inner.toValue(input)),
+    fromValue: (input) => {
+      if (input.tag !== 'option') throw new Error('expected an optional tool input value');
+      return input.value === undefined ? undefined : inner.fromValue(input.value);
+    },
+  };
 }
 
 export function optionValueCodec(shape: ExtendedOptionShape): FluentCodec | undefined {

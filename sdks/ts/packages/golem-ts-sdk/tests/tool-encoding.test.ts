@@ -18,6 +18,7 @@ import { z } from 'zod/v4';
 import { compileSchema } from '../src/fluent/schema/adapter';
 import type { FluentCodec } from '../src/fluent/schema/codec';
 import { KeyValue, Path, s } from '../src/fluent/schema/markers';
+import { c, getExtendedToolDefinition, toolDefinition } from '../src/fluent/tool';
 import {
   type ExtendedCommandBody,
   type ExtendedCommandNode,
@@ -492,6 +493,187 @@ function gitFixture(): ExtendedToolType {
 }
 
 describe('extended tool WIT encoding', () => {
+  it('builds canonical tool metadata through the fluent public surface', () => {
+    const definition = toolDefinition('grep')
+      .version('2.0.0')
+      .doc({ summary: 'Search files', description: 'Search files for patterns.' })
+      .aliases('egrep')
+      .global('case-sensitive', z.boolean(), { kind: 'flag', short: 'i' })
+      .global('color', z.enum(['always', 'never', 'auto']), {
+        default: 'auto',
+        env: 'GREP_COLOR',
+      })
+      .annotations({ readOnly: true, idempotent: true })
+      .body((commandBody) =>
+        commandBody
+          .positional('pattern', z.string(), { valueName: 'PATTERN' })
+          .tail('files', Path({ direction: 'input', kind: 'any' }), {
+            acceptsStdio: true,
+          })
+          .option('extra-patterns', z.string(), {
+            short: 'e',
+            repeatable: 'either',
+            delim: ',',
+          })
+          .option('max-count', s.u32({ min: 1 }), { short: 'n' })
+          .flag('number', { short: 'N' })
+          .constraint(
+            c.implies({
+              lhs: c.present('extra-patterns'),
+              rhs: c.present('pattern'),
+            }),
+          )
+          .stdin({ mime: ['*/*'], required: false })
+          .stdout({ mime: ['text/plain'], required: true })
+          .returns(z.array(z.object({ file: z.string(), line: z.number(), text: z.string() })), {
+            formatters: ['human', 'json'],
+            defaultFormatter: 'human',
+          })
+          .error('invalid-pattern', {
+            kind: 'usage',
+            exitCode: 2,
+            payload: z.object({ reason: z.string() }),
+          })
+          .error('no-match', { kind: 'runtime', exitCode: 1 }),
+      )
+      .command('replace', (replace) =>
+        replace
+          .doc('Replace matching text')
+          .body((commandBody) =>
+            commandBody
+              .positional('pattern', z.string())
+              .positional('replacement', z.string())
+              .returns(z.number().int()),
+          ),
+      );
+
+    const encoded = encodeTool(getExtendedToolDefinition(definition));
+    expect(encoded.version).toBe('2.0.0');
+    expect(encoded.commands.nodes.map((node) => node.name)).toEqual(['grep', 'replace']);
+    expect(encoded.commands.nodes[0]).toMatchObject({
+      aliases: ['egrep'],
+      doc: { summary: 'Search files', description: 'Search files for patterns.' },
+      globals: {
+        options: [
+          expect.objectContaining({
+            long: 'color',
+            required: false,
+            envVar: 'GREP_COLOR',
+          }),
+        ],
+        flags: [expect.objectContaining({ long: 'case-sensitive', short: 'i' })],
+      },
+    });
+    const rootBody = encoded.commands.nodes[0].body!;
+    expect(rootBody.positionals.fixed[0]).toMatchObject({
+      name: 'pattern',
+      valueName: 'PATTERN',
+      required: true,
+    });
+    expect(rootBody.positionals.tail).toMatchObject({
+      name: 'files',
+      min: 0,
+      acceptsStdio: true,
+    });
+    expect(rootBody.options.map((option) => [option.long, option.shape.tag])).toEqual([
+      ['extra-patterns', 'repeatable-list'],
+      ['max-count', 'scalar'],
+    ]);
+    expect(rootBody.constraints[0].tag).toBe('implies');
+    expect(rootBody.result?.defaultFormatter).toBe('human');
+    expect(rootBody.errors.map((errorCase) => [errorCase.name, errorCase.kind])).toEqual([
+      ['invalid-pattern', 'usage-error'],
+      ['no-match', 'runtime-error'],
+    ]);
+    expect(rootBody.annotations).toEqual({
+      readOnly: true,
+      destructive: true,
+      idempotent: true,
+      openWorld: true,
+    });
+  });
+
+  it('builds nested dispatchers, map/count globals, all constraints, and unit results', () => {
+    const definition = toolDefinition('git')
+      .command('remote', (remote) =>
+        remote
+          .aliases('rmt')
+          .global('verbose', { kind: 'count-flag', short: 'v', max: 3 })
+          .global('config', KeyValue(z.string()), {
+            short: 'c',
+            repeatable: 'repeated',
+          })
+          .command('set-url', (setUrl) =>
+            setUrl.body((commandBody) =>
+              commandBody
+                .positional('name', z.string())
+                .positional('oldurl', s.url(), { required: false })
+                .option('mode', z.enum(['fetch', 'push']), { optionalScalar: true })
+                .flag('add')
+                .flag('delete')
+                .constraint(c.requiresAll([c.present('name')]))
+                .constraint(c.requiresAny([c.present('add'), c.present('delete')]))
+                .constraint(c.allOrNone([c.present('oldurl'), c.present('mode')]))
+                .constraint(c.mutexGroups([[c.present('add')], [c.present('delete')]]))
+                .constraint(c.forbids({ lhs: c.present('add'), rhs: c.present('delete') }))
+                .constraint(c.requiresAll([c.valueIs('mode', 'fetch')]))
+                .returns(z.void()),
+            ),
+          ),
+      )
+      .global('git-dir', Path({ kind: 'directory' }), { default: '.git' });
+
+    const tool = getExtendedToolDefinition(definition);
+    const encoded = encodeTool(tool);
+    expect(encoded.version).toBe('0.0.0');
+    expect(encoded.commands.nodes.map((node) => node.name)).toEqual(['git', 'remote', 'set-url']);
+    expect(encoded.commands.nodes[1].body).toBeUndefined();
+    expect(encoded.commands.nodes[1].globals.flags[0].shape).toEqual({
+      tag: 'count-flag',
+      val: 3,
+    });
+    expect(encoded.commands.nodes[1].globals.options[0].shape.tag).toBe('repeatable-map');
+    const body = encoded.commands.nodes[2].body!;
+    expect(body.result).toBeUndefined();
+    expect(body.options[0].shape.tag).toBe('optional-scalar');
+    expect(body.constraints.map((constraint) => constraint.tag)).toEqual([
+      'requires-all',
+      'requires-any',
+      'all-or-none',
+      'mutex-groups',
+      'forbids',
+      'requires-all',
+    ]);
+    expect(
+      tool.canonicalInputModel(tool.commandByPath(['remote', 'set-url'])!).decode(
+        tool.canonicalInputModel(tool.commandByPath(['remote', 'set-url'])!).encode({
+          'git-dir': '.git',
+          verbose: 0,
+          config: new Map(),
+          name: 'origin',
+          oldurl: undefined,
+          mode: undefined,
+          add: false,
+          delete: false,
+        }),
+      ),
+    ).toMatchObject({ oldurl: undefined, mode: undefined });
+  });
+
+  it('rejects TypeScript argument-key collisions and annotations on dispatchers', () => {
+    const collision = toolDefinition('collision').body((commandBody) =>
+      commandBody.option('max-1', z.string()).option('max1', z.string()),
+    );
+    const dispatcherAnnotations = toolDefinition('dispatcher').annotations({ readOnly: true });
+
+    expect(() => getExtendedToolDefinition(collision)).toThrowError(
+      expect.objectContaining({ code: 'duplicate-name' }),
+    );
+    expect(() => getExtendedToolDefinition(dispatcherAnnotations)).toThrowError(
+      expect.objectContaining({ code: 'invalid-metadata-value' }),
+    );
+  });
+
   it('encodes the canonical grep model deterministically with compiled codecs', () => {
     const fixture = grepFixture();
     const encoded = encodeTool(fixture);

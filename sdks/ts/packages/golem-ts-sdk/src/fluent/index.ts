@@ -50,6 +50,37 @@ export type { KeyValueOptions, PathOptions, QuantityOptions } from './schema/mar
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { FluentCodec, SchemaWalker } from './schema/codec';
 
+export { c, command, err, ok, toolDefinition } from './tool';
+export type {
+  CamelCase,
+  ConstraintRef,
+  DocInput,
+  ErrorOptions,
+  FlagOptions,
+  FormatterInput,
+  GlobalCountFlagOptions,
+  GlobalFlagOptions,
+  GlobalValueOptions,
+  NestedCommandImplementation,
+  OptionOptions,
+  PositionalOptions,
+  RepeatableMode,
+  ReturnsOptions,
+  StreamOptions,
+  TailOptions,
+  ToolBodyModel,
+  ToolCommandModel,
+  ToolCommandModelOf,
+  ToolConstraint,
+  ToolDefinition,
+  ToolErr,
+  ToolHandler,
+  ToolImplementation,
+  ToolInvocationContext,
+  ToolOk,
+  ToolResult,
+} from './tool';
+
 // wasm-RPC client for calling other agents.
 export { clientFor, RemoteCallError } from './client';
 export type {
