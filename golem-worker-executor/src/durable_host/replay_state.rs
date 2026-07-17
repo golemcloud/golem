@@ -258,16 +258,18 @@ impl ReplayCursor {
                     .map(|r| r.contains(*idx))
                     .unwrap_or(false)
                 {
-                    // If we are in the current skip region, ignore the entry
+                    // If we are in the current skip region, ignore the entry; when this is the last
+                    // entry of the region, look up the next region so later deleted regions are
+                    // skipped too.
+                    if current_next_skip_region
+                        .as_ref()
+                        .map(|r| &r.end == idx)
+                        .unwrap_or(false)
+                    {
+                        current_next_skip_region =
+                            skipped_regions.find_next_deleted_region(idx.next());
+                    }
                     continue;
-                }
-                if current_next_skip_region
-                    .as_ref()
-                    .map(|r| &r.end == idx)
-                    .unwrap_or(false)
-                {
-                    // if we are at the end of the current skip region, find the next one
-                    current_next_skip_region = skipped_regions.find_next_deleted_region(idx.next());
                 }
 
                 update_state(entry, *idx, &mut state);
@@ -355,6 +357,8 @@ impl CursorTx<'_> {
     /// replay correct: a positional reader (a scope/marker consumer, or another call's claim) never
     /// steals a host call's terminal that belongs to a different, concurrently-replaying call — it
     /// drains those to their owners first and only then looks at the next non-terminal entry.
+    /// *Orphan terminals* — `End`/`Cancelled` whose `Start` lies inside a skipped/deleted region —
+    /// are likewise auto-drained (consumed without an awaiter), see [`Self::is_orphan_terminal`].
     ///
     /// On the first non-drainable entry (a non-terminal, or an `End`/`Cancelled` nobody awaits):
     /// - if `condition` matches, it is committed and returned;
@@ -377,6 +381,18 @@ impl CursorTx<'_> {
             if self.is_awaited_terminal(&entry) {
                 // An `End`/`Cancelled` owned by a concurrently-replaying call: commit it and hand it
                 // back to its awaiter, then keep draining. Never returned to this caller.
+                self.commit_consumed_entry(read_idx, &entry).await?;
+                continue;
+            }
+
+            if self.is_orphan_terminal(&entry) {
+                // An `End`/`Cancelled` whose `Start` lies inside a skipped/deleted region (a
+                // jump/revert/fork/snapshot cut between a `Start` and its terminal): nobody can
+                // ever claim or await it, so consume it here and keep draining instead of handing
+                // it to a positional reader as an unexpected entry.
+                debug!(
+                    "Skipping orphan terminal at {read_idx} whose Start lies in a skipped region"
+                );
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 continue;
             }
@@ -413,6 +429,22 @@ impl CursorTx<'_> {
             _ => return false,
         };
         self.st.concurrent_resolver.is_pending(start_index)
+    }
+
+    /// Whether `entry` is an `End`/`Cancelled` whose `start_index` lies inside a skipped/deleted
+    /// region. Such an *orphan terminal* is left behind when a jump/revert/fork/snapshot deletes
+    /// the region containing a call's `Start` but not its terminal. Its `Start` can never be
+    /// claimed (both the positional head consume and the scan-ahead claim jump over deleted
+    /// regions), so no awaiter can ever exist for it; the cursor consumes it like a no-op instead
+    /// of surfacing it to a positional reader as an unexpected entry.
+    fn is_orphan_terminal(&self, entry: &OplogEntry) -> bool {
+        let start_index = match entry {
+            OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
+                *start_index
+            }
+            _ => return false,
+        };
+        self.st.skipped_regions.is_in_deleted_region(start_index)
     }
 
     /// Commits a just-read entry: apply its commit-only side effects, publish the cursor advance,
@@ -653,8 +685,10 @@ impl CursorTx<'_> {
     }
 
     async fn get_out_of_skipped_region(&mut self) {
-        if self.cursor.is_replay() {
-            let update_next_skipped_region = match &self.st.next_skipped_region {
+        // Loop: after jumping a region, the freshly looked-up next region may start immediately
+        // after the jump target (adjacent regions recorded separately), requiring another jump.
+        while self.cursor.is_replay() {
+            match &self.st.next_skipped_region {
                 Some(region) if region.start == (self.cursor.last_replayed_index().next()) => {
                     let target = region.end.next(); // we want to continue reading _after_ the region
                     debug!(
@@ -668,17 +702,17 @@ impl CursorTx<'_> {
                         .last_replayed_index
                         .set(target.previous()); // so we set the last replayed index to the end of the region
 
-                    true
+                    // The lookup must start *after* the just-jumped region: `find_next_deleted_region`
+                    // matches regions starting at-or-after the given index, so looking up from the
+                    // region's own end would re-find a single-entry region (start == end) and leave
+                    // the genuinely next region untracked.
+                    let next = self
+                        .st
+                        .skipped_regions
+                        .find_next_deleted_region(self.cursor.last_replayed_index().next());
+                    self.st.next_skipped_region = next;
                 }
-                _ => false,
-            };
-
-            if update_next_skipped_region {
-                let next = self
-                    .st
-                    .skipped_regions
-                    .find_next_deleted_region(self.cursor.last_replayed_index());
-                self.st.next_skipped_region = next;
+                _ => break,
             }
         }
     }
@@ -2013,8 +2047,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{err}").contains("durable_function_type"),
-            "unexpected error: {err}"
+            format!("{err}").contains("WriteRemote"),
+            "the error must spell out the mismatched expected identity, got: {err}"
         );
         let internal = rs.cursor.state.lock().await;
         assert!(
@@ -3300,13 +3334,163 @@ mod tests {
         }
     }
 
+    /// An `End` whose `Start` lies inside a deleted region (a jump/revert cut between the pair) is
+    /// an *orphan terminal*: the cursor must consume it transparently instead of surfacing it to a
+    /// positional reader, and a later call must still claim and resolve at its true indices.
+    #[test]
+    async fn orphan_end_with_deleted_start_is_skipped() {
+        // [NoOp(1), Start(2), End(2→3), Start(4), End(4→5)] with deleted region [2, 2]: the End at
+        // 3 is orphaned; the kept call (4, 5) must claim and resolve normally across it.
+        let oplog = Arc::new(InMemoryOplog::new());
+        for entry in [
+            noop(),
+            start_now(),
+            end_for(2, 1),
+            start_now(),
+            end_for(4, 2),
+        ] {
+            oplog.add(entry).await;
+        }
+        let oplog: Arc<dyn Oplog> = oplog;
+        let skipped = DeletedRegions::from_regions([OplogRegion {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(2),
+        }]);
+        let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+            .await
+            .expect("failed to build replay state");
+
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            handle.start_idx(),
+            OplogIndex::from_u64(4),
+            "the claim must skip the orphan End and land on the kept Start"
+        );
+        match rs.await_resolution(handle).await.unwrap() {
+            Resolution::Completed { end_idx, .. } => {
+                assert_eq!(end_idx, OplogIndex::from_u64(5))
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert!(rs.is_live());
+    }
+
+    /// A `Cancelled` orphan (its `Start` deleted) is consumed transparently by a positional drain,
+    /// bringing replay to live instead of erroring as an unexpected entry.
+    #[test]
+    async fn orphan_cancelled_with_deleted_start_is_skipped() {
+        // [NoOp(1), Start(2), Cancelled(2→3)] with deleted region [2, 2].
+        let oplog = Arc::new(InMemoryOplog::new());
+        for entry in [noop(), start_now(), cancelled_for(2)] {
+            oplog.add(entry).await;
+        }
+        let oplog: Arc<dyn Oplog> = oplog;
+        let skipped = DeletedRegions::from_regions([OplogRegion {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(2),
+        }]);
+        let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+            .await
+            .expect("failed to build replay state");
+
+        let result = rs.try_get_oplog_entry(|_| false).await.unwrap();
+        assert!(result.is_none());
+        assert!(
+            rs.is_live(),
+            "the orphan Cancelled must be drained, reaching live"
+        );
+    }
+
+    /// A positional reader (`get_oplog_entry`) skips an orphan terminal and returns the next real
+    /// entry instead of surfacing the orphan as an unexpected entry.
+    #[test]
+    async fn positional_reader_skips_orphan_terminal() {
+        // [NoOp(1), Start(2), End(2→3), NoOp(4)] with deleted region [2, 2]: the positional read
+        // must consume the orphan End at 3 and return the NoOp at 4.
+        let oplog = Arc::new(InMemoryOplog::new());
+        for entry in [noop(), start_now(), end_for(2, 1), noop()] {
+            oplog.add(entry).await;
+        }
+        let oplog: Arc<dyn Oplog> = oplog;
+        let skipped = DeletedRegions::from_regions([OplogRegion {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(2),
+        }]);
+        let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+            .await
+            .expect("failed to build replay state");
+
+        let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+        assert_eq!(idx, OplogIndex::from_u64(4));
+        assert!(matches!(entry, OplogEntry::NoOp { .. }));
+        assert!(rs.is_live());
+    }
+
+    /// The inverse partial deletion — the `Start` kept, its terminal inside a deleted region —
+    /// reports `Incomplete` (the caller may re-execute the call), never an error or a hang.
+    #[test]
+    async fn deleted_terminal_reports_incomplete() {
+        // [NoOp(1), Start(2), End(2→3)] with deleted region [3, 3].
+        let oplog = Arc::new(InMemoryOplog::new());
+        for entry in [noop(), start_now(), end_for(2, 1)] {
+            oplog.add(entry).await;
+        }
+        let oplog: Arc<dyn Oplog> = oplog;
+        let skipped = DeletedRegions::from_regions([OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(3),
+        }]);
+        let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+            .await
+            .expect("failed to build replay state");
+
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
+        match rs.await_resolution_outcome(handle).await.unwrap() {
+            ResolutionOutcome::Incomplete => {}
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
+        assert!(rs.is_live());
+    }
+
+    /// How a generated call pair interacts with the deleted regions in
+    /// [`replay_skips_deleted_regions_fuzz`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Deletion {
+        /// Both the `Start` and its terminal are kept.
+        Kept,
+        /// The whole pair lies inside a deleted region (a clean jump/revert cut).
+        Pair,
+        /// Only the `Start` is deleted: its terminal survives as an *orphan terminal* the cursor
+        /// must skip transparently.
+        StartOnly,
+        /// Only the terminal is deleted: the kept `Start` must report `Incomplete`.
+        TerminalOnly,
+    }
+
     /// Seam 1, deleted/jump regions: a randomized generator that records a run of contiguous
-    /// `Start`/`End` call pairs and then marks a random subset of those pairs as belonging to deleted
-    /// oplog regions (as a `Jump`/revert would leave behind). The deleted entries must be skipped by
-    /// the replay cursor entirely — never claimed, never read — and the calls outside the deleted
-    /// regions must still claim at their true indices and resolve. Deleting a leading region exercises
-    /// the construction-time jump; deleting a trailing region exercises the jump-to-target transition
-    /// into live. Seeds are fixed, so any failure reproduces.
+    /// call pairs — each terminating in an `End` or a `Cancelled` — and then marks, per pair,
+    /// either the whole pair, only its `Start`, or only its terminal as belonging to deleted
+    /// oplog regions (as a `Jump`/revert cutting at an arbitrary point would leave behind).
+    /// Deleted entries must be skipped by the replay cursor entirely — never claimed, never
+    /// read; orphan terminals (Start deleted, terminal kept) must be consumed transparently;
+    /// kept `Start`s whose terminal was deleted must report `Incomplete`; and fully kept calls
+    /// must still claim at their true indices and resolve to their recorded terminal. Deleting
+    /// a leading region exercises the construction-time jump; deleting a trailing region
+    /// exercises the jump-to-target transition into live. Seeds are fixed, so any failure
+    /// reproduces.
     #[test]
     async fn replay_skips_deleted_regions_fuzz() {
         use rand::rngs::StdRng;
@@ -3318,30 +3502,52 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(seed);
             let num_calls = rng.random_range(1..=6usize);
 
-            // Contiguous call pairs after the placeholder: [Start, End, Start, End, ...].
+            // Contiguous call pairs after the placeholder: [Start, terminal, Start, terminal, ...],
+            // where each terminal is independently an `End` or a `Cancelled`.
             let mut entries = vec![noop()];
             let mut start_idx = Vec::with_capacity(num_calls);
-            let mut end_idx = Vec::with_capacity(num_calls);
-            let mut deleted = Vec::with_capacity(num_calls);
+            let mut terminal_idx = Vec::with_capacity(num_calls);
+            let mut is_cancelled = Vec::with_capacity(num_calls);
+            let mut deletion = Vec::with_capacity(num_calls);
             let mut nanos = 0u64;
             for _ in 0..num_calls {
                 entries.push(start_now());
                 let si = entries.len() as u64;
-                nanos += 1;
-                entries.push(end_for(si, nanos));
-                let ei = entries.len() as u64;
+                let cancelled = rng.random_bool(0.3);
+                if cancelled {
+                    entries.push(cancelled_for(si));
+                } else {
+                    nanos += 1;
+                    entries.push(end_for(si, nanos));
+                }
+                let ti = entries.len() as u64;
                 start_idx.push(si);
-                end_idx.push(ei);
-                deleted.push(rng.random_bool(0.4));
+                terminal_idx.push(ti);
+                is_cancelled.push(cancelled);
+                deletion.push(match rng.random_range(0..10u32) {
+                    0..=3 => Deletion::Kept,
+                    4..=5 => Deletion::Pair,
+                    6..=7 => Deletion::StartOnly,
+                    _ => Deletion::TerminalOnly,
+                });
             }
 
             // Coalesce the deleted entry indices into contiguous regions.
             let mut deleted_indices: std::collections::BTreeSet<u64> =
                 std::collections::BTreeSet::new();
             for i in 0..num_calls {
-                if deleted[i] {
-                    deleted_indices.insert(start_idx[i]);
-                    deleted_indices.insert(end_idx[i]);
+                match deletion[i] {
+                    Deletion::Kept => {}
+                    Deletion::Pair => {
+                        deleted_indices.insert(start_idx[i]);
+                        deleted_indices.insert(terminal_idx[i]);
+                    }
+                    Deletion::StartOnly => {
+                        deleted_indices.insert(start_idx[i]);
+                    }
+                    Deletion::TerminalOnly => {
+                        deleted_indices.insert(terminal_idx[i]);
+                    }
                 }
             }
             let mut regions = Vec::new();
@@ -3373,10 +3579,11 @@ mod tests {
                 .await
                 .expect("failed to build replay state");
 
-            // Claim only the kept calls, in order; the cursor must jump over every deleted region.
+            // Claim only the calls whose `Start` is kept, in order; the cursor must jump over
+            // every deleted region and transparently consume every orphan terminal.
             let mut handles = Vec::new();
             for i in 0..num_calls {
-                if deleted[i] {
+                if matches!(deletion[i], Deletion::Pair | Deletion::StartOnly) {
                     continue;
                 }
                 let handle = rs
@@ -3395,19 +3602,60 @@ mod tests {
             }
 
             for (i, handle) in handles {
-                match rs
-                    .await_resolution(handle)
-                    .await
-                    .unwrap_or_else(|e| panic!("seed {seed}: await of kept call {i} failed: {e}"))
-                {
-                    Resolution::Completed { end_idx: ei, .. } => assert_eq!(
-                        ei,
-                        OplogIndex::from_u64(end_idx[i]),
-                        "seed {seed}: kept call {i} resolved to the wrong End"
-                    ),
-                    other => panic!("seed {seed}: kept call {i} expected Completed, got {other:?}"),
+                match deletion[i] {
+                    Deletion::Kept => match rs.await_resolution(handle).await.unwrap_or_else(|e| {
+                        panic!("seed {seed}: await of kept call {i} failed: {e}")
+                    }) {
+                        Resolution::Completed { end_idx: ti, .. } if !is_cancelled[i] => {
+                            assert_eq!(
+                                ti,
+                                OplogIndex::from_u64(terminal_idx[i]),
+                                "seed {seed}: kept call {i} resolved to the wrong End"
+                            )
+                        }
+                        Resolution::Cancelled {
+                            cancelled_idx: ti, ..
+                        } if is_cancelled[i] => {
+                            assert_eq!(
+                                ti,
+                                OplogIndex::from_u64(terminal_idx[i]),
+                                "seed {seed}: kept call {i} resolved to the wrong Cancelled"
+                            )
+                        }
+                        other => panic!(
+                            "seed {seed}: kept call {i} (cancelled: {}) resolved to the wrong terminal kind: {other:?}",
+                            is_cancelled[i]
+                        ),
+                    },
+                    Deletion::TerminalOnly => {
+                        match rs
+                            .await_resolution_outcome(handle)
+                            .await
+                            .unwrap_or_else(|e| {
+                                panic!(
+                                    "seed {seed}: await of terminal-deleted call {i} failed: {e}"
+                                )
+                            }) {
+                            ResolutionOutcome::Incomplete => {}
+                            other => panic!(
+                                "seed {seed}: terminal-deleted call {i} expected Incomplete, got {other:?}"
+                            ),
+                        }
+                    }
+                    Deletion::Pair | Deletion::StartOnly => unreachable!(),
                 }
             }
+
+            // Any trailing orphan terminals (a Start-deleted call at the end of the layout) are
+            // only consumed when something drives the cursor: drain and expect no real entry.
+            let trailing = rs
+                .try_get_oplog_entry(|_| false)
+                .await
+                .unwrap_or_else(|e| panic!("seed {seed}: final drain failed: {e}"));
+            assert!(
+                trailing.is_none(),
+                "seed {seed}: final drain unexpectedly returned an entry: {trailing:?}"
+            );
 
             assert!(
                 rs.is_live(),
