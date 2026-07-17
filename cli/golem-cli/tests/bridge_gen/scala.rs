@@ -164,7 +164,7 @@ fn flag(long: &str, shape: FlagShape) -> FlagSpec {
     }
 }
 
-fn grep_tool() -> Tool {
+pub(super) fn grep_tool() -> Tool {
     let color_type = TypeId::from("color-mode");
     let color_ref = SchemaType::ref_to(color_type.clone());
     let mut root = command_node("grep");
@@ -1491,4 +1491,183 @@ fn guest_tool_error_trait_parents_do_not_resolve_to_generated_user_types() {
     let dir = pkg.package_dir();
 
     compile(dir.as_path());
+}
+
+#[test]
+fn tool_generation_result_decoding_compiles() {
+    let mut tool = grep_tool();
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        positionals: Positionals {
+            fixed: vec![positional("decode-result-value", SchemaType::string())],
+            tail: None,
+        },
+        result: Some(ToolResultSpec {
+            type_: SchemaType::string(),
+            doc: doc("result"),
+            formatters: vec![Formatter {
+                name: "json".to_string(),
+                doc: Doc::default(),
+            }],
+            default_formatter: "json".to_string(),
+        }),
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph::empty();
+    let pkg = GeneratedToolPackage::new(tool);
+    let target_path = pkg.package_dir();
+    let status = std::process::Command::new("sbt")
+        .arg("--batch")
+        .arg("compile")
+        .current_dir(&target_path)
+        .status()
+        .expect("failed to run sbt; is it installed?");
+    assert!(status.success(), "sbt compile failed in {target_path}");
+}
+
+#[test]
+fn tool_generation_optional_stdout_compiles_as_optional_result() {
+    let mut tool = grep_tool();
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        stdout: Some(StreamSpec {
+            doc: doc("optional stdout"),
+            mime: vec![],
+            required: false,
+        }),
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph::empty();
+    let pkg = GeneratedToolPackage::new(tool);
+    let target_path = pkg.package_dir();
+    let check_path = target_path
+        .join("src/main/scala/golem/bridge/client/grep/OptionalStdoutCompileCheck.scala");
+    std::fs::write(
+        &check_path,
+        r#"package golem.bridge.client.grep
+
+object OptionalStdoutCompileCheck {
+  private val rpc = new _root_.golem.tool.ToolRpcTransport {
+def invokeAndAwait(
+  commandPath: _root_.scala.List[_root_.scala.Predef.String],
+  input: _root_.golem.schema.TypedSchemaValue,
+  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream]
+): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolInvokeResult]] =
+  _root_.scala.concurrent.Future.successful(
+    _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None, _root_.scala.None))
+  )
+  }
+
+  private val client = new GrepClient(rpc, _root_.scala.collection.immutable.List())
+  val result: _root_.scala.concurrent.Future[
+_root_.scala.Either[
+  _root_.golem.tool.ToolError[_root_.scala.Nothing],
+  _root_.scala.Option[_root_.golem.tool.ToolOutputStream]
+]
+  ] = client.grep()
+}
+"#,
+    )
+    .unwrap();
+
+    let status = std::process::Command::new("sbt")
+        .arg("--batch")
+        .arg("compile")
+        .current_dir(&target_path)
+        .status()
+        .expect("failed to run sbt; is it installed?");
+    assert!(
+        status.success(),
+        "generated optional-stdout tool client did not compile in {target_path}"
+    );
+}
+
+#[test]
+fn tool_generation_infallible_error_type_uses_scala_nothing_when_user_type_is_named_nothing() {
+    let mut tool = grep_tool();
+    let nothing_type = TypeId::from("nothing");
+    tool.commands.nodes[0].globals = Globals::default();
+    tool.commands.nodes[0].subcommands = vec![];
+    tool.commands.nodes[0].body = Some(CommandBody {
+        positionals: Positionals {
+            fixed: vec![positional(
+                "value",
+                SchemaType::ref_to(nothing_type.clone()),
+            )],
+            tail: None,
+        },
+        errors: vec![],
+        ..tool_body()
+    });
+    tool.commands.nodes.truncate(1);
+    tool.schema = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: nothing_type,
+            name: Some("nothing".to_string()),
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "value".to_string(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            }]),
+        }],
+        root: SchemaType::record(vec![]),
+    };
+    let pkg = GeneratedToolPackage::new(tool);
+    let target_path = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        target_path.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
+    )
+    .unwrap();
+    assert!(
+        !source.contains("ToolError[Nothing]"),
+        "generated tool client should use _root_.scala.Nothing:\n{source}"
+    );
+    assert!(source.contains("ToolError[_root_.scala.Nothing]"));
+
+    let check_path =
+        target_path.join("src/main/scala/golem/bridge/client/grep/NothingCompileCheck.scala");
+    std::fs::write(
+        &check_path,
+        r#"package golem.bridge.client.grep
+
+object NothingCompileCheck {
+  private val rpc = new _root_.golem.tool.ToolRpcTransport {
+def invokeAndAwait(
+  commandPath: _root_.scala.List[_root_.scala.Predef.String],
+  input: _root_.golem.schema.TypedSchemaValue,
+  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream]
+): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolInvokeResult]] =
+  _root_.scala.concurrent.Future.successful(
+    _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None, _root_.scala.None))
+  )
+  }
+
+  private val client = new GrepClient(rpc, _root_.scala.collection.immutable.List())
+  val result: _root_.scala.concurrent.Future[
+_root_.scala.Either[
+  _root_.golem.tool.ToolError[_root_.scala.Nothing],
+  _root_.scala.Unit
+]
+  ] = client.grep(Nothing("x"))
+}
+"#,
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("sbt")
+        .arg("--batch")
+        .arg("compile")
+        .current_dir(&target_path)
+        .output()
+        .expect("failed to run sbt; is it installed?");
+    assert!(
+        output.status.success(),
+        "generated infallible tool client should use scala.Nothing, not a generated Nothing type, in {target_path}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
