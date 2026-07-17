@@ -34,7 +34,7 @@ jobs:
         with:
           targets: wasm32-wasip2
 
-      - uses: bytecodealliance/setup-wasi-sdk-action@v1
+      - uses: bytecodealliance/setup-wasi-sdk-action@b2de090b44eb70013ee96b393727d473b35e1728
         with:
           version: "25"
 
