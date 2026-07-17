@@ -33,7 +33,8 @@ use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
 };
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
@@ -42,7 +43,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -1809,6 +1810,235 @@ async fn p3_sleep_suspends_and_resumes(
         .invoke_and_await_agent(&component, &agent_id, "sleep_p3", data_value!(0u64))
         .await?;
     assert!(start.elapsed().as_secs() < 2);
+
+    Ok(())
+}
+
+/// Interrupting a worker while the guest is parked in a live P3 monotonic-clock wait
+/// (`wasi:clocks` `wait-for`) must deliver the interrupt promptly instead of waiting for the
+/// sleep to elapse: the park races the worker's interrupt signal, the durable call is abandoned
+/// (its `Start` stays incomplete for replay) and the event loop unwinds cooperatively with the
+/// interrupt. After resume, the retained invocation replays, re-enters the wait and completes.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn interrupt_while_parked_in_p3_sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    // Keep the parked wait from suspending during the test, so the interrupt must be delivered
+    // to the *parked* host future rather than to an already-suspended worker.
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.wait_suspend_grace = Duration::from_secs(300);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "interrupt-while-parked-in-p3-sleep");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "sleep_p3",
+                    data_value!(15u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Give the guest time to enter the P3 clock wait, then interrupt.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let interrupted_at = Instant::now();
+    executor.interrupt(&worker_id).await?;
+
+    let result = fiber.await?;
+    // If the interrupt were not delivered to the parked wait, the sleep would run to completion
+    // and the invocation would succeed instead.
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("Interrupted via the Golem API"),
+        "Expected interruption error, got: {err_msg}"
+    );
+    assert!(
+        interrupted_at.elapsed() < Duration::from_secs(10),
+        "interrupting a parked P3 sleep must unwind promptly"
+    );
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    // Resuming replays the worker; the retained invocation re-enters the wait and completes
+    // once the originally recorded deadline elapses.
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(60))
+        .await?;
+
+    let start = Instant::now();
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_p3", data_value!(0u64))
+        .await?;
+    assert!(start.elapsed().as_secs() < 2);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// Interrupting a worker while the guest is parked in a live P3 TCP `receive` wait (connected,
+/// but the peer never sends any bytes) must deliver the interrupt promptly: the parked durable
+/// receive task races the worker's interrupt signal, abandons its open chunk child and parent
+/// durable calls (both `Start`s stay incomplete for replay) and unwinds the event loop
+/// cooperatively, closing the socket. After resume, the retained invocation replays: the guest
+/// reconnects live and completes against the now-responding server.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn interrupt_while_parked_in_p3_tcp_receive(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let (connected_tx, mut connected_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (closed_tx, mut closed_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let tcp_server = spawn(
+        async move {
+            let mut first = true;
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let is_first = first;
+                first = false;
+                let connected_tx = connected_tx.clone();
+                let closed_tx = closed_tx.clone();
+                spawn(async move {
+                    if is_first {
+                        // Never send anything; report when the peer closes the connection.
+                        let _ = connected_tx.send(());
+                        let mut byte = [0u8; 1];
+                        let closed = matches!(stream.read(&mut byte).await, Ok(0));
+                        let _ = closed_tx.send(closed);
+                    } else {
+                        let _ = stream.write_all(b"hello").await;
+                        let _ = stream.shutdown().await;
+                    }
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Networking", "interrupt-while-parked-in-p3-tcp-receive");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "tcp_collect_p3",
+                    data_value!(port),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait until the guest has connected, then give it a moment to enter the parked receive
+    // wait before interrupting.
+    tokio::time::timeout(Duration::from_secs(30), connected_rx.recv())
+        .await?
+        .ok_or_else(|| anyhow!("tcp server stopped before the guest connected"))?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    executor.interrupt(&worker_id).await?;
+
+    let result = fiber.await?;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("Interrupted via the Golem API"),
+        "Expected interruption error, got: {err_msg}"
+    );
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), closed_rx.recv())
+            .await?
+            .unwrap_or(false),
+        "interrupting the worker must close the in-flight TCP connection"
+    );
+
+    // Resuming replays the worker; the retained invocation reconnects live and completes
+    // against the now-responding server.
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(&component, &agent_id, "tcp_collect_p3", data_value!(port))
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(result2, Ok("hello".to_string()));
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    tcp_server.abort();
 
     Ok(())
 }

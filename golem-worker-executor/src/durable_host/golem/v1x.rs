@@ -1313,19 +1313,24 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
                 return Err(handle.trap(WorkerExecutorError::runtime(err.clone())));
             }
         };
-        let wait_context = accessor.with(|mut access| {
+        let (wait_context, interrupt) = accessor.with(|mut access| {
             let ctx = access.get();
-            SuspendableWaitContext {
-                wait_id: ctx.state.next_suspendable_wait_id(),
-                agent_mode: ctx.agent_mode(),
-                suspend: ctx.state.config.suspend.clone(),
-                wait_deadline: None,
-                suspendable_waits: ctx.state.suspendable_waits(),
-                wakeup_scheduler: ctx.state.wakeup_scheduler(),
-            }
+            let interrupt = ctx.create_interrupt_signal();
+            (
+                SuspendableWaitContext {
+                    wait_id: ctx.state.next_suspendable_wait_id(),
+                    agent_mode: ctx.agent_mode(),
+                    suspend: ctx.state.config.suspend.clone(),
+                    wait_deadline: None,
+                    suspendable_waits: ctx.state.suspendable_waits(),
+                    wakeup_scheduler: ctx.state.wakeup_scheduler(),
+                },
+                interrupt,
+            )
         });
         let outcome = park_suspendable_wait(
             wait_context,
+            interrupt,
             || {
                 let promise_handle = promise_handle.clone();
                 async move {
@@ -1348,6 +1353,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
             ParkOutcome::Ready => {}
             ParkOutcome::SuspendWorker => {
                 return Err(handle.trap(InterruptKind::Suspend(Timestamp::now_utc())));
+            }
+            ParkOutcome::Interrupted(kind) => {
+                // An interrupt is non-error control flow: abandon the durable call without a
+                // trap context so the error classifies as `TrapType::Interrupt`.
+                handle.abandon_for_trap();
+                return Err(anyhow::Error::from(kind));
             }
             ParkOutcome::EphemeralTooLong {
                 requested_nanos,

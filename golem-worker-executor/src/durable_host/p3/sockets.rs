@@ -19,7 +19,8 @@ use std::task::{Context, Poll};
 use crate::durable_host::TcpSocketStreamDirection;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
 use crate::durable_host::durability::{
-    ClassifiedHostError, DurableCallTrapContext, HostFailureKind, mark_durable_call_trap_context,
+    ClassifiedHostError, DurabilityHost, DurableCallTrapContext, HostFailureKind,
+    mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -1052,7 +1053,7 @@ where
         // Safe park: waiting for the guest to demand the next chunk.
         let demand = activity.park(demand_rx.recv()).await;
 
-        let child =
+        let mut child =
             match CallHandle::<P3SocketsTypesTcpSocketReceiveChunk, NotCancellable>::start_access(
                 accessor,
                 durable_worker_ctx::<Ctx, U>,
@@ -1152,14 +1153,40 @@ where
                 if let Some(permit_tx) = permit_tx.as_ref() {
                     let _ = permit_tx.send(());
                 }
-                match bytes_rx.recv().await {
-                    Some(bytes) => TcpReceiveFrame::Data(Bytes::from(bytes)),
-                    None => {
-                        let result = match socket_result_rx.take() {
-                            Some(rx) => rx.await.unwrap_or(Err(types::ErrorCode::ConnectionBroken)),
-                            None => Ok(()),
-                        };
-                        TcpReceiveFrame::End(result)
+                // This live socket wait can park indefinitely (no bytes may ever
+                // arrive), so it must race the worker's interrupt signal: worker
+                // interruption / the invocation deadline can only unwind the event
+                // loop cooperatively, from within a parked host future.
+                let interrupt = accessor.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+                });
+                let socket_result_rx = &mut socket_result_rx;
+                let read_frame = async {
+                    match bytes_rx.recv().await {
+                        Some(bytes) => TcpReceiveFrame::Data(Bytes::from(bytes)),
+                        None => {
+                            let result = match socket_result_rx.take() {
+                                Some(rx) => {
+                                    rx.await.unwrap_or(Err(types::ErrorCode::ConnectionBroken))
+                                }
+                                None => Ok(()),
+                            };
+                            TcpReceiveFrame::End(result)
+                        }
+                    }
+                };
+                tokio::select! {
+                    frame = read_frame => frame,
+                    kind = interrupt => {
+                        // An interrupt is not a cancellation and not a hard error:
+                        // abandon the open chunk child first, then the parent, so
+                        // neither writes a terminal (both `Start`s stay incomplete
+                        // and re-execute on resume), and unwind the event loop with
+                        // the interrupt kind directly so it classifies as
+                        // `TrapType::Interrupt`.
+                        child.abandon_for_trap();
+                        parent.abandon_for_trap();
+                        return Err(wasmtime::Error::from_anyhow(kind.into()));
                     }
                 }
             };

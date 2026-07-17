@@ -172,6 +172,71 @@ async fn interruption(
     Ok(())
 }
 
+/// A guest invocation exceeding the configured `limits.max_invocation_duration` is aborted and
+/// fails like a trap: no invocation-finished marker is written and normal retry handling
+/// applies. With a single-attempt retry policy the worker ends up `Failed` and the awaiting
+/// client observes the timeout error.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn max_invocation_duration_aborts_long_running_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.limits.max_invocation_duration = Some(Duration::from_secs(2));
+            config.retry = RetryConfig {
+                max_attempts: 1,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(10),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "max-invocation-duration-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // An invocation well under the limit succeeds normally.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    // `interruption` sleeps for ~10 seconds in 100ms steps, well over the 2s limit.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "interruption", data_value!())
+        .await;
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("maximum invocation duration"),
+        "Expected the max invocation duration error, got: {err_msg}"
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("8m")]

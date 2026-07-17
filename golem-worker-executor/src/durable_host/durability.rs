@@ -1274,6 +1274,18 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     }
 
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
+        // The invocation-deadline broadcast only reaches subscribers that already exist, so a
+        // signal created *after* the deadline latched must resolve immediately — otherwise a
+        // park entered post-deadline would never observe the synthetic interrupt.
+        if self
+            .state
+            .invocation_deadline_exceeded
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Box::pin(std::future::ready(InterruptKind::Interrupt(
+                Timestamp::now_utc(),
+            )));
+        }
         self.execution_status
             .read()
             .unwrap()

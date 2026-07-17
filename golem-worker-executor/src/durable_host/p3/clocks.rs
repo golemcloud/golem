@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
     CallHandle, NotCancellable, drain_queued_dropped_call_events,
 };
@@ -202,22 +203,27 @@ async fn wait_until_live<U: Send + 'static, Ctx: WorkerCtx>(
     store: &Accessor<U, DurableP3<Ctx>>,
     when: monotonic_clock::Mark,
 ) -> wasmtime::Result<()> {
-    let context = store.with(|mut access| {
+    let (context, interrupt) = store.with(|mut access| {
         let ctx = super::expect_ctx::<Ctx, U>(access.data_mut()).durable_ctx_mut();
         let now = block_on(monotonic_clock::Host::now(&mut ctx.as_wasi_view().clocks()))?;
         let remaining = remaining_duration(now, when);
-        Ok::<_, wasmtime::Error>(SuspendableWaitContext {
-            wait_id: ctx.state.next_suspendable_wait_id(),
-            agent_mode: ctx.agent_mode(),
-            suspend: ctx.state.config.suspend.clone(),
-            wait_deadline: Some(Utc::now() + chrono::Duration::from_std(remaining).unwrap()),
-            suspendable_waits: ctx.state.suspendable_waits(),
-            wakeup_scheduler: ctx.state.wakeup_scheduler(),
-        })
+        let interrupt = ctx.create_interrupt_signal();
+        Ok::<_, wasmtime::Error>((
+            SuspendableWaitContext {
+                wait_id: ctx.state.next_suspendable_wait_id(),
+                agent_mode: ctx.agent_mode(),
+                suspend: ctx.state.config.suspend.clone(),
+                wait_deadline: Some(Utc::now() + chrono::Duration::from_std(remaining).unwrap()),
+                suspendable_waits: ctx.state.suspendable_waits(),
+                wakeup_scheduler: ctx.state.wakeup_scheduler(),
+            },
+            interrupt,
+        ))
     })?;
 
     let outcome = park_suspendable_wait(
         context,
+        interrupt,
         || async move {
             if let Ok(now) = current_monotonic_now::<U, Ctx>(store) {
                 tokio::time::sleep(remaining_duration(now, when)).await;
@@ -247,6 +253,7 @@ async fn wait_until_live<U: Send + 'static, Ctx: WorkerCtx>(
         ParkOutcome::SuspendWorker => Err(wasmtime::Error::from_anyhow(
             InterruptKind::Suspend(Timestamp::now_utc()).into(),
         )),
+        ParkOutcome::Interrupted(kind) => Err(wasmtime::Error::from_anyhow(kind.into())),
         ParkOutcome::EphemeralTooLong {
             requested_nanos,
             max_nanos,

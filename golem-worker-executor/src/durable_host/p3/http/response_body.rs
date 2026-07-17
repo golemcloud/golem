@@ -22,8 +22,8 @@ use crate::durable_host::concurrent::{
     AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable, DropEvent, NotCancellable,
 };
 use crate::durable_host::durability::{
-    AsyncRetryDecision, DurableCallTrapContext, HostFailureKind, InFunctionRetryState,
-    TaskRetryContext, mark_durable_call_trap_context,
+    AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
+    InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
 };
 use crate::durable_host::http::inline_retry::parse_content_range_start;
 use crate::durable_host::http::types::classify_serializable_http_error_code;
@@ -873,53 +873,78 @@ where
                     }
                 }
             } else {
-                let mut frame = if pending_reissue {
-                    // First live read of a replayed response's placeholder body:
-                    // the durable consume-body scope turned out to be incomplete
-                    // (the original run was interrupted mid-body-stream, so the
-                    // scope claim jumped to live), and the placeholder carries no
-                    // data. Re-issue the recorded request now and stream the
-                    // fresh body instead. This only fires on a real guest demand:
-                    // a dropped stream or a cleanly replaying scope never
-                    // re-issues.
-                    pending_reissue = false;
-                    match resend.as_ref() {
-                        Some(resend) => {
-                            match reissue_recorded_request::<Ctx, U>(accessor, resend).await {
-                                RebuildOutcome::Rebuilt {
-                                    body: fresh_body,
-                                    io_guard,
-                                } => {
-                                    body = fresh_body;
-                                    _rebuild_io_guard = Some(io_guard);
-                                    read_http_body_frame(&mut body).await
-                                }
-                                RebuildOutcome::Failed(code) => HttpBodyFrame::Error(code),
-                                RebuildOutcome::Refused(message) => {
-                                    retry_exempt = true;
-                                    HttpBodyFrame::Error(ErrorCode::InternalError(Some(message)))
+                // Live upstream body reads (including a re-issued request's body) can park
+                // indefinitely waiting for network bytes, so they must race the worker's
+                // interrupt signal: worker interruption / the invocation deadline can only
+                // unwind the event loop cooperatively, from within a parked host future.
+                let interrupt = accessor.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+                });
+                let read_frame = async {
+                    if pending_reissue {
+                        // First live read of a replayed response's placeholder body:
+                        // the durable consume-body scope turned out to be incomplete
+                        // (the original run was interrupted mid-body-stream, so the
+                        // scope claim jumped to live), and the placeholder carries no
+                        // data. Re-issue the recorded request now and stream the
+                        // fresh body instead. This only fires on a real guest demand:
+                        // a dropped stream or a cleanly replaying scope never
+                        // re-issues.
+                        pending_reissue = false;
+                        match resend.as_ref() {
+                            Some(resend) => {
+                                match reissue_recorded_request::<Ctx, U>(accessor, resend).await {
+                                    RebuildOutcome::Rebuilt {
+                                        body: fresh_body,
+                                        io_guard,
+                                    } => {
+                                        body = fresh_body;
+                                        _rebuild_io_guard = Some(io_guard);
+                                        read_http_body_frame(&mut body).await
+                                    }
+                                    RebuildOutcome::Failed(code) => HttpBodyFrame::Error(code),
+                                    RebuildOutcome::Refused(message) => {
+                                        retry_exempt = true;
+                                        HttpBodyFrame::Error(ErrorCode::InternalError(Some(
+                                            message,
+                                        )))
+                                    }
                                 }
                             }
-                        }
-                        None => {
-                            retry_exempt = true;
-                            HttpBodyFrame::Error(ErrorCode::InternalError(Some(
+                            None => {
+                                retry_exempt = true;
+                                HttpBodyFrame::Error(ErrorCode::InternalError(Some(
                                 "cannot rebuild the in-flight p3 HTTP send after a restart: no \
                                  resend information was captured for the replayed response"
                                     .to_string(),
                             )))
+                            }
                         }
-                    }
-                } else if let Some(cancel_rx) = cancel_rx {
-                    tokio::select! {
-                        _ = cancel_rx => {
-                            cancel_ack = read_cancel_ack;
-                            HttpBodyFrame::Cancelled
+                    } else if let Some(cancel_rx) = cancel_rx {
+                        tokio::select! {
+                            _ = cancel_rx => {
+                                cancel_ack = read_cancel_ack;
+                                HttpBodyFrame::Cancelled
+                            }
+                            frame = read_http_body_frame(&mut body) => frame,
                         }
-                        frame = read_http_body_frame(&mut body) => frame,
+                    } else {
+                        read_http_body_frame(&mut body).await
                     }
-                } else {
-                    read_http_body_frame(&mut body).await
+                };
+                let mut frame = tokio::select! {
+                    frame = read_frame => frame,
+                    kind = interrupt => {
+                        // An interrupt is not a cancellation and not a hard error:
+                        // abandon the open chunk child first, then the parent, so
+                        // neither writes a terminal (both `Start`s stay incomplete
+                        // and re-execute on resume), and unwind the event loop with
+                        // the interrupt kind directly so it classifies as
+                        // `TrapType::Interrupt`.
+                        child.abandon_for_trap();
+                        parent.abandon_for_trap();
+                        return Err(wasmtime::Error::from_anyhow(kind.into()));
+                    }
                 };
 
                 // Inline response-body resume, mirroring the P2
@@ -930,10 +955,7 @@ where
                 // seamlessly — no trap, no replay. This runs *before* the
                 // worker-level classification below; only an ineligible or
                 // budget-exhausted failure falls through to it.
-                loop {
-                    let HttpBodyFrame::Error(error_code) = &frame else {
-                        break;
-                    };
+                while let HttpBodyFrame::Error(error_code) = &frame {
                     if retry_exempt {
                         break;
                     }

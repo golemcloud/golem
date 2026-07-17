@@ -429,6 +429,11 @@ where
         let attempt_result = match select(Box::pin(send), interrupt).await {
             Either::Left((result, _)) => result,
             Either::Right((interrupt_kind, _)) => {
+                // An interrupt is not a cancellation: abandon the send call so its `Start` stays
+                // incomplete on disk (re-executed on resume) instead of letting the handle drop
+                // enqueue a spurious `Cancelled` terminal, and propagate the kind directly so it
+                // classifies as `TrapType::Interrupt`.
+                handle.abandon_for_trap();
                 let error: anyhow::Error = interrupt_kind.into();
                 return Err(HttpError::trap(wasmtime::Error::from_anyhow(error)));
             }

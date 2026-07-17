@@ -16,7 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
-use golem_common::model::IdempotencyKey;
+use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -947,6 +947,145 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
         recv_close_event(&mut closed_rx).await?,
         "post-restart cancellation must still close the fresh live request connection"
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+/// Interrupting a worker while the guest is parked in a still-pending P3 HTTP
+/// response wait must deliver the interrupt promptly: the parked send races
+/// the worker's interrupt signal, abandons its durable call handle (leaving
+/// the `Start` incomplete for replay) and unwinds the event loop cooperatively
+/// with the interrupt, aborting the in-flight request. The caller gets the
+/// regular interruption error. After resume, the retained invocation is
+/// retried live and completes against the now-responding server.
+#[test]
+#[tracing::instrument]
+async fn interrupt_while_parked_in_p3_http_response_wait(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
+
+    let http_server = spawn(
+        async move {
+            let mut first = true;
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let is_first = first;
+                first = false;
+                let request_tx = request_tx.clone();
+                let closed_tx = closed_tx.clone();
+                spawn(async move {
+                    if is_first {
+                        // Never respond; report when the peer aborts the request.
+                        let result = async {
+                            let _ = read_request_headers(&mut stream).await?;
+                            let _ = request_tx.send(Ok(()));
+                            wait_for_peer_close(&mut stream).await
+                        }
+                        .await;
+                        let _ = closed_tx.send(result);
+                    } else {
+                        let _ = async {
+                            let _ = read_request_headers(&mut stream).await?;
+                            stream
+                                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nhi")
+                                .await?;
+                            anyhow::Ok(())
+                        }
+                        .await;
+                    }
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "get_and_read_body_chunked",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait until the guest is parked in the pending P3 response wait: the
+    // server has read the request headers but will never respond.
+    recv_request_event(&mut request_rx).await?;
+
+    executor.interrupt(&worker_id).await?;
+
+    let result = fiber.await?;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("Interrupted via the Golem API"),
+        "Expected interruption error, got: {err_msg}"
+    );
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    assert!(
+        recv_close_event(&mut closed_rx).await?,
+        "interrupting the worker must abort the in-flight HTTP request connection"
+    );
+
+    // Resuming the worker retries the interrupted invocation live; the server
+    // responds this time.
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_read_body_chunked",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result2, "200 hi");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

@@ -132,6 +132,13 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     store.data_mut().set_running();
 
+    // Arm the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`).
+    // When it fires, a synthetic interrupt wakes every cooperative host park point and traps
+    // executing wasm via the epoch callback; the resulting `InvokeResult::Interrupted` is
+    // converted below into a typed timeout failure, so the timeout follows the normal
+    // `TrapType::Error` retry handling instead of leaving the worker externally `Interrupted`.
+    let deadline = store.data().durable_ctx().arm_invocation_deadline();
+
     // If the invocation targets a read-only AgentMethod, enable the read-only invocation
     // strictness for the duration of the call. We restore the mode on every exit path:
     // normal `Ok` / `Err` returns from the wasmtime call site as well as panics that
@@ -155,9 +162,59 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         Err(payload) => std::panic::resume_unwind(payload),
     };
 
+    let call_result = apply_invocation_deadline(&mut store, deadline, call_result).await;
+
     store.data().set_suspended();
 
     call_result
+}
+
+/// Converts the synthetic interrupt raised by an exceeded invocation deadline into a typed
+/// timeout failure at the invocation boundary.
+///
+/// The deadline (see [`crate::durable_host::InvocationDeadline`]) wakes cooperative host park
+/// points and the epoch callback through the same signal a real interrupt uses, so the guest
+/// call unwinds as `InvokeResult::Interrupted`. Here — and only here — that synthetic unwind is
+/// replaced with an `InvokeResult::Failed` carrying a timeout error, which flows through the
+/// regular `TrapType::Error` retry handling (no `AgentInvocationFinished` is written and the
+/// invocation is retried per policy — the same contract as a crash).
+///
+/// First cause wins: a genuine external interrupt sets `ExecutionStatus::Interrupting`, which
+/// persists until the invocation settles, so if one arrived the result is left as a real
+/// interrupt even when the deadline also fired.
+async fn apply_invocation_deadline<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    deadline: crate::durable_host::InvocationDeadline,
+    call_result: Result<InvokeResult, WorkerExecutorError>,
+) -> Result<InvokeResult, WorkerExecutorError> {
+    if !deadline.exceeded() || store.data().durable_ctx().is_interrupting() {
+        return call_result;
+    }
+    match call_result {
+        Ok(InvokeResult::Interrupted {
+            consumed_fuel,
+            interrupt_kind: InterruptKind::Interrupt(_),
+        }) => {
+            let retry_from = store.data().get_current_retry_point().await;
+            let in_atomic_region = store.data().current_in_atomic_region();
+            let atomic_region_had_side_effects =
+                store.data().current_atomic_region_had_side_effects();
+            Ok(InvokeResult::Failed {
+                consumed_fuel,
+                error: OplogAgentError::InternalError(format!(
+                    "invocation exceeded the configured maximum invocation duration of {:?}",
+                    deadline
+                        .duration()
+                        .expect("an exceeded deadline always has a configured duration")
+                )),
+                retry_from,
+                in_atomic_region,
+                atomic_region_had_side_effects,
+                semantic_trap_retry_override: None,
+            })
+        }
+        other => other,
+    }
 }
 
 /// Upper bound on the post-completion tail-work drain of a guest call: how long
@@ -194,6 +251,14 @@ const TAIL_WORK_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_
 ///
 /// The drain phase is bounded by [`TAIL_WORK_SETTLE_TIMEOUT`]; see its documentation for the
 /// timeout semantics.
+///
+/// The event loop future itself is never dropped while unfinished: durable `CallHandle`s owned
+/// by parked host futures are not cancellation-safe (`NotCancellable` handles panic when dropped
+/// unfinished, and even `Cancellable` drops may leave terminal oplog effects unwritten).
+/// External cancellation — worker interruption and the optional max-invocation-duration limit —
+/// is instead delivered *cooperatively*: every blocking host park point races the worker's
+/// interrupt signal, abandons its durable call handles for the trap, and unwinds the event loop
+/// with the interrupt from within.
 async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     store: &mut StoreContextMut<'_, Ctx>,
     fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,

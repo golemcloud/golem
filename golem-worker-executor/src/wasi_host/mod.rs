@@ -244,6 +244,7 @@ pub fn create_context(
         .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)
+        .inherit_network()
         .build();
 
     Ok((wasi, io_ctx, table))

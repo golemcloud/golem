@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
@@ -22,7 +22,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, EphemeralSleepTooLongError};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 
 use crate::durable_host::WakeupScheduler;
 use crate::metrics::ephemeral::{dec_promise_waiting, inc_promise_waiting};
@@ -32,6 +32,10 @@ use crate::services::golem_config::SuspendConfig;
 pub(crate) enum ParkOutcome {
     Ready,
     SuspendWorker,
+    /// The worker's interrupt signal fired while parked (a real interrupt or the synthetic
+    /// invocation-deadline wakeup). The caller must abandon its durable call handle(s) and
+    /// propagate the kind directly so it classifies as `TrapType::Interrupt`.
+    Interrupted(InterruptKind),
     EphemeralTooLong {
         requested_nanos: u64,
         max_nanos: u64,
@@ -49,6 +53,7 @@ pub(crate) struct SuspendableWaitContext {
 
 pub(crate) async fn park_suspendable_wait<R, Ready, F, Q, N>(
     context: SuspendableWaitContext,
+    mut interrupt: Pin<Box<dyn Future<Output = InterruptKind> + Send>>,
     mut ready: R,
     mut final_ready: F,
     mut safe_to_suspend: Q,
@@ -72,13 +77,16 @@ where
                     max_nanos,
                 });
             }
-            ready().await;
-            return Ok(ParkOutcome::Ready);
+            return tokio::select! {
+                _ = ready() => Ok(ParkOutcome::Ready),
+                kind = &mut interrupt => Ok(ParkOutcome::Interrupted(kind)),
+            };
         }
 
         let _promise_waiting = PromiseWaiting::new(true);
         tokio::select! {
             _ = ready() => Ok(ParkOutcome::Ready),
+            kind = &mut interrupt => Ok(ParkOutcome::Interrupted(kind)),
             _ = tokio::time::sleep(context.suspend.ephemeral_max_sleep) => {
                 Ok(ParkOutcome::EphemeralTooLong {
                     requested_nanos: max_nanos,
@@ -104,6 +112,7 @@ where
 
             tokio::select! {
                 _ = ready() => return Ok(ParkOutcome::Ready),
+                kind = &mut interrupt => return Ok(ParkOutcome::Interrupted(kind)),
                 _ = tokio::time::sleep(tick_after) => {}
             }
 
@@ -114,8 +123,10 @@ where
             if let Some(remaining) = remaining()
                 && remaining < context.suspend.suspend_after
             {
-                ready().await;
-                return Ok(ParkOutcome::Ready);
+                return tokio::select! {
+                    _ = ready() => Ok(ParkOutcome::Ready),
+                    kind = &mut interrupt => Ok(ParkOutcome::Interrupted(kind)),
+                };
             }
 
             if safe_to_suspend() {
@@ -411,6 +422,7 @@ mod tests {
 
         let outcome = park_suspendable_wait(
             context,
+            Box::pin(pending::<InterruptKind>()),
             || {
                 let ready = ready.clone();
                 async move {
@@ -452,6 +464,7 @@ mod tests {
 
         let outcome = park_suspendable_wait(
             context,
+            Box::pin(pending::<InterruptKind>()),
             || {
                 let ready = ready.clone();
                 let polls = polls.clone();

@@ -387,6 +387,37 @@ impl Drop for StoreAliveGuard {
     }
 }
 
+/// Guard for the per-invocation wall-clock deadline; see
+/// [`DurableWorkerCtx::arm_invocation_deadline`]. Holds the shared latch and the timer task;
+/// dropping it aborts the timer and clears the latch so the deadline never outlives its
+/// invocation.
+pub struct InvocationDeadline {
+    latch: Arc<AtomicBool>,
+    duration: Option<Duration>,
+    timer: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl InvocationDeadline {
+    /// Whether the deadline fired during this invocation.
+    pub fn exceeded(&self) -> bool {
+        self.latch.load(Ordering::Acquire)
+    }
+
+    /// The configured maximum invocation duration, if any.
+    pub fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
+}
+
+impl Drop for InvocationDeadline {
+    fn drop(&mut self) {
+        if let Some(timer) = self.timer.take() {
+            timer.abort();
+        }
+        self.latch.store(false, Ordering::Release);
+    }
+}
+
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
         let current_idempotency_key = self
@@ -2588,6 +2619,62 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.tail_work_tracker()
     }
 
+    /// Arms the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`)
+    /// and returns its guard. Called at the start of every guest invocation.
+    ///
+    /// When configured, a timer task is spawned that, once the deadline elapses, latches the
+    /// shared `invocation_deadline_exceeded` flag and broadcasts a *synthetic* interrupt on the
+    /// running execution status's interrupt-signal channel — without changing the execution
+    /// status itself, so the worker is never externally observed as `Interrupted`. The broadcast
+    /// wakes every cooperative host park point already racing the interrupt signal; the latched
+    /// flag makes `check_interrupt` (epoch callback, CPU-bound wasm) and every *subsequently
+    /// created* interrupt signal observe the deadline too. The invocation boundary converts the
+    /// resulting synthetic interrupt unwind into a typed timeout failure (see
+    /// `apply_invocation_deadline` in `worker::invocation`).
+    ///
+    /// Dropping the guard (at the invocation boundary) aborts the timer and clears the latch;
+    /// arming also clears it first, so a stale latch from a lost abort race cannot leak into the
+    /// next invocation.
+    pub fn arm_invocation_deadline(&self) -> InvocationDeadline {
+        let latch = self.state.invocation_deadline_exceeded.clone();
+        latch.store(false, Ordering::Release);
+        let duration = self.state.config.limits.max_invocation_duration;
+        let timer = duration.map(|duration| {
+            let latch = latch.clone();
+            let execution_status = self.execution_status.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(duration).await;
+                latch.store(true, Ordering::Release);
+                let interrupt_signal = {
+                    let status = execution_status.read().unwrap();
+                    match &*status {
+                        ExecutionStatus::Running {
+                            interrupt_signal, ..
+                        } => Some(interrupt_signal.clone()),
+                        _ => None,
+                    }
+                };
+                if let Some(interrupt_signal) = interrupt_signal {
+                    let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+                }
+            })
+        });
+        InvocationDeadline {
+            latch,
+            duration,
+            timer,
+        }
+    }
+
+    /// Whether the worker is currently being interrupted through the Golem API
+    /// (`ExecutionStatus::Interrupting`), independent of the invocation-deadline latch.
+    pub fn is_interrupting(&self) -> bool {
+        matches!(
+            &*self.execution_status.read().unwrap(),
+            ExecutionStatus::Interrupting { .. }
+        )
+    }
+
     pub(crate) fn register_open_websocket(
         &mut self,
         rep: u32,
@@ -2896,11 +2983,23 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
-        let execution_status = self.execution_status.read().unwrap();
-        match &*execution_status {
-            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(*interrupt_kind),
-            _ => None,
+        {
+            let execution_status = self.execution_status.read().unwrap();
+            if let ExecutionStatus::Interrupting { interrupt_kind, .. } = &*execution_status {
+                return Some(*interrupt_kind);
+            }
         }
+        // An exceeded invocation deadline surfaces as a synthetic interrupt so CPU-bound wasm
+        // traps at the next epoch check; the invocation boundary converts the unwind into a
+        // typed timeout failure (see `arm_invocation_deadline`).
+        if self
+            .state
+            .invocation_deadline_exceeded
+            .load(Ordering::Acquire)
+        {
+            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+        }
+        None
     }
 
     fn set_suspended(&self) {
@@ -5095,6 +5194,14 @@ struct PrivateDurableWorkerState {
     suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
     next_suspendable_wait_id: AtomicU64,
 
+    /// Latched when the current invocation's wall-clock deadline
+    /// (`limits.max_invocation_duration`) has been exceeded. Shared with the deadline timer task
+    /// (see [`DurableWorkerCtx::arm_invocation_deadline`]); read by `check_interrupt` (epoch
+    /// callback) and `create_interrupt_signal` so both executing wasm and newly created
+    /// cooperative parks observe the deadline. Cleared when the deadline is (re-)armed and when
+    /// its guard drops at the invocation boundary.
+    invocation_deadline_exceeded: Arc<AtomicBool>,
+
     dropped_call_events: (
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
@@ -5307,6 +5414,7 @@ impl PrivateDurableWorkerState {
             tail_work: tail_work::TailWorkTracker::new(),
             suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
             next_suspendable_wait_id: AtomicU64::new(1),
+            invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
