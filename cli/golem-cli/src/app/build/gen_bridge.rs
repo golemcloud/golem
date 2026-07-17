@@ -2,7 +2,7 @@ use crate::app::build::extract_component_metadata::extract_and_store_component_m
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
-use crate::bridge_gen::moonbit::MoonBitBridgeGenerator;
+use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
 use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode};
 use crate::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
@@ -710,9 +710,10 @@ fn supported_dependency_guest_bridge_target_language(
     language: GuestLanguage,
 ) -> bool {
     match dependency {
-        ComponentDependency::Agent { .. } => {
-            matches!(language, GuestLanguage::Rust | GuestLanguage::Scala)
-        }
+        ComponentDependency::Agent { .. } => matches!(
+            language,
+            GuestLanguage::Rust | GuestLanguage::Scala | GuestLanguage::MoonBit
+        ),
         ComponentDependency::Tool { .. } => {
             matches!(language, GuestLanguage::Rust | GuestLanguage::Scala)
         }
@@ -867,6 +868,14 @@ async fn gen_bridge_sdk_target(
                         (GuestLanguage::MoonBit, BridgeMode::External) => {
                             Box::new(MoonBitBridgeGenerator::new(agent_type, &output_dir, false)?)
                         }
+                        (GuestLanguage::MoonBit, BridgeMode::Guest) => {
+                            Box::new(MoonBitBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                false,
+                                MoonBitBridgeMode::GuestWasmRpc,
+                            )?)
+                        }
                         (language, BridgeMode::Guest) => bail!(
                             "internal bridge mode is not supported for {} yet",
                             language.to_string().log_color_highlight()
@@ -964,7 +973,7 @@ pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> 
             && target.bridge_mode == BridgeMode::Guest
             && !matches!(
                 target.target_language,
-                GuestLanguage::Rust | GuestLanguage::Scala
+                GuestLanguage::Rust | GuestLanguage::Scala | GuestLanguage::MoonBit
             )
         {
             bail!(
@@ -1027,7 +1036,7 @@ mod tests {
 
     #[test]
     fn validate_supported_bridge_targets_rejects_unsupported_guest_languages() {
-        for unsupported_language in [GuestLanguage::TypeScript, GuestLanguage::MoonBit] {
+        for unsupported_language in [GuestLanguage::TypeScript] {
             let targets = vec![bridge_sdk_target_with_mode(
                 "AlphaAgent",
                 unsupported_language,
@@ -1071,6 +1080,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_supported_bridge_targets_accepts_moonbit_agent_guest_targets() {
+        let targets = vec![bridge_sdk_target_with_mode(
+            "AlphaAgent",
+            GuestLanguage::MoonBit,
+            BridgeMode::Guest,
+            tempdir().unwrap().path().join("bridge/alpha-guest-client"),
+        )];
+
+        validate_supported_bridge_targets(&targets).unwrap();
+    }
+
+    #[test]
     fn validate_supported_bridge_targets_accepts_scala_tool_guest_targets() {
         let targets = vec![BridgeSdkTarget {
             component_name: ComponentName("component".to_string()),
@@ -1088,27 +1109,29 @@ mod tests {
 
     #[test]
     fn validate_supported_bridge_targets_rejects_non_rust_or_scala_tool_targets() {
-        let targets = vec![BridgeSdkTarget {
-            component_name: ComponentName("component".to_string()),
-            kind: BridgeSdkTargetKind::Tool(tool("MyTool")),
-            target_language: GuestLanguage::TypeScript,
-            bridge_mode: BridgeMode::Guest,
-            output_dir: tempdir()
-                .unwrap()
-                .path()
-                .join("bridge/my-tool-guest-client"),
-        }];
+        for unsupported_language in [GuestLanguage::TypeScript, GuestLanguage::MoonBit] {
+            let targets = vec![BridgeSdkTarget {
+                component_name: ComponentName("component".to_string()),
+                kind: BridgeSdkTargetKind::Tool(tool("MyTool")),
+                target_language: unsupported_language,
+                bridge_mode: BridgeMode::Guest,
+                output_dir: tempdir()
+                    .unwrap()
+                    .path()
+                    .join("bridge/my-tool-guest-client"),
+            }];
 
-        let error = validate_supported_bridge_targets(&targets).unwrap_err();
-        assert!(
-            format!("{error:?}")
-                .contains("tool guest bridge SDKs are only supported for rust and scala yet"),
-            "unexpected error: {error:?}"
-        );
+            let error = validate_supported_bridge_targets(&targets).unwrap_err();
+            assert!(
+                format!("{error:?}")
+                    .contains("tool guest bridge SDKs are only supported for rust and scala yet"),
+                "unexpected error for {unsupported_language}: {error:?}"
+            );
+        }
     }
 
     #[test]
-    fn dependency_guest_bridge_support_allows_scala_for_agents_and_tools() {
+    fn dependency_guest_bridge_support_allows_moonbit_for_agents_but_not_tools() {
         let component_name = ComponentName("component".to_string());
         let agent_dependency = ComponentDependency::Agent {
             component_name: component_name.clone(),
@@ -1128,12 +1151,20 @@ mod tests {
             GuestLanguage::Scala
         ));
         assert!(supported_dependency_guest_bridge_target_language(
+            &agent_dependency,
+            GuestLanguage::MoonBit
+        ));
+        assert!(supported_dependency_guest_bridge_target_language(
             &tool_dependency,
             GuestLanguage::Rust
         ));
         assert!(supported_dependency_guest_bridge_target_language(
             &tool_dependency,
             GuestLanguage::Scala
+        ));
+        assert!(!supported_dependency_guest_bridge_target_language(
+            &tool_dependency,
+            GuestLanguage::MoonBit
         ));
     }
 
