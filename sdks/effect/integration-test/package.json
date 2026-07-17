@@ -12,10 +12,11 @@
   },
   "dependencies": {
     "@golemcloud/effect-golem": "file:..",
-    "effect": "4.0.0-beta.57"
+    "effect": "4.0.0-beta.98"
   },
   "devDependencies": {
-    "@effect/platform-node": "4.0.0-beta.57",
+    "@effect/platform-node": "4.0.0-beta.98",
+    "@effect/platform-node-shared": "4.0.0-beta.98",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^16.0.1",
