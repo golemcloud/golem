@@ -1186,8 +1186,9 @@ mod memory_eviction_planning {
 //
 // The model drives random interleavings of acquire / release / cancel against
 // the real scheduler and, after every step, asserts the *liveness* invariant:
-// whenever fewer permits are genuinely held than the limit allows, a fresh
-// acquire must succeed promptly. A leaked `running_count` violates this.
+// whenever fewer permits are genuinely held than the limit allows and no older
+// waiter exists, a fresh acquire must succeed promptly. A leaked `running_count`
+// violates this.
 mod scheduler_liveness {
     use super::super::concurrent_agents_scheduler::{
         ConcurrentAgentPermit, ConcurrentAgentsScheduler,
@@ -1352,10 +1353,10 @@ mod scheduler_liveness {
             }
             pending = still_pending;
 
-            // Liveness invariant: if we are below the limit, a fresh
-            // acquire must succeed promptly. A leaked running_count
-            // would make this hang and trip the timeout.
-            if held.len() < limit {
+            // Liveness invariant: with capacity and no older FIFO waiter, a
+            // fresh acquire must succeed promptly. A pending waiter has
+            // priority over the probe and may legitimately consume the slot.
+            if held.len() < limit && pending.is_empty() {
                 let probe =
                     tokio::time::timeout(PROBE_TIMEOUT, sched.acquire(acc, agent("probe"))).await;
                 prop_assert!(
