@@ -33,6 +33,7 @@
 
 import { Effect, Schema, Scope, Stream } from "effect"
 import { BlobstoreClient, type HostContainer } from "./host/BlobstoreClient.js"
+import { strictTextDecoder } from "./internal/textDecoder.js"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -304,7 +305,7 @@ const decodeObjectMetadata = (m: {
 // surfaces as the SDK-internal {@link BlobstoreDecodeError}.
 
 const encoder = new TextEncoder()
-const strictDecoder = new TextDecoder("utf-8", { fatal: true })
+const strictDecoder = strictTextDecoder()
 
 const decodeUtf8 = (bytes: Uint8Array): Effect.Effect<string, BlobstoreDecodeError> =>
   Effect.try({

@@ -41,6 +41,7 @@
 
 import { Effect, Option, Scope, Schema } from "effect"
 import { KeyValueClient, type HostBucket } from "./host/KeyValueClient.js"
+import { strictTextDecoder } from "./internal/textDecoder.js"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -253,7 +254,7 @@ export interface SchemaBucket<S extends Schema.Top> {
 // surfaces as the SDK-internal {@link KeyValueDecodeError}.
 
 const encoder = new TextEncoder()
-const strictDecoder = new TextDecoder("utf-8", { fatal: true })
+const strictDecoder = strictTextDecoder()
 
 const decodeUtf8 = (bytes: Uint8Array): Effect.Effect<string, KeyValueDecodeError> =>
   Effect.try({

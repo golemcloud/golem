@@ -8,6 +8,7 @@ import {
   extractBoundary,
   MultipartCodecError,
 } from "./multipart.js"
+import { strictTextDecoder } from "./textDecoder.js"
 
 /**
  * @internal
@@ -107,7 +108,7 @@ const encodePrincipal = Schema.encodeUnknownSync(PrincipalFromString)
 const decodePrincipalFromString = Schema.decodeUnknownSync(PrincipalFromString)
 
 const encoder = new TextEncoder()
-const strictDecoder = new TextDecoder("utf-8", { fatal: true })
+const strictDecoder = strictTextDecoder()
 
 const decodeUtf8 = (bytes: Uint8Array, ctx: string): string => {
   try {
