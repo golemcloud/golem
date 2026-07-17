@@ -1125,6 +1125,75 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct FailFirstAckSchedulerStorage {
+        inner: Arc<InMemorySchedulerStorage>,
+        failures_remaining: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for FailFirstAckSchedulerStorage {
+        async fn insert(
+            &self,
+            schedule_id: ScheduleId,
+            due_at: DateTime<Utc>,
+            shard_id: ShardId,
+            action: &ScheduledAction,
+        ) -> Result<(), SchedulerStorageError> {
+            self.inner
+                .insert(schedule_id, due_at, shard_id, action)
+                .await
+        }
+
+        async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(schedule_id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            lease_ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            self.inner
+                .claim_due(now, assignment, limit, lease_ttl)
+                .await
+        }
+
+        async fn count_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, String> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn extend_lease(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+            lease_until: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner
+                .extend_lease(schedule_id, lease_owner, lease_until)
+                .await
+        }
+
+        async fn ack(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+        ) -> Result<bool, SchedulerStorageError> {
+            if self.failures_remaining.swap(0, Ordering::SeqCst) > 0 {
+                return Err(SchedulerStorageError::Transient(
+                    "simulated transient acknowledgement failure".to_string(),
+                ));
+            }
+            self.inner.ack(schedule_id, lease_owner).await
+        }
+    }
+
     #[test]
     async fn schedule_retries_transient_storage_errors() {
         let insert_attempts = Arc::new(AtomicUsize::new(0));
@@ -1449,6 +1518,66 @@ mod tests {
             .unwrap();
 
         assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn acknowledgement_failure_does_not_cancel_sibling_agent_lanes() {
+        let inner = Arc::new(InMemorySchedulerStorage::new());
+        let storage: Arc<dyn SchedulerStorage + Send + Sync> =
+            Arc::new(FailFirstAckSchedulerStorage {
+                inner: inner.clone(),
+                failures_remaining: AtomicUsize::new(1),
+            });
+        let promise_service = create_promise_service_mock();
+        let fingerprint = AgentFingerprint::new();
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(DelayedActiveWorkerAccessMock {
+                fingerprint,
+                in_flight: in_flight.clone(),
+                max_in_flight: Arc::new(AtomicUsize::new(0)),
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            promise_service.clone(),
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            RetryConfig::max_attempts_3(),
+            2,
+            CancellationToken::new(),
+        );
+
+        let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+        let promise_id = promise(agent("fast"), 1);
+        svc.schedule(due_at, complete_promise_action(promise_id.clone()))
+            .await;
+        svc.schedule(
+            due_at,
+            ScheduledAction::Invoke {
+                account_id: AccountId::new(),
+                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("slow")),
+                invocation: Box::new(agent_method_invocation()),
+                target_worker_fingerprint: fingerprint,
+            },
+        )
+        .await;
+
+        let now = DateTime::from_str("2023-07-17T10:15:00Z").unwrap();
+        svc.process(now).await.unwrap();
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        assert!(promise_service.all_completed().await.contains(&promise_id));
+        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
+        assert_eq!(inner.count_due(now, &assignment).await.unwrap(), 1);
     }
 
     #[test]
