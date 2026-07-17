@@ -242,7 +242,7 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
     assert!(!source.contains("@runtime"));
     assert!(!source.contains("IntoSchema"));
     assert!(!source.contains("FromSchema"));
-    assert!(!source.contains("pub struct KitchenAgent"));
+    assert!(source.contains("pub(all) struct KitchenAgentClient"));
 
     let output = std::process::Command::new("moon")
         .arg("-C")
@@ -257,6 +257,254 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
         "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
+    let mut agent_type = agent(
+        "ConfiguredCounter",
+        "moonbit",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "read",
+                vec![field("delta", SchemaType::s32())],
+                Some(SchemaType::s64()),
+            ),
+            method("reset", vec![], None),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec!["limits".into(), "retries".into()],
+        value_type: SchemaType::S64 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Signed(1)),
+                max: Some(NumericBound::Signed(9)),
+                unit: Some("attempts".into()),
+            }),
+            metadata: MetadataEnvelope::default(),
+        },
+    }];
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    assert!(source.contains("pub(all) struct ConfiguredCounterClient"));
+    assert!(source.contains("@rpc.AgentClient::get(\"ConfiguredCounter\", constructor_input)"));
+    assert!(source.contains("@rpc.AgentClient::new_phantom("));
+    assert!(source.contains("@rpc.AgentClient::get_phantom("));
+    assert!(source.contains("pub fn[T] ConfiguredCounterClient::scoped("));
+    assert!(source.contains("pub fn ConfiguredCounterClient::get_agent_id("));
+    assert!(source.contains("pub fn ConfiguredCounterClient::phantom_id("));
+    assert!(source.contains("pub fn ConfiguredCounterClient::drop("));
+    assert!(source.contains("self.client.invoke_and_await(\"read\", input)"));
+    assert!(source.contains("self.client.invoke(\"read\", input)"));
+    assert!(source.contains("self.client.schedule_invocation(scheduled_at, \"read\", input)"));
+    assert!(
+        source
+            .contains("self.client.schedule_cancelable_invocation(scheduled_at, \"read\", input)")
+    );
+    assert!(source.contains("@types.Signed(1L)"));
+    assert!(source.contains("@types.Signed(9L)"));
+    assert!(source.contains("Some(\"attempts\")"));
+    assert!(!source.contains("typed_config_value"));
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_handles_helper_wrapper_and_local_name_collisions() {
+    let agent_type = agent(
+        "CollisionAgent",
+        "moonbit",
+        vec![
+            field("client", SchemaType::string()),
+            field("constructor-input", SchemaType::string()),
+        ],
+        vec![
+            method(
+                "drop",
+                vec![
+                    field("input", SchemaType::string()),
+                    field("scheduled-at", SchemaType::string()),
+                ],
+                None,
+            ),
+            method("schedule-cancelable-drop", vec![], None),
+            method("phantom-id", vec![], Some(SchemaType::string())),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    assert!(source.contains("pub fn CollisionAgentClient::drop_2("));
+    assert!(source.contains("pub fn CollisionAgentClient::phantom_id_2("));
+    assert!(source.contains("pub fn CollisionAgentClient::schedule_cancelable_drop_2("));
+    assert!(source.contains("client_2 : String"));
+    assert!(source.contains("constructor_input_2 : String"));
+    assert!(source.contains("input_2 : String"));
+    assert!(source.contains("scheduled_at_2 : String"));
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_scoped_does_not_shadow_constructor_type_t() {
+    let agent_type = agent(
+        "ScopedTypeAgent",
+        "moonbit",
+        vec![field("config", ref_to("T"))],
+        vec![],
+        vec![def(
+            "T",
+            SchemaType::record(vec![named_field("value", SchemaType::string())]),
+        )],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_mode_accepts_numeric_agent_type_names() {
+    let guest = generate_without_check(
+        agent(
+            "123",
+            "typescript",
+            vec![],
+            vec![],
+            vec![],
+            AgentMode::Durable,
+        ),
+        MoonBitBridgeMode::GuestWasmRpc,
+    );
+    let manifest_path = guest.path().join("moon.mod.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["name"] = "numeric-agent-guest-client".into();
+    std::fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn ephemeral_guest_client_omits_get_and_scoped() {
+    let guest = generate_without_check(
+        agent(
+            "EphemeralAgent",
+            "moonbit",
+            vec![],
+            vec![method("ping", vec![], None)],
+            vec![],
+            AgentMode::Ephemeral,
+        ),
+        MoonBitBridgeMode::GuestWasmRpc,
+    );
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    assert!(!source.contains("pub fn EphemeralAgentClient::get("));
+    assert!(!source.contains("pub fn[T] EphemeralAgentClient::scoped("));
+    assert!(source.contains("pub fn EphemeralAgentClient::new_phantom("));
+    assert!(source.contains("pub fn EphemeralAgentClient::get_phantom("));
+}
+
+#[test]
+fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
+    let mut agent_type = agent(
+        "EphemeralCollisionAgent",
+        "moonbit",
+        vec![],
+        vec![
+            method("get", vec![], None),
+            method("get_with_config", vec![], None),
+            method("scoped", vec![], None),
+        ],
+        vec![],
+        AgentMode::Ephemeral,
+    );
+    agent_type.config = vec![AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec!["region".into()],
+        value_type: SchemaType::string(),
+    }];
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    let expected_methods = [
+        "pub fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient)",
+        "pub fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient)",
+        "pub fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient)",
+    ];
+    let missing = expected_methods
+        .iter()
+        .filter(|method| !source.contains(**method))
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "methods were renamed despite the colliding lifecycle helpers being absent: {missing:?}\n{source}"
     );
 }
 

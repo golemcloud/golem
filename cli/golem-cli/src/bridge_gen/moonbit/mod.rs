@@ -46,7 +46,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::Role;
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
-use golem_common::schema::graph::SchemaTypeDef;
+use golem_common::schema::graph::{SchemaTypeDef, reachable_defs};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     DiscriminatorRule, NumericBound, NumericRestrictions, QuantityValue, SchemaType,
@@ -399,7 +399,9 @@ impl MoonBitBridgeGenerator {
                 import {{
                   "golemcloud/golem_sdk/agents",
                   "golemcloud/golem_sdk/interface/golem/agent/common" @common,
+                  "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
                   "golemcloud/golem_sdk/interface/golem/core/types" @types,
+                  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
                   "golemcloud/golem_sdk/rpc",
                   "golemcloud/golem_sdk/schema_model" @model,
                 }}
@@ -424,7 +426,7 @@ impl MoonBitBridgeGenerator {
                 self.agent_type.type_name.as_str()
             ),
             MoonBitBridgeMode::GuestWasmRpc => format!(
-                "MoonBit guest bridge types and structural codecs for the `{}` Golem agent.",
+                "Type-safe MoonBit guest RPC client for the `{}` Golem agent.",
                 self.agent_type.type_name.as_str()
             ),
         };
@@ -437,8 +439,9 @@ impl MoonBitBridgeGenerator {
         }
         self.write_codecs(&mut writer)?;
         self.write_multimodals(&mut writer)?;
-        if self.mode == MoonBitBridgeMode::ExternalRest {
-            self.write_agent_struct(&mut writer)?;
+        match self.mode {
+            MoonBitBridgeMode::ExternalRest => self.write_agent_struct(&mut writer)?,
+            MoonBitBridgeMode::GuestWasmRpc => self.write_guest_agent_client(&mut writer)?,
         }
 
         Ok(writer.finish())
@@ -714,7 +717,7 @@ impl MoonBitBridgeGenerator {
     }
 
     fn write_guest_codec_support(&self, writer: &mut MoonBitWriter) {
-        let source = r#"pub suberror CodecError(String) derive(Eq)
+        let source = r#"pub suberror CodecError(String) derive(Debug, Eq)
 
 pub(all) enum UnstructuredText {
   Inline(String, String?)
@@ -1050,6 +1053,435 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         Ok(())
     }
 
+    fn write_guest_agent_client(&self, writer: &mut MoonBitWriter) -> anyhow::Result<()> {
+        let client = guest_client_struct_name(&self.agent_type);
+        let agent_type_name = moonbit_string_literal(self.agent_type.type_name.as_str());
+
+        writer.doc("A native guest RPC client for this agent type.");
+        writer.line(format!("pub(all) struct {client} {{"));
+        writer.indent();
+        writer.line("client : @rpc.AgentClient");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        self.write_guest_constructors(writer, &client, &agent_type_name)?;
+
+        writer.line(format!(
+            "pub fn {client}::get_agent_id(self : {client}) -> String raise @common.AgentError {{"
+        ));
+        writer.indent();
+        writer.line("self.client.get_agent_id()");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.line(format!(
+            "pub fn {client}::phantom_id(self : {client}) -> @types.Uuid? {{"
+        ));
+        writer.indent();
+        writer.line("self.client.phantom_id()");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.line(format!("pub fn {client}::drop(self : {client}) -> Unit {{"));
+        writer.indent();
+        writer.line("self.client.drop()");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        if self.agent_type.mode == AgentMode::Durable {
+            let input = self.agent_type.constructor.input_schema.clone();
+            let param_defs = self.input_param_defs(&input)?;
+            let param_decls = render_param_decls(&param_defs);
+            let result_type_param = self.guest_scoped_result_type_param();
+            let param_names = param_defs
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            let f_decl = append_param(
+                &format!("f : ({client}) -> {result_type_param} raise @common.AgentError"),
+                &param_decls,
+            );
+            writer.line(format!(
+                "pub fn[{result_type_param}] {client}::scoped({f_decl}) -> {result_type_param} raise @common.AgentError {{"
+            ));
+            writer.indent();
+            writer.line(format!(
+                "let client = {client}::get({})",
+                param_names.join(", ")
+            ));
+            writer.line("defer client.drop()");
+            writer.line("f(client)");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
+
+        let methods = self.agent_type.methods.clone();
+        let bases = self.method_base_idents(&methods);
+        for (method, base) in methods.iter().zip(bases.iter()) {
+            self.write_guest_method(writer, &client, method, base)?;
+        }
+        Ok(())
+    }
+
+    fn guest_scoped_result_type_param(&self) -> String {
+        let generated_names = self
+            .type_naming
+            .types()
+            .map(|(_, name)| name.name.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let mut candidate = "T".to_string();
+        let mut suffix = 2;
+        while generated_names.contains(candidate.as_str()) {
+            candidate = format!("T{suffix}");
+            suffix += 1;
+        }
+        candidate
+    }
+
+    fn write_guest_constructors(
+        &self,
+        writer: &mut MoonBitWriter,
+        client: &str,
+        agent_type_name: &str,
+    ) -> anyhow::Result<()> {
+        let input = self.agent_type.constructor.input_schema.clone();
+        let param_defs = self.input_param_defs(&input)?;
+        let param_decls = render_param_decls(&param_defs);
+
+        if self.agent_type.mode == AgentMode::Durable {
+            self.write_guest_constructor(
+                writer,
+                client,
+                agent_type_name,
+                "get",
+                &param_decls,
+                &input,
+                None,
+                None,
+            )?;
+        }
+        self.write_guest_constructor(
+            writer,
+            client,
+            agent_type_name,
+            "new_phantom",
+            &param_decls,
+            &input,
+            None,
+            None,
+        )?;
+        self.write_guest_constructor(
+            writer,
+            client,
+            agent_type_name,
+            "get_phantom",
+            &append_param("phantom_id : @types.Uuid", &param_decls),
+            &input,
+            Some("phantom_id"),
+            None,
+        )?;
+
+        let configs = self.local_configs();
+        if configs.is_empty() {
+            return Ok(());
+        }
+        let param_names = param_defs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let config_names = self.config_param_idents(&param_names, &configs);
+        let config_decls = configs
+            .iter()
+            .zip(config_names.iter())
+            .map(|(config, name)| {
+                Ok(format!(
+                    "{name} : {}?",
+                    self.type_reference(&config.value_type)?
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .join(", ");
+        let with_config_decls = append_param(&config_decls, &param_decls);
+
+        if self.agent_type.mode == AgentMode::Durable {
+            self.write_guest_constructor(
+                writer,
+                client,
+                agent_type_name,
+                "get_with_config",
+                &with_config_decls,
+                &input,
+                None,
+                Some((&configs, &config_names)),
+            )?;
+        }
+        self.write_guest_constructor(
+            writer,
+            client,
+            agent_type_name,
+            "new_phantom_with_config",
+            &with_config_decls,
+            &input,
+            None,
+            Some((&configs, &config_names)),
+        )?;
+        self.write_guest_constructor(
+            writer,
+            client,
+            agent_type_name,
+            "get_phantom_with_config",
+            &append_param(
+                &config_decls,
+                &append_param("phantom_id : @types.Uuid", &param_decls),
+            ),
+            &input,
+            Some("phantom_id"),
+            Some((&configs, &config_names)),
+        )?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_guest_constructor(
+        &self,
+        writer: &mut MoonBitWriter,
+        client: &str,
+        agent_type_name: &str,
+        name: &str,
+        param_decls: &str,
+        input: &InputSchema,
+        phantom_id: Option<&str>,
+        configs: Option<(&[AgentConfigDeclarationSchema], &[String])>,
+    ) -> anyhow::Result<()> {
+        writer.line(format!(
+            "pub fn {client}::{name}({param_decls}) -> {client} raise @common.AgentError {{"
+        ));
+        writer.indent();
+        self.write_guest_invocation_input(writer, input, "constructor_input", "constructor")?;
+        if let Some((configs, names)) = configs {
+            self.write_guest_config_array(writer, configs, names)?;
+        }
+        let mut args = vec![agent_type_name.to_string(), "constructor_input".to_string()];
+        if let Some(phantom_id) = phantom_id {
+            args.push(phantom_id.to_string());
+        }
+        if configs.is_some() {
+            args.push("agent_config".to_string());
+        }
+        writer.line(format!(
+            "let client = @rpc.AgentClient::{name}({})",
+            args.join(", ")
+        ));
+        writer.line("{ client, }");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+        Ok(())
+    }
+
+    fn write_guest_config_array(
+        &self,
+        writer: &mut MoonBitWriter,
+        configs: &[AgentConfigDeclarationSchema],
+        config_names: &[String],
+    ) -> anyhow::Result<()> {
+        writer.line("let agent_config : Array[@common.TypedAgentConfigValue] = []");
+        for (config, name) in configs.iter().zip(config_names.iter()) {
+            writer.line(format!("match {name} {{"));
+            writer.indent();
+            writer.line("Some(value) => {");
+            writer.indent();
+            let encoded = guest_codec_source(self.encode_expr("value", &config.value_type, 0)?);
+            writer.line(format!("let config_value = {encoded} catch {{"));
+            writer.indent();
+            writer.line("error => raise @common.AgentError::InvalidInput(\"failed encoding agent config: \" + repr(error))");
+            writer.dedent();
+            writer.line("}");
+            let graph = SchemaGraph {
+                defs: reachable_defs(self.type_naming.graph(), &config.value_type),
+                root: config.value_type.clone(),
+            };
+            writer.line(format!(
+                "let wire = @model.typed_schema_value_to_wit(@model.TypedSchemaValue::{{ graph: {}, value: config_value, }}) catch {{",
+                emit_schema_graph_literal(&graph)
+            ));
+            writer.indent();
+            writer.line("error => raise @common.AgentError::InvalidInput(\"failed encoding agent config: \" + error.to_string())");
+            writer.dedent();
+            writer.line("}");
+            let path = config
+                .path
+                .iter()
+                .map(|segment| moonbit_string_literal(segment))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writer.line(format!(
+                "agent_config.push(@common.TypedAgentConfigValue::{{ path: [{path}], value: wire, }})"
+            ));
+            writer.dedent();
+            writer.line("}");
+            writer.line("None => ()");
+            writer.dedent();
+            writer.line("}");
+        }
+        Ok(())
+    }
+
+    fn write_guest_invocation_input(
+        &self,
+        writer: &mut MoonBitWriter,
+        input: &InputSchema,
+        local_name: &str,
+        context: &str,
+    ) -> anyhow::Result<()> {
+        let fields = user_supplied_fields(input);
+        let names = self.input_param_idents(&fields);
+        let mut values = Vec::new();
+        if let Some(mm) = self.multimodal_input(input)? {
+            writer.line(format!(
+                "let f0 = encode_{}({}) catch {{",
+                mm.name, names[0]
+            ));
+            writer.indent();
+            writer.line(format!(
+                "error => raise @common.AgentError::InvalidInput({} + repr(error))",
+                moonbit_string_literal(&format!(
+                    "{}.{context}: ",
+                    self.agent_type.type_name.as_str()
+                ))
+            ));
+            writer.dedent();
+            writer.line("}");
+            values.push("f0".to_string());
+        } else {
+            for (idx, field) in fields.iter().enumerate() {
+                let encoded =
+                    guest_codec_source(self.encode_expr(&names[idx], &field.schema, 0)?);
+                writer.line(format!("let f{idx} = {encoded} catch {{"));
+                writer.indent();
+                writer.line(format!(
+                    "error => raise @common.AgentError::InvalidInput({} + repr(error))",
+                    moonbit_string_literal(&format!(
+                        "{}.{context}: ",
+                        self.agent_type.type_name.as_str()
+                    ))
+                ));
+                writer.dedent();
+                writer.line("}");
+                values.push(format!("f{idx}"));
+            }
+        }
+        writer.line(format!(
+            "let {local_name} = @agents.encode_invocation_input([{}])",
+            values.join(", ")
+        ));
+        Ok(())
+    }
+
+    fn write_guest_method(
+        &self,
+        writer: &mut MoonBitWriter,
+        client: &str,
+        method: &AgentMethodSchema,
+        base: &str,
+    ) -> anyhow::Result<()> {
+        let method_name = moonbit_string_literal(&method.name);
+        let context = format!("{}.{}", self.agent_type.type_name.as_str(), method.name);
+        let param_defs = self.input_param_defs(&method.input_schema)?;
+        let param_decls = render_param_decls(&param_defs);
+        let self_decls = prepend_self_decl(client, &param_decls);
+        let (ret_ty, decode) = self.output_return(&method.output_schema)?;
+        let decode = decode.map(guest_codec_source);
+
+        writer.line(format!(
+            "pub fn {client}::{base}(self : {self_decls}) -> {ret_ty} raise @common.AgentError {{"
+        ));
+        writer.indent();
+        self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
+        match decode {
+            None => writer.line(format!(
+                "let _ = self.client.invoke_and_await({method_name}, input)"
+            )),
+            Some(decode) => {
+                writer.line(format!(
+                    "match self.client.invoke_and_await({method_name}, input) {{"
+                ));
+                writer.indent();
+                writer.line("Some(tree) => {");
+                writer.indent();
+                writer.line("let value = @model.schema_value_from_wit(tree) catch {");
+                writer.indent();
+                writer.line(format!(
+                    "error => raise @common.AgentError::InvalidType({} + error.to_string())",
+                    moonbit_string_literal(&format!("{context}: "))
+                ));
+                writer.dedent();
+                writer.line("}");
+                writer.line(format!("{decode} catch {{"));
+                writer.indent();
+                writer.line(format!(
+                    "error => raise @common.AgentError::InvalidType({} + repr(error))",
+                    moonbit_string_literal(&format!("{context}: "))
+                ));
+                writer.dedent();
+                writer.line("}");
+                writer.dedent();
+                writer.line("}");
+                writer.line(format!(
+                    "None => raise @common.AgentError::InvalidType({})",
+                    moonbit_string_literal(&format!("{context}: expected a value"))
+                ));
+                writer.dedent();
+                writer.line("}");
+            }
+        }
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.line(format!(
+            "pub fn {client}::trigger_{base}(self : {self_decls}) -> Unit raise @common.AgentError {{"
+        ));
+        writer.indent();
+        self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
+        writer.line(format!("self.client.invoke({method_name}, input)"));
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        let schedule_decls = prepend_param("scheduled_at : @wallClock.Datetime", &param_decls);
+        let schedule_self_decls = prepend_self_decl(client, &schedule_decls);
+        writer.line(format!(
+            "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> Unit raise @common.AgentError {{"
+        ));
+        writer.indent();
+        self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
+        writer.line(format!(
+            "self.client.schedule_invocation(scheduled_at, {method_name}, input)"
+        ));
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.line(format!(
+            "pub fn {client}::schedule_cancelable_{base}(self : {schedule_self_decls}) -> @agentHost.CancellationToken raise @common.AgentError {{"
+        ));
+        writer.indent();
+        self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
+        writer.line(format!(
+            "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input)"
+        ));
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+        Ok(())
+    }
+
     fn write_constructors(
         &self,
         writer: &mut MoonBitWriter,
@@ -1247,6 +1679,13 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let mut reserved: Vec<String> =
             RESERVED_PARAM_NAMES.iter().map(|s| s.to_string()).collect();
         reserved.push("agent_config".to_string());
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+            reserved.extend(
+                ["client", "config_value", "error", "phantom_id", "wire"]
+                    .into_iter()
+                    .map(str::to_string),
+            );
+        }
         reserved.extend(constructor_param_names.iter().cloned());
         for i in 0..configs.len() {
             reserved.push(format!("cfg{i}"));
@@ -1540,6 +1979,25 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
     fn input_param_idents(&self, fields: &[&NamedField]) -> Vec<String> {
         let mut reserved: Vec<String> =
             RESERVED_PARAM_NAMES.iter().map(|s| s.to_string()).collect();
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+            reserved.extend(
+                [
+                    "agent_config",
+                    "client",
+                    "config_value",
+                    "constructor_input",
+                    "error",
+                    "f",
+                    "input",
+                    "phantom_id",
+                    "scheduled_at",
+                    "tree",
+                    "wire",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
+        }
         for i in 0..fields.len() {
             reserved.push(format!("f{i}"));
         }
@@ -1579,6 +2037,27 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             .iter()
             .map(|s| s.to_string())
             .collect();
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+            used.remove("configure");
+            used.remove("agent_id");
+            if self.agent_type.mode == AgentMode::Ephemeral {
+                used.remove("get");
+                used.remove("get_with_config");
+            }
+            if self.local_configs().is_empty() {
+                used.remove("get_with_config");
+                used.remove("get_phantom_with_config");
+                used.remove("new_phantom_with_config");
+            }
+            used.extend(
+                ["drop", "get_agent_id", "phantom_id"]
+                    .into_iter()
+                    .map(str::to_string),
+            );
+            if self.agent_type.mode == AgentMode::Durable {
+                used.insert("scoped".to_string());
+            }
+        }
         let mut bases = Vec::with_capacity(methods.len());
         for method in methods {
             let ident = to_moonbit_term_ident(&method.name, self.same_language);
@@ -1587,6 +2066,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             while used.contains(&candidate)
                 || used.contains(&format!("trigger_{candidate}"))
                 || used.contains(&format!("schedule_{candidate}"))
+                || (self.mode == MoonBitBridgeMode::GuestWasmRpc
+                    && used.contains(&format!("schedule_cancelable_{candidate}")))
             {
                 candidate = format!("{ident}_{n}");
                 n += 1;
@@ -1594,6 +2075,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             used.insert(candidate.clone());
             used.insert(format!("trigger_{candidate}"));
             used.insert(format!("schedule_{candidate}"));
+            if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+                used.insert(format!("schedule_cancelable_{candidate}"));
+            }
             bases.push(candidate);
         }
         bases
@@ -2290,7 +2774,11 @@ fn is_named_composite(resolved: &SchemaType) -> bool {
 
 /// Name of the generated agent handle struct, e.g. `foo-agent` -> `FooAgent`.
 fn agent_struct_name(agent_type: &AgentTypeSchema) -> String {
-    agent_type.type_name.as_str().to_upper_camel_case()
+    let name = agent_type.type_name.as_str().to_upper_camel_case();
+    match name.chars().next() {
+        Some(first) if first.is_ascii_uppercase() => name,
+        _ => format!("Agent{name}"),
+    }
 }
 
 fn guest_client_struct_name(agent_type: &AgentTypeSchema) -> String {
