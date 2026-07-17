@@ -20,11 +20,16 @@
 import { SchemaGraph, SchemaValue } from '../../internal/schema-model';
 import type { StandardSchemaV1 } from './standardSchema';
 
+/**
+ * A stable schema graph paired with deterministic value conversions. Codecs are
+ * immutable once compiled: conversions must not mutate the codec, its graph, or
+ * any codec reachable through structural child links.
+ */
 export interface FluentCodec {
-  /** Root SchemaType and the nominal definitions it references. */
+  /** Immutable root SchemaType and the nominal definitions it references. */
   readonly graph: SchemaGraph;
-  toValue(value: unknown): SchemaValue;
-  fromValue(value: SchemaValue): unknown;
+  readonly toValue: (value: unknown) => SchemaValue;
+  readonly fromValue: (value: SchemaValue) => unknown;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
   /**
@@ -79,6 +84,66 @@ export interface FluentCodec {
    * is unaffected (only a top-level parameter codec is auto-injected).
    */
   readonly autoInjected?: 'principal';
+}
+
+/** Recursively freeze codec data once compilation is complete. */
+export function freezeFluentCodec(codec: FluentCodec): FluentCodec {
+  freezeCodec(codec, new WeakSet(), new WeakSet());
+  return codec;
+}
+
+function freezeCodec(
+  codec: FluentCodec,
+  seenCodecs: WeakSet<object>,
+  seenGraphValues: WeakSet<object>,
+): void {
+  if (seenCodecs.has(codec)) return;
+  seenCodecs.add(codec);
+
+  freezeGraphValue(codec.graph, seenGraphValues);
+  if (codec.fields) {
+    codec.fields.forEach((entry) => {
+      freezeCodec(entry.codec, seenCodecs, seenGraphValues);
+      Object.freeze(entry);
+    });
+    Object.freeze(codec.fields);
+  }
+  [codec.optionInner, codec.listItem, codec.mapKey, codec.mapValue, codec.secretInner].forEach(
+    (child) => {
+      if (child) freezeCodec(child, seenCodecs, seenGraphValues);
+    },
+  );
+  Object.freeze(codec);
+}
+
+function freezeGraphValue(value: unknown, seen: WeakSet<object>): void {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  if (value instanceof Map) {
+    value.forEach((entryValue, key) => {
+      freezeGraphValue(key, seen);
+      freezeGraphValue(entryValue, seen);
+    });
+    Object.defineProperties(value, {
+      set: { value: immutableMapMutation },
+      delete: { value: immutableMapMutation },
+      clear: { value: immutableMapMutation },
+    });
+    Object.freeze(value);
+    return;
+  }
+
+  Reflect.ownKeys(value).forEach((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && 'value' in descriptor) freezeGraphValue(descriptor.value, seen);
+  });
+  Object.freeze(value);
+}
+
+function immutableMapMutation(): never {
+  throw new TypeError('Cannot mutate an immutable codec map');
 }
 
 /**

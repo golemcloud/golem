@@ -20,10 +20,12 @@ import type { FluentCodec } from '../src/fluent/schema/codec';
 import { Bytes, KeyValue, Quantity, s } from '../src/fluent/schema/markers';
 import { field, schemaType, t, v, validateSchemaGraph } from '../src/internal/schema-model';
 import {
+  CanonicalInputModel,
   type ExtendedCommandBody,
   type ExtendedCommandNode,
   type ExtendedOptionSpec,
   ExtendedToolType,
+  appendGraftedSubtree,
   codecValue,
   emptyDoc,
   emptyGlobals,
@@ -109,16 +111,23 @@ describe('internal extended tool model', () => {
       '1.0.0',
       command('grep', {
         globals: { options: [option('profile')], flags: [flag('verbose')] },
-        subcommands: [leaf],
+        subcommands: [
+          command('remote', {
+            globals: { options: [option('tenant')], flags: [flag('quiet')] },
+            subcommands: [leaf],
+          }),
+        ],
       }),
     );
 
-    expect(tool.commandByPath(['s'])).toBe(leaf);
-    expect(tool.commandPath(leaf)).toEqual(['search']);
+    expect(tool.commandByPath(['remote', 's'])).toBe(leaf);
+    expect(tool.commandPath(leaf)).toEqual(['remote', 'search']);
     const input = tool.canonicalInputModel(leaf);
     expect(input.fields.map((field) => field.name)).toEqual([
       'profile',
       'verbose',
+      'tenant',
+      'quiet',
       'endpoint',
       'source',
       'patterns',
@@ -128,6 +137,8 @@ describe('internal extended tool model', () => {
     const value = {
       profile: 'prod',
       verbose: true,
+      tenant: 'golem',
+      quiet: false,
       endpoint: 'local',
       source: 'src',
       patterns: ['TODO', 'FIXME'],
@@ -135,7 +146,9 @@ describe('internal extended tool model', () => {
       'dry-run': false,
     };
     expect(input.decode(input.encode(value))).toEqual(value);
-    expect(tool.projectHelp(['search'])?.arguments.map((entry) => entry.kind)).toEqual([
+    expect(tool.projectHelp(['remote', 'search'])?.arguments.map((entry) => entry.kind)).toEqual([
+      'global-option',
+      'global-flag',
       'global-option',
       'global-flag',
       'global-option',
@@ -227,6 +240,179 @@ describe('internal extended tool model', () => {
     expect(() => validateExtendedTool(invalid)).toThrowError(
       expect.objectContaining({ code: 'duplicate-name' }),
     );
+  });
+
+  it.each([
+    ['long name', option('account'), 'duplicate-name'],
+    ['alias', { ...option('local'), aliases: ['profile'] }, 'duplicate-name'],
+    ['short name', { ...option('local'), short: 'p' }, 'duplicate-short'],
+  ] as const)('rejects a local %s colliding with an inherited global', (_surface, local, code) => {
+    const inherited = { ...option('profile'), aliases: ['account'], short: 'p' };
+    const tool = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: { options: [inherited], flags: [] },
+        subcommands: [command('leaf', { body: body({ options: [local] }) })],
+      }),
+    );
+
+    expect(() => normalizeExtendedTool(tool)).toThrowError(expect.objectContaining({ code }));
+  });
+
+  it('reconciles a grafted child root against its new ancestor globals', () => {
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        globals: { options: [option('profile')], flags: [] },
+        body: body(),
+      }),
+    );
+    const parent = command('root', {
+      globals: { options: [option('profile')], flags: [] },
+    });
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      appendGraftedSubtree(parent, graftSubtree(child, { expectedName: 'remote' })),
+    );
+
+    expect(() => normalizeExtendedTool(composed)).toThrowError(
+      expect.objectContaining({ code: 'duplicate-name' }),
+    );
+  });
+
+  it('resolves a grafted child constraint against a new ancestor global', () => {
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({
+          constraints: [
+            {
+              tag: 'requires-all',
+              refs: [
+                {
+                  tag: 'value-is',
+                  name: 'profile',
+                  value: { tag: 'deferred', value: 'prod' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+    expect(() => normalizeExtendedTool(child)).toThrowError(
+      expect.objectContaining({ code: 'unresolved-constraint-ref' }),
+    );
+
+    const parent = command('root', {
+      globals: { options: [option('profile')], flags: [] },
+    });
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      appendGraftedSubtree(parent, graftSubtree(child, { expectedName: 'remote' })),
+    );
+    const first = normalizeExtendedTool(composed);
+    const second = normalizeExtendedTool(composed);
+    const constraint = first.commandByPath(['remote'])?.body?.constraints[0];
+
+    expect(constraint).toMatchObject({
+      tag: 'requires-all',
+      refs: [
+        {
+          tag: 'value-is',
+          name: 'profile',
+          value: {
+            tag: 'resolved',
+            value: 'prod',
+            schemaValue: { tag: 'string', value: 'prod' },
+          },
+        },
+      ],
+    });
+    expect(second).toEqual(first);
+  });
+
+  it('uses body-local fields as the canonical fallback for invalid inherited collisions', () => {
+    const leaf = command('leaf', {
+      body: body({ options: [{ ...option('local'), aliases: ['profile'] }] }),
+    });
+    const tool = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: { options: [{ ...option('profile'), aliases: ['p'] }], flags: [] },
+        subcommands: [leaf],
+      }),
+    );
+
+    expect(tool.canonicalInputFields(leaf).map((field) => field.name)).toEqual(['local']);
+    expect(() => validateExtendedTool(tool)).toThrowError(
+      expect.objectContaining({ code: 'duplicate-name' }),
+    );
+  });
+
+  it('forwards canonical values by name or alias in target field order', () => {
+    const source = new CanonicalInputModel([
+      { name: 'profile', aliases: ['p'], codec: stringCodec },
+      { name: 'source', aliases: [], codec: stringCodec },
+    ]);
+    const target = new CanonicalInputModel([
+      { name: 'source', aliases: [], codec: stringCodec },
+      { name: 'p', aliases: [], codec: stringCodec },
+    ]);
+    const sourceInput = source.encodeTyped({ profile: 'prod', source: 'src/main.ts' });
+
+    expect(target.forwardValues(source.decodeValues(sourceInput.value))).toEqual({
+      graph: target.codec.graph,
+      value: v.record([v.string('src/main.ts'), v.string('prod')]),
+    });
+  });
+
+  it('requires exact schema graphs when forwarding canonical values', () => {
+    const source = new CanonicalInputModel([
+      { name: 'profile', aliases: ['p'], codec: stringCodec },
+    ]);
+    const values = source.decodeValues(source.encode({ profile: 'prod' }));
+    const incompatible = new CanonicalInputModel([
+      { name: 'p', aliases: [], codec: compileSchema(z.boolean()) },
+    ]);
+    const missing = new CanonicalInputModel([{ name: 'tenant', aliases: [], codec: stringCodec }]);
+
+    expect(() => incompatible.forwardValues(values)).toThrow(/incompatible schema/);
+    expect(() => missing.forwardValues(values)).toThrow(
+      /missing canonical tool input field `tenant`/,
+    );
+  });
+
+  it('validates standalone canonical record schemas and graph merges', () => {
+    expect(
+      () =>
+        new CanonicalInputModel([
+          { name: 'same', aliases: [], codec: stringCodec },
+          { name: 'same', aliases: [], codec: stringCodec },
+        ]),
+    ).toThrowError(expect.objectContaining({ code: 'ill-formed-schema' }));
+
+    const stringRef: FluentCodec = {
+      ...stringCodec,
+      graph: {
+        defs: new Map([['shared', { body: t.string() }]]),
+        root: t.ref('shared'),
+      },
+    };
+    const boolRef: FluentCodec = {
+      ...compileSchema(z.boolean()),
+      graph: {
+        defs: new Map([['shared', { body: t.bool() }]]),
+        root: t.ref('shared'),
+      },
+    };
+    expect(
+      () =>
+        new CanonicalInputModel([
+          { name: 'first', aliases: [], codec: stringRef },
+          { name: 'second', aliases: [], codec: boolRef },
+        ]),
+    ).toThrowError(expect.objectContaining({ code: 'schema-conflict' }));
   });
 
   it('accepts a valid f32 restriction spanning negative and positive values', () => {
@@ -1141,48 +1327,6 @@ describe('internal extended tool model', () => {
 
     expect(() => validateExtendedTool(tool)).toThrowError(
       expect.objectContaining({ code: 'ill-formed-schema' }),
-    );
-  });
-
-  it('rejects a resolved value-is literal whose source and encoded values disagree', () => {
-    const tool = new ExtendedToolType(
-      '1.0.0',
-      command('invalid', {
-        body: body({
-          positionals: {
-            fixed: [
-              {
-                name: 'mode',
-                doc: emptyDoc(),
-                codec: stringCodec,
-                required: true,
-                acceptsStdio: false,
-              },
-            ],
-          },
-          constraints: [
-            {
-              tag: 'requires-all',
-              refs: [
-                {
-                  tag: 'value-is',
-                  name: 'mode',
-                  value: {
-                    tag: 'resolved',
-                    codec: stringCodec,
-                    value: 'prod',
-                    schemaValue: v.string('dev'),
-                  },
-                },
-              ],
-            },
-          ],
-        }),
-      }),
-    );
-
-    expect(() => validateExtendedTool(tool)).toThrowError(
-      expect.objectContaining({ code: 'value-is-type-mismatch' }),
     );
   });
 });

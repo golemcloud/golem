@@ -23,7 +23,17 @@ import type {
   Repetition,
   StreamSpec,
 } from 'golem:tool/common@0.1.0';
-import { field, mergeGraphDefs, SchemaValue, t, v } from '../schema-model';
+import {
+  deepEqual,
+  field,
+  mergeGraphDefs,
+  type SchemaGraph,
+  type SchemaValue,
+  t,
+  type TypedSchemaValue,
+  v,
+  validateSchemaGraph,
+} from '../schema-model';
 import type { FluentCodec } from '../../fluent/schema/codec';
 import { toolBuildError } from './errors';
 
@@ -217,11 +227,23 @@ export class CanonicalInputModel {
   readonly codec: FluentCodec;
 
   constructor(readonly fields: readonly CanonicalInputField[]) {
-    const defs = mergeGraphDefs(fields.map((entry) => entry.codec.graph));
+    fields.forEach((entry) =>
+      assertCanonicalGraph(entry.codec.graph, `canonical input field "${entry.name}"`),
+    );
+    let defs: SchemaGraph['defs'];
+    try {
+      defs = mergeGraphDefs(fields.map((entry) => entry.codec.graph));
+    } catch (error) {
+      toolBuildError(
+        'schema-conflict',
+        `canonical input schema merge failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const graph = {
       defs,
       root: t.record(fields.map((entry) => field(entry.name, entry.codec.graph.root))),
     };
+    assertCanonicalGraph(graph, 'canonical input record');
     this.codec = {
       graph,
       toValue: (input) => {
@@ -255,6 +277,10 @@ export class CanonicalInputModel {
     return this.codec.toValue(input);
   }
 
+  encodeTyped(input: Record<string, unknown>): TypedSchemaValue {
+    return { graph: this.codec.graph, value: this.encode(input) };
+  }
+
   decode(input: SchemaValue): Record<string, unknown> {
     return this.codec.fromValue(input) as Record<string, unknown>;
   }
@@ -272,6 +298,48 @@ export class CanonicalInputModel {
       schemaValue: input.fields[index],
     }));
   }
+
+  /**
+   * Rebuild this model's positional record from fields decoded by another
+   * canonical model. Forwarding matches canonical names and aliases, but only
+   * reuses a value when the complete per-field schema graph is identical.
+   */
+  forwardValues(input: readonly CanonicalInputValue[]): TypedSchemaValue {
+    const values = this.fields.map((field) => {
+      const value = input.find((candidate) => canonicalSurfacesOverlap(field, candidate));
+      if (!value) {
+        throw new Error(`missing canonical tool input field \`${field.name}\``);
+      }
+      if (!deepEqual(value.codec.graph, field.codec.graph)) {
+        throw new Error(
+          `canonical tool input field \`${value.name}\` has incompatible schema for forwarded field \`${field.name}\``,
+        );
+      }
+      return value.schemaValue;
+    });
+    return { graph: this.codec.graph, value: v.record(values) };
+  }
+}
+
+function assertCanonicalGraph(graph: SchemaGraph, position: string): void {
+  const error = validateSchemaGraph(graph)[0];
+  if (!error) return;
+  toolBuildError(
+    error.code === 'dangling-ref' ? 'unresolved-type-ref' : 'ill-formed-schema',
+    `${position}: ${error.message}`,
+  );
+}
+
+function canonicalSurfacesOverlap(
+  left: Pick<CanonicalInputField, 'name' | 'aliases'>,
+  right: Pick<CanonicalInputField, 'name' | 'aliases'>,
+): boolean {
+  return (
+    left.name === right.name ||
+    left.aliases.includes(right.name) ||
+    right.aliases.includes(left.name) ||
+    left.aliases.some((alias) => right.aliases.includes(alias))
+  );
 }
 
 export type ToolHelpArgumentKind =
@@ -368,21 +436,42 @@ export class ExtendedToolType {
   }
 
   canonicalInputFields(target: ExtendedCommandNode): CanonicalInputField[] {
-    const globals = this.effectiveGlobals(target).map(
-      (entry): CanonicalInputField =>
-        entry.tag === 'option'
-          ? {
-              name: entry.option.long,
-              aliases: entry.option.aliases,
-              codec: optionCollectedCodec(entry.option.shape),
-            }
-          : {
-              name: entry.flag.long,
-              aliases: entry.flag.aliases,
-              codec: flagCodec(entry.flag),
-            },
-    );
     const body = target.body;
+    const localNames = new Set<string>();
+    if (body) {
+      body.positionals.fixed.forEach((positional) => localNames.add(positional.name));
+      if (body.positionals.tail) localNames.add(body.positionals.tail.name);
+      body.options.forEach((option) => {
+        localNames.add(option.long);
+        option.aliases.forEach((alias) => localNames.add(alias));
+      });
+      body.flags.forEach((flag) => {
+        localNames.add(flag.long);
+        flag.aliases.forEach((alias) => localNames.add(alias));
+      });
+    }
+    const globals = this.effectiveGlobals(target)
+      .filter((entry) => {
+        const names =
+          entry.tag === 'option'
+            ? [entry.option.long, ...entry.option.aliases]
+            : [entry.flag.long, ...entry.flag.aliases];
+        return names.every((name) => !localNames.has(name));
+      })
+      .map(
+        (entry): CanonicalInputField =>
+          entry.tag === 'option'
+            ? {
+                name: entry.option.long,
+                aliases: entry.option.aliases,
+                codec: optionCollectedCodec(entry.option.shape),
+              }
+            : {
+                name: entry.flag.long,
+                aliases: entry.flag.aliases,
+                codec: flagCodec(entry.flag),
+              },
+      );
     if (!body) return globals;
     return [
       ...globals,

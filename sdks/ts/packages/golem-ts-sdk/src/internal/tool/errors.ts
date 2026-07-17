@@ -17,6 +17,7 @@ export type ToolBuildErrorCode =
   | 'duplicate-command-parent'
   | 'invalid-identifier'
   | 'invalid-metadata-value'
+  | 'encode-error'
   | 'subtree-root-name-mismatch'
   | 'duplicate-name'
   | 'duplicate-short'

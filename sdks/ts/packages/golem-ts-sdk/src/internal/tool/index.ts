@@ -13,6 +13,7 @@
 // limitations under the License.
 
 export * from './composition';
+export * from './encoding';
 export * from './errors';
 export * from './model';
 export * from './validation';

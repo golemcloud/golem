@@ -22,7 +22,7 @@
 // structure) and must NOT statically `import` the schema library, so no schema
 // library is baked into the SDK / WASM — it lives only in the component bundle.
 
-import { FluentCodec, SchemaWalker } from './codec';
+import { FluentCodec, freezeFluentCodec, SchemaWalker } from './codec';
 import { isStandardSchema, type StandardSchemaV1 } from './standardSchema';
 import { isMarkerSchema, WIT_MARKER } from './markers';
 import { RecursionRegistry } from './recursion';
@@ -45,7 +45,7 @@ export function registeredVendors(): string[] {
  * the registry is threaded through the recursive walk (see {@link compileSchemaWith}).
  */
 export function compileSchema(schema: unknown): FluentCodec {
-  return compileSchemaWith(schema, new RecursionRegistry());
+  return freezeFluentCodec(compileSchemaWith(schema, new RecursionRegistry()));
 }
 
 /**

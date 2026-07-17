@@ -80,8 +80,8 @@ export type {
 
 /** A schema type node: a structural body plus its metadata envelope. */
 export interface SchemaType {
-  body: SchemaTypeBody;
-  metadata: MetadataEnvelope;
+  readonly body: SchemaTypeBody;
+  readonly metadata: MetadataEnvelope;
 }
 
 export type SchemaTypeBody =
@@ -155,8 +155,8 @@ export interface UnionBranch {
 
 export interface SchemaTypeDef {
   /** Optional human-readable qualified name (display only). */
-  name?: string;
-  body: SchemaType;
+  readonly name?: string;
+  readonly body: SchemaType;
 }
 
 /**
@@ -164,8 +164,8 @@ export interface SchemaTypeDef {
  * stable `type-id`) plus a root type. `ref` bodies reference entries in `defs`.
  */
 export interface SchemaGraph {
-  defs: Map<TypeId, SchemaTypeDef>;
-  root: SchemaType;
+  readonly defs: ReadonlyMap<TypeId, SchemaTypeDef>;
+  readonly root: SchemaType;
 }
 
 // ============================================================
@@ -338,6 +338,59 @@ export const v = {
   secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
 };
+
+/** Clone a schema value without duplicating affine capability handles. */
+export function cloneSchemaValue(value: SchemaValue): SchemaValue {
+  switch (value.tag) {
+    case 'record':
+      return { tag: 'record', fields: value.fields.map(cloneSchemaValue) };
+    case 'variant':
+      return {
+        tag: 'variant',
+        caseIndex: value.caseIndex,
+        payload: value.payload ? cloneSchemaValue(value.payload) : undefined,
+      };
+    case 'flags':
+      return { tag: 'flags', flags: [...value.flags] };
+    case 'tuple':
+      return { tag: 'tuple', elements: value.elements.map(cloneSchemaValue) };
+    case 'list':
+      return { tag: 'list', elements: value.elements.map(cloneSchemaValue) };
+    case 'fixed-list':
+      return { tag: 'fixed-list', elements: value.elements.map(cloneSchemaValue) };
+    case 'map':
+      return {
+        tag: 'map',
+        entries: value.entries.map((entry) => ({
+          key: cloneSchemaValue(entry.key),
+          value: cloneSchemaValue(entry.value),
+        })),
+      };
+    case 'option':
+      return {
+        tag: 'option',
+        value: value.value !== undefined ? cloneSchemaValue(value.value) : undefined,
+      };
+    case 'result':
+      return {
+        tag: 'result',
+        result: {
+          tag: value.result.tag,
+          value:
+            value.result.value !== undefined ? cloneSchemaValue(value.result.value) : undefined,
+        },
+      };
+    case 'binary':
+      return { ...value, bytes: value.bytes.slice() };
+    case 'datetime':
+    case 'quantity':
+      return { ...value, value: { ...value.value } };
+    case 'union':
+      return { tag: 'union', unionTag: value.unionTag, body: cloneSchemaValue(value.body) };
+    default:
+      return { ...value };
+  }
+}
 
 // ============================================================
 // Structural equality (bigint / Uint8Array / Map aware)

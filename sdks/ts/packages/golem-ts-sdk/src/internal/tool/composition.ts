@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { FluentCodec } from '../../fluent/schema/codec';
+import { cloneSchemaValue } from '../schema-model';
 import { toolBuildError } from './errors';
 import {
   type Doc,
@@ -184,7 +185,13 @@ function resolveConstraint(
 }
 
 function resolveRef(ref: ExtendedRef, scope: ReadonlyMap<string, ValueIsScopeEntry>): ExtendedRef {
-  if (ref.tag === 'present' || ref.value.tag === 'resolved') return ref;
+  if (ref.tag === 'present') return ref;
+  if (ref.value.tag === 'resolved') {
+    return {
+      ...ref,
+      value: { ...ref.value, schemaValue: cloneSchemaValue(ref.value.schemaValue) },
+    };
+  }
   if (!scope.has(ref.name)) return ref;
   const entry = scope.get(ref.name);
   if (!entry?.codec || !entry.mode) {
@@ -203,7 +210,7 @@ function resolveRef(ref: ExtendedRef, scope: ReadonlyMap<string, ValueIsScopeEnt
     try {
       const sourceValue = parseSourceValue(codec, ref.value.value);
       if (sourceValue.tag === 'invalid') continue;
-      const schemaValue = codec.toValue(sourceValue.value);
+      const schemaValue = cloneSchemaValue(codec.toValue(sourceValue.value));
       if (schemaValueConforms(codec.graph, codec.graph.root, schemaValue)) {
         return {
           ...ref,

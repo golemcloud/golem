@@ -15,6 +15,7 @@
 import type { FluentCodec } from '../../fluent/schema/codec';
 import {
   assertSchemaValueRepresentable,
+  cloneSchemaValue,
   deepEqual,
   floatFromBits,
   isQuantityValueRepresentable,
@@ -147,7 +148,7 @@ function validateBody(
   let sawOptional = false;
   body.positionals.fixed.forEach((positional) => {
     checkIdentifier('positional name', positional.name);
-    insertName(names, positional.name);
+    insertName(names, positional.name, shorts);
     validateCodec(positional.codec, `positional ${positional.name}`);
     rejectVariantInput(positional.codec, positional.name);
     codecs.push(positional.codec);
@@ -171,7 +172,7 @@ function validateBody(
   const tail = body.positionals.tail;
   if (tail) {
     checkIdentifier('positional name', tail.name);
-    insertName(names, tail.name);
+    insertName(names, tail.name, shorts);
     validateCodec(tail.itemCodec, `tail ${tail.name}`);
     rejectVariantInput(tail.itemCodec, tail.name);
     codecs.push(tail.itemCodec);
@@ -378,20 +379,7 @@ function validateRef(
       `value-is literal does not match the argument type: ${ref.name}`,
     );
   }
-  let encoded: SchemaValue;
-  try {
-    encoded = resolved.codec.toValue(resolved.value);
-  } catch {
-    toolBuildError(
-      'value-is-type-mismatch',
-      `value-is literal does not match the argument type: ${ref.name}`,
-    );
-  }
-  if (
-    !deepEqual(encoded, resolved.schemaValue) ||
-    !sourceValueConforms(candidate, resolved.value) ||
-    !schemaValueConforms(candidate.graph, candidate.graph.root, resolved.schemaValue)
-  ) {
+  if (!schemaValueConforms(candidate.graph, candidate.graph.root, resolved.schemaValue)) {
     toolBuildError(
       'value-is-type-mismatch',
       `value-is literal does not match the argument type: ${ref.name}`,
@@ -411,7 +399,8 @@ function validateCodecValue(
       `${code === 'default-type-mismatch' ? 'default value' : 'value-is literal'} codec does not match its declared schema`,
     );
   }
-  if (!sourceValueConforms(expected, value.value)) {
+  const sourceValue = parseSourceValue(expected, value.value);
+  if (sourceValue.tag === 'invalid') {
     toolBuildError(
       code,
       `${code === 'default-type-mismatch' ? 'default value' : 'value-is literal'} does not satisfy its source schema`,
@@ -419,7 +408,7 @@ function validateCodecValue(
   }
   let encoded: SchemaValue;
   try {
-    encoded = value.codec.toValue(value.value);
+    encoded = cloneSchemaValue(expected.toValue(sourceValue.value));
   } catch (error) {
     toolBuildError(code, errorMessage(error));
   }
@@ -478,17 +467,22 @@ function insertSurface(
   names: Set<string>,
   shorts: Set<string>,
 ): void {
-  insertName(names, name);
-  aliases.forEach((alias) => insertName(names, alias));
+  insertName(names, name, shorts);
+  aliases.forEach((alias) => insertName(names, alias, shorts));
   if (short !== undefined) {
     checkUnicodeScalar('short form', short, 'invalid-identifier');
+    if (names.has(short)) {
+      toolBuildError('duplicate-name', `duplicate tool metadata name: ${short}`);
+    }
     if (shorts.has(short)) toolBuildError('duplicate-short', `duplicate short form: '${short}'`);
     shorts.add(short);
   }
 }
 
-function insertName(names: Set<string>, name: string): void {
-  if (names.has(name)) toolBuildError('duplicate-name', `duplicate tool metadata name: ${name}`);
+function insertName(names: Set<string>, name: string, shorts?: ReadonlySet<string>): void {
+  if (names.has(name) || shorts?.has(name)) {
+    toolBuildError('duplicate-name', `duplicate tool metadata name: ${name}`);
+  }
   names.add(name);
 }
 
@@ -1020,7 +1014,18 @@ export type SourceValueResult =
 
 /** Apply a codec's synchronous Standard Schema validation, preserving transformed output. */
 export function parseSourceValue(codec: FluentCodec, value: unknown): SourceValueResult {
-  if (!codec.sourceSchema) return { tag: 'valid', value };
+  if (!codec.sourceSchema) {
+    if (codec.listItem && Array.isArray(value)) {
+      const items: unknown[] = [];
+      for (const item of value) {
+        const parsed = parseSourceValue(codec.listItem, item);
+        if (parsed.tag === 'invalid') return parsed;
+        items.push(parsed.value);
+      }
+      return { tag: 'valid', value: items };
+    }
+    return { tag: 'valid', value };
+  }
   try {
     const result = codec.sourceSchema['~standard'].validate(value);
     return result instanceof Promise || result.issues !== undefined
@@ -1029,10 +1034,6 @@ export function parseSourceValue(codec: FluentCodec, value: unknown): SourceValu
   } catch {
     return { tag: 'invalid' };
   }
-}
-
-export function sourceValueConforms(codec: FluentCodec, value: unknown): boolean {
-  return parseSourceValue(codec, value).tag === 'valid';
 }
 
 function resolveType(
