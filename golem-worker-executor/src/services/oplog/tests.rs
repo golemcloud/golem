@@ -167,9 +167,9 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(
-        indexed_storage,
+        indexed_storage.clone(),
         blob_storage,
-        1,
+        100,
         1,
         100,
         RetryConfig::default(),
@@ -210,6 +210,16 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     oplog.add(entry4.clone()).await;
     oplog.add(entry5.clone()).await; // uncommitted entries
 
+    let read_count = indexed_storage.read_count();
+    let buffered_entries = oplog
+        .read_many(OplogIndex::from_u64(4), 2)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+
+    assert_eq!(buffered_entries, vec![entry4.clone(), entry5.clone()]);
+    assert_eq!(indexed_storage.read_count(), read_count);
+
     let entries = oplog
         .read_many(OplogIndex::INITIAL, 5)
         .await
@@ -220,6 +230,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
         entries,
         vec![entry1, entry2, entry3, entry4, entry5.clone()]
     );
+    assert_eq!(indexed_storage.read_count(), read_count + 1);
 
     let entry = oplog
         .read_many(OplogIndex::from_u64(5), 1)
@@ -228,6 +239,11 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
         .collect::<Vec<_>>();
 
     assert_eq!(entry, vec![entry5]);
+    assert_eq!(indexed_storage.read_count(), read_count + 1);
+
+    let read_count = indexed_storage.read_count();
+    assert!(oplog.read_many(OplogIndex::from_u64(5), 0).await.is_empty());
+    assert_eq!(indexed_storage.read_count(), read_count);
 }
 
 #[test]

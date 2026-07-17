@@ -833,14 +833,19 @@ impl PrimaryOplogState {
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("read_many");
 
+        if n == 0 {
+            return BTreeMap::new();
+        }
+
         let last_idx = oplog_index.range_end(n);
-        let mut result: BTreeMap<OplogIndex, OplogEntry> = {
+        let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
+        {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
             let agent_mode = self.agent_mode;
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
-            let end: u64 = last_idx.into();
+            let end: u64 = min(last_idx, self.last_committed_idx).into();
             retry_storage_op(&self.retry_config, "read_many", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
@@ -858,6 +863,8 @@ impl PrimaryOplogState {
             .into_iter()
             .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
             .collect()
+        } else {
+            BTreeMap::new()
         };
 
         if last_idx < self.last_committed_idx {
