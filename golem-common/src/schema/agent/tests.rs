@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::base_model::Empty;
-use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use crate::base_model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
 use crate::schema::agent::{
-    AgentConstructorSchema, AgentDependencySchema, AgentTypeSchema, AutoInjectedKind, FieldSource,
-    InputSchema, NamedField, OutputSchema, ParsedAgentId,
-    json_input_schema_value_to_typed_schema_value, typed_schema_value_with_projected_defs,
+    AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
+    AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
+    ParsedAgentId, json_input_schema_value_to_typed_schema_value,
+    typed_schema_value_with_projected_defs,
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
@@ -596,4 +597,170 @@ fn projected_helper_drops_all_defs_for_ref_free_root() {
     let typed = typed_schema_value_with_projected_defs(&graph, root, value);
 
     assert!(typed.graph().defs.is_empty());
+}
+
+// --- AgentTypeSchema::validate: rejection of P3 stub types (future/stream) ---
+
+fn method(name: &str, input: Vec<NamedField>, output: OutputSchema) -> AgentMethodSchema {
+    AgentMethodSchema {
+        name: name.to_string(),
+        description: String::new(),
+        prompt_hint: None,
+        input_schema: InputSchema::Parameters(input),
+        output_schema: output,
+        http_endpoint: vec![],
+        read_only: None,
+    }
+}
+
+#[test]
+fn validate_accepts_agent_type_without_p3_stubs() {
+    let agent = AgentTypeSchema {
+        methods: vec![method(
+            "get-weather",
+            vec![NamedField::user_supplied("city", SchemaType::string())],
+            OutputSchema::Single(Box::new(SchemaType::list(SchemaType::u8()))),
+        )],
+        ..sample_agent_type()
+    };
+    assert!(agent.validate().is_ok());
+}
+
+#[test]
+fn validate_rejects_stream_in_method_output() {
+    let agent = AgentTypeSchema {
+        methods: vec![method(
+            "download",
+            vec![],
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u8())))),
+        )],
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("stream output must be rejected");
+    assert!(
+        err.contains("unsupported type 'stream'") && err.contains("method 'download' output"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_future_in_method_parameter() {
+    let agent = AgentTypeSchema {
+        methods: vec![method(
+            "wait-for",
+            vec![NamedField::user_supplied(
+                "signal",
+                SchemaType::future(None),
+            )],
+            OutputSchema::Unit,
+        )],
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("future parameter must be rejected");
+    assert!(
+        err.contains("unsupported type 'future'")
+            && err.contains("method 'wait-for' parameter 'signal'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_stream_nested_in_constructor_parameter() {
+    // The stub is nested inside a structural type, not at the top level.
+    let agent = AgentTypeSchema {
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                "sources",
+                SchemaType::list(SchemaType::stream(Some(SchemaType::u8()))),
+            )]),
+        },
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("nested stream in constructor must be rejected");
+    assert!(
+        err.contains("unsupported type 'stream'")
+            && err.contains("constructor parameter 'sources'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_stream_in_shared_type_definition() {
+    let agent = AgentTypeSchema {
+        schema: registry(vec![proj_def(
+            "Chunks",
+            SchemaType::stream(Some(SchemaType::u8())),
+        )]),
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("stream in a shared type definition must be rejected");
+    assert!(
+        err.contains("unsupported type 'stream'")
+            && err.contains("shared type definition 'Chunks'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_future_in_config_value_type() {
+    let agent = AgentTypeSchema {
+        config: vec![AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["a".to_string(), "b".to_string()],
+            value_type: SchemaType::future(Some(SchemaType::string())),
+        }],
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("future config value type must be rejected");
+    assert!(
+        err.contains("unsupported type 'future'") && err.contains("config value at path 'a.b'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_stream_in_dependency_method_parameter() {
+    let agent = AgentTypeSchema {
+        dependencies: vec![AgentDependencySchema {
+            type_name: "helper".to_string(),
+            description: None,
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            methods: vec![method(
+                "feed",
+                vec![NamedField::user_supplied(
+                    "data",
+                    SchemaType::stream(Some(SchemaType::u8())),
+                )],
+                OutputSchema::Unit,
+            )],
+        }],
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("stream in a dependency method must be rejected");
+    assert!(
+        err.contains("unsupported type 'stream'")
+            && err.contains("dependency 'helper' method 'feed' parameter 'data'"),
+        "unexpected error: {err}"
+    );
 }

@@ -28,7 +28,9 @@ use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::wit::decode_agent_error;
 use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
-use golem_common::schema::validation::value::validate_record_fields;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::validation::value::{validate_record_fields, validate_value};
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value, encode_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -343,6 +345,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             method_name,
             input,
             principal,
+            expected_output,
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
@@ -358,6 +361,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             match result {
                 Ok(Ok(maybe_output)) => {
                     let output = decode_invoke_output(maybe_output)?;
+                    validate_invoke_output(display_name, &expected_output, &output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
                         result: AgentInvocationResult::AgentMethod { output },
@@ -525,6 +529,41 @@ fn decode_invoke_output(
             WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
         }),
     }
+}
+
+/// Declared output shape of an agent method, carried from [`lower_invocation`]
+/// (where the agent type and method are resolved) to [`dispatch_call`] (where
+/// the guest's returned value is validated against it).
+#[derive(Debug)]
+pub struct ExpectedInvokeOutput {
+    /// The agent type's shared definition graph; `SchemaType::Ref` nodes in
+    /// [`root`](Self::root) resolve against its defs (the graph's own root is
+    /// a placeholder — see [`AgentTypeSchema::schema`]).
+    graph: SchemaGraph,
+    /// The method's declared output type; the canonical empty tuple for
+    /// `unit` outputs (see [`decode_invoke_output`]).
+    root: SchemaType,
+}
+
+/// Validates the decoded output of an agent method invocation against the
+/// method's declared output schema, so a guest returning a mismatched value
+/// fails deterministically at the invocation boundary instead of surfacing
+/// later as a confusing shape mismatch in a consumer of the result.
+fn validate_invoke_output(
+    method_name: &str,
+    expected: &ExpectedInvokeOutput,
+    output: &SchemaValue,
+) -> Result<(), WorkerExecutorError> {
+    validate_value(&expected.graph, &expected.root, output).map_err(|errors| {
+        WorkerExecutorError::runtime(format!(
+            "Agent method '{method_name}' returned a value that does not match its declared output schema: {}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    })
 }
 
 /// Per-instance cache of typed guest export handles.
@@ -770,6 +809,7 @@ enum LoweredCall {
         method_name: String,
         input: core_wire::SchemaValueTree,
         principal: golem_agent::common::Principal,
+        expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
     LoadSnapshot {
@@ -838,6 +878,14 @@ pub fn lower_invocation(
                 &method_name,
             )?;
 
+            let expected_output = Box::new(ExpectedInvokeOutput {
+                graph: agent_type.schema.clone(),
+                root: match method.output_schema.schema() {
+                    Some(ty) => ty.clone(),
+                    None => SchemaType::tuple(Vec::new()),
+                },
+            });
+
             Ok(LoweredInvocation {
                 display_name: method_name.clone(),
                 read_only_method,
@@ -845,6 +893,7 @@ pub fn lower_invocation(
                     method_name,
                     input: encode_value(&input),
                     principal: principal.into(),
+                    expected_output,
                 },
             })
         }
@@ -1131,6 +1180,90 @@ mod tests {
         assert!(
             err.to_string().contains("invalid input parameter value"),
             "unexpected error: {err}"
+        );
+    }
+
+    // --- validate_invoke_output ---
+
+    fn unit_expected_output() -> ExpectedInvokeOutput {
+        ExpectedInvokeOutput {
+            graph: SchemaGraph::empty(),
+            root: SchemaType::tuple(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn unit_output_accepts_canonical_empty_tuple() {
+        let output = SchemaValue::Tuple {
+            elements: Vec::new(),
+        };
+        validate_invoke_output(METHOD_NAME, &unit_expected_output(), &output)
+            .expect("empty tuple must satisfy a unit output schema");
+    }
+
+    #[test]
+    fn unit_output_rejects_non_unit_value() {
+        let Err(err) =
+            validate_invoke_output(METHOD_NAME, &unit_expected_output(), &SchemaValue::U32(1))
+        else {
+            panic!("non-unit value for a unit output schema must be rejected");
+        };
+        assert!(
+            err.to_string()
+                .contains("does not match its declared output schema"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn declared_output_accepts_matching_value() {
+        let expected = ExpectedInvokeOutput {
+            graph: SchemaGraph::empty(),
+            root: SchemaType::u32(),
+        };
+        validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
+            .expect("matching value must pass output validation");
+    }
+
+    #[test]
+    fn declared_output_rejects_mismatched_value() {
+        let expected = ExpectedInvokeOutput {
+            graph: SchemaGraph::empty(),
+            root: SchemaType::u32(),
+        };
+        let Err(err) = validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true))
+        else {
+            panic!("mismatched output value must be rejected");
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains(METHOD_NAME)
+                && message.contains("does not match its declared output schema"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn declared_output_resolves_refs_through_the_agent_graph() {
+        use golem_common::schema::graph::SchemaTypeDef;
+        use golem_common::schema::metadata::TypeId;
+
+        let expected = ExpectedInvokeOutput {
+            graph: SchemaGraph {
+                defs: vec![SchemaTypeDef {
+                    id: TypeId::new("Answer"),
+                    name: None,
+                    body: SchemaType::u32(),
+                }],
+                root: SchemaType::record(Vec::new()),
+            },
+            root: SchemaType::ref_to(TypeId::new("Answer")),
+        };
+        validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
+            .expect("ref output must resolve through the agent graph");
+        assert!(
+            validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true)).is_err(),
+            "mismatched ref output must be rejected"
         );
     }
 }
