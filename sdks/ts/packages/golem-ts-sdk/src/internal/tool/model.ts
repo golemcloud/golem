@@ -211,6 +211,7 @@ export interface CanonicalInputField {
   readonly name: string;
   readonly aliases: readonly string[];
   readonly codec: FluentCodec;
+  readonly optionalCarrier?: true;
 }
 
 export interface CanonicalInputValue {
@@ -466,6 +467,9 @@ export class ExtendedToolType {
                 name: entry.option.long,
                 aliases: entry.option.aliases,
                 codec: canonicalOptionCodec(entry.option),
+                ...(hasOptionalOptionCarrier(entry.option)
+                  ? { optionalCarrier: true as const }
+                  : {}),
               }
             : {
                 name: entry.flag.long,
@@ -480,6 +484,7 @@ export class ExtendedToolType {
         name: positional.name,
         aliases: [],
         codec: canonicalPositionalCodec(positional),
+        ...(hasOptionalPositionalCarrier(positional) ? { optionalCarrier: true as const } : {}),
       })),
       ...(body.positionals.tail
         ? [
@@ -494,6 +499,7 @@ export class ExtendedToolType {
         name: option.long,
         aliases: option.aliases,
         codec: canonicalOptionCodec(option),
+        ...(hasOptionalOptionCarrier(option) ? { optionalCarrier: true as const } : {}),
       })),
       ...body.flags.map((flag) => ({
         name: flag.long,
@@ -597,15 +603,21 @@ export function optionCollectedCodec(shape: ExtendedOptionShape): FluentCodec {
 
 function canonicalOptionCodec(option: ExtendedOptionSpec): FluentCodec {
   const collected = optionCollectedCodec(option.shape);
-  return !option.required && option.default === undefined && !isRepeatable(option.shape)
-    ? optionalCanonicalFieldCodec(collected)
-    : collected;
+  return hasOptionalOptionCarrier(option) ? optionalCanonicalFieldCodec(collected) : collected;
 }
 
 function canonicalPositionalCodec(positional: ExtendedPositional): FluentCodec {
-  return !positional.required && positional.default === undefined
+  return hasOptionalPositionalCarrier(positional)
     ? optionalCanonicalFieldCodec(positional.codec)
     : positional.codec;
+}
+
+function hasOptionalOptionCarrier(option: ExtendedOptionSpec): boolean {
+  return !option.required && option.default === undefined && !isRepeatable(option.shape);
+}
+
+function hasOptionalPositionalCarrier(positional: ExtendedPositional): boolean {
+  return !positional.required && positional.default === undefined;
 }
 
 function isRepeatable(shape: ExtendedOptionShape): boolean {

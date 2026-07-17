@@ -13,12 +13,21 @@
 // limitations under the License.
 
 import type { Tool, ToolError } from 'golem:tool/common@0.1.0';
-import { deepEqual, type TypedSchemaValue, validateSchemaGraph } from '../schema-model';
 import {
+  deepEqual,
+  type SchemaValue,
+  type TypedSchemaValue,
+  validateSchemaGraph,
+} from '../schema-model';
+import {
+  type CanonicalInputField,
   encodeTool,
+  type CanonicalInputValue,
+  type ExtendedCommandNode,
   type ExtendedToolRuntime,
   ExtendedToolType,
   normalizeExtendedTool,
+  schemaValueConforms,
 } from '../tool';
 
 export interface RegisteredTool {
@@ -33,6 +42,15 @@ export type ToolInvoker = (
   input: TypedSchemaValue,
   context: unknown,
 ) => Promise<unknown>;
+
+export interface PreparedToolInvocation {
+  invoke(context: unknown): Promise<unknown>;
+}
+
+export interface ResolvedToolInvocation {
+  readonly command: ExtendedCommandNode;
+  prepare(input: TypedSchemaValue): PreparedToolInvocation;
+}
 
 class ToolRegistryImpl {
   private readonly registry = new Map<string, RegisteredTool>();
@@ -71,8 +89,10 @@ class ToolRegistryImpl {
         extended,
         encoded: encodeTool(extended),
         runtime: registeredRuntime,
-        invoker: (commandPath, input, context) =>
-          this.invokeRegistered(extended, registeredRuntime, commandPath, input, context),
+        invoker: async (commandPath, input, context) => {
+          const resolved = this.resolveRegistered(extended, registeredRuntime, commandPath);
+          return await resolved.prepare(input).invoke(context);
+        },
       } satisfies RegisteredTool;
 
       this.registry.set(name, entry);
@@ -104,6 +124,14 @@ class ToolRegistryImpl {
 
   getInvoker(name: string): ToolInvoker | undefined {
     return this.get(name)?.invoker;
+  }
+
+  resolveInvocation(name: string, commandPath: readonly string[]): ResolvedToolInvocation {
+    const registered = this.get(name);
+    if (!registered) {
+      throw { tag: 'invalid-tool-name', val: name } satisfies ToolError;
+    }
+    return this.resolveRegistered(registered.extended, registered.runtime, commandPath);
   }
 
   recordRegistrationError(toolName: string, message: string): void {
@@ -142,49 +170,41 @@ class ToolRegistryImpl {
     return Array.from(this.registry.entries()).sort(([left], [right]) => compareNames(left, right));
   }
 
-  private async invokeRegistered(
+  private resolveRegistered(
     tool: ExtendedToolType,
     runtime: ExtendedToolRuntime,
     commandPath: readonly string[],
-    input: TypedSchemaValue,
-    context: unknown,
-  ): Promise<unknown> {
+    invalidPath: readonly string[] = commandPath,
+  ): ResolvedToolInvocation {
     const command = tool.commandByPath(commandPath);
-    if (!command) throw invalidCommandPath(commandPath);
+    if (!command) throw invalidCommandPath(invalidPath);
 
     const canonicalPath = tool.commandPath(command);
-    if (!canonicalPath) throw invalidCommandPath(commandPath);
-
-    const graphError = validateSchemaGraph(input.graph)[0];
-    if (graphError) {
-      throw invalidInput(`invalid tool input schema: ${graphError.message}`);
-    }
-
-    const inputModel = tool.canonicalInputModel(command);
-    if (!deepEqual(input.graph, inputModel.codec.graph)) {
-      throw invalidInput('tool input schema does not match the command canonical input schema');
-    }
-    let inputValues;
-    try {
-      inputValues = inputModel.decodeValues(input.value);
-    } catch (error) {
-      throw invalidInput(error);
-    }
+    if (!canonicalPath) throw invalidCommandPath(invalidPath);
 
     const binding = runtime.bindings.find((candidate) =>
       pathsEqual(candidate.commandPath, canonicalPath),
     );
     if (binding) {
-      const handlerInput = Object.fromEntries(
-        inputValues.map((field) => [camelCase(field.name), field.value]),
-      );
-      return await binding.handler.call(binding.receiver, handlerInput, context);
+      return {
+        command,
+        prepare: (input) => {
+          const inputValues = decodeCanonicalInput(tool, command, input);
+          const handlerInput = Object.fromEntries(
+            inputValues.map((field) => [camelCase(field.name), field.value]),
+          );
+          return {
+            invoke: async (context) =>
+              await binding.handler.call(binding.receiver, handlerInput, context),
+          };
+        },
+      };
     }
 
     const forward = runtime.subtreeForwards.find((candidate) =>
       pathStartsWith(canonicalPath, candidate.pathPrefix),
     );
-    if (!forward) throw invalidCommandPath(commandPath);
+    if (!forward) throw invalidCommandPath(invalidPath);
 
     const child = this.get(forward.childToolName);
     if (!child) {
@@ -195,16 +215,57 @@ class ToolRegistryImpl {
     }
 
     const childPath = canonicalPath.slice(forward.pathPrefix.length);
-    const childCommand = child.extended.commandByPath(childPath);
-    if (!childCommand) throw invalidCommandPath(commandPath);
+    const childResolved = this.resolveRegistered(
+      child.extended,
+      child.runtime,
+      childPath,
+      invalidPath,
+    );
+    return {
+      command,
+      prepare: (input) => {
+        const inputValues = decodeCanonicalInput(tool, command, input);
+        let childInput: TypedSchemaValue;
+        try {
+          childInput = child.extended
+            .canonicalInputModel(childResolved.command)
+            .forwardValues(inputValues);
+        } catch (error) {
+          throw invalidInput(error);
+        }
+        return childResolved.prepare(childInput);
+      },
+    };
+  }
+}
 
-    let childInput: TypedSchemaValue;
-    try {
-      childInput = child.extended.canonicalInputModel(childCommand).forwardValues(inputValues);
-    } catch (error) {
-      throw invalidInput(error);
-    }
-    return await child.invoker(childPath, childInput, context);
+function decodeCanonicalInput(
+  tool: ExtendedToolType,
+  command: ExtendedCommandNode,
+  input: TypedSchemaValue,
+): CanonicalInputValue[] {
+  const graphError = validateSchemaGraph(input.graph)[0];
+  if (graphError) {
+    throw invalidInput(`invalid tool input schema: ${graphError.message}`);
+  }
+
+  const inputModel = tool.canonicalInputModel(command);
+  if (!deepEqual(input.graph, inputModel.codec.graph)) {
+    throw invalidInput('tool input schema does not match the command canonical input schema');
+  }
+  if (
+    input.value.tag !== 'record' ||
+    input.value.fields.length !== inputModel.fields.length ||
+    inputModel.fields.some(
+      (field, index) => !canonicalValueConforms(field, input.value.fields[index]),
+    )
+  ) {
+    throw invalidInput('tool input value does not match the command canonical input schema');
+  }
+  try {
+    return inputModel.decodeValues(input.value);
+  } catch (error) {
+    throw invalidInput(error);
   }
 }
 
@@ -222,6 +283,25 @@ function pathStartsWith(path: readonly string[], prefix: readonly string[]): boo
 
 function camelCase(name: string): string {
   return name.replace(/-([a-z0-9])/g, (_, char: string) => char.toUpperCase());
+}
+
+function canonicalValueConforms(field: CanonicalInputField, value: SchemaValue): boolean {
+  if (field.optionalCarrier) {
+    if (value.tag !== 'option') return false;
+    if (
+      value.value !== undefined &&
+      !schemaValueConforms(field.codec.graph, field.codec.graph.root, value.value)
+    ) {
+      return false;
+    }
+  } else if (!schemaValueConforms(field.codec.graph, field.codec.graph.root, value)) {
+    return false;
+  }
+  try {
+    return deepEqual(field.codec.toValue(field.codec.fromValue(value)), value);
+  } catch {
+    return false;
+  }
 }
 
 function invalidCommandPath(commandPath: readonly string[]): ToolError {

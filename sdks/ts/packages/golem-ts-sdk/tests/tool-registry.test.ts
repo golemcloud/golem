@@ -12,14 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { getStdout } from 'wasi:cli/stdout@0.2.3';
+import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
-import { command, ok, toolDefinition, type ToolImplementation } from '../src/fluent';
+import { command, err, ok, toolDefinition, type ToolImplementation } from '../src/fluent';
 import { compileSchema } from '../src/fluent/schema/adapter';
 import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
+import { typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import { tool } from '../src';
 
-beforeEach(() => ToolRegistry.clearForTests());
+beforeEach(() => {
+  ToolRegistry.clearForTests();
+  vi.mocked(getStdout)
+    .mockReset()
+    .mockImplementation(() => {
+      throw new Error('getStdout is not mocked for this test');
+    });
+});
 
 describe('fluent tool registration', () => {
   it('keeps definitions inert until implement is called', () => {
@@ -220,6 +231,63 @@ describe('fluent tool registration', () => {
     expect(received).toBeUndefined();
   });
 
+  it('rejects a missing canonical carrier for a present optional-of-option argument', async () => {
+    const definition = toolDefinition('nested-optional-tool').body((body) =>
+      body.option('label', z.string().optional()).returns(z.void()),
+    );
+    let called = false;
+    definition.implement({
+      'nested-optional-tool': async () => {
+        called = true;
+        return ok(undefined);
+      },
+    });
+
+    const registered = ToolRegistry.get('nested-optional-tool');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('nested optional tool was not registered');
+    const inputModel = registered.extended.canonicalInputModel(commandNode);
+    expect(inputModel.encodeTyped({ label: 'present' }).value).toEqual(
+      v.record([v.option(v.option(v.string('present')))]),
+    );
+
+    const nonCanonicalInput = {
+      graph: inputModel.codec.graph,
+      value: v.record([v.option(v.string('present'))]),
+    };
+    await expect(registered.invoker([], nonCanonicalInput, {})).rejects.toMatchObject({
+      tag: 'invalid-input',
+    });
+    expect(called).toBe(false);
+  });
+
+  it('rejects non-canonical values for required fields without an outer option carrier', async () => {
+    const definition = toolDefinition('literal-tool').body((body) =>
+      body.option('mode', z.literal('right').optional(), { required: true }).returns(z.void()),
+    );
+    let called = false;
+    definition.implement({
+      'literal-tool': async () => {
+        called = true;
+        return ok(undefined);
+      },
+    });
+
+    const registered = ToolRegistry.get('literal-tool');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('literal tool was not registered');
+    const inputModel = registered.extended.canonicalInputModel(commandNode);
+    const nonCanonicalInput = {
+      graph: inputModel.codec.graph,
+      value: v.record([v.option(v.string('wrong'))]),
+    };
+
+    await expect(registered.invoker([], nonCanonicalInput, {})).rejects.toMatchObject({
+      tag: 'invalid-input',
+    });
+    expect(called).toBe(false);
+  });
+
   it('preserves a separately registered child handler receiver when forwarding', async () => {
     const remote = toolDefinition('remote').command('add', (add) =>
       add.body((body) => body.returns(z.string())),
@@ -416,5 +484,308 @@ describe('fluent tool registration', () => {
 
     expect(ToolRegistry.getRegisteredTools()).toEqual([]);
     expect(ToolRegistry.getRegistrationErrors()).toEqual([]);
+  });
+});
+
+describe('tool guest exports', () => {
+  it('discovers registered descriptors and looks them up by root name', async () => {
+    toolDefinition('zeta')
+      .body((body) => body.returns(z.void()))
+      .implement({ zeta: async () => ok(undefined) });
+    toolDefinition('alpha')
+      .body((body) => body.returns(z.void()))
+      .implement({ alpha: async () => ok(undefined) });
+
+    await expect(tool.discoverTools()).resolves.toMatchObject([
+      { commands: { nodes: [{ name: 'alpha' }] } },
+      { commands: { nodes: [{ name: 'zeta' }] } },
+    ]);
+    await expect(tool.getTool('zeta')).resolves.toBe(ToolRegistry.getTool('zeta'));
+    await expect(tool.getTool('missing')).rejects.toEqual({
+      tag: 'invalid-tool-name',
+      val: 'missing',
+    });
+  });
+
+  it('reports deferred registration diagnostics through discovery', async () => {
+    toolDefinition('Invalid')
+      .body((body) => body.returns(z.void()))
+      .implement({ Invalid: async () => ok(undefined) });
+
+    await expect(tool.discoverTools()).rejects.toEqual({
+      tag: 'invalid-result',
+      val: expect.stringContaining('Tool "Invalid"'),
+    });
+  });
+
+  it('decodes canonical input, injects the principal, and encodes a local result', async () => {
+    let received: { input: unknown; principalTag: string } | undefined;
+    toolDefinition('echo')
+      .body((body) => body.positional('message', z.string()).returns(z.string()))
+      .implement({
+        echo: async (input, context) => {
+          received = { input, principalTag: context.principal.tag };
+          return ok(input.message.toUpperCase());
+        },
+      });
+    const registered = ToolRegistry.get('echo');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('echo tool was not registered');
+    const input = registered.extended
+      .canonicalInputModel(commandNode)
+      .encodeTyped({ message: 'hello' });
+
+    const result = await tool.invoke('echo', [], typedSchemaValueToWit(input), undefined, {
+      tag: 'anonymous',
+    });
+
+    expect(received).toEqual({ input: { message: 'hello' }, principalTag: 'anonymous' });
+    expect(result.stdout).toBeUndefined();
+    expect(result.result).toBeDefined();
+    const decoded = typedSchemaValueFromWit(result.result!);
+    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe('HELLO');
+  });
+
+  it('maps unknown tools, command paths, and invalid canonical values to exact tool errors', async () => {
+    toolDefinition('echo')
+      .body((body) => body.positional('message', z.string()).returns(z.void()))
+      .implement({ echo: async () => ok(undefined) });
+    const registered = ToolRegistry.get('echo');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('echo tool was not registered');
+    const inputModel = registered.extended.canonicalInputModel(commandNode);
+    const validInput = typedSchemaValueToWit(inputModel.encodeTyped({ message: 'hello' }));
+
+    await expect(
+      tool.invoke('missing', [], validInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'missing' });
+    await expect(
+      tool.invoke('echo', ['missing'], validInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toEqual({ tag: 'invalid-command-path', val: ['missing'] });
+
+    const invalidValue = typedSchemaValueToWit({
+      graph: inputModel.codec.graph,
+      value: v.record([v.bool(true)]),
+    });
+    await expect(
+      tool.invoke('echo', [], invalidValue, undefined, { tag: 'anonymous' }),
+    ).rejects.toMatchObject({ tag: 'invalid-input' });
+  });
+
+  it('encodes declared custom errors and rejects invalid handler results', async () => {
+    toolDefinition('fallible')
+      .body((body) =>
+        body.returns(z.string()).error('failed', {
+          kind: 'runtime',
+          exitCode: 1,
+          payload: z.object({ reason: z.string() }),
+        }),
+      )
+      .implement({
+        fallible: async () => err('failed', { reason: 'nope' }),
+      });
+    const fallible = ToolRegistry.get('fallible');
+    const fallibleCommand = fallible?.extended.commandByPath([]);
+    if (!fallible || !fallibleCommand) throw new Error('fallible tool was not registered');
+    const fallibleInput = typedSchemaValueToWit(
+      fallible.extended.canonicalInputModel(fallibleCommand).encodeTyped({}),
+    );
+
+    const customError = await tool
+      .invoke('fallible', [], fallibleInput, undefined, { tag: 'anonymous' })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(customError).toMatchObject({ tag: 'custom-error' });
+    const payload = typedSchemaValueFromWit(
+      (customError as { val: Parameters<typeof typedSchemaValueFromWit>[0] }).val,
+    );
+    expect(fallibleCommand.body?.errors[0].payloadCodec?.fromValue(payload.value)).toEqual({
+      reason: 'nope',
+    });
+
+    toolDefinition('invalid-result')
+      .body((body) => body.returns(z.string()))
+      .implement({ 'invalid-result': async () => ok(42 as never) });
+    const invalid = ToolRegistry.get('invalid-result');
+    const invalidCommand = invalid?.extended.commandByPath([]);
+    if (!invalid || !invalidCommand) throw new Error('invalid-result tool was not registered');
+    const invalidInput = typedSchemaValueToWit(
+      invalid.extended.canonicalInputModel(invalidCommand).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('invalid-result', [], invalidInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toMatchObject({ tag: 'invalid-result' });
+  });
+
+  it('encodes transformed handler outputs without applying the transform again', async () => {
+    toolDefinition('transformed-result')
+      .body((body) => body.returns(z.string().transform((value) => `${value}!`)))
+      .implement({
+        'transformed-result': async () => ok('done!'),
+      });
+    const registered = ToolRegistry.get('transformed-result');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('transformed-result was not registered');
+    const input = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const result = await tool.invoke('transformed-result', [], input, undefined, {
+      tag: 'anonymous',
+    });
+
+    expect(result.result).toBeDefined();
+    const decoded = typedSchemaValueFromWit(result.result!);
+    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe('done!');
+  });
+
+  it('adapts declared streams and returns the acquired stdout resource', async () => {
+    const writes: Uint8Array[] = [];
+    const output = {
+      blockingWriteAndFlush(contents: Uint8Array) {
+        writes.push(new Uint8Array(contents));
+      },
+      blockingFlush: vi.fn(),
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    let reads = 0;
+    const input = {
+      blockingRead() {
+        if (reads++ === 0) return new TextEncoder().encode('input');
+        throw { tag: 'closed' };
+      },
+    } as unknown as InputStream;
+
+    toolDefinition('streams')
+      .body((body) => body.stdin({ required: true }).stdout({ required: true }).returns(z.void()))
+      .implement({
+        streams: async (_, context) => {
+          const reader = context.stdin.getReader();
+          const first = await reader.read();
+          const done = await reader.read();
+          expect(new TextDecoder().decode(first.value)).toBe('input');
+          expect(done.done).toBe(true);
+
+          const writer = context.stdout.getWriter();
+          await writer.write(new TextEncoder().encode('output'));
+          await writer.close();
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('streams');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('streams tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('streams', [], invocationInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toEqual({
+      tag: 'invalid-input',
+      val: 'tool invocation did not contain declared stdin stream',
+    });
+    const result = await tool.invoke('streams', [], invocationInput, input, { tag: 'anonymous' });
+
+    expect(result).toEqual({ result: undefined, stdout: output });
+    expect(writes.map((chunk) => new TextDecoder().decode(chunk))).toEqual(['output']);
+    expect(output.blockingFlush).toHaveBeenCalled();
+  });
+
+  it('does not convert undeclared handler exceptions into tool errors', async () => {
+    const failure = new Error('handler failed');
+    toolDefinition('traps')
+      .body((body) => body.returns(z.void()))
+      .implement({
+        traps: async () => {
+          throw failure;
+        },
+      });
+    const registered = ToolRegistry.get('traps');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('traps tool was not registered');
+    const input = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(tool.invoke('traps', [], input, undefined, { tag: 'anonymous' })).rejects.toBe(
+      failure,
+    );
+  });
+
+  it('resolves a missing grafted child before enforcing its required stdin', async () => {
+    const remote = toolDefinition('remote').body((body) =>
+      body.stdin({ required: true }).returns(z.void()),
+    );
+    const git = toolDefinition('git').command('remote', remote);
+    git.implement({});
+    const registered = ToolRegistry.get('git');
+    const commandNode = registered?.extended.commandByPath(['remote']);
+    if (!registered || !commandNode) throw new Error('git subtree was not registered');
+    const input = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('git', ['remote'], input, undefined, { tag: 'anonymous' }),
+    ).rejects.toEqual({
+      tag: 'invalid-tool-name',
+      val: 'remote',
+    });
+  });
+
+  it('validates canonical input before acquiring declared stdout', async () => {
+    const output = {
+      blockingFlush: vi.fn(),
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+    toolDefinition('stdout-validate')
+      .body((body) =>
+        body.positional('message', z.string()).stdout({ required: true }).returns(z.void()),
+      )
+      .implement({ 'stdout-validate': async () => ok(undefined) });
+    const registered = ToolRegistry.get('stdout-validate');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('stdout-validate tool was not registered');
+    const inputModel = registered.extended.canonicalInputModel(commandNode);
+    const invalidInput = typedSchemaValueToWit({
+      graph: inputModel.codec.graph,
+      value: v.record([v.bool(true)]),
+    });
+
+    await expect(
+      tool.invoke('stdout-validate', [], invalidInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toMatchObject({ tag: 'invalid-input' });
+    expect(getStdout).not.toHaveBeenCalled();
+  });
+
+  it('resolves an invalid command path before decoding malformed input', async () => {
+    toolDefinition('echo')
+      .body((body) => body.returns(z.void()))
+      .implement({ echo: async () => ok(undefined) });
+    const registered = ToolRegistry.get('echo');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('echo tool was not registered');
+    const validInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+    const malformedInput = {
+      ...validInput,
+      value: {
+        ...validInput.value,
+        root: validInput.value.valueNodes.length,
+      },
+    };
+
+    await expect(
+      tool.invoke('echo', ['missing'], malformedInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toEqual({
+      tag: 'invalid-command-path',
+      val: ['missing'],
+    });
   });
 });

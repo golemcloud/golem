@@ -32,6 +32,7 @@ export default defineConfig({
         __dirname,
         'types/wasi_clocks_0_2_3_wall_clock.d.ts',
       ),
+      'wasi:cli/stdout@0.2.3': path.resolve(__dirname, 'types/wasi_cli_0_2_3_stdout.d.ts'),
       // Host bindings used by the fluent typed surfaces. Type-only at test time —
       // the surfaces only call them inside functions, so importing the package
       // barrel resolves without the live WASM host. (fluent-io.test.ts vi.mocks
