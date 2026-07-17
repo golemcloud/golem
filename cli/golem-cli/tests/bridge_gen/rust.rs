@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::bridge_gen::fixtures::{
-    agent, code_first_snippets_agent_type, def, field, method, multi_agent_wrapper_2_types, ref_to,
-    single_agent_wrapper_types,
+    agent, code_first_snippets_agent_type, def, field, local_config, method,
+    multi_agent_wrapper_2_types, ref_to, single_agent_wrapper_types,
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::Utf8Path;
-use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
+use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode, RustTypeName};
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::AgentMode;
@@ -155,6 +155,73 @@ fn bridge_rust_ephemeral_metadata_wrapper_does_not_collide_with_schema_type() {
     );
 
     generate_and_compile(agent_type, target_dir);
+}
+
+#[test]
+fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
+    let dir = TempDir::new().unwrap();
+    let target_path = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "AlphaAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "run",
+            vec![field("value", SchemaType::s32())],
+            Some(SchemaType::string()),
+        )],
+        vec![],
+        AgentMode::Ephemeral,
+    );
+    agent_type.config = vec![local_config(vec!["api-key"], SchemaType::string())];
+    let mut generator = RustBridgeGenerator::new_with_mode(
+        agent_type,
+        target_path,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+
+    generator.generate().unwrap();
+
+    let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+    for ephemeral_shape in [
+        "pub use golem_rust::agentic::EphemeralInvocationResult",
+        "pub fn new_phantom(",
+        "pub fn new_phantom_with_config(",
+        "async_invoke_and_await",
+        ".invoke(",
+        "schedule_invocation",
+        "schedule_cancelable_invocation",
+    ] {
+        assert!(
+            lib_rs.contains(ephemeral_shape),
+            "missing ephemeral guest wasm-rpc API shape {ephemeral_shape}:\n{lib_rs}"
+        );
+    }
+    assert!(!lib_rs.contains("pub struct AlphaAgentInvocationResult"));
+    assert!(!lib_rs.contains("_with_metadata"));
+    assert!(!lib_rs.contains("pub fn get("));
+    assert!(!lib_rs.contains("pub fn get_phantom("));
+    assert!(!lib_rs.contains("pub fn get_with_config("));
+    assert!(!lib_rs.contains("pub fn get_phantom_with_config("));
+    assert!(!lib_rs.contains("Uuid::new_v4"));
+
+    let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
+    let output = std::process::Command::new("cargo")
+        .arg("check")
+        .arg("--target-dir")
+        .arg(shared_target_dir)
+        .current_dir(target_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generated ephemeral guest crate failed cargo check\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
