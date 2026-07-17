@@ -1076,9 +1076,12 @@ mod tests {
         HostResponseMonotonicClockTimestamp, OplogPayload, PayloadId, RawOplogPayload,
     };
     use golem_common::model::{AgentId, Timestamp};
+    use proptest::prelude::*;
     use std::collections::BTreeMap;
     use std::time::Duration;
     use test_r::test;
+
+    test_r::enable!();
 
     /// Minimal in-memory `Oplog` used to drive a [`ReplayState`] over hand-built entries.
     #[derive(Debug)]
@@ -1244,47 +1247,93 @@ mod tests {
             .expect("failed to build replay state")
     }
 
-    #[test]
-    async fn replay_reads_sparse_batch_entries_individually() {
-        let oplog = Arc::new(InMemoryOplog::sparse(vec![noop(), noop(), noop()]));
-        let mut state = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
-            .await
-            .unwrap();
-
-        assert!(matches!(
-            state.get_oplog_entry().await.unwrap().1,
-            OplogEntry::NoOp { .. }
-        ));
-        assert!(matches!(
-            state.get_oplog_entry().await.unwrap().1,
-            OplogEntry::NoOp { .. }
-        ));
+    fn indexed_noop(value: u64) -> OplogEntry {
+        OplogEntry::NoOp {
+            timestamp: Timestamp::from(value),
+        }
     }
 
-    #[test]
-    async fn lowering_replay_target_discards_prefetched_future_entries() {
-        let original = OplogEntry::NoOp {
-            timestamp: Timestamp::from(1),
-        };
-        let replacement = OplogEntry::NoOp {
-            timestamp: Timestamp::from(2),
-        };
-        let oplog = Arc::new(InMemoryOplog::new());
-        for _ in 0..3 {
-            oplog.add(original.clone()).await;
-        }
-        let mut state = ReplayState::new(test_agent_id(), oplog.clone(), DeletedRegions::default())
-            .await
+    #[derive(Debug, Clone)]
+    enum ReplayOperation {
+        SetTarget(u8),
+        Read,
+    }
+
+    fn replay_operations() -> impl Strategy<Value = Vec<ReplayOperation>> {
+        prop::collection::vec(
+            prop_oneof![
+                (2u8..=16).prop_map(ReplayOperation::SetTarget),
+                Just(ReplayOperation::Read),
+            ],
+            1..64,
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// A lowered target invalidates all prefetched entries after it, including when a sparse
+        /// cross-layer batch forces a single-entry fallback.
+        #[test]
+        fn replay_buffer_tracks_random_target_changes(
+            sparse_batch_reads in any::<bool>(),
+            operations in replay_operations(),
+        ) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            runtime.block_on(async move {
+                const LAST_INDEX: u64 = 16;
+
+                let mut expected: Vec<OplogEntry> = (1..=LAST_INDEX).map(indexed_noop).collect();
+                let oplog = if sparse_batch_reads {
+                    Arc::new(InMemoryOplog::sparse(expected.clone()))
+                } else {
+                    let oplog = Arc::new(InMemoryOplog::new());
+                    for entry in &expected {
+                        oplog.add(entry.clone()).await;
+                    }
+                    oplog
+                };
+                let mut state = ReplayState::new(test_agent_id(), oplog.clone(), DeletedRegions::default())
+                    .await
+                    .unwrap();
+                let mut next_index = 2u64;
+                let mut target = LAST_INDEX;
+                let mut generation = LAST_INDEX;
+
+                for operation in operations {
+                    match operation {
+                        ReplayOperation::SetTarget(raw_target) if next_index <= LAST_INDEX => {
+                            let new_target = u64::from(raw_target)
+                                .max(next_index)
+                                .min(LAST_INDEX);
+                            if new_target < target {
+                                for index in (new_target + 1)..=LAST_INDEX {
+                                    generation += 1;
+                                    let entry = indexed_noop(generation);
+                                    expected[(index - 1) as usize] = entry.clone();
+                                    oplog.replace(OplogIndex::from_u64(index), entry).await;
+                                }
+                            }
+                            state.set_replay_target(OplogIndex::from_u64(new_target));
+                            target = new_target;
+                        }
+                        ReplayOperation::Read if next_index <= target => {
+                            let (_, entry) = state.get_oplog_entry().await.unwrap();
+                            prop_assert_eq!(entry, expected[(next_index - 1) as usize].clone());
+                            next_index += 1;
+                        }
+                        _ => {}
+                    }
+                }
+
+                Ok(())
+            })
             .unwrap();
-
-        state.set_replay_target(OplogIndex::INITIAL.next());
-        state.get_oplog_entry().await.unwrap();
-        oplog
-            .replace(OplogIndex::INITIAL.next().next(), replacement.clone())
-            .await;
-        state.set_replay_target(OplogIndex::INITIAL.next().next());
-
-        assert_eq!(state.get_oplog_entry().await.unwrap().1, replacement);
+        }
     }
 
     #[test]
