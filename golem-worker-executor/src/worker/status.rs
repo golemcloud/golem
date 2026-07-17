@@ -744,7 +744,7 @@ fn calculate_pending_invocations(
     result
 }
 
-fn calculate_pending_card_events(
+pub(crate) fn calculate_pending_card_events(
     initial: Vec<PendingCardEventRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<PendingCardEventRef> {
