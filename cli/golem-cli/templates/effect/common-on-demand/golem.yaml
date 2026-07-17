@@ -1,0 +1,65 @@
+# golem-app-manifest-header
+
+componentTemplates:
+  effect:
+    presets:
+      optimized:
+        default: true
+        build:
+        - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ appRootDir }}/package.json"
+          targets:
+          - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+        - command: npx --no rollup -- -c "{{ golemTempDir }}/common/effect/rollup.config.component.mjs"
+          dir: "{{ componentDir }}"
+          env:
+            GOLEM_APP_ROOT: "{{ appRootDir }}"
+            GOLEM_TEMP: "{{ golemTempDir }}"
+            GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/common/effect/rollup.config.component.mjs"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ appRootDir }}/package.json"
+          targets:
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
+          module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      quick:
+        build:
+        - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ appRootDir }}/package.json"
+          targets:
+          - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+        - command: npx --no rollup -- -c "{{ golemTempDir }}/common/effect/rollup.config.component.mjs"
+          dir: "{{ componentDir }}"
+          env:
+            GOLEM_APP_ROOT: "{{ appRootDir }}"
+            GOLEM_TEMP: "{{ golemTempDir }}"
+            GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/common/effect/rollup.config.component.mjs"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ appRootDir }}/package.json"
+          targets:
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
+          module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+customCommands:
+  effect-npm-install:
+  - command: npm install

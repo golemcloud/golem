@@ -15,6 +15,7 @@
 pub mod sdk {
     pub const RUST: &str = "2.1.0";
     pub const TS: &str = "1.1.1";
+    pub const EFFECT_GOLEM: &str = "1.5.0-rc1";
     pub const SCALA: &str = "1.5.1";
     pub const MOONBIT: &str = "0.5.2";
     pub const MANIFEST: &str = "1.5.0";
@@ -47,6 +48,10 @@ pub mod ts_dep {
     pub const ROLLUP: &str = "^4.50.1";
     pub const TSLIB: &str = "^2.8.1";
     pub const TYPESCRIPT: &str = "^5.9.2";
+}
+
+pub mod effect_dep {
+    pub const EFFECT: &str = "4.0.0-beta.57";
 }
 
 // Keep this aligned with the Rust component template

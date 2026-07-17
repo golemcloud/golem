@@ -81,7 +81,7 @@ impl TryFrom<GuestLanguage> for ReplLanguage {
 
     fn try_from(guest_language: GuestLanguage) -> Result<Self, Self::Error> {
         match guest_language {
-            GuestLanguage::TypeScript => Ok(ReplLanguage::TypeScript),
+            GuestLanguage::TypeScript | GuestLanguage::Effect => Ok(ReplLanguage::TypeScript),
             GuestLanguage::Rust => Ok(ReplLanguage::TypeScript),
             GuestLanguage::Scala => Ok(ReplLanguage::TypeScript),
             GuestLanguage::MoonBit => Ok(ReplLanguage::TypeScript),

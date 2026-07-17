@@ -52,6 +52,7 @@ enum DependencyMatcherSemantics {
 #[derive(Clone, Debug)]
 enum ExpectedDependencyKind {
     ExactPath(String),
+    ExactValue(String),
     SemanticCompatibleVersion {
         base_version: String,
         use_version_hint: bool,
@@ -129,8 +130,15 @@ pub(crate) fn plan_dependency_fixes(
 
     let mut plan = DependencyFixPlan::default();
 
-    if selected_languages.contains(&GuestLanguage::TypeScript) {
-        let package_step = ts::plan_package_json_fix_step(ctx, overrides, &mut plan.warnings)?;
+    if selected_languages.contains(&GuestLanguage::TypeScript)
+        || selected_languages.contains(&GuestLanguage::Effect)
+    {
+        let package_step = ts::plan_package_json_fix_step(
+            ctx,
+            overrides,
+            &selected_languages,
+            &mut plan.warnings,
+        )?;
         if let Some(step) = package_step {
             plan.steps.push(step);
         }
@@ -411,6 +419,21 @@ fn evaluate_dependency_spec_compliance(
                 Ok(DependencySpecCompliance::NeedsUpdate)
             }
         }
+        ExpectedDependencyKind::ExactValue(expected_value) => {
+            if found_text == expected_value {
+                Ok(DependencySpecCompliance::Compatible)
+            } else if ["file:", "link:", "portal:"]
+                .iter()
+                .any(|prefix| found_text.starts_with(prefix))
+            {
+                Ok(DependencySpecCompliance::SkipWarn(format!(
+                    "Skipped dependency check for local package spec '{}'",
+                    found_text
+                )))
+            } else {
+                Ok(DependencySpecCompliance::NeedsUpdate)
+            }
+        }
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint,
@@ -562,7 +585,9 @@ fn resolve_local_ts_dependency_path(path: &str) -> anyhow::Result<String> {
 
 fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
     match expected {
-        ExpectedDependencyKind::ExactPath(path) => path.clone(),
+        ExpectedDependencyKind::ExactPath(path) | ExpectedDependencyKind::ExactValue(path) => {
+            path.clone()
+        }
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint: _,
@@ -647,6 +672,42 @@ mod test {
         .unwrap();
 
         assert_eq!(compliance, DependencySpecCompliance::Compatible);
+    }
+
+    #[test]
+    fn exact_dependency_check_rejects_semver_ranges() {
+        let compliance = evaluate_dependency_spec_compliance(
+            "^4.0.0-beta.57",
+            &ExpectedDependencyKind::ExactValue("4.0.0-beta.57".to_string()),
+            DependencyMatcherSemantics::TypeScript,
+        )
+        .unwrap();
+
+        assert_eq!(compliance, DependencySpecCompliance::NeedsUpdate);
+    }
+
+    #[test]
+    fn exact_dependency_check_rejects_dist_tags() {
+        let compliance = evaluate_dependency_spec_compliance(
+            "latest",
+            &ExpectedDependencyKind::ExactValue("4.0.0-beta.57".to_string()),
+            DependencyMatcherSemantics::TypeScript,
+        )
+        .unwrap();
+
+        assert_eq!(compliance, DependencySpecCompliance::NeedsUpdate);
+    }
+
+    #[test]
+    fn exact_dependency_check_skips_local_package_specs() {
+        let compliance = evaluate_dependency_spec_compliance(
+            "file:./effect-golem-1.5.0.tgz",
+            &ExpectedDependencyKind::ExactValue("1.5.0".to_string()),
+            DependencyMatcherSemantics::TypeScript,
+        )
+        .unwrap();
+
+        assert!(matches!(compliance, DependencySpecCompliance::SkipWarn(_)));
     }
 
     #[test]

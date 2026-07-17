@@ -221,6 +221,10 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
             path: path.clone(),
             features: vec![],
         },
+        ExpectedDependencyKind::ExactValue(version) => DependencySpec::Version {
+            version: version.clone(),
+            features: vec![],
+        },
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint: _,

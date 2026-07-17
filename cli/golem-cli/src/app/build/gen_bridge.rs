@@ -228,11 +228,9 @@ async fn gen_bridge_sdk_target(
                         &output_dir,
                         false,
                     )?),
-                    GuestLanguage::TypeScript => Box::new(TypeScriptBridgeGenerator::new(
-                        target.agent_type,
-                        &output_dir,
-                        false,
-                    )?),
+                    GuestLanguage::TypeScript | GuestLanguage::Effect => Box::new(
+                        TypeScriptBridgeGenerator::new(target.agent_type, &output_dir, false)?,
+                    ),
                     GuestLanguage::Scala => {
                         bail!("Bridge generation is not yet supported for Scala")
                     }

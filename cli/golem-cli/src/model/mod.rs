@@ -74,6 +74,7 @@ use url::Url;
 pub enum GuestLanguage {
     #[value(alias = "ts")]
     TypeScript,
+    Effect,
     Rust,
     Scala,
     MoonBit,
@@ -84,6 +85,7 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
+            "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
@@ -94,6 +96,7 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" => Some(GuestLanguage::TypeScript),
+            "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
@@ -104,6 +107,7 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "rust",
             GuestLanguage::TypeScript => "ts",
+            GuestLanguage::Effect => "effect",
             GuestLanguage::Scala => "scala",
             GuestLanguage::MoonBit => "moonbit",
         }
@@ -111,7 +115,7 @@ impl GuestLanguage {
 
     pub fn supports_bridge_generation(&self) -> bool {
         match self {
-            GuestLanguage::Rust | GuestLanguage::TypeScript => true,
+            GuestLanguage::Rust | GuestLanguage::TypeScript | GuestLanguage::Effect => true,
             GuestLanguage::Scala | GuestLanguage::MoonBit => false,
         }
     }
@@ -120,9 +124,31 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
+            GuestLanguage::Effect => "Effect",
             GuestLanguage::Scala => "Scala",
             GuestLanguage::MoonBit => "MoonBit",
         }
+    }
+}
+
+#[cfg(test)]
+mod guest_language_tests {
+    use super::GuestLanguage;
+    use test_r::test;
+
+    #[test]
+    fn effect_has_stable_cli_and_template_identifiers() {
+        assert_eq!(
+            GuestLanguage::from_string("effect"),
+            Some(GuestLanguage::Effect)
+        );
+        assert_eq!(
+            GuestLanguage::from_id_string("effect"),
+            Some(GuestLanguage::Effect)
+        );
+        assert_eq!(GuestLanguage::Effect.id(), "effect");
+        assert_eq!(GuestLanguage::Effect.name(), "Effect");
+        assert!(GuestLanguage::Effect.supports_bridge_generation());
     }
 }
 

@@ -1388,6 +1388,7 @@ impl<'a> Component<'a> {
             id.template_name()
                 .and_then(|template_name| match template_name {
                     "ts" => Some(GuestLanguage::TypeScript),
+                    "effect" => Some(GuestLanguage::Effect),
                     "rust" => Some(GuestLanguage::Rust),
                     "scala" => Some(GuestLanguage::Scala),
                     "moonbit" => Some(GuestLanguage::MoonBit),
