@@ -231,7 +231,7 @@ describe("Retry.toSchedule — combinators", () => {
         const { decisions } = yield* collect(schedule, inputs)
         // Effect's `Schedule.while` is per-step, not permanent — when the
         // predicate is false for one input the branch yields `Cause.done`
-        // for that step, and `Schedule.either` emits only the other side's
+        // for that step, and `Schedule.min` emits only the other side's
         // delay. On the next input the predicate is re-evaluated; if true
         // the branch participates again. This matches host semantics for
         // `filtered-on` inside `policy-union` more closely than a
@@ -253,6 +253,28 @@ describe("Retry.toSchedule — combinators", () => {
       expect(decisions[0].delayMillis).toBe(1000)
       expect(done).toBe(true)
     }),
+  )
+
+  it.effect(
+    "time-box starts when the policy is first evaluated, even if its inner filter skips",
+    () =>
+      Effect.gen(function* () {
+        type Err = { code: number }
+        const gated = Retry.Policy.periodic(Duration.millis(10))
+          .onlyWhen(Retry.Predicate.gte(Retry.Props.statusCode, 500))
+          .within(Duration.millis(100))
+        const fallback = Retry.Policy.periodic(Duration.millis(200))
+        const schedule = yield* Retry.toSchedule<Err>(gated.union(fallback), {
+          properties: (e) => ({ [Retry.Props.statusCode]: e.code }),
+        })
+
+        const { decisions } = yield* collect(schedule, [
+          { code: 404 }, // gated branch skips, fallback advances elapsed time by 200ms
+          { code: 500 }, // gated branch is eligible, but its 100ms box has expired
+        ])
+
+        expect(decisions.map((d) => d.delayMillis)).toEqual([200, 200])
+      }),
   )
 
   it.effect("jitter with factor 0 leaves the delay unchanged", () =>

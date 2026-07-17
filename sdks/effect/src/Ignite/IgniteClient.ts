@@ -295,6 +295,9 @@ const buildConnection = (target: Target, decodeTemporal: TemporalDecodeMode): Co
     executeValues(sql, params) {
       return runValues(sql, params)
     },
+    executeValuesUnprepared(sql, params) {
+      return runValues(sql, params)
+    },
     executeUnprepared(sql, params, transformRows) {
       const eff = runQuery(sql, params ?? [], false) as Effect.Effect<
         ReadonlyArray<Record<string, unknown>>,

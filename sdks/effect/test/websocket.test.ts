@@ -298,7 +298,7 @@ describe("Websocket — Layer integration", () => {
 
       const seen: string[] = []
       yield* Effect.gen(function* () {
-        const sock = yield* Socket.Socket.asEffect()
+        const sock = yield* Socket.Socket
         yield* sock.runString((s) => {
           seen.push(s)
         })

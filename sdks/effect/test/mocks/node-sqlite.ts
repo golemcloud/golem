@@ -38,6 +38,9 @@ export class StatementSync {
   run(..._params: ReadonlyArray<unknown>): { changes: number; lastInsertRowid: number | bigint } {
     return { changes: 0, lastInsertRowid: 0 }
   }
+  columns(): ReadonlyArray<unknown> {
+    return /^\s*(?:SELECT|WITH|PRAGMA|EXPLAIN|VALUES)\b/i.test(this._sql) ? [{}] : []
+  }
   iterate(..._params: ReadonlyArray<unknown>): IterableIterator<Record<string, unknown>> {
     return [][Symbol.iterator]()
   }
