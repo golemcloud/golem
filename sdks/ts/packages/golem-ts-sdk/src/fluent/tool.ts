@@ -33,11 +33,13 @@ import {
   type ExtendedRef,
   type ExtendedResultSpec,
   type ExtendedToolRuntime,
+  type SubtreeForward,
   ExtendedToolType,
   codecValue,
   emptyDoc,
   emptyGlobals,
   emptyPositionals,
+  graftSubtree,
   listCodec,
   normalizeExtendedTool,
   toolBuildError,
@@ -138,6 +140,11 @@ export interface ToolCommandModel<
   readonly children: Children;
 }
 
+export interface ToolSubtreeModel<Command = ToolCommandModel> {
+  readonly ownership: 'subtree';
+  readonly command: Command;
+}
+
 type BodyModelOf<Builder> =
   Builder extends BodyBuilder<infer Args, infer Success, infer Errors, infer Stdin, infer Stdout>
     ? ToolBodyModel<Args, Success, Errors, Stdin, Stdout>
@@ -225,7 +232,7 @@ export type ToolHandler<Args, Success, Errors, Context> = (
 const COMMAND_IMPLEMENTATION = Symbol('golem.tool.commandImplementation');
 
 export type NestedCommandImplementation<Body, Children> = Children & {
-  readonly [COMMAND_IMPLEMENTATION]: { readonly body: Body };
+  readonly [COMMAND_IMPLEMENTATION]: { readonly body: Body; readonly receiver: Children };
 };
 
 export function command<const Children extends object>(
@@ -246,7 +253,7 @@ export function command<Body, Children extends object>(
     Object.getOwnPropertyDescriptors(children),
   ) as NestedCommandImplementation<Body | undefined, Children>;
   Object.defineProperty(result, COMMAND_IMPLEMENTATION, {
-    value: { body },
+    value: { body, receiver: children },
     enumerable: false,
   });
   return result;
@@ -265,7 +272,11 @@ type HandlerFor<Model, Inherited> =
     : never;
 
 type ChildImplementations<Children, Inherited> = {
-  [Name in keyof Children]: NodeImplementation<Children[Name], Inherited>;
+  [Name in keyof Children as Children[Name] extends ToolSubtreeModel
+    ? never
+    : Name]: NodeImplementation<Children[Name], Inherited>;
+} & {
+  [Name in keyof Children as Children[Name] extends ToolSubtreeModel ? Name : never]?: never;
 };
 
 type NodeImplementation<Model, Inherited> =
@@ -674,6 +685,7 @@ export class BodyBuilder<
 }
 
 const BUILD_TOOL = Symbol('golem.tool.build');
+type AnyToolDefinition = CommandBuilder<any, any, any, any, true>;
 
 export class CommandBuilder<
   Name extends string,
@@ -689,6 +701,7 @@ export class CommandBuilder<
     private readonly node: ExtendedCommandNode,
     private readonly toolVersion: string,
     private readonly commandAnnotations?: CommandAnnotations,
+    private readonly subtreeForwards: readonly SubtreeForward[] = [],
   ) {}
 
   static root<const Name extends string>(
@@ -705,7 +718,13 @@ export class CommandBuilder<
     this: CommandBuilder<Name, Globals, Body, Children, true>,
     version: string,
   ): CommandBuilder<Name, Globals, Body, Children, true> {
-    return new CommandBuilder(this.name, this.node, version, this.commandAnnotations);
+    return new CommandBuilder(
+      this.name,
+      this.node,
+      version,
+      this.commandAnnotations,
+      this.subtreeForwards,
+    );
   }
 
   doc(doc: DocInput): CommandBuilder<Name, Globals, Body, Children, Root> {
@@ -724,6 +743,7 @@ export class CommandBuilder<
       this.node,
       this.toolVersion,
       normalizeAnnotations(annotations),
+      this.subtreeForwards,
     );
   }
 
@@ -791,6 +811,25 @@ export class CommandBuilder<
     return this.next({ ...this.node, body: body.build() });
   }
 
+  command<
+    const ChildName extends string,
+    ChildGlobals,
+    ChildBody extends AnyToolBodyModel | undefined,
+    ChildChildren,
+  >(
+    name: ChildName,
+    subtree: ToolDefinition<ChildName, ChildGlobals, ChildBody, ChildChildren>,
+  ): CommandBuilder<
+    Name,
+    Globals,
+    Body,
+    Children & {
+      [Key in ChildName]: ToolSubtreeModel<
+        ToolCommandModel<ChildName, ChildGlobals, ChildBody, ChildChildren>
+      >;
+    },
+    Root
+  >;
   command<const ChildName extends string, Built extends CommandBuilder<any, any, any, any, false>>(
     name: ChildName,
     build: (command: CommandBuilder<ChildName>) => Built,
@@ -800,18 +839,48 @@ export class CommandBuilder<
     Body,
     Children & { [Key in ChildName]: ToolCommandModelOf<Built> },
     Root
-  > {
-    const child = build(CommandBuilder.child(name));
+  >;
+  command(
+    name: string,
+    buildOrSubtree:
+      | AnyToolDefinition
+      | ((command: CommandBuilder<string>) => CommandBuilder<any, any, any, any, false>),
+  ): CommandBuilder<Name, Globals, Body, Children & Record<string, unknown>, Root> {
+    if (buildOrSubtree instanceof CommandBuilder) {
+      const childTool = new ExtendedToolType(
+        buildOrSubtree.toolVersion,
+        buildOrSubtree.finalizeNode(),
+      );
+      const graft = graftSubtree(childTool, { expectedName: name });
+      return this.next(
+        {
+          ...this.node,
+          subcommands: [...this.node.subcommands, graft],
+        },
+        [...this.subtreeForwards, { pathPrefix: [graft.name], childToolName: childTool.toolName }],
+      );
+    }
+
+    const child = buildOrSubtree(CommandBuilder.child(name));
     if (!(child instanceof CommandBuilder) || child.name !== name) {
       toolBuildError(
         'invalid-metadata-value',
         `tool command callback for "${name}" must return that command's builder`,
       );
     }
-    return this.next({
-      ...this.node,
-      subcommands: [...this.node.subcommands, child.finalizeNode()],
-    });
+    return this.next(
+      {
+        ...this.node,
+        subcommands: [...this.node.subcommands, child.finalizeNode()],
+      },
+      [
+        ...this.subtreeForwards,
+        ...child.subtreeForwards.map((forward) => ({
+          ...forward,
+          pathPrefix: [child.name, ...forward.pathPrefix],
+        })),
+      ],
+    );
   }
 
   implement(
@@ -829,7 +898,11 @@ export class CommandBuilder<
     try {
       ToolRegistry.registerImplementation(this.name, () => {
         const tool = this[BUILD_TOOL]();
-        const runtime = bindToolImplementation(tool, implementation as object);
+        const runtime = bindToolImplementation(
+          tool,
+          implementation as object,
+          this.subtreeForwards,
+        );
         return { tool, runtime };
       });
     } catch (error) {
@@ -843,8 +916,15 @@ export class CommandBuilder<
 
   private next<NextGlobals, NextBody extends AnyToolBodyModel | undefined, NextChildren>(
     node: ExtendedCommandNode,
+    subtreeForwards: readonly SubtreeForward[] = this.subtreeForwards,
   ): CommandBuilder<Name, NextGlobals, NextBody, NextChildren, Root> {
-    return new CommandBuilder(this.name, node, this.toolVersion, this.commandAnnotations);
+    return new CommandBuilder(
+      this.name,
+      node,
+      this.toolVersion,
+      this.commandAnnotations,
+      subtreeForwards,
+    );
   }
 
   private finalizeNode(): ExtendedCommandNode {
@@ -878,7 +958,7 @@ export function toolDefinition<const Name extends string>(name: Name): ToolDefin
 }
 
 /** Finalize a fluent definition into the shared extended model used by tool runtime layers. */
-export function getExtendedToolDefinition<Definition extends ToolDefinition>(
+export function getExtendedToolDefinition<Definition extends AnyToolDefinition>(
   definition: Definition,
 ): ExtendedToolType {
   return definition[BUILD_TOOL]();
@@ -887,6 +967,7 @@ export function getExtendedToolDefinition<Definition extends ToolDefinition>(
 function bindToolImplementation(
   tool: ExtendedToolType,
   implementation: object,
+  subtreeForwards: readonly SubtreeForward[],
 ): ExtendedToolRuntime {
   if (!isImplementationObject(implementation)) {
     throw new Error(`tool "${tool.toolName}" implementation must be an object`);
@@ -898,15 +979,18 @@ function bindToolImplementation(
     node: ExtendedCommandNode,
     commandPath: readonly string[],
     nodeImplementation: unknown,
+    nodeReceiver: object | undefined,
     root: boolean,
   ): void => {
     const commandName = [tool.toolName, ...commandPath].join(' ');
     let childrenImplementation: Record<PropertyKey, unknown> | undefined;
     let handler: unknown;
+    let receiver = nodeReceiver;
 
     if (root) {
       childrenImplementation = implementation;
       handler = node.body ? getImplementationProperty(implementation, node.name).value : undefined;
+      receiver = implementation;
     } else if (node.body && node.subcommands.length === 0) {
       handler = nodeImplementation;
     } else {
@@ -917,6 +1001,7 @@ function bindToolImplementation(
       }
       childrenImplementation = nodeImplementation;
       handler = nodeImplementation[COMMAND_IMPLEMENTATION].body;
+      receiver = nodeImplementation[COMMAND_IMPLEMENTATION].receiver;
     }
 
     if (node.body) {
@@ -926,24 +1011,39 @@ function bindToolImplementation(
       bindings.push({
         commandPath: [...commandPath],
         handler: handler as ExtendedToolRuntime['bindings'][number]['handler'],
+        receiver,
       });
     } else if (handler !== undefined) {
       throw new Error(`tool dispatcher "${commandName}" cannot have a body implementation`);
     }
 
     for (const child of node.subcommands) {
+      const childPath = [...commandPath, child.name];
+      if (subtreeForwards.some((forward) => pathsEqual(forward.pathPrefix, childPath))) {
+        continue;
+      }
       const childImplementation = childrenImplementation
         ? getImplementationProperty(childrenImplementation, child.name)
         : { found: false as const, value: undefined };
       if (!childImplementation.found) {
         throw new Error(`missing implementation for tool command "${commandName} ${child.name}"`);
       }
-      visit(child, [...commandPath, child.name], childImplementation.value, false);
+      visit(child, childPath, childImplementation.value, childImplementation.receiver, false);
     }
   };
 
-  visit(tool.root, [], implementation, true);
-  return { bindings, subtreeForwards: [] };
+  visit(tool.root, [], implementation, implementation, true);
+  return {
+    bindings,
+    subtreeForwards: subtreeForwards.map((forward) => ({
+      ...forward,
+      pathPrefix: [...forward.pathPrefix],
+    })),
+  };
+}
+
+function pathsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index]);
 }
 
 function isImplementationObject(value: unknown): value is Record<PropertyKey, unknown> {
@@ -953,13 +1053,17 @@ function isImplementationObject(value: unknown): value is Record<PropertyKey, un
 function getImplementationProperty(
   implementation: Record<PropertyKey, unknown>,
   name: PropertyKey,
-): { readonly found: boolean; readonly value: unknown } {
-  let current: object | null = implementation;
+): { readonly found: boolean; readonly value: unknown; readonly receiver?: object } {
+  const receiver = isNestedCommandImplementation(implementation)
+    ? implementation[COMMAND_IMPLEMENTATION].receiver
+    : implementation;
+  let current: object | null = receiver;
   while (current !== null && current !== Object.prototype) {
     if (hasOwn(current, name)) {
       return {
         found: true,
-        value: (current as Record<PropertyKey, unknown>)[name],
+        value: Reflect.get(receiver, name, receiver),
+        receiver,
       };
     }
     current = Object.getPrototypeOf(current) as object | null;
@@ -968,11 +1072,17 @@ function getImplementationProperty(
 }
 
 function isNestedCommandImplementation(value: unknown): value is Record<PropertyKey, unknown> & {
-  readonly [COMMAND_IMPLEMENTATION]: { readonly body: unknown };
+  readonly [COMMAND_IMPLEMENTATION]: { readonly body: unknown; readonly receiver: object };
 } {
   if (!isImplementationObject(value) || !(COMMAND_IMPLEMENTATION in value)) return false;
   const marker = value[COMMAND_IMPLEMENTATION];
-  return isImplementationObject(marker) && hasOwn(marker, 'body');
+  return (
+    isImplementationObject(marker) &&
+    hasOwn(marker, 'body') &&
+    hasOwn(marker, 'receiver') &&
+    (typeof marker.receiver === 'object' || typeof marker.receiver === 'function') &&
+    marker.receiver !== null
+  );
 }
 
 function emptyCommand(name: string): ExtendedCommandNode {

@@ -67,6 +67,7 @@ export interface ExtendedToolRuntime {
 export interface CommandBinding {
   readonly commandPath: readonly string[];
   readonly handler: (input: Record<string, unknown>, context: unknown) => unknown;
+  readonly receiver?: object;
 }
 
 export interface SubtreeForward {
@@ -694,12 +695,18 @@ export function flagCodec(flag: FlagSpec): FluentCodec {
     ? {
         graph: { defs: new Map(), root: t.bool() },
         toValue: (input) => v.bool(input as boolean),
-        fromValue: (input) => (input as Extract<SchemaValue, { tag: 'bool' }>).value,
+        fromValue: (input) => {
+          if (input.tag !== 'bool') throw new Error('expected a boolean flag schema value');
+          return input.value;
+        },
       }
     : {
         graph: { defs: new Map(), root: t.u32() },
         toValue: (input) => v.u32(input as number),
-        fromValue: (input) => (input as Extract<SchemaValue, { tag: 'u32' }>).value,
+        fromValue: (input) => {
+          if (input.tag !== 'u32') throw new Error('expected a count flag schema value');
+          return input.value;
+        },
       };
 }
 

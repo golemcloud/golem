@@ -347,6 +347,21 @@ const defaultedOptionalScalarImplementation: ToolImplementation<typeof defaulted
   };
 void defaultedOptionalScalarImplementation;
 
+const subtreeRemoteDef = toolDefinition('subtree-remote').body((body) =>
+  body.positional('name', z.string()).returns(z.string()),
+);
+const subtreeParentDef = toolDefinition('subtree-parent').command(
+  'subtree-remote',
+  subtreeRemoteDef,
+);
+const subtreeParentImplementation: ToolImplementation<typeof subtreeParentDef> = {};
+void subtreeParentImplementation;
+const invalidSubtreeParentImplementation: ToolImplementation<typeof subtreeParentDef> = {
+  // @ts-expect-error a separately grafted child is implemented by its own definition
+  'subtree-remote': async () => ok('wrong owner'),
+};
+void invalidSubtreeParentImplementation;
+
 // @ts-expect-error the root implicit-body key is the tool metadata name, not camelCase
 const wrongRootKey: ToolImplementation<typeof grepDef> = { grepTool: async () => ok([]) };
 void wrongRootKey;

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Tool } from 'golem:tool/common@0.1.0';
+import type { Tool, ToolError } from 'golem:tool/common@0.1.0';
+import { deepEqual, type TypedSchemaValue, validateSchemaGraph } from '../schema-model';
 import {
   encodeTool,
   type ExtendedToolRuntime,
@@ -24,7 +25,14 @@ export interface RegisteredTool {
   readonly extended: ExtendedToolType;
   readonly encoded: Tool;
   readonly runtime: ExtendedToolRuntime;
+  readonly invoker: ToolInvoker;
 }
+
+export type ToolInvoker = (
+  commandPath: readonly string[],
+  input: TypedSchemaValue,
+  context: unknown,
+) => Promise<unknown>;
 
 class ToolRegistryImpl {
   private readonly registry = new Map<string, RegisteredTool>();
@@ -49,19 +57,22 @@ class ToolRegistryImpl {
         );
       }
       const extended = normalizeExtendedTool(tool);
+      const registeredRuntime = {
+        bindings: runtime.bindings.map((binding) => ({
+          ...binding,
+          commandPath: [...binding.commandPath],
+        })),
+        subtreeForwards: runtime.subtreeForwards.map((forward) => ({
+          ...forward,
+          pathPrefix: [...forward.pathPrefix],
+        })),
+      } satisfies ExtendedToolRuntime;
       const entry = {
         extended,
         encoded: encodeTool(extended),
-        runtime: {
-          bindings: runtime.bindings.map((binding) => ({
-            ...binding,
-            commandPath: [...binding.commandPath],
-          })),
-          subtreeForwards: runtime.subtreeForwards.map((forward) => ({
-            ...forward,
-            pathPrefix: [...forward.pathPrefix],
-          })),
-        },
+        runtime: registeredRuntime,
+        invoker: (commandPath, input, context) =>
+          this.invokeRegistered(extended, registeredRuntime, commandPath, input, context),
       } satisfies RegisteredTool;
 
       this.registry.set(name, entry);
@@ -89,6 +100,10 @@ class ToolRegistryImpl {
 
   getRuntime(name: string): ExtendedToolRuntime | undefined {
     return this.get(name)?.runtime;
+  }
+
+  getInvoker(name: string): ToolInvoker | undefined {
+    return this.get(name)?.invoker;
   }
 
   recordRegistrationError(toolName: string, message: string): void {
@@ -126,10 +141,98 @@ class ToolRegistryImpl {
   private sortedEntries(): [string, RegisteredTool][] {
     return Array.from(this.registry.entries()).sort(([left], [right]) => compareNames(left, right));
   }
+
+  private async invokeRegistered(
+    tool: ExtendedToolType,
+    runtime: ExtendedToolRuntime,
+    commandPath: readonly string[],
+    input: TypedSchemaValue,
+    context: unknown,
+  ): Promise<unknown> {
+    const command = tool.commandByPath(commandPath);
+    if (!command) throw invalidCommandPath(commandPath);
+
+    const canonicalPath = tool.commandPath(command);
+    if (!canonicalPath) throw invalidCommandPath(commandPath);
+
+    const graphError = validateSchemaGraph(input.graph)[0];
+    if (graphError) {
+      throw invalidInput(`invalid tool input schema: ${graphError.message}`);
+    }
+
+    const inputModel = tool.canonicalInputModel(command);
+    if (!deepEqual(input.graph, inputModel.codec.graph)) {
+      throw invalidInput('tool input schema does not match the command canonical input schema');
+    }
+    let inputValues;
+    try {
+      inputValues = inputModel.decodeValues(input.value);
+    } catch (error) {
+      throw invalidInput(error);
+    }
+
+    const binding = runtime.bindings.find((candidate) =>
+      pathsEqual(candidate.commandPath, canonicalPath),
+    );
+    if (binding) {
+      const handlerInput = Object.fromEntries(
+        inputValues.map((field) => [camelCase(field.name), field.value]),
+      );
+      return await binding.handler.call(binding.receiver, handlerInput, context);
+    }
+
+    const forward = runtime.subtreeForwards.find((candidate) =>
+      pathStartsWith(canonicalPath, candidate.pathPrefix),
+    );
+    if (!forward) throw invalidCommandPath(commandPath);
+
+    const child = this.get(forward.childToolName);
+    if (!child) {
+      throw {
+        tag: 'invalid-tool-name',
+        val: forward.childToolName,
+      } satisfies ToolError;
+    }
+
+    const childPath = canonicalPath.slice(forward.pathPrefix.length);
+    const childCommand = child.extended.commandByPath(childPath);
+    if (!childCommand) throw invalidCommandPath(commandPath);
+
+    let childInput: TypedSchemaValue;
+    try {
+      childInput = child.extended.canonicalInputModel(childCommand).forwardValues(inputValues);
+    } catch (error) {
+      throw invalidInput(error);
+    }
+    return await child.invoker(childPath, childInput, context);
+  }
 }
 
 function compareNames(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function pathsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index]);
+}
+
+function pathStartsWith(path: readonly string[], prefix: readonly string[]): boolean {
+  return prefix.length <= path.length && prefix.every((segment, index) => segment === path[index]);
+}
+
+function camelCase(name: string): string {
+  return name.replace(/-([a-z0-9])/g, (_, char: string) => char.toUpperCase());
+}
+
+function invalidCommandPath(commandPath: readonly string[]): ToolError {
+  return { tag: 'invalid-command-path', val: [...commandPath] };
+}
+
+function invalidInput(error: unknown): ToolError {
+  return {
+    tag: 'invalid-input',
+    val: error instanceof Error ? error.message : String(error),
+  };
 }
 
 export const ToolRegistry: ToolRegistryImpl = new ToolRegistryImpl();

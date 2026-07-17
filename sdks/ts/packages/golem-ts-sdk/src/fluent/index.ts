@@ -80,6 +80,7 @@ export type {
   ToolInvocationContext,
   ToolOk,
   ToolResult,
+  ToolSubtreeModel,
 } from './tool';
 
 // wasm-RPC client for calling other agents.
