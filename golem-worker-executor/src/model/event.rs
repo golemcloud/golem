@@ -1,5 +1,5 @@
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{AgentEvent, IdempotencyKey, LogLevel, Timestamp, oplog};
+use golem_common::model::{AgentEvent, IdempotencyKey, LogLevel, OplogIndex, Timestamp, oplog};
 
 // Internal version of AgentEvent, without any operational details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -32,6 +32,15 @@ pub enum InternalWorkerEvent {
         timestamp: Timestamp,
         plugin_name: String,
         message: String,
+    },
+    SnapshotRecoverySucceeded {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+    },
+    SnapshotRecoveryFailed {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+        error: String,
     },
 }
 
@@ -83,6 +92,21 @@ impl InternalWorkerEvent {
         }
     }
 
+    pub fn snapshot_recovery_succeeded(snapshot_index: OplogIndex) -> Self {
+        Self::SnapshotRecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+            snapshot_index,
+        }
+    }
+
+    pub fn snapshot_recovery_failed(snapshot_index: OplogIndex, error: String) -> Self {
+        Self::SnapshotRecoveryFailed {
+            timestamp: Timestamp::now_utc(),
+            snapshot_index,
+            error,
+        }
+    }
+
     pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
         match self {
             Self::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
@@ -118,6 +142,8 @@ impl InternalWorkerEvent {
             Self::InvocationStart { .. } => None,
             Self::InvocationFinished { .. } => None,
             Self::PluginError { .. } => None,
+            Self::SnapshotRecoverySucceeded { .. } => None,
+            Self::SnapshotRecoveryFailed { .. } => None,
         }
     }
 }
@@ -164,6 +190,22 @@ impl From<InternalWorkerEvent> for AgentEvent {
                 timestamp,
                 plugin_name,
                 message,
+            },
+            InternalWorkerEvent::SnapshotRecoverySucceeded {
+                timestamp,
+                snapshot_index,
+            } => Self::SnapshotRecoverySucceeded {
+                timestamp,
+                snapshot_index,
+            },
+            InternalWorkerEvent::SnapshotRecoveryFailed {
+                timestamp,
+                snapshot_index,
+                error,
+            } => Self::SnapshotRecoveryFailed {
+                timestamp,
+                snapshot_index,
+                error,
             },
         }
     }
