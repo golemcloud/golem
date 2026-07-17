@@ -25,7 +25,9 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicQueuedCardEvent,
+};
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
 };
@@ -374,12 +376,6 @@ async fn card_host_api_observes_revocation_during_invocation(
         .ok_or_else(|| anyhow!("expected release promise"))?;
     let release_promise = <PromiseId as FromSchema>::from_value(&release_promise)
         .map_err(|error| anyhow!("{error}"))?;
-    let before_invocation_idx = target
-        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
-        .await?
-        .last()
-        .map(|entry| entry.oplog_index)
-        .unwrap_or(OplogIndex::INITIAL);
 
     let invocation = {
         let target = target.clone();
@@ -401,30 +397,14 @@ async fn card_host_api_observes_revocation_during_invocation(
         )
     };
 
-    let mut random_boundary_observed = false;
-    for _ in 0..40 {
-        let oplog = target
-            .get_oplog(&target_agent_id, before_invocation_idx.next())
-            .await?;
-        random_boundary_observed = oplog.iter().any(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::Start(params) if params.function_name.contains("random")
-            )
-        });
-        if random_boundary_observed {
-            break;
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-    assert!(
-        random_boundary_observed,
-        "invocation did not reach a random-call durable boundary"
-    );
-    assert!(
-        !invocation.is_finished(),
-        "invocation finished before the revocation was queued"
-    );
+    target
+        .wait_for_status(
+            &target_agent_id,
+            AgentStatus::Running,
+            Duration::from_secs(10),
+        )
+        .await?;
+    sleep(Duration::from_millis(250)).await;
 
     owner
         .registry_service_client()
@@ -432,32 +412,13 @@ async fn card_host_api_observes_revocation_during_invocation(
         .delete_permission_share(&share.id.0, share.revision.into())
         .await?;
 
-    let mut queued_event_index = None;
-    for _ in 0..40 {
-        let oplog = target
-            .get_oplog(&target_agent_id, OplogIndex::INITIAL)
-            .await?;
-        queued_event_index = oplog.iter().find_map(|entry| match &entry.entry {
-            PublicOplogEntry::CardEventQueued(params) if params.event.card_id() == card_id => {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        });
-        if queued_event_index.is_some() {
-            break;
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-    let queued_event_index = queued_event_index
-        .ok_or_else(|| anyhow!("card revocation was not queued during the invocation"))?;
-
     target
         .complete_promise(&release_promise, b"release".to_vec())
         .await?;
 
     let invocation = tokio::time::timeout(Duration::from_secs(30), invocation)
         .await
-        .map_err(|_| anyhow!("invocation did not finish after release"))?;
+        .map_err(|_| anyhow!("bounded invocation did not finish"))?;
     let result = invocation??
         .into_return_value()
         .ok_or_else(|| anyhow!("expected mid-invocation revocation result"))?;
@@ -468,16 +429,111 @@ async fn card_host_api_observes_revocation_during_invocation(
         }
     );
 
+    target
+        .wait_for_status(&target_agent_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
     let oplog = target
         .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
-    assert!(oplog.iter().any(|entry| {
-        matches!(
-            &entry.entry,
+
+    let invocation_started_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                invocation: PublicAgentInvocation::AgentMethodInvocation(params),
+                ..
+            }) if params.method_name == "derive_card_after_promise" => Some(entry.oplog_index),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("missing invocation start entry"))?;
+    let queued_event_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardEventQueued(params)
+                if matches!(
+                    &params.event,
+                    PublicQueuedCardEvent::Revoke(event) if event.card_id == card_id
+                ) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("card revocation was not queued"))?;
+    let revoked_event_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
             PublicOplogEntry::CardRevoked(params)
-                if params.queued_event_index == queued_event_index && params.card_id == card_id
-        )
-    }));
+                if params.queued_event_index == queued_event_index && params.card_id == card_id =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("queued card revocation was not applied"))?;
+    let invocation_finished_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(params)
+                if params.method_name.as_deref() == Some("derive_card_after_promise") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("missing invocation finish entry"))?;
+
+    let random_boundary_before_queue_index = oplog
+        .iter()
+        .find_map(|entry| {
+            (entry.oplog_index > invocation_started_index
+                && entry.oplog_index < queued_event_index
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params) if params.function_name.contains("random")
+                ))
+            .then_some(entry.oplog_index)
+        })
+        .ok_or_else(|| {
+            anyhow!("card revocation was queued before the first random-call durable boundary")
+        })?;
+    let random_boundary_after_revoke_index = oplog
+        .iter()
+        .find_map(|entry| {
+            (entry.oplog_index > revoked_event_index
+                && entry.oplog_index < invocation_finished_index
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params) if params.function_name.contains("random")
+                ))
+            .then_some(entry.oplog_index)
+        })
+        .ok_or_else(|| {
+            anyhow!("no random-call durable boundary processed the queued revocation")
+        })?;
+    let derive_after_revoke_index = oplog
+        .iter()
+        .find_map(|entry| {
+            (entry.oplog_index > revoked_event_index
+                && entry.oplog_index < invocation_finished_index
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params) if params.function_name.contains("derive-card")
+                ))
+            .then_some(entry.oplog_index)
+        })
+        .ok_or_else(|| anyhow!("card derivation did not run after the revocation was applied"))?;
+
+    assert!(
+        invocation_started_index < random_boundary_before_queue_index
+            && random_boundary_before_queue_index < queued_event_index
+            && queued_event_index < revoked_event_index
+            && revoked_event_index < random_boundary_after_revoke_index
+            && random_boundary_after_revoke_index < derive_after_revoke_index
+            && derive_after_revoke_index < invocation_finished_index,
+        "card revocation was not processed between durable boundaries of the invocation"
+    );
 
     Ok(())
 }

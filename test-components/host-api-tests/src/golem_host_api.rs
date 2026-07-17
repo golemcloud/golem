@@ -74,7 +74,7 @@ pub trait GolemHostApi {
     fn card_api_roundtrip(&self) -> CardApiResult;
     fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
     fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
-    fn derive_card_after_promise(
+    async fn derive_card_after_promise(
         &self,
         high_bits: u64,
         low_bits: u64,
@@ -491,27 +491,25 @@ impl GolemHostApi for GolemHostApiImpl {
         .is_ok()
     }
 
-    fn derive_card_after_promise(
+    async fn derive_card_after_promise(
         &self,
         high_bits: u64,
         low_bits: u64,
         release: PromiseId,
     ) -> MidInvocationCardRevocationResult {
-        for _ in 0..100_000 {
-            if get_promise(&release).get().is_some() {
-                return MidInvocationCardRevocationResult {
-                    release_observed: true,
-                    derive_succeeded: self.derive_card_by_id(high_bits, low_bits),
-                };
-            }
+        let release = get_promise(&release);
+        let mut release_observed = false;
 
+        for _ in 0..200 {
+            release_observed |= release.get().is_some();
             let mut bytes = [0; 4];
             wstd::rand::get_random_bytes(&mut bytes);
+            wstd::task::sleep(wstd::time::Duration::from_millis(50)).await;
         }
 
         MidInvocationCardRevocationResult {
-            release_observed: false,
-            derive_succeeded: false,
+            release_observed,
+            derive_succeeded: release_observed && self.derive_card_by_id(high_bits, low_bits),
         }
     }
 
