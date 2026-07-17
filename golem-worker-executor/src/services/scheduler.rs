@@ -913,6 +913,11 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _invocation: AgentInvocation,
+            _worker_env: Option<Vec<(String, String)>>,
+            _worker_agent_config: Vec<AgentConfigEntryDto>,
+            _component_revision: Option<ComponentRevision>,
+            _worker_parent: Option<golem_common::model::AgentId>,
+            _worker_creation_principal: Principal,
         ) -> Result<(), WorkerExecutorError> {
             let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
@@ -1075,6 +1080,14 @@ mod tests {
             self.inner
                 .claim_due(now, assignment, limit, lease_ttl)
                 .await
+        }
+
+        async fn count_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, String> {
+            self.inner.count_due(now, assignment).await
         }
 
         async fn extend_lease(
@@ -1327,6 +1340,103 @@ mod tests {
     }
 
     #[test]
+    async fn scheduled_actions_for_distinct_agents_are_processed_concurrently() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let fingerprint = AgentFingerprint::new();
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(DelayedActiveWorkerAccessMock {
+                fingerprint,
+                in_flight: Arc::new(AtomicUsize::new(0)),
+                max_in_flight: max_in_flight.clone(),
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            create_promise_service_mock(),
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            RetryConfig::max_attempts_3(),
+            2,
+            CancellationToken::new(),
+        );
+
+        let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+        for name in ["agent-1", "agent-2"] {
+            svc.schedule(
+                due_at,
+                ScheduledAction::Invoke {
+                    account_id: AccountId::new(),
+                    owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent(name)),
+                    invocation: Box::new(agent_method_invocation()),
+                    target_worker_fingerprint: fingerprint,
+                },
+            )
+            .await;
+        }
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(max_in_flight.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    async fn scheduled_actions_for_the_same_agent_are_processed_serially() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let fingerprint = AgentFingerprint::new();
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(DelayedActiveWorkerAccessMock {
+                fingerprint,
+                in_flight: Arc::new(AtomicUsize::new(0)),
+                max_in_flight: max_in_flight.clone(),
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            create_promise_service_mock(),
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            RetryConfig::max_attempts_3(),
+            2,
+            CancellationToken::new(),
+        );
+
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("agent-1"));
+        let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+        for _ in 0..2 {
+            svc.schedule(
+                due_at,
+                ScheduledAction::Invoke {
+                    account_id: AccountId::new(),
+                    owned_agent_id: owned_agent_id.clone(),
+                    invocation: Box::new(agent_method_invocation()),
+                    target_worker_fingerprint: fingerprint,
+                },
+            )
+            .await;
+        }
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     async fn scheduled_ephemeral_invoke_skips_fingerprint_lookup_and_preserves_creation_data() {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let recorded = Arc::new(Mutex::new(None));
@@ -1350,6 +1460,7 @@ mod tests {
             Duration::from_secs(30),
             10,
             RetryConfig::max_attempts_3(),
+            64,
             CancellationToken::new(),
         );
 
@@ -1436,6 +1547,7 @@ mod tests {
             Duration::from_secs(30),
             10,
             RetryConfig::max_attempts_3(),
+            64,
             CancellationToken::new(),
         );
 
@@ -1487,6 +1599,7 @@ mod tests {
             Duration::from_secs(30),
             10,
             RetryConfig::max_attempts_3(),
+            64,
             CancellationToken::new(),
         );
 

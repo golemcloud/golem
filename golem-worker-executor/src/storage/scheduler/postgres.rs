@@ -19,6 +19,7 @@ use super::{
 use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use golem_common::SafeDisplay;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::db::postgres::PostgresPool;

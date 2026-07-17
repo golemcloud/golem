@@ -19,6 +19,7 @@ use super::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
+use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
