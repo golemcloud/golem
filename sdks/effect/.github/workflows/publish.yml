@@ -36,6 +36,8 @@ jobs:
       - uses: bytecodealliance/setup-wasi-sdk-action@b2de090b44eb70013ee96b393727d473b35e1728
         with:
           version: "25"
+          # rquickjs-sys Bindgen needs the host compiler, not a global WASI CC/CXX.
+          add-to-path: "false"
 
       - uses: cargo-bins/cargo-binstall@v1.21.0
 
