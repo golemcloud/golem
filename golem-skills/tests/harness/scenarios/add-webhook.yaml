@@ -10,51 +10,88 @@ steps:
       build: true
 
   - id: "add-webhook-agents"
-    prompt: >
-      In the test-app project, build a webhook integration demo using two new durable
-      agent types: `WebhookAgent` and `SenderAgent`. Both are identified by a single
-      name constructor parameter.
+    prompt:
+      rust: &non-effect-add-webhook-agents-prompt >
+        In the test-app project, build a webhook integration demo using two new durable
+        agent types: `WebhookAgent` and `SenderAgent`. Both are identified by a single
+        name constructor parameter.
 
-      Give `WebhookAgent` an HTTP mount under `/webhooks/{name}` and `SenderAgent`
-      an HTTP mount under `/senders/{name}`. Make sure both are exposed through the
-      app HTTP API on `test-app.localhost:9006`.
+        Give `WebhookAgent` an HTTP mount under `/webhooks/{name}` and `SenderAgent`
+        an HTTP mount under `/senders/{name}`. Make sure both are exposed through the
+        app HTTP API on `test-app.localhost:9006`.
 
-      **WebhookAgent** must have mutable state fields for a `webhook_url` (string,
-      initially empty) and a `result` (string, initially empty). It must expose
-      these HTTP endpoints:
+        **WebhookAgent** must have mutable state fields for a `webhook_url` (string,
+        initially empty) and a `result` (string, initially empty). It must expose
+        these HTTP endpoints:
 
-      - `POST /start` — creates a Golem webhook, stores the webhook handler so
-        the agent can await it later, and stores the webhook URL in the
-        `webhook_url` state field. Then hand off the URL to a `SenderAgent`
-        (identified by the same name) via RPC by calling `receive_url` on it.
-        After that, await the webhook handler to get the incoming POST payload.
-        Decode the payload as a string and store it in the `result` state field.
-        Return the result.
+        - `POST /start` — creates a Golem webhook, stores the webhook handler so
+          the agent can await it later, and stores the webhook URL in the
+          `webhook_url` state field. Then hand off the URL to a `SenderAgent`
+          (identified by the same name) via RPC by calling `receive_url` on it.
+          After that, await the webhook handler to get the incoming POST payload.
+          Decode the payload as a string and store it in the `result` state field.
+          Return the result.
 
-      - `GET /result` — returns the current value of `result` as a plain string.
+        - `GET /result` — returns the current value of `result` as a plain string.
 
-      **SenderAgent** must be able to receive and store a URL string. It must expose
-      these HTTP endpoints:
+        **SenderAgent** must be able to receive and store a URL string. It must expose
+        these HTTP endpoints:
 
-      - `POST /receive-url` — receives a `url` string parameter and stores it
-        in agent state. This is called by `WebhookAgent` via RPC. Returns nothing.
+        - `POST /receive-url` — receives a `url` string parameter and stores it
+          in agent state. This is called by `WebhookAgent` via RPC. Returns nothing.
 
-      - `POST /send` — accepts a JSON body with a `message` field (a string).
-        Makes an outgoing HTTP POST request to the stored webhook URL with the
-        message string as the plain text request body. Returns a boolean
-        indicating success (true if the POST returned a successful status code).
+        - `POST /send` — accepts a JSON body with a `message` field (a string).
+          Makes an outgoing HTTP POST request to the stored webhook URL with the
+          message string as the plain text request body. Returns a boolean
+          indicating success (true if the POST returned a successful status code).
 
-      The expected flow is: WebhookAgent creates a webhook, hands off the URL to
-      SenderAgent, and suspends while awaiting the webhook. Later, someone calls
-      SenderAgent's send endpoint with a message, which POSTs to the webhook URL
-      and wakes up WebhookAgent.
+        The expected flow is: WebhookAgent creates a webhook, hands off the URL to
+        SenderAgent, and suspends while awaiting the webhook. Later, someone calls
+        SenderAgent's send endpoint with a message, which POSTs to the webhook URL
+        and wakes up WebhookAgent.
 
-      Make sure the project builds successfully.
+        Make sure the project builds successfully.
+      ts: *non-effect-add-webhook-agents-prompt
+      effect: >
+        In the Effect-based test-app project, build a webhook rendezvous demo with two durable
+        agents defined using Effect and `@golemcloud/effect-golem`: `WebhookAgent` and
+        `SenderAgent`. Give each a single `constructorParams` string named `name`. Mount them with
+        `Http.mount("/webhooks/{name}")` and `Http.mount("/senders/{name}")`, expose both through
+        the app HTTP API on `test-app.localhost:9006`, and register their implementations from
+        `src/main.ts`.
+
+        `WebhookAgent` must keep `webhookUrl` and `result` string state, both initially empty. Its
+        `POST /start` Effect must create a webhook with `Webhook.create`, store `handle.url`, get
+        the same-name `SenderAgent` through its typed client, and hand off both the URL and
+        `handle.promiseId` with `yield* sender.receiveUrl.trigger(...)`. Use this fire-and-forget
+        RPC so `start` reaches the webhook wait without waiting on the receiver. Keep the handle
+        local to this invocation, await
+        `handle.await`, decode the payload with `text()`, store the text in `result`, and return
+        it. Expose `GET /result` to return the current result string.
+
+        `SenderAgent` must store the received URL and promise ID in per-instance Effect state.
+        Define the promise ID parameter with its exact WIT shape, using `WitTypes.Uint64` for UUID
+        halves and the oplog index. Expose `POST /receive-url` as the `receiveUrl` method with
+        unbound `url` and `promiseId` parameters, storing both and returning `Schema.Void`.
+
+        The pinned Effect SDK has no outgoing HTTP capability. Therefore adapt `POST /send`
+        honestly instead of using `fetch` or inventing an HTTP client: accept the unbound
+        camelCase JSON `message` string and call `Agents.Promises.complete` with the stored promise
+        ID and `new TextEncoder().encode(message)`. Return the resulting success boolean. This
+        intentionally resumes the webhook's underlying promise without claiming to POST to the
+        public URL.
+
+        Implement every handler as an Effect, preserve existing manifest entries, and make sure
+        the project builds successfully.
+      scala: *non-effect-add-webhook-agents-prompt
+      moonbit: *non-effect-add-webhook-agents-prompt
     expectedSkills:
       rust:
         - "golem-add-webhook-rust"
       ts:
         - "golem-add-webhook-ts"
+      effect:
+        - "golem-add-webhook-effect"
       scala:
         - "golem-add-webhook-scala"
       moonbit:
@@ -62,6 +99,33 @@ steps:
     verify:
       build: true
       deploy: true
+
+  - id: "warm-effect-webhook-agent"
+    only_if:
+      language: "effect"
+    http:
+      url: "http://test-app.localhost:9006/webhooks/w1/result"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: ""
+
+  - id: "warm-effect-sender-agent"
+    only_if:
+      language: "effect"
+    http:
+      url: "http://test-app.localhost:9006/senders/w1/send"
+      method: "POST"
+      body: '{"message": "warmup"}'
+      headers:
+        Content-Type: "application/json"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: false
 
   - id: "trigger-webhook-start"
     trigger:

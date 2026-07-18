@@ -386,9 +386,31 @@ units:
     prerequisites:
       - golem-add-http-endpoint
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T16:08:12.070Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-webhook/attempt-1/add-webhook/amp-effect-add-webhook.json
+        thread: https://ampcode.com/threads/T-019f75fc-4c84-703c-9043-aa423b2d09be
+        finishedAt: 2026-07-18T16:33:21.961Z
+        error: |-
+          add-webhook:
+          ASSERTION_FAILED (stdout_contains): stdout does not contain "Suspended"
+      - number: 2
+        startedAt: 2026-07-18T16:33:21.964Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-webhook/attempt-2/add-webhook/amp-effect-add-webhook.json
+        thread: https://ampcode.com/threads/T-019f7613-5759-7692-b59f-465cbc411253
+        finishedAt: 2026-07-18T17:00:44.780Z
+    evidence:
+      verifiedAt: 2026-07-18T17:00:44.780Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7613-5759-7692-b59f-465cbc411253
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-webhook/attempt-2/add-webhook/amp-effect-add-webhook.json
   - id: golem-annotate-agent
     targetSkill: golem-annotate-agent-effect
     verifyScenarios:
