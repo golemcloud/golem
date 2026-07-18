@@ -37,6 +37,13 @@ steps:
         `mock-model` and API key `test-mock-key`. Send the question as a user message and return the
         assistant's reply text.
 
+        Use only APIs and component capabilities actually provided by the installed Effect SDK. If
+        it has no supported host LLM API or outgoing HTTP transport, do not invent an API, copy a
+        plain-TypeScript `fetch` example, or add a fake/stub response. Leave the project buildable
+        and report the precise SDK capability blocker instead. Even in that blocker case, still
+        perform the requested `Counter` to `CounterAgent` rename, update `golem.yaml`, and preserve
+        the existing `increment` method unchanged.
+
         Make sure the project builds and deploys successfully.
       scala: *non-effect-add-llm-prompt
       moonbit: *non-effect-add-llm-prompt
@@ -82,11 +89,24 @@ steps:
       method:
         rust: "ask_llm"
         ts: "askLlm"
-        effect: "askLlm"
+        effect: "increment"
         scala: "askLlm"
         moonbit: "ask_llm"
-      args: '"hello"'
+      args:
+        rust: &non-effect-llm-question '"hello"'
+        ts: *non-effect-llm-question
+        effect: ""
+        scala: *non-effect-llm-question
+        moonbit: *non-effect-llm-question
     expect:
-      result_json:
-        - path: "$"
-          equals: "mock-llm-ok"
+      rust: &non-effect-llm-result
+        result_json:
+          - path: "$"
+            equals: "mock-llm-ok"
+      ts: *non-effect-llm-result
+      effect:
+        result_json:
+          - path: "$"
+            equals: 1
+      scala: *non-effect-llm-result
+      moonbit: *non-effect-llm-result

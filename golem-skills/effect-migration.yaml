@@ -223,9 +223,31 @@ units:
     prerequisites:
       - golem-add-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T12:47:35.656Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-llm/attempt-1/add-llm/amp-effect-add-llm.json
+        thread: https://ampcode.com/threads/T-019f7544-a0f1-72da-a1d3-be78023ebdd7
+        finishedAt: 2026-07-18T13:07:27.533Z
+        error: |-
+          add-llm:
+          ASSERTION_FAILED (result_json[$].equals): $ expected "mock-llm-ok", got undefined; result_json=undefined
+      - number: 2
+        startedAt: 2026-07-18T13:07:27.540Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-llm/attempt-2/add-llm/amp-effect-add-llm.json
+        thread: https://ampcode.com/threads/T-019f7556-d799-71a8-9a3f-4297b0f0a27c
+        finishedAt: 2026-07-18T13:25:59.728Z
+    evidence:
+      verifiedAt: 2026-07-18T13:25:59.728Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7556-d799-71a8-9a3f-4297b0f0a27c
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-llm/attempt-2/add-llm/amp-effect-add-llm.json
   - id: golem-add-mysql
     targetSkill: golem-add-mysql-effect
     verifyScenarios:
