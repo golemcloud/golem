@@ -190,9 +190,31 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Use @golemcloud/effect-golem/ignite2 rather than a native Node driver.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T12:11:06.141Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-ignite/attempt-1/add-ignite-rdbms/amp-effect-add-ignite-rdbms.json
+        thread: https://ampcode.com/threads/T-019f7523-39b5-70c2-85b9-548002c53cf4
+        finishedAt: 2026-07-18T12:32:21.805Z
+        error: |-
+          add-ignite-rdbms:
+          ASSERTION_FAILED (result_json[$].equals): $ expected "ignite-ok", got undefined; result_json=undefined
+      - number: 2
+        startedAt: 2026-07-18T12:32:21.809Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-ignite/attempt-2/add-ignite-rdbms/amp-effect-add-ignite-rdbms.json
+        thread: https://ampcode.com/threads/T-019f7536-ad4c-7119-9346-b9949900e66d
+        finishedAt: 2026-07-18T12:47:34.333Z
+    evidence:
+      verifiedAt: 2026-07-18T12:47:34.333Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7536-ad4c-7119-9346-b9949900e66d
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-ignite/attempt-2/add-ignite-rdbms/amp-effect-add-ignite-rdbms.json
   - id: golem-add-llm
     targetSkill: golem-add-llm-effect
     verifyScenarios:
