@@ -353,9 +353,31 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Map rollback behavior to the Effect SDK Saga APIs.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T15:12:19.907Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-transactions/attempt-1/transactions-1-fallible-rollback-http-ledger/amp-effect-transactions-1-fallible-rollback-http-ledger.json
+        thread: https://ampcode.com/threads/T-019f75c9-266d-7113-b8ca-56560bbfea4a
+        finishedAt: 2026-07-18T15:33:31.082Z
+        error: |-
+          transactions-1-fallible-rollback-http-ledger:
+          ASSERTION_FAILED (result_json[$.success].equals): $.success expected false, got undefined; result_json=undefined
+      - number: 2
+        startedAt: 2026-07-18T15:33:31.085Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-transactions/attempt-2/transactions-1-fallible-rollback-http-ledger/amp-effect-transactions-1-fallible-rollback-http-ledger.json
+        thread: https://ampcode.com/threads/T-019f75dc-8c94-763c-a835-2dc1166809af
+        finishedAt: 2026-07-18T16:08:10.766Z
+    evidence:
+      verifiedAt: 2026-07-18T16:08:10.766Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f75dc-8c94-763c-a835-2dc1166809af
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-transactions/attempt-2/transactions-1-fallible-rollback-http-ledger/amp-effect-transactions-1-fallible-rollback-http-ledger.json
   - id: golem-add-webhook
     targetSkill: golem-add-webhook-effect
     verifyScenarios:
