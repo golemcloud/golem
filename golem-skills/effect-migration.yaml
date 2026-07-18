@@ -257,9 +257,31 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Use @golemcloud/effect-golem/mysql rather than a native Node driver.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T13:26:01.137Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-mysql/attempt-1/add-mysql-rdbms/amp-effect-add-mysql-rdbms.json
+        thread: https://ampcode.com/threads/T-019f7567-d0cb-7296-9a57-bc73e828ab76
+        finishedAt: 2026-07-18T13:47:30.505Z
+        error: |-
+          add-mysql-rdbms:
+          ASSERTION_FAILED (result_json[$].equals): $ expected "mysql-ok", got undefined; result_json=undefined
+      - number: 2
+        startedAt: 2026-07-18T13:47:30.508Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-mysql/attempt-2/add-mysql-rdbms/amp-effect-add-mysql-rdbms.json
+        thread: https://ampcode.com/threads/T-019f757b-7daf-77e6-b330-b09155161018
+        finishedAt: 2026-07-18T14:09:34.728Z
+    evidence:
+      verifiedAt: 2026-07-18T14:09:34.728Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f757b-7daf-77e6-b330-b09155161018
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-mysql/attempt-2/add-mysql-rdbms/amp-effect-add-mysql-rdbms.json
   - id: golem-add-postgres
     targetSkill: golem-add-postgres-effect
     verifyScenarios:
