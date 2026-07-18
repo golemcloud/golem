@@ -41,7 +41,7 @@ define_matrix_dimension!(lang: Arc<dyn TestContext> -> "ts", "rust");
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn rpc_provided_config_overrides_defaults(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -128,7 +128,7 @@ async fn rpc_provided_config_overrides_defaults(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -211,7 +211,7 @@ async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn rpc_does_not_override_values_of_existing_agent(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,

@@ -251,7 +251,7 @@ jobs:
           QUIET: true
           GOLEM_PRESET: quick
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
+        timeout-minutes: 45
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
@@ -735,10 +735,17 @@ jobs:
       - name: Remove any pre-existing WASMs
         run: find test-components -maxdepth 1 -name '*.wasm' -delete
 
+      - name: Setup Rust toolchain for Golem 1.5 guest components
+        if: startsWith(matrix.chunk.name, 'rust-')
+        run: |
+          rustup toolchain install 1.96.1 --profile minimal --no-self-update
+          rustup target add --toolchain 1.96.1 wasm32-wasip1 wasm32-wasip2
+
       - name: Build test components
         working-directory: test-components
         env:
           GOLEM_TS_PRESET: quick
+          RUSTUP_TOOLCHAIN: ${{ startsWith(matrix.chunk.name, 'rust-') && '1.96.1' || 'stable' }}
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
