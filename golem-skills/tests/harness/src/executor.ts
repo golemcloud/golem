@@ -22,10 +22,10 @@ const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
 
-const SUPPORTED_LANG_KEYS = new Set(["ts", "rust", "scala", "moonbit"]);
+const SUPPORTED_LANG_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit"]);
 
 /**
- * Checks if a value is a language-keyed map (e.g., { ts: "...", rust: "...", scala: "..." }).
+ * Checks if a value is a language-keyed map (e.g., { ts: "...", effect: "...", rust: "..." }).
  * Returns true only if the value is a plain object whose keys are all known language codes.
  */
 function isLanguageMap(value: unknown): value is Record<string, unknown> {
@@ -190,7 +190,7 @@ const ACTION_FIELDS = [
   "mcp_call",
 ] as const;
 
-// Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
+// Language-conditional: accepts either T or { ts: T, effect: T, rust: T, ... }
 function langConditional<T extends z.ZodType>(schema: T) {
   return z.union([schema, z.record(z.string(), schema)]);
 }

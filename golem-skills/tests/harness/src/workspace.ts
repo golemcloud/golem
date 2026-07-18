@@ -66,10 +66,26 @@ export async function findGolemAppDir(workspace: string): Promise<string> {
 
 /**
  * Given a GOLEM_PATH, find the target directory containing the `golem` binary.
+ * Uses GOLEM_TARGET_DIR when set, which is useful when Cargo is configured with
+ * a target directory outside the repository.
  * Prefers `target/release` if a `golem` executable exists there, otherwise
  * falls back to `target/debug`. Throws if neither contains the binary.
  */
-export function resolveGolemTargetDir(golemPath: string): string {
+export function resolveGolemTargetDir(
+  golemPath: string,
+  targetDirOverride = process.env.GOLEM_TARGET_DIR,
+): string {
+  if (targetDirOverride) {
+    try {
+      accessSync(path.join(targetDirOverride, "golem"), constants.X_OK);
+      return targetDirOverride;
+    } catch {
+      throw new Error(
+        `GOLEM_TARGET_DIR does not contain an executable golem binary: ${targetDirOverride}`,
+      );
+    }
+  }
+
   const releaseDir = path.join(golemPath, "target", "release");
   const debugDir = path.join(golemPath, "target", "debug");
 

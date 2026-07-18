@@ -32,7 +32,7 @@ import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./
 const DEFAULT_SCENARIO_RETRIES = 5;
 
 const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex", "gemini"] as const;
-const SUPPORTED_LANGUAGES = ["ts", "rust", "scala", "moonbit"] as const;
+const SUPPORTED_LANGUAGES = ["ts", "effect", "rust", "scala", "moonbit"] as const;
 
 type SupportedAgent = (typeof SUPPORTED_AGENTS)[number];
 type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
