@@ -75,6 +75,7 @@ interface ScenarioReport {
   scenario: string;
   matrix: { agent: string; language: string };
   status: "pass" | "fail";
+  artifactPaths?: string[];
   results: Array<{
     success: boolean;
     error?: string;
@@ -535,7 +536,7 @@ async function buildWorkerPrompt(
   repoRoot: string,
   manifest: MigrationManifest,
   unit: MigrationUnit,
-  previousFailure?: string,
+  previousAttempt?: MigrationAttempt,
 ): Promise<string> {
   const basePrompt = await fs.readFile(
     path.join(repoRoot, "golem-skills", "effect-migration-worker.md"),
@@ -550,6 +551,10 @@ async function buildWorkerPrompt(
     return `golem-skills/skills/effect/${prerequisite.targetSkill}/SKILL.md`;
   });
   const localSdkPath = process.env[manifest.effectGolem.localPathEnv];
+  const previousFailure = previousAttempt?.error;
+  const artifactPaths = previousAttempt
+    ? await collectAttemptArtifactPaths(repoRoot, previousAttempt)
+    : [];
 
   return `${basePrompt}
 
@@ -568,14 +573,81 @@ ${scenarios.map((scenario) => `  - ${scenario}`).join("\n")}
 ${prerequisiteSkills.length > 0 ? prerequisiteSkills.map((skill) => `  - ${skill}`).join("\n") : "  - none"}
 - Canary reference: golem-skills/skills/effect/golem-add-agent-effect/SKILL.md
 - Generated Effect guide: cli/golem-cli/templates/effect/common/AGENTS.md
-${previousFailure ? `\n## Previous verification failure\n\n${previousFailure}\n` : ""}
+${previousFailure ? buildPreviousFailureSection(previousFailure, previousAttempt.reports, artifactPaths) : ""}
 Implement this one unit now. Read other files as needed, but edit only the target skill and listed
 scenarios.`;
 }
 
-async function runAmpWorker(repoRoot: string, mode: string, prompt: string): Promise<AmpResult> {
+async function collectAttemptArtifactPaths(
+  repoRoot: string,
+  attempt: MigrationAttempt,
+): Promise<string[]> {
+  const artifactPaths = new Set<string>();
+  for (const reportPath of attempt.reports) {
+    try {
+      const report = JSON.parse(
+        await fs.readFile(path.resolve(repoRoot, reportPath), "utf8"),
+      ) as ScenarioReport;
+      for (const artifactPath of report.artifactPaths ?? []) {
+        const relativePath = path.relative(repoRoot, artifactPath);
+        artifactPaths.add(relativePath.startsWith("..") ? artifactPath : relativePath);
+      }
+    } catch {
+      // The report path and original failure still give the repair worker useful evidence.
+    }
+  }
+  return [...artifactPaths];
+}
+
+export function buildPreviousFailureSection(
+  failure: string,
+  reports: string[],
+  artifactPaths: string[],
+): string {
+  const list = (paths: string[]) =>
+    paths.length > 0 ? paths.map((entry) => `  - ${entry}`).join("\n") : "  - none";
+
+  return `
+## Previous live verification failed — repair it
+
+The controller ran the real Amp × Effect scenarios after the prior edit. Diagnose the failure
+before changing the skill again. Inspect the generated application and the complete report; the
+short error alone may hide a runtime trap or incorrect generated code.
+
+- Reports:
+${list(reports)}
+- Generated scenario workspaces and artifacts:
+${list(artifactPaths)}
+
+Use generated workspaces only as diagnostic evidence. Fix the assigned Effect skill and/or its
+listed scenarios, not the generated application. Do not merely repeat the previous implementation.
+
+### Failure
+
+${failure}
+`;
+}
+
+export function ampWorkerArgs(mode: string, prompt: string, thread?: string): string[] {
+  const executeArgs = [
+    "--mode",
+    mode,
+    "--dangerously-allow-all",
+    "--execute",
+    prompt,
+    "--stream-json",
+  ];
+  return thread ? ["threads", "continue", thread, ...executeArgs] : executeArgs;
+}
+
+async function runAmpWorker(
+  repoRoot: string,
+  mode: string,
+  prompt: string,
+  continueThread?: string,
+): Promise<AmpResult> {
   return new Promise((resolve, reject) => {
-    const args = ["--mode", mode, "--dangerously-allow-all", "--execute", prompt, "--stream-json"];
+    const args = ampWorkerArgs(mode, prompt, continueThread);
     const child = spawn("amp", args, {
       cwd: repoRoot,
       env: process.env,
@@ -633,7 +705,7 @@ async function runAmpWorker(repoRoot: string, mode: string, prompt: string): Pro
         exitCode: code ?? 1,
         stdout,
         stderr,
-        thread: thread ? `https://ampcode.com/threads/${thread}` : undefined,
+        thread: thread ? `https://ampcode.com/threads/${thread}` : continueThread,
         result: resultText,
       });
     });
@@ -800,12 +872,14 @@ async function runUnit(
   options: RunOptions,
   manifest: MigrationManifest,
   unit: MigrationUnit,
+  attemptLimit = manifest.policy.maxAttempts,
 ): Promise<boolean> {
-  let previousFailure: string | undefined;
+  let previousAttempt = unit.attempts[unit.attempts.length - 1];
+  let workerThread = previousAttempt?.thread;
 
   await assertScopedChanges(options.repoRoot, unit, options.manifestPath);
 
-  while (unit.attempts.length < manifest.policy.maxAttempts) {
+  while (unit.attempts.length < attemptLimit) {
     const attempt: MigrationAttempt = {
       number: unit.attempts.length + 1,
       startedAt: timestamp(),
@@ -819,9 +893,15 @@ async function runUnit(
     try {
       if (!options.verifyOnly) {
         const manifestBeforeWorker = await fs.readFile(options.manifestPath, "utf8");
-        const prompt = await buildWorkerPrompt(options.repoRoot, manifest, unit, previousFailure);
-        const amp = await runAmpWorker(options.repoRoot, manifest.policy.workerMode, prompt);
-        attempt.thread = amp.thread;
+        const prompt = await buildWorkerPrompt(options.repoRoot, manifest, unit, previousAttempt);
+        const amp = await runAmpWorker(
+          options.repoRoot,
+          manifest.policy.workerMode,
+          prompt,
+          previousAttempt?.error ? workerThread : undefined,
+        );
+        attempt.thread = amp.thread ?? workerThread;
+        workerThread = attempt.thread;
         const manifestAfterWorker = await fs.readFile(options.manifestPath, "utf8");
         if (manifestAfterWorker !== manifestBeforeWorker) {
           throw new ScopeViolationError(
@@ -852,20 +932,21 @@ async function runUnit(
       console.log(`Passed: ${unit.id}`);
       return true;
     } catch (error) {
-      previousFailure = error instanceof Error ? error.message : String(error);
+      const failure = error instanceof Error ? error.message : String(error);
       if (error instanceof ScopeViolationError) {
-        console.error(`Stopped: ${unit.id}\n${previousFailure}`);
+        console.error(`Stopped: ${unit.id}\n${failure}`);
         throw error;
       }
       if (error instanceof ControllerError) {
-        console.error(`Stopped: ${unit.id}\n${previousFailure}`);
+        console.error(`Stopped: ${unit.id}\n${failure}`);
         throw error;
       }
-      const blocked = unit.attempts.length >= manifest.policy.maxAttempts;
-      finishAttempt(attempt, blocked ? "blocked" : "failed", previousFailure);
+      const blocked = unit.attempts.length >= attemptLimit;
+      finishAttempt(attempt, blocked ? "blocked" : "failed", failure);
+      previousAttempt = attempt;
       unit.state = blocked ? "blocked" : "editing";
       await saveManifest(options.manifestPath, manifest);
-      console.error(`${blocked ? "Blocked" : "Retrying"}: ${unit.id}\n${previousFailure}`);
+      console.error(`${blocked ? "Blocked" : "Retrying"}: ${unit.id}\n${failure}`);
       if (options.verifyOnly || blocked) return false;
     }
   }
@@ -885,13 +966,16 @@ Options:
   --commit-each        Commit every passed unit locally (required with --all)
   --verify-only        Verify existing edits without launching an Amp worker
   --dry-run            Validate and print the selected queue without changing files
+  --retry-blocked      Give the selected blocked unit a fresh bounded attempt budget
   --continue-on-block  Continue with independent units after a blocked unit
   -h, --help           Show this help
 
 Run the controller from a dedicated, initially clean Git worktree. By default it processes one
 ready unit and leaves the verified diff for review. Use --commit-each for resumable unattended
 runs; the controller never pushes. GOLEM_EFFECT_GOLEM_PATH may point to an absolute local SDK
-checkout; otherwise workers inspect the pinned repository ref from the manifest.
+checkout; otherwise workers inspect the pinned repository ref from the manifest. A failed live
+scenario resumes the migration thread with its report and generated workspace until the attempt
+budget is exhausted.
 `);
 }
 
@@ -904,6 +988,7 @@ async function main(): Promise<void> {
       "commit-each": { type: "boolean", default: false },
       "verify-only": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
+      "retry-blocked": { type: "boolean", default: false },
       "continue-on-block": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -914,6 +999,9 @@ async function main(): Promise<void> {
   }
   if (values.all && !values["commit-each"] && !values["dry-run"]) {
     throw new Error("--all requires --commit-each so every completed unit is resumable");
+  }
+  if (values["retry-blocked"] && !values.unit) {
+    throw new Error("--retry-blocked requires --unit <id>");
   }
 
   const thisDir = path.dirname(fileURLToPath(import.meta.url));
@@ -949,7 +1037,21 @@ async function main(): Promise<void> {
   while (true) {
     const unit = selectNextUnit(manifest, values.unit);
     if (!unit || (unit.state === "passed" && !options.verifyOnly)) break;
-    const passed = await runUnit(options, manifest, unit);
+    const retryingBlocked =
+      values["retry-blocked"] &&
+      (unit.state === "blocked" || unit.attempts.length >= manifest.policy.maxAttempts);
+    if (values["retry-blocked"] && !retryingBlocked) {
+      throw new Error(`${unit.id} is not blocked or out of attempts`);
+    }
+    const attemptLimit = retryingBlocked
+      ? unit.attempts.length + manifest.policy.maxAttempts
+      : manifest.policy.maxAttempts;
+    if (retryingBlocked) {
+      console.log(
+        `Retrying blocked unit ${unit.id} with ${manifest.policy.maxAttempts} additional attempts.`,
+      );
+    }
+    const passed = await runUnit(options, manifest, unit, attemptLimit);
     processed++;
     const continueAfterBlocked = values["continue-on-block"] || !manifest.policy.stopOnBlocked;
     if (!passed && !continueAfterBlocked) break;

@@ -6,6 +6,8 @@ import * as path from "node:path";
 import { describe, test } from "node:test";
 import { promisify } from "node:util";
 import {
+  ampWorkerArgs,
+  buildPreviousFailureSection,
   findMissingEffectBranches,
   loadManifest,
   reportFailure,
@@ -18,6 +20,14 @@ const harnessRoot = process.cwd();
 const repoRoot = path.resolve(harnessRoot, "../../..");
 const manifestPath = path.join(repoRoot, "golem-skills", "effect-migration.yaml");
 const execFileAsync = promisify(execFile);
+
+function resetMigrationProgress(manifest: Awaited<ReturnType<typeof loadManifest>>): void {
+  for (const unit of manifest.units) {
+    unit.state = unit.id === "golem-add-agent" ? "passed" : "pending";
+    unit.attempts = [];
+    unit.evidence = null;
+  }
+}
 
 describe("Effect migration manifest", () => {
   test("contains the complete inventory with valid references and scenarios", async () => {
@@ -57,11 +67,13 @@ describe("Effect migration manifest", () => {
 
   test("selects the first ready unit after the passed canary", async () => {
     const manifest = await loadManifest(manifestPath);
+    resetMigrationProgress(manifest);
     assert.equal(selectNextUnit(manifest)?.id, "golem-add-npm-package");
   });
 
   test("does not select an active unit whose attempt budget is exhausted", async () => {
     const manifest = await loadManifest(manifestPath);
+    resetMigrationProgress(manifest);
     const exhausted = manifest.units.find(({ id }) => id === "golem-add-npm-package");
     assert.ok(exhausted);
     exhausted.state = "editing";
@@ -86,6 +98,25 @@ describe("Effect migration manifest", () => {
 });
 
 describe("Effect migration verification", () => {
+  test("continues the migration thread with live verification evidence", () => {
+    const thread = "https://ampcode.com/threads/T-00000000-0000-0000-0000-000000000001";
+    const args = ampWorkerArgs("high", "repair the failed scenario", thread);
+    assert.deepEqual(args.slice(0, 3), ["threads", "continue", thread]);
+    assert.ok(args.includes("--execute"));
+    assert.ok(args.includes("--stream-json"));
+
+    const feedback = buildPreviousFailureSection(
+      "atomic-block: INVOKE_FAILED",
+      ["results/effect-migration/atomic-block/report.json"],
+      ["workspaces/run-id/atomic-block/effect"],
+    );
+    assert.match(feedback, /Previous live verification failed — repair it/);
+    assert.match(feedback, /results\/effect-migration\/atomic-block\/report\.json/);
+    assert.match(feedback, /workspaces\/run-id\/atomic-block\/effect/);
+    assert.match(feedback, /Fix the assigned Effect skill and\/or its[\s\S]*listed scenarios/);
+    assert.match(feedback, /atomic-block: INVOKE_FAILED/);
+  });
+
   test("finds nested language maps without an Effect branch", () => {
     assert.deepEqual(
       findMissingEffectBranches({
