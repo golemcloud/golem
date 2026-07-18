@@ -113,9 +113,21 @@ units:
     prerequisites:
       - golem-add-http-endpoint
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T11:36:15.933Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-cors/attempt-1/add-cors/amp-effect-add-cors.json
+        thread: https://ampcode.com/threads/T-019f7503-5514-751b-a45b-08b3d9b5095f
+        finishedAt: 2026-07-18T11:50:05.182Z
+    evidence:
+      verifiedAt: 2026-07-18T11:50:05.182Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7503-5514-751b-a45b-08b3d9b5095f
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-cors/attempt-1/add-cors/amp-effect-add-cors.json
   - id: golem-add-http-auth
     targetSkill: golem-add-http-auth-effect
     verifyScenarios:
