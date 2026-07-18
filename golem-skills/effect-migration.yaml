@@ -4,7 +4,7 @@ effectGolem:
   ref: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
   localPathEnv: GOLEM_EFFECT_GOLEM_PATH
 policy:
-  maxAttempts: 3
+  maxAttempts: 4
   stopOnBlocked: true
   workerMode: high
   buildProfile: release
@@ -92,12 +92,12 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T10:39:47.514Z
+        finishedAt: 2026-07-18T11:00:02.755Z
+        thread: https://ampcode.com/threads/T-019f74cf-a244-72bb-ab1e-196a255d03bd
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-cli/amp-effect-add-config-cli.json
           - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-manifest/amp-effect-add-config-manifest.json
-        thread: https://ampcode.com/threads/T-019f74cf-a244-72bb-ab1e-196a255d03bd
-        finishedAt: 2026-07-18T11:00:02.755Z
     evidence:
       verifiedAt: 2026-07-18T11:00:02.755Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -117,11 +117,11 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T11:36:15.933Z
+        finishedAt: 2026-07-18T11:50:05.182Z
+        thread: https://ampcode.com/threads/T-019f7503-5514-751b-a45b-08b3d9b5095f
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-cors/attempt-1/add-cors/amp-effect-add-cors.json
-        thread: https://ampcode.com/threads/T-019f7503-5514-751b-a45b-08b3d9b5095f
-        finishedAt: 2026-07-18T11:50:05.182Z
     evidence:
       verifiedAt: 2026-07-18T11:50:05.182Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -140,11 +140,11 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T11:50:06.253Z
+        finishedAt: 2026-07-18T12:11:04.850Z
+        thread: https://ampcode.com/threads/T-019f7510-01ee-74ad-a4b6-3102886175c1
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-http-auth/attempt-1/http-endpoint-auth/amp-effect-http-endpoint-auth.json
-        thread: https://ampcode.com/threads/T-019f7510-01ee-74ad-a4b6-3102886175c1
-        finishedAt: 2026-07-18T12:11:04.850Z
     evidence:
       verifiedAt: 2026-07-18T12:11:04.850Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -168,12 +168,12 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T11:00:03.777Z
+        finishedAt: 2026-07-18T11:36:14.857Z
+        thread: https://ampcode.com/threads/T-019f74e2-31bc-75eb-b7bf-163d34ddbca9
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/add-http-endpoint/amp-effect-add-http-endpoint.json
           - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/configure-api-domain/amp-effect-configure-api-domain.json
-        thread: https://ampcode.com/threads/T-019f74e2-31bc-75eb-b7bf-163d34ddbca9
-        finishedAt: 2026-07-18T11:36:14.857Z
     evidence:
       verifiedAt: 2026-07-18T11:36:14.857Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -194,21 +194,21 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T12:11:06.141Z
+        finishedAt: 2026-07-18T12:32:21.805Z
+        thread: https://ampcode.com/threads/T-019f7523-39b5-70c2-85b9-548002c53cf4
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-ignite/attempt-1/add-ignite-rdbms/amp-effect-add-ignite-rdbms.json
-        thread: https://ampcode.com/threads/T-019f7523-39b5-70c2-85b9-548002c53cf4
-        finishedAt: 2026-07-18T12:32:21.805Z
         error: |-
           add-ignite-rdbms:
           ASSERTION_FAILED (result_json[$].equals): $ expected "ignite-ok", got undefined; result_json=undefined
       - number: 2
         startedAt: 2026-07-18T12:32:21.809Z
+        finishedAt: 2026-07-18T12:47:34.333Z
+        thread: https://ampcode.com/threads/T-019f7536-ad4c-7119-9346-b9949900e66d
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-ignite/attempt-2/add-ignite-rdbms/amp-effect-add-ignite-rdbms.json
-        thread: https://ampcode.com/threads/T-019f7536-ad4c-7119-9346-b9949900e66d
-        finishedAt: 2026-07-18T12:47:34.333Z
     evidence:
       verifiedAt: 2026-07-18T12:47:34.333Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -227,21 +227,21 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T12:47:35.656Z
+        finishedAt: 2026-07-18T13:07:27.533Z
+        thread: https://ampcode.com/threads/T-019f7544-a0f1-72da-a1d3-be78023ebdd7
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-llm/attempt-1/add-llm/amp-effect-add-llm.json
-        thread: https://ampcode.com/threads/T-019f7544-a0f1-72da-a1d3-be78023ebdd7
-        finishedAt: 2026-07-18T13:07:27.533Z
         error: |-
           add-llm:
           ASSERTION_FAILED (result_json[$].equals): $ expected "mock-llm-ok", got undefined; result_json=undefined
       - number: 2
         startedAt: 2026-07-18T13:07:27.540Z
+        finishedAt: 2026-07-18T13:25:59.728Z
+        thread: https://ampcode.com/threads/T-019f7556-d799-71a8-9a3f-4297b0f0a27c
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-llm/attempt-2/add-llm/amp-effect-add-llm.json
-        thread: https://ampcode.com/threads/T-019f7556-d799-71a8-9a3f-4297b0f0a27c
-        finishedAt: 2026-07-18T13:25:59.728Z
     evidence:
       verifiedAt: 2026-07-18T13:25:59.728Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -261,21 +261,21 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T13:26:01.137Z
+        finishedAt: 2026-07-18T13:47:30.505Z
+        thread: https://ampcode.com/threads/T-019f7567-d0cb-7296-9a57-bc73e828ab76
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-mysql/attempt-1/add-mysql-rdbms/amp-effect-add-mysql-rdbms.json
-        thread: https://ampcode.com/threads/T-019f7567-d0cb-7296-9a57-bc73e828ab76
-        finishedAt: 2026-07-18T13:47:30.505Z
         error: |-
           add-mysql-rdbms:
           ASSERTION_FAILED (result_json[$].equals): $ expected "mysql-ok", got undefined; result_json=undefined
       - number: 2
         startedAt: 2026-07-18T13:47:30.508Z
+        finishedAt: 2026-07-18T14:09:34.728Z
+        thread: https://ampcode.com/threads/T-019f757b-7daf-77e6-b330-b09155161018
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-mysql/attempt-2/add-mysql-rdbms/amp-effect-add-mysql-rdbms.json
-        thread: https://ampcode.com/threads/T-019f757b-7daf-77e6-b330-b09155161018
-        finishedAt: 2026-07-18T14:09:34.728Z
     evidence:
       verifiedAt: 2026-07-18T14:09:34.728Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -295,21 +295,21 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T14:09:37.275Z
+        finishedAt: 2026-07-18T14:26:40.395Z
+        thread: https://ampcode.com/threads/T-019f758f-c29c-75b8-9cd2-82cdce9903bb
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-postgres/attempt-1/add-postgres-rdbms/amp-effect-add-postgres-rdbms.json
-        thread: https://ampcode.com/threads/T-019f758f-c29c-75b8-9cd2-82cdce9903bb
-        finishedAt: 2026-07-18T14:26:40.395Z
         error: |-
           add-postgres-rdbms:
           ASSERTION_FAILED (result_json[$].equals): $ expected "postgres-ok", got undefined; result_json=undefined
       - number: 2
         startedAt: 2026-07-18T14:26:40.401Z
+        finishedAt: 2026-07-18T14:45:55.763Z
+        thread: https://ampcode.com/threads/T-019f759f-594f-7132-a384-ebce0874fe99
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-postgres/attempt-2/add-postgres-rdbms/amp-effect-add-postgres-rdbms.json
-        thread: https://ampcode.com/threads/T-019f759f-594f-7132-a384-ebce0874fe99
-        finishedAt: 2026-07-18T14:45:55.763Z
     evidence:
       verifiedAt: 2026-07-18T14:45:55.763Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -331,12 +331,12 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T14:45:58.266Z
+        finishedAt: 2026-07-18T15:12:18.399Z
+        thread: https://ampcode.com/threads/T-019f75b1-0971-750e-9dca-109adf86691b
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-secret/attempt-1/add-secret/amp-effect-add-secret.json
           - golem-skills/tests/harness/results/effect-migration/golem-add-secret/attempt-1/add-secret-runtime/amp-effect-add-secret-runtime.json
-        thread: https://ampcode.com/threads/T-019f75b1-0971-750e-9dca-109adf86691b
-        finishedAt: 2026-07-18T15:12:18.399Z
     evidence:
       verifiedAt: 2026-07-18T15:12:18.399Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -357,21 +357,21 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T15:12:19.907Z
+        finishedAt: 2026-07-18T15:33:31.082Z
+        thread: https://ampcode.com/threads/T-019f75c9-266d-7113-b8ca-56560bbfea4a
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-transactions/attempt-1/transactions-1-fallible-rollback-http-ledger/amp-effect-transactions-1-fallible-rollback-http-ledger.json
-        thread: https://ampcode.com/threads/T-019f75c9-266d-7113-b8ca-56560bbfea4a
-        finishedAt: 2026-07-18T15:33:31.082Z
         error: |-
           transactions-1-fallible-rollback-http-ledger:
           ASSERTION_FAILED (result_json[$.success].equals): $.success expected false, got undefined; result_json=undefined
       - number: 2
         startedAt: 2026-07-18T15:33:31.085Z
+        finishedAt: 2026-07-18T16:08:10.766Z
+        thread: https://ampcode.com/threads/T-019f75dc-8c94-763c-a835-2dc1166809af
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-transactions/attempt-2/transactions-1-fallible-rollback-http-ledger/amp-effect-transactions-1-fallible-rollback-http-ledger.json
-        thread: https://ampcode.com/threads/T-019f75dc-8c94-763c-a835-2dc1166809af
-        finishedAt: 2026-07-18T16:08:10.766Z
     evidence:
       verifiedAt: 2026-07-18T16:08:10.766Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -390,21 +390,21 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T16:08:12.070Z
+        finishedAt: 2026-07-18T16:33:21.961Z
+        thread: https://ampcode.com/threads/T-019f75fc-4c84-703c-9043-aa423b2d09be
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-webhook/attempt-1/add-webhook/amp-effect-add-webhook.json
-        thread: https://ampcode.com/threads/T-019f75fc-4c84-703c-9043-aa423b2d09be
-        finishedAt: 2026-07-18T16:33:21.961Z
         error: |-
           add-webhook:
           ASSERTION_FAILED (stdout_contains): stdout does not contain "Suspended"
       - number: 2
         startedAt: 2026-07-18T16:33:21.964Z
+        finishedAt: 2026-07-18T17:00:44.780Z
+        thread: https://ampcode.com/threads/T-019f7613-5759-7692-b59f-465cbc411253
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-webhook/attempt-2/add-webhook/amp-effect-add-webhook.json
-        thread: https://ampcode.com/threads/T-019f7613-5759-7692-b59f-465cbc411253
-        finishedAt: 2026-07-18T17:00:44.780Z
     evidence:
       verifiedAt: 2026-07-18T17:00:44.780Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -423,11 +423,11 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T17:00:45.943Z
+        finishedAt: 2026-07-18T17:14:53.564Z
+        thread: https://ampcode.com/threads/T-019f762c-6c7d-76a7-905a-eeac523afc88
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-annotate-agent/attempt-1/annotate-agent/amp-effect-annotate-agent.json
-        thread: https://ampcode.com/threads/T-019f762c-6c7d-76a7-905a-eeac523afc88
-        finishedAt: 2026-07-18T17:14:53.564Z
     evidence:
       verifiedAt: 2026-07-18T17:14:53.564Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -443,9 +443,100 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Map atomic regions to the Effect SDK Durability API.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T17:14:54.620Z
+        finishedAt: 2026-07-18T17:44:52.602Z
+        thread: https://ampcode.com/threads/T-019f7639-60e8-7058-bdfc-d4c56f614d9a
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-1/atomic-block/amp-effect-atomic-block.json
+        error: |-
+          atomic-block:
+          ASSERTION_FAILED (body_json[$].equals): $ expected ["a","b","a","b","c","d"], got ["a","b","c","d","a","b","c","d"]; result_json=["a","b","c","d","a","b","c","d"]
+      - number: 2
+        startedAt: 2026-07-18T17:44:52.606Z
+        finishedAt: 2026-07-18T18:11:05.801Z
+        thread: https://ampcode.com/threads/T-019f7654-cf1c-745c-a5b0-b60fdb9af608
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-2/atomic-block/amp-effect-atomic-block.json
+        error: |-
+          atomic-block:
+          ASSERTION_FAILED (body_json[$].equals): $ expected ["a","b","a","b","c","d"], got ["a","b","a","b","c","d","a","b","c","d"]; result_json=["a","b","a","b","c","d","a","b","c","d"]
+      - number: 3
+        startedAt: 2026-07-18T18:11:05.805Z
+        finishedAt: 2026-07-18T18:36:45.048Z
+        thread: https://ampcode.com/threads/T-019f766c-d11b-7588-a638-7ad39e04ff9a
+        outcome: blocked
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-3/atomic-block/amp-effect-atomic-block.json
+        error: |-
+          atomic-block:
+          Agent failed: OpenAI WebSocket closed: 1006
+
+          If this persists, try deactivating your ChatGPT subscription at https://ampcode.com/settings/model-providers.
+      - number: 4
+        startedAt: 2026-07-18T19:20:47.632Z
+        finishedAt: 2026-07-18T19:34:44.866Z
+        thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
+        outcome: blocked
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-4/atomic-block/amp-effect-atomic-block.json
+        error: |
+          atomic-block:
+          INVOKE_FAILED: Using generated idempotency key: 3eb53a48-650c-4e8e-ac81-a97ce96804e2
+          Selected app: test-app, env: local, server: local - builtin (http://localhost:9881/)
+          Fuzzy matched pattern runAtomicTest as runAtomicTest
+          Invoking agent test-app:effect-main/CounterAgent("main")/runAtomicTest
+          [2026-07-18T19:34:42.642Z] [INVOKE  ] STARTED  runAtomicTest (3eb53a48-650c-4e8e-ac81-a97ce96804e2)
+          error: Agent Service - Error: 500 Internal Server Error, Invocation Failed
+      - number: 5
+        startedAt: 2026-07-18T20:00:36.699Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-5/atomic-block/amp-effect-atomic-block.json
+        thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
+        finishedAt: 2026-07-18T20:20:33.756Z
+        error: |
+          atomic-block:
+          INVOKE_FAILED: Using generated idempotency key: eb072be6-041d-434d-a711-c2ba1386ec73
+          Selected app: test-app, env: local, server: local - builtin (http://localhost:9881/)
+          Fuzzy matched pattern runAtomicTest as runAtomicTest
+          Invoking agent test-app:effect-main/CounterAgent("main")/runAtomicTest 
+          [2026-07-18T20:19:59.691Z] [INVOKE  ] STARTED  runAtomicTest (eb072be6-041d-434d-a711-c2ba1386ec73)
+          [2026-07-18T20:20:33.667Z] [STDERR  ] 
+          [2026-07-18T20:20:33.667Z] [STDERR  ] thread '<unnamed>' (1) panicked at src/internal.rs:210941:
+          [2026-07-18T20:20:33.667Z] [STDERR  ] Exception during awaiting call result for guest.invoke:
+          [2026-07-18T20:20:33.667Z] [STDERR  ] JavaScript error: atomic recovery did not complete after 300 attempts
+          [2026-07-18T20:20:33.667Z] [STDERR  ] Stack:
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at <anonymous> (user:121:42)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at next (native)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at ~effect/Effect/successCont (effect:2:83318)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at ~effect/Effect/evaluate (effect:2:17976)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at runLoop (effect:2:78877)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at evaluate (effect:2:78259)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at <anonymous> (effect:2:81836)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at <anonymous> (@golemcloud/effect-golem:2:136186)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at apply (native)
+          [2026-07-18T20:20:33.667Z] [STDERR  ]     at call (native)
+          [2026-07-18T20:20:33.667Z] [STDERR  ] 
+          [2026-07-18T20:20:33.667Z] [STDERR  ] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+          error: Agent Service - Error: 500 Internal Server Error, Invocation Failed
+      - number: 6
+        startedAt: 2026-07-18T20:20:33.759Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-6/atomic-block/amp-effect-atomic-block.json
+        thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
+        finishedAt: 2026-07-18T20:32:15.739Z
+    evidence:
+      verifiedAt: 2026-07-18T20:32:15.739Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-6/atomic-block/amp-effect-atomic-block.json
   - id: golem-call-another-agent
     targetSkill: golem-call-another-agent-effect
     verifyScenarios:
