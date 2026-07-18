@@ -291,9 +291,31 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Use @golemcloud/effect-golem/postgres rather than a native Node driver.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T14:09:37.275Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-postgres/attempt-1/add-postgres-rdbms/amp-effect-add-postgres-rdbms.json
+        thread: https://ampcode.com/threads/T-019f758f-c29c-75b8-9cd2-82cdce9903bb
+        finishedAt: 2026-07-18T14:26:40.395Z
+        error: |-
+          add-postgres-rdbms:
+          ASSERTION_FAILED (result_json[$].equals): $ expected "postgres-ok", got undefined; result_json=undefined
+      - number: 2
+        startedAt: 2026-07-18T14:26:40.401Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-postgres/attempt-2/add-postgres-rdbms/amp-effect-add-postgres-rdbms.json
+        thread: https://ampcode.com/threads/T-019f759f-594f-7132-a384-ebce0874fe99
+        finishedAt: 2026-07-18T14:45:55.763Z
+    evidence:
+      verifiedAt: 2026-07-18T14:45:55.763Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f759f-594f-7132-a384-ebce0874fe99
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-postgres/attempt-2/add-postgres-rdbms/amp-effect-add-postgres-rdbms.json
   - id: golem-add-secret
     targetSkill: golem-add-secret-effect
     verifyScenarios:
