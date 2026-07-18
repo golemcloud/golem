@@ -12,6 +12,7 @@ pub trait Clock {
     async fn sleep_during_request(&self, secs: u64) -> String;
     async fn sleep_during_parallel_requests(&self, secs: u64) -> String;
     async fn sleep_between_requests(&self, secs: u64, n: u64) -> String;
+    async fn jump_during_request(&self) -> String;
 }
 
 pub struct ClockImpl {
@@ -88,6 +89,22 @@ impl Clock for ClockImpl {
             golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000)).await;
         }
         result
+    }
+
+    /// Attempts to jump backwards while an HTTP request is still in flight. The jump must be
+    /// rejected by the executor because deleting the region would strand the in-flight call's
+    /// `Start` entry.
+    async fn jump_during_request(&self) -> String {
+        let target = golem_rust::get_oplog_index();
+        let request = async { send_request().await.unwrap_or_else(|err| err) };
+        let jump = async {
+            // Give the request future time to start and register its durable call
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(200_000_000).await;
+            golem_rust::set_oplog_index(target);
+            "jump-completed".to_string()
+        };
+        let (request_result, jump_result) = (request, jump).join().await;
+        format!("{request_result}, {jump_result}")
     }
 }
 

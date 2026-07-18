@@ -2329,6 +2329,49 @@ async fn sleep_and_awaiting_parallel_responses(
 
 #[test]
 #[tracing::instrument]
+#[timeout("4m")]
+async fn jump_with_in_flight_durable_call_fails(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "jump-during-request");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "jump_during_request", data_value!())
+        .await;
+
+    drop(executor);
+    server.abort();
+
+    assert!(result.is_err());
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("durable host calls are still in flight"),
+        "Unexpected error: {err}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn sleep_below_threshold_between_http_responses(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

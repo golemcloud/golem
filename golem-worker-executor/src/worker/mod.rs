@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod agent_config;
+pub mod cut_point;
 pub mod invocation;
 mod invocation_loop;
 pub mod read_only_cache;
@@ -2293,6 +2294,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             Err(WorkerExecutorError::invalid_request(format!(
                 "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
+            )))
+        } else if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
+            |idx| self.oplog.read(idx),
+            last_oplog_index,
+            region_end,
+            &last_known_status.skipped_regions,
+        )
+        .await
+        {
+            Err(WorkerExecutorError::invalid_request(format!(
+                "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
             )))
         } else {
             let region = OplogRegion {

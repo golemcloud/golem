@@ -370,6 +370,15 @@ pub trait InvocationHooks {
 
 #[async_trait]
 pub trait UpdateManagement {
+    /// Whether the worker is currently at a boundary where a snapshot may be taken and
+    /// committed.
+    ///
+    /// A committed snapshot is a replay cut point: snapshot-based recovery and snapshot-based
+    /// update skip every oplog entry before the snapshot. No durable construct may span that
+    /// cut, so this is false while any durable host call is in flight or any durable scope or
+    /// atomic region is open.
+    fn is_at_safe_snapshot_boundary(&self) -> bool;
+
     /// Marks the beginning of a snapshot function call. This can be used to disabled persistence
     fn begin_call_snapshotting_function(&mut self);
 

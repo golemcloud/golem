@@ -3432,6 +3432,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
+    fn is_at_safe_snapshot_boundary(&self) -> bool {
+        self.state.at_safe_snapshot_boundary()
+    }
+
     fn begin_call_snapshotting_function(&mut self) {
         // While calling a snapshotting function (load/save), we completely turn off persistence
         // In addition to the user-controllable persistence level we also skip writing the
@@ -5879,6 +5883,20 @@ impl PrivateDurableWorkerState {
             && self.active_durable_scopes.is_empty()
             && self.persistence_level != PersistenceLevel::PersistNothing
             && self.snapshotting_mode.is_none()
+    }
+
+    /// Whether the worker is at a boundary where a snapshot may be taken.
+    ///
+    /// A committed snapshot is a replay cut point: snapshot-based recovery (and snapshot-based
+    /// update) skips every oplog entry before the snapshot. The invariant is that no durable
+    /// construct may span that cut — a durable call or scope whose `Start` precedes the snapshot
+    /// but whose `End`/`Cancelled` is recorded after it would leave a terminal whose `Start` the
+    /// post-snapshot replay never sees (the orphan terminal is drained harmlessly, but the call
+    /// itself cannot be restored from the snapshot). Snapshots are therefore only taken at a
+    /// clean checkpoint boundary (no open atomic regions or durable scopes, normal persistence
+    /// regime) with no durable host call in flight.
+    pub fn at_safe_snapshot_boundary(&self) -> bool {
+        self.at_clean_checkpoint_boundary() && !self.has_in_flight_live_host_calls()
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.

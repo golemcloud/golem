@@ -557,6 +557,30 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let source_oplog = source_worker_instance.oplog();
 
+        // The fork copies the source oplog up to and including `oplog_index_cut_off`; no paired
+        // durable construct may span that cut. A durable call whose `Start` is copied but whose
+        // terminal is not would replay in the forked worker as an incomplete call, and an atomic
+        // region or remote transaction cut in half would lose its outcome. Reject such cut points
+        // instead of silently degrading to incomplete-call recovery semantics.
+        let source_oplog_end = source_oplog.current_oplog_index().await;
+        let source_skipped_regions = source_worker_instance
+            .get_latest_worker_metadata()
+            .await
+            .last_known_status
+            .skipped_regions;
+        if let Some(spanning) = crate::worker::cut_point::find_construct_spanning_cut_point(
+            |idx| source_oplog.read(idx),
+            oplog_index_cut_off,
+            source_oplog_end,
+            &source_skipped_regions,
+        )
+        .await
+        {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Cannot fork worker at oplog index {oplog_index_cut_off}: the cut point is inside {spanning}"
+            )));
+        }
+
         let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
 
         // Update the oplog initial entry with the new worker

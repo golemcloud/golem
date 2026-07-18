@@ -571,6 +571,10 @@ impl ResourceStore for Context {
 
 #[async_trait]
 impl UpdateManagement for Context {
+    fn is_at_safe_snapshot_boundary(&self) -> bool {
+        self.durable_ctx.is_at_safe_snapshot_boundary()
+    }
+
     fn begin_call_snapshotting_function(&mut self) {
         self.durable_ctx.begin_call_snapshotting_function()
     }

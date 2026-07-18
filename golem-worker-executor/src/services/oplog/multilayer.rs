@@ -1005,7 +1005,9 @@ impl Oplog for MultiLayerOplog {
         let full_match = match partial_result.first_key_value() {
             None => false,
             Some((first_idx, _)) => {
-                remaining -= partial_result.len() as u64;
+                // A layer may return more entries than requested (archived layers read whole
+                // chunks), so the subtraction must saturate
+                remaining = remaining.saturating_sub(partial_result.len() as u64);
                 *first_idx == idx
             }
         };
@@ -1018,7 +1020,7 @@ impl Oplog for MultiLayerOplog {
                 let full_match = match partial_result.first_key_value() {
                     None => false,
                     Some((first_idx, _)) => {
-                        remaining -= partial_result.len() as u64;
+                        remaining = remaining.saturating_sub(partial_result.len() as u64);
                         *first_idx == idx
                     }
                 };

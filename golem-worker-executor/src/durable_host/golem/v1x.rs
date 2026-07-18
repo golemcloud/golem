@@ -326,6 +326,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         oplog_idx: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "set_oplog_index");
+        if self.state.is_live() {
+            // A jump deletes the oplog region between the target and the Jump entry; no durable
+            // call may span that boundary. First drain already-dropped cancellable calls so their
+            // `Cancelled` terminal is recorded before the Jump (inside the deleted region), then
+            // refuse to jump while any live durable call is still in flight — its `End`/
+            // `Cancelled` would be recorded after the Jump and reference a `Start` inside the
+            // deleted region (mirrors the `mark_end_operation` and persistence-level guards).
+            drain_queued_dropped_call_events(self)
+                .await
+                .map_err(anyhow::Error::from)?;
+            if self.state.has_in_flight_live_host_calls() {
+                return Err(anyhow!(
+                    "Cannot jump to oplog index {oplog_idx}: durable host calls are still in flight"
+                ));
+            }
+        }
         let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
         let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
         let original_target = OplogIndex::from_u64(oplog_idx); // the actual oplog entry the user wants to jump to

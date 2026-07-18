@@ -1089,6 +1089,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
     /// The inner implementation of the manual update command
     async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+        // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
+        // update, replay starts from the snapshot and skips everything before it. No durable call
+        // or scope may span that cut, so refuse the update while any is still open.
+        if !self.store.data().is_at_safe_snapshot_boundary() {
+            return self
+                .fail_update(
+                    target_revision,
+                    "cannot take a snapshot for the update: durable calls or scopes are still open"
+                        .to_string(),
+                )
+                .await;
+        }
+
         let idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = IdempotencyKey::fresh();
@@ -1328,6 +1341,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     async fn save_snapshot(&mut self) -> CommandOutcome {
+        // A committed snapshot is a replay cut point (snapshot-based recovery skips everything
+        // before it), so no durable call or scope may span it. Skip this periodic snapshot when
+        // the worker is not at a safe boundary; the next scheduled snapshot will retry.
+        if !self.store.data().is_at_safe_snapshot_boundary() {
+            warn!(
+                "Skipping periodic snapshot: durable calls or scopes are still open at the snapshot point"
+            );
+            return CommandOutcome::Continue;
+        }
+
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
