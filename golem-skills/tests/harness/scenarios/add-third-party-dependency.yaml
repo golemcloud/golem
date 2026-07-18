@@ -11,12 +11,15 @@ steps:
     prompt:
       rust: "Add the 'base64' crate (version 0.22) to the test-app project. Make sure it builds and deploys successfully."
       ts: "Add the 'change-case' npm package to the test-app project. Make sure it builds and deploys successfully."
+      effect: "Add the 'change-case' npm package to the Effect-based test-app project. Make sure it builds and deploys successfully."
       scala: "Add the 'com.lihaoyi::upickle::4.1.0' library to the test-app project. Make sure it builds and deploys successfully."
       moonbit: "Add the 'moonbitlang/x' package to the test-app project. Make sure it builds and deploys successfully."
     expectedSkills:
       rust:
         - "golem-add-rust-crate"
       ts:
+        - "golem-add-npm-package"
+      effect:
         - "golem-add-npm-package"
       scala:
         - "golem-add-scala-dependency"
@@ -40,6 +43,13 @@ steps:
         "hello world" to camelCase using the 'change-case' package and returns the result as a string
         instead of the counter value. Change the method's return type to string.
         Make sure it builds and deploys successfully.
+      effect: >
+        Modify the existing `Counter` agent in the Effect-based test-app so the `increment` method
+        still updates the counter, then converts the string "hello world" to camelCase using the
+        `change-case` package and returns the resulting "helloWorld" string. Update the method's
+        success schema to `Schema.String`. The handler's returned Effect must succeed with that
+        string; do not call `camelCase` only as a side effect. Keep the declared agent name as
+        `Counter`. Make sure it builds and deploys successfully.
       scala: >
         Modify the CounterAgent in test-app so the 'increment' function uses upickle to serialize
         the counter value into a JSON string like {"count":1} and returns that string.
@@ -70,6 +80,17 @@ steps:
       language: "ts"
     invoke_json:
       agent: 'CounterAgent("dep-test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "helloWorld"
+
+  - id: "verify-result-effect"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'Counter("dep-test")'
       method: 'increment'
     expect:
       result_json:

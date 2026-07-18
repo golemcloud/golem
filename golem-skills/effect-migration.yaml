@@ -1,20 +1,20 @@
 version: 1
-
 effectGolem:
   repository: https://github.com/golemcloud/effect-golem
-  ref: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3 # v1.5.0
+  ref: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
   localPathEnv: GOLEM_EFFECT_GOLEM_PATH
-
 policy:
   maxAttempts: 3
   stopOnBlocked: true
   workerMode: high
   buildProfile: release
-
 units:
   - id: golem-add-agent
     targetSkill: golem-add-agent-effect
-    verifyScenarios: [add-simple-agent]
+    verifyScenarios:
+      - add-simple-agent
+    relatedScenarios: []
+    prerequisites: []
     strategy: adapted
     notes: Canonical Effect v4 agent, Schema, Snapshot, Ref, and registration patterns.
     state: passed
@@ -39,7 +39,6 @@ units:
       thread: https://ampcode.com/threads/T-019f7455-1fb9-70c2-b7b6-0c34ca9901ab
       reports:
         - golem-skills/tests/harness/results/effect-migration/golem-add-agent/phase-0-sdk-updated/amp-effect-add-simple-agent.json
-
   - id: golem-add-npm-package
     targetSkill: golem-add-npm-package
     references:
@@ -47,360 +46,465 @@ units:
       - golem-skills/skills/rust/golem-add-rust-crate/SKILL.md
       - golem-skills/skills/scala/golem-add-scala-dependency/SKILL.md
       - golem-skills/skills/moonbit/golem-add-moonbit-package/SKILL.md
-    verifyScenarios: [add-third-party-dependency]
-    relatedScenarios: [add-llm]
+    verifyScenarios:
+      - add-third-party-dependency
+    relatedScenarios:
+      - add-llm
+    prerequisites: []
     strategy: adapted
     notes: Effect uses npm, but dependencies must also be compatible with QuickJS and Wasm.
-    state: pending
-    attempts: []
-    evidence: null
-
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T09:59:12.735Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-npm-package/attempt-1/add-third-party-dependency/amp-effect-add-third-party-dependency.json
+        thread: https://ampcode.com/threads/T-019f74aa-7b16-7389-ba49-054138ce642c
+        finishedAt: 2026-07-18T10:17:58.710Z
+        error: |-
+          add-third-party-dependency:
+          ASSERTION_FAILED (result_json[$].equals): $ expected "helloWorld", got undefined; result_json=undefined
+      - number: 2
+        startedAt: 2026-07-18T10:17:58.714Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-npm-package/attempt-2/add-third-party-dependency/amp-effect-add-third-party-dependency.json
+        thread: https://ampcode.com/threads/T-019f74bb-ab2e-74c0-a0a0-899a6da4de61
+        finishedAt: 2026-07-18T10:38:22.803Z
+    evidence:
+      verifiedAt: 2026-07-18T10:38:22.803Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f74bb-ab2e-74c0-a0a0-899a6da4de61
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-npm-package/attempt-2/add-third-party-dependency/amp-effect-add-third-party-dependency.json
   - id: golem-add-config
     targetSkill: golem-add-config-effect
-    verifyScenarios: [add-config-cli, add-config-manifest]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-config-cli
+      - add-config-manifest
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Map typed agent configuration to Effect Schema and constructor implementation inputs.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-cors
     targetSkill: golem-add-cors-effect
-    verifyScenarios: [add-cors]
-    prerequisites: [golem-add-http-endpoint]
+    verifyScenarios:
+      - add-cors
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-http-endpoint
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-http-auth
     targetSkill: golem-add-http-auth-effect
-    verifyScenarios: [http-endpoint-auth]
-    prerequisites: [golem-add-http-endpoint]
+    verifyScenarios:
+      - http-endpoint-auth
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-http-endpoint
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-http-endpoint
     targetSkill: golem-add-http-endpoint-effect
-    verifyScenarios: [add-http-endpoint, configure-api-domain]
-    relatedScenarios: [add-cors, http-endpoint-parameters, make-http-request]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-http-endpoint
+      - configure-api-domain
+    relatedScenarios:
+      - add-cors
+      - http-endpoint-parameters
+      - make-http-request
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Keep Rib and manifest routing behavior; adapt only the Effect agent implementation.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-ignite
     targetSkill: golem-add-ignite-effect
-    verifyScenarios: [add-ignite-rdbms]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-ignite-rdbms
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Use @golemcloud/effect-golem/ignite2 rather than a native Node driver.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-llm
     targetSkill: golem-add-llm-effect
-    verifyScenarios: [add-llm]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-llm
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-mysql
     targetSkill: golem-add-mysql-effect
-    verifyScenarios: [add-mysql-rdbms]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-mysql-rdbms
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Use @golemcloud/effect-golem/mysql rather than a native Node driver.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-postgres
     targetSkill: golem-add-postgres-effect
-    verifyScenarios: [add-postgres-rdbms]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-postgres-rdbms
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Use @golemcloud/effect-golem/postgres rather than a native Node driver.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-secret
     targetSkill: golem-add-secret-effect
-    verifyScenarios: [add-secret, add-secret-runtime]
-    relatedScenarios: [add-llm]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-secret
+      - add-secret-runtime
+    relatedScenarios:
+      - add-llm
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Preserve redaction with Schema.Redacted throughout Effect values and logs.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-transactions
     targetSkill: golem-add-transactions-effect
-    verifyScenarios: [transactions-1-fallible-rollback-http-ledger]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - transactions-1-fallible-rollback-http-ledger
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Map rollback behavior to the Effect SDK Saga APIs.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-add-webhook
     targetSkill: golem-add-webhook-effect
-    verifyScenarios: [add-webhook]
-    prerequisites: [golem-add-http-endpoint]
+    verifyScenarios:
+      - add-webhook
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-http-endpoint
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-annotate-agent
     targetSkill: golem-annotate-agent-effect
-    verifyScenarios: [annotate-agent]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - annotate-agent
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-atomic-block
     targetSkill: golem-atomic-block-effect
-    verifyScenarios: [atomic-block]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - atomic-block
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Map atomic regions to the Effect SDK Durability API.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-call-another-agent
     targetSkill: golem-call-another-agent-effect
-    verifyScenarios: [rpc-1-invoke-and-await]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - rpc-1-invoke-and-await
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-call-from-external
     targetSkill: golem-call-from-external-effect
-    verifyScenarios: [call-from-external]
-    prerequisites: [golem-add-http-endpoint]
+    verifyScenarios:
+      - call-from-external
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-http-endpoint
     strategy: adapted
     notes: Generated bridge clients and CLI values use TypeScript syntax for Effect components.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-configure-durability
     targetSkill: golem-configure-durability-effect
-    verifyScenarios: [change-durability-mode]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - change-durability-mode
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Map durability modes to the Effect SDK Durability API.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-create-agent-instance
     targetSkill: golem-create-agent-instance-effect
-    verifyScenarios: [create-agent-instance]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - create-agent-instance
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: direct
     notes: CLI-facing operation; Effect constructor values use TypeScript syntax.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-custom-snapshot
     targetSkill: golem-custom-snapshot-effect
-    verifyScenarios: [snapshot-recovery, manual-snapshot-update-agent]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - snapshot-recovery
+      - manual-snapshot-update-agent
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Use Snapshot.define and schema evolution rather than custom JSON serialization.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-enable-otlp
     targetSkill: golem-enable-otlp-effect
-    verifyScenarios: [enable-otlp]
-    relatedScenarios: [manage-plugins-manifest]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - enable-otlp
+    relatedScenarios:
+      - manage-plugins-manifest
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Use Effect logging and spans while preserving OTLP plugin setup.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-file-io
     targetSkill: golem-file-io-effect
-    verifyScenarios: [read-large-provisioned-file]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - read-large-provisioned-file
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: QuickJS has no unrestricted Node filesystem; use supported WASI/runtime APIs only.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-fire-and-forget
     targetSkill: golem-fire-and-forget-effect
-    verifyScenarios: [rpc-2-trigger]
-    prerequisites: [golem-call-another-agent]
+    verifyScenarios:
+      - rpc-2-trigger
+    relatedScenarios: []
+    prerequisites:
+      - golem-call-another-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-http-params
     targetSkill: golem-http-params-effect
-    verifyScenarios: [http-endpoint-parameters]
-    prerequisites: [golem-add-http-endpoint]
+    verifyScenarios:
+      - http-endpoint-parameters
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-http-endpoint
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-interactive-repl
     targetSkill: golem-interactive-repl-effect
-    verifyScenarios: [interactive-repl]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - interactive-repl
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: direct
     notes: Effect components intentionally use the TypeScript REPL binding and value syntax.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-invoke-agent
     targetSkill: golem-invoke-agent-effect
-    verifyScenarios: [invoke-agent]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - invoke-agent
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: direct
     notes: Effect components intentionally use TypeScript CLI value syntax.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-logging
     targetSkill: golem-logging-effect
-    verifyScenarios: [add-logging]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-logging
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Use Effect logging and spans, not console-only TypeScript guidance.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-make-http-request
     targetSkill: golem-make-http-request-effect
-    verifyScenarios: [make-http-request]
-    relatedScenarios: [add-llm]
-    prerequisites: [golem-add-http-endpoint]
+    verifyScenarios:
+      - make-http-request
+    relatedScenarios:
+      - add-llm
+    prerequisites:
+      - golem-add-http-endpoint
     strategy: adapted
     notes: Use the supported Effect/WASI HTTP client rather than Node networking libraries.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-multi-instance-agent
     targetSkill: golem-multi-instance-agent-effect
-    verifyScenarios: [rpc-4-phantom-agents]
-    prerequisites: [golem-call-another-agent]
+    verifyScenarios:
+      - rpc-4-phantom-agents
+    relatedScenarios: []
+    prerequisites:
+      - golem-call-another-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-parallel-workers
     targetSkill: golem-parallel-workers-effect
-    verifyScenarios: [parallel-workers]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - parallel-workers
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Preserve durable concurrency semantics using Effect combinators supported by the SDK.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-quota
     targetSkill: golem-quota-effect
-    verifyScenarios: [add-quota]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-quota
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-recurring-task
     targetSkill: golem-recurring-task-effect
-    verifyScenarios: [recurring-task-cancelable, recurring-task-self-schedule]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - recurring-task-cancelable
+      - recurring-task-self-schedule
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-retry-policies
     targetSkill: golem-retry-policies-effect
-    verifyScenarios: [add-retry-policies, add-retry-policies-manifest]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - add-retry-policies
+      - add-retry-policies-manifest
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Separate Effect failure typing from Golem host-operation retry policy.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-schedule-agent
     targetSkill: golem-schedule-agent-effect
-    verifyScenarios: [schedule-agent]
-    prerequisites: [golem-invoke-agent]
+    verifyScenarios:
+      - schedule-agent
+    relatedScenarios: []
+    prerequisites:
+      - golem-invoke-agent
     strategy: direct
     notes: CLI-facing operation; Effect constructor and method values use TypeScript syntax.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-schedule-future-call
     targetSkill: golem-schedule-future-call-effect
-    verifyScenarios: [rpc-3-schedule-future-call]
-    prerequisites: [golem-call-another-agent]
+    verifyScenarios:
+      - rpc-3-schedule-future-call
+    relatedScenarios: []
+    prerequisites:
+      - golem-call-another-agent
     strategy: adapted
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-stateless-agent
     targetSkill: golem-stateless-agent-effect
-    verifyScenarios: [stateless-agent]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - stateless-agent
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Omit Snapshot state while retaining Effect-based handlers and registration.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-trigger-agent
     targetSkill: golem-trigger-agent-effect
-    verifyScenarios: [trigger-agent]
-    prerequisites: [golem-invoke-agent]
+    verifyScenarios:
+      - trigger-agent
+    relatedScenarios: []
+    prerequisites:
+      - golem-invoke-agent
     strategy: direct
     notes: CLI-facing operation; Effect constructor and method values use TypeScript syntax.
     state: pending
     attempts: []
     evidence: null
-
   - id: golem-wait-for-external-input
     targetSkill: golem-wait-for-external-input-effect
-    verifyScenarios: [wait-for-external-input]
-    prerequisites: [golem-add-agent]
+    verifyScenarios:
+      - wait-for-external-input
+    relatedScenarios: []
+    prerequisites:
+      - golem-add-agent
     strategy: adapted
     notes: Use durable Effect suspension primitives exposed by the Effect SDK.
     state: pending

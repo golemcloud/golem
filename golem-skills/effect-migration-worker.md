@@ -20,6 +20,7 @@ You are migrating exactly one language-specific Golem coding skill to the Effect
   explicitly ask for an Effect-based implementation.
 - Extend existing scenario language maps; do not rewrite or alter other languages.
 - Do not run the live skill harness. The controller runs it after this Amp thread exits.
+- Do not run the bug finder tool.
 - Do not edit the migration manifest, controller, common skills, Effect SDK source, or unrelated
   files.
 - Do not commit, push, reset, restore, clean, or switch branches.
