@@ -15,7 +15,7 @@
 use axum::Router;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::post;
+use axum::routing::{get, post};
 use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::base64::Base64;
@@ -38,7 +38,7 @@ use golem_test_framework::config::{
     WorkerExecutorClusterControlStub,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -65,12 +65,32 @@ struct BatchCallback {
     first_entry_index: u64,
     entry_count: u64,
     invocations: Vec<InvocationRecord>,
+    /// Enriched durable host-call entries (Start/End/Cancelled) observed by the
+    /// plugin after calling `enrich-oplog-entries` on the batch
+    #[serde(default)]
+    durable_entries: Vec<DurableEntryRecord>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct InvocationRecord {
     oplog_index: u64,
     fn_name: String,
+}
+
+/// Post-enrichment evidence of a durable host-call entry, as observed by the
+/// oplog processor plugin guest.
+#[derive(Clone, Debug, serde::Deserialize)]
+struct DurableEntryRecord {
+    oplog_index: u64,
+    /// "start", "end" or "cancelled"
+    kind: String,
+    /// The durable function name (present for `start` entries)
+    function_name: Option<String>,
+    /// The oplog index of the matching `start` entry (present for `end` and
+    /// `cancelled` entries)
+    start_index: Option<u64>,
+    /// Whether the entry carried a typed-schema-value payload
+    has_payload: bool,
 }
 
 /// Extract function names from batches, sorted by oplog_index.
@@ -478,6 +498,377 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     // E2: Verify oplog entries exist for the worker
     let oplog = user.get_oplog(&worker_id, OplogIndex::from_u64(0)).await?;
     assert!(!oplog.is_empty(), "Worker oplog should not be empty");
+
+    Ok(())
+}
+
+// ============================================================================
+// P3 host-call entries: delivery + enrichment of Start/End/Cancelled + payloads
+// ============================================================================
+
+/// The source worker performs P3 HTTP calls (POST with a streamed request body and
+/// GET with a streamed body read), producing concurrent-durability `Start`/`End`
+/// oplog entries with `typed-schema-value` payloads; a second worker cancels a
+/// pending non-idempotent POST mid-flight, producing a durable-call `Cancelled`
+/// entry. The oplog processor plugin receives these entries and calls the host's
+/// `enrich-oplog-entries` on every batch (unwrapping the result), so a successful
+/// delivery proves both the raw WIT conversion and the public-oplog WIT encoding
+/// handle P3 entries.
+#[test]
+#[tracing::instrument]
+async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let (callback_url, received_batches, _callback_server) = start_callback_server().await;
+
+    // HTTP server serving the source worker's P3 HTTP calls
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new()
+                .route(
+                    "/post-example",
+                    post(move |_body: Bytes| async move {
+                        "{ \"percentage\": 0.25, \"message\": \"response message\" }".to_string()
+                    }),
+                )
+                .route(
+                    "/big-byte-array",
+                    get(move || async move { vec![42u8; 1024 * 1024] }),
+                )
+                .route(
+                    "/delayed-response",
+                    post(move |_body: Bytes| async move {
+                        // Delay the response headers longer than the guest's
+                        // cancellation timer, so the pending non-idempotent POST
+                        // send is always cancelled mid-flight
+                        tokio::time::sleep(Duration::from_secs(300)).await;
+                        "too late".to_string()
+                    }),
+                );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
+
+    let oplog_processor_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "oplog-processor-p3".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
+                }),
+            },
+        )
+        .await?;
+
+    let oplog_processor_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: oplog_processor_plugin.id,
+            },
+        )
+        .await?;
+
+    let mut plugin_params = BTreeMap::new();
+    plugin_params.insert("callback-url".to_string(), callback_url.clone());
+
+    let component = user
+        .component(&env.id, "golem_it_http_tests_release")
+        .name("golem-it:http-tests")
+        .with_parametrized_plugin(
+            "HttpClient2",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params.clone(),
+        )
+        .with_parametrized_plugin(
+            "HttpClient4",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
+        .store()
+        .await?;
+
+    let mut worker_env = HashMap::new();
+    worker_env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let http_agent_id = agent_id!("HttpClient2");
+    let worker_id = user
+        .start_agent_with(
+            &component.id,
+            http_agent_id.clone(),
+            worker_env.clone(),
+            Vec::new(),
+        )
+        .await?;
+
+    // P3 HTTP POST with a streamed request body
+    user.invoke_and_await_agent(&component, &http_agent_id, "run", data_value!())
+        .await?;
+
+    // P3 HTTP GET with a streamed response body read
+    user.invoke_and_await_agent(
+        &component,
+        &http_agent_id,
+        "slow_body_stream",
+        data_value!(),
+    )
+    .await?;
+
+    // A second worker cancels a pending non-idempotent P3 POST (a cancellable
+    // `http::client::send` durable call), producing a durable-call `Cancelled`
+    // oplog entry
+    let cancel_agent_id = agent_id!("HttpClient4");
+    let cancel_worker_id = user
+        .start_agent_with(
+            &component.id,
+            cancel_agent_id.clone(),
+            worker_env,
+            Vec::new(),
+        )
+        .await?;
+    let cancel_result = user
+        .invoke_and_await_agent(
+            &component,
+            &cancel_agent_id,
+            "post_and_cancel_before_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(cancel_result, "cancelled-before-response");
+
+    // The worker's own oplog must contain the concurrent-durability Start/End entries
+    // produced by the P3 HTTP host calls, identified by function name and carrying
+    // generic typed-schema-value payloads
+    let oplog = user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let mut p3_start_indices = HashSet::new();
+    for entry in &oplog {
+        if let PublicOplogEntry::Start(params) = &entry.entry {
+            if params.function_name == "http::client::send" {
+                assert!(
+                    params.request.is_some(),
+                    "P3 `http::client::send` Start entry at {} must carry a typed-schema-value request payload",
+                    entry.oplog_index
+                );
+                p3_start_indices.insert(entry.oplog_index.as_u64());
+            }
+        }
+    }
+    assert!(
+        !p3_start_indices.is_empty(),
+        "Expected P3 `http::client::send` Start entries in the source worker oplog"
+    );
+
+    let mut p3_end_indices = HashSet::new();
+    for entry in &oplog {
+        if let PublicOplogEntry::End(params) = &entry.entry {
+            if p3_start_indices.contains(&params.start_index.as_u64()) {
+                assert!(
+                    params.response.is_some(),
+                    "P3 `http::client::send` End entry at {} must carry a typed-schema-value response payload",
+                    entry.oplog_index
+                );
+                p3_end_indices.insert(entry.oplog_index.as_u64());
+            }
+        }
+    }
+    assert_eq!(
+        p3_end_indices.len(),
+        p3_start_indices.len(),
+        "Every P3 `http::client::send` Start entry must have a matching End entry"
+    );
+
+    // The cancel worker's oplog must contain the P3 `http::client::send` Start
+    // and a matching `Cancelled` entry for the dropped POST. Wait for both of
+    // its completed invocations first (agent-initialization +
+    // post_and_cancel_before_response) so the cancellation drain is committed.
+    wait_for_oplog_completions(
+        &user,
+        &cancel_worker_id,
+        2,
+        Duration::from_secs(300),
+        &received_batches,
+    )
+    .await;
+
+    let cancel_oplog = user
+        .get_oplog(&cancel_worker_id, OplogIndex::INITIAL)
+        .await?;
+
+    let p3_cancel_start_indices: HashSet<u64> = cancel_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "http::client::send" => {
+                assert!(
+                    params.request.is_some(),
+                    "P3 `http::client::send` Start entry at {} in the cancel worker oplog must carry a typed-schema-value request payload",
+                    entry.oplog_index
+                );
+                Some(entry.oplog_index.as_u64())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !p3_cancel_start_indices.is_empty(),
+        "Expected a P3 `http::client::send` Start entry in the cancel worker oplog"
+    );
+
+    let p3_cancelled_start_indices: HashSet<u64> = cancel_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(params)
+                if p3_cancel_start_indices.contains(&params.start_index.as_u64()) =>
+            {
+                Some(params.start_index.as_u64())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !p3_cancelled_start_indices.is_empty(),
+        "Expected a `Cancelled` entry matching a P3 `http::client::send` Start in the cancel worker oplog"
+    );
+
+    // Wait for the plugin to receive and process all completed invocations
+    // (agent-initialization + run + slow_body_stream on the first worker, plus
+    // agent-initialization + post_and_cancel_before_response on the cancel
+    // worker). Delivery requires the plugin's enrich-oplog-entries call to
+    // succeed on every batch, including batches containing the P3
+    // Start/End/Cancelled entries and their payloads.
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        3,
+        Duration::from_secs(300),
+        &received_batches,
+    )
+    .await;
+
+    let all_batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(300)).await;
+    let batches: Vec<BatchCallback> = all_batches
+        .iter()
+        .filter(|b| b.source_worker_id.contains("HttpClient2"))
+        .cloned()
+        .collect();
+    let cancel_batches: Vec<BatchCallback> = all_batches
+        .iter()
+        .filter(|b| b.source_worker_id.contains("HttpClient4"))
+        .cloned()
+        .collect();
+
+    assert_function_names(
+        &batches,
+        &["agent-initialization", "run", "slow_body_stream"],
+    );
+    assert_unique_oplog_indices(&batches);
+    assert_function_names(
+        &cancel_batches,
+        &["agent-initialization", "post_and_cancel_before_response"],
+    );
+    assert_unique_oplog_indices(&cancel_batches);
+
+    // Cross-check the plugin's post-enrichment evidence against the source
+    // worker's oplog: the exact P3 `http::client::send` Start/End entries seen
+    // in the oplog must have reached the plugin, survived its
+    // `enrich-oplog-entries` call, and carried their typed-schema-value payloads
+    let durable_evidence: Vec<DurableEntryRecord> = batches
+        .iter()
+        .flat_map(|b| b.durable_entries.iter().cloned())
+        .collect();
+
+    let enriched_p3_starts: HashSet<u64> = durable_evidence
+        .iter()
+        .filter(|e| {
+            e.kind == "start" && e.function_name.as_deref() == Some("http::client::send")
+        })
+        .map(|e| {
+            assert!(
+                e.has_payload,
+                "Enriched P3 `http::client::send` Start entry at {} seen by the plugin must carry a request payload",
+                e.oplog_index
+            );
+            e.oplog_index
+        })
+        .collect();
+    assert_eq!(
+        enriched_p3_starts, p3_start_indices,
+        "The plugin must observe exactly the P3 `http::client::send` Start entries present in the source oplog after enrichment"
+    );
+
+    let enriched_p3_ends: HashSet<u64> = durable_evidence
+        .iter()
+        .filter(|e| {
+            e.kind == "end" && e.start_index.is_some_and(|si| p3_start_indices.contains(&si))
+        })
+        .map(|e| {
+            assert!(
+                e.has_payload,
+                "Enriched P3 `http::client::send` End entry at {} seen by the plugin must carry a response payload",
+                e.oplog_index
+            );
+            e.oplog_index
+        })
+        .collect();
+    assert_eq!(
+        enriched_p3_ends, p3_end_indices,
+        "The plugin must observe exactly the P3 `http::client::send` End entries present in the source oplog after enrichment"
+    );
+
+    // The cancel worker's `Cancelled` entries must also survive enrichment: for
+    // every cancelled P3 `http::client::send` Start in its oplog, the plugin
+    // must report an enriched `cancelled` entry referencing that Start index
+    let enriched_cancelled_starts: HashSet<u64> = cancel_batches
+        .iter()
+        .flat_map(|b| b.durable_entries.iter())
+        .filter(|e| e.kind == "cancelled")
+        .filter_map(|e| e.start_index)
+        .collect();
+    assert!(
+        enriched_cancelled_starts.is_superset(&p3_cancelled_start_indices),
+        "The plugin must observe enriched `Cancelled` entries for the cancelled P3 `http::client::send` calls \
+         (expected start indices {p3_cancelled_start_indices:?}, observed {enriched_cancelled_starts:?})"
+    );
+
+    let enriched_cancel_worker_p3_starts: HashSet<u64> = cancel_batches
+        .iter()
+        .flat_map(|b| b.durable_entries.iter())
+        .filter(|e| e.kind == "start" && e.function_name.as_deref() == Some("http::client::send"))
+        .map(|e| {
+            assert!(
+                e.has_payload,
+                "Enriched P3 `http::client::send` Start entry at {} seen by the plugin must carry a request payload",
+                e.oplog_index
+            );
+            e.oplog_index
+        })
+        .collect();
+    assert_eq!(
+        enriched_cancel_worker_p3_starts, p3_cancel_start_indices,
+        "The plugin must observe exactly the P3 `http::client::send` Start entries present in the cancel worker oplog after enrichment"
+    );
+
+    http_server.abort();
 
     Ok(())
 }

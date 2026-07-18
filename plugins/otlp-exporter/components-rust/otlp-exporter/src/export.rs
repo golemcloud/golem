@@ -121,58 +121,56 @@ pub(crate) fn build_resource_attributes(
     ]
 }
 
-fn send_otlp_request(config: &ExporterConfig, path: &str, json: String) -> Result<(), String> {
-    wit_bindgen::block_on(async {
-        let url = format!("{}{}", config.endpoint.trim_end_matches('/'), path);
+async fn send_otlp_request(config: &ExporterConfig, path: &str, json: String) -> Result<(), String> {
+    let url = format!("{}{}", config.endpoint.trim_end_matches('/'), path);
 
-        let mut header_entries = vec![("content-type".to_string(), b"application/json".to_vec())];
+    let mut header_entries = vec![("content-type".to_string(), b"application/json".to_vec())];
 
-        for (key, value) in &config.headers {
-            header_entries.push((key.clone(), value.as_bytes().to_vec()));
+    for (key, value) in &config.headers {
+        header_entries.push((key.clone(), value.as_bytes().to_vec()));
+    }
+
+    let headers = types::Fields::from_list(&header_entries)
+        .map_err(|err| format!("invalid OTLP headers: {err:?}"))?;
+
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    set_request_uri(&request, &url)?;
+
+    let (send_result, transmit_result, ()) = futures::join!(
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            let remaining = body_tx.write_all(json.into_bytes()).await;
+            assert!(remaining.is_empty());
+            let _ = trailers_tx.write(Ok(None)).await;
+            drop(body_tx);
         }
+    );
 
-        let headers = types::Fields::from_list(&header_entries)
-            .map_err(|err| format!("invalid OTLP headers: {err:?}"))?;
+    let response = send_result.map_err(|err| {
+        let err = format!("OTLP transport error: {err:?}");
+        eprintln!("{err}");
+        err
+    })?;
 
-        let (mut body_tx, body_rx) = wit_stream::new();
-        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    transmit_result.map_err(|err| {
+        let err = format!("OTLP request body error: {err:?}");
+        eprintln!("{err}");
+        err
+    })?;
 
-        let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
-        request.set_method(&types::Method::Post).unwrap();
-        set_request_uri(&request, &url)?;
+    let status = response.get_status_code();
+    if !(200..300).contains(&status) {
+        let err = format!("OTLP export failed with HTTP status: {status}");
+        eprintln!("{err}");
+        return Err(err);
+    }
 
-        let (send_result, transmit_result, ()) = futures::join!(
-            async { client::send(request).await },
-            async { transmit.await },
-            async {
-                let remaining = body_tx.write_all(json.into_bytes()).await;
-                assert!(remaining.is_empty());
-                let _ = trailers_tx.write(Ok(None)).await;
-                drop(body_tx);
-            }
-        );
-
-        let response = send_result.map_err(|err| {
-            let err = format!("OTLP transport error: {err:?}");
-            eprintln!("{err}");
-            err
-        })?;
-
-        transmit_result.map_err(|err| {
-            let err = format!("OTLP request body error: {err:?}");
-            eprintln!("{err}");
-            err
-        })?;
-
-        let status = response.get_status_code();
-        if !(200..300).contains(&status) {
-            let err = format!("OTLP export failed with HTTP status: {status}");
-            eprintln!("{err}");
-            return Err(err);
-        }
-
-        Ok(())
-    })
+    Ok(())
 }
 
 fn set_request_uri(request: &types::Request, url: &str) -> Result<(), String> {
@@ -204,26 +202,26 @@ fn set_request_uri(request: &types::Request, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn send_spans(
+pub(crate) async fn send_spans(
     config: &ExporterConfig,
     request_body: ExportTraceServiceRequest,
 ) -> Result<(), String> {
     let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
-    send_otlp_request(config, "/v1/traces", json)
+    send_otlp_request(config, "/v1/traces", json).await
 }
 
-pub(crate) fn send_logs(
+pub(crate) async fn send_logs(
     config: &ExporterConfig,
     request_body: ExportLogsServiceRequest,
 ) -> Result<(), String> {
     let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
-    send_otlp_request(config, "/v1/logs", json)
+    send_otlp_request(config, "/v1/logs", json).await
 }
 
-pub(crate) fn send_metrics(
+pub(crate) async fn send_metrics(
     config: &ExporterConfig,
     request_body: ExportMetricsServiceRequest,
 ) -> Result<(), String> {
     let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
-    send_otlp_request(config, "/v1/metrics", json)
+    send_otlp_request(config, "/v1/metrics", json).await
 }

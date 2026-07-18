@@ -23,5 +23,5 @@ interface oplog-processor {
     /// The `metadata` parameter contains the latest metadata of the agent.
     /// The `first-entry-index` parameter contains the index of the first entry in the list of `entries`.
     /// The `entries` parameter always contains at least one element.
-    process: func(account-info: account-info, config: list<tuple<string, string>>, component-id: component-id, agent-id: agent-id, metadata: agent-metadata, first-entry-index: oplog-index, entries: list<oplog-entry>) -> result<_, string>;
+    process: async func(account-info: account-info, config: list<tuple<string, string>>, component-id: component-id, agent-id: agent-id, metadata: agent-metadata, first-entry-index: oplog-index, entries: list<oplog-entry>) -> result<_, string>;
 }

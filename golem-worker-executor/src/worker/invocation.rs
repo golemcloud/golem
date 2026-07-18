@@ -419,26 +419,22 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest
-                .call_process(
-                    &mut *store,
-                    account_info,
-                    &config,
-                    component_id,
-                    &agent_id,
-                    &metadata,
-                    first_entry_index,
-                    &entries,
-                )
-                .await;
-            // `call_process` uses the non-accessor async bindgen: it runs on the store's event
-            // loop but returns as soon as the export completes, before spawned tail work (or an
-            // open replay-cursor transaction) settles. Drain it with a no-op root the same way
-            // the accessor-based guest calls above drain theirs.
-            let result = match run_guest_call_settled(store, async |_| {}).await {
-                Ok(()) => result,
-                Err(settle_err) => result.and(Err(settle_err)),
-            };
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest
+                    .call_process(
+                        accessor,
+                        account_info,
+                        config,
+                        component_id,
+                        agent_id,
+                        metadata,
+                        first_entry_index,
+                        entries,
+                    )
+                    .await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {

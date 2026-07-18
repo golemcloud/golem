@@ -120,6 +120,13 @@ interface oplog {
         instance-id: uuid
     }
 
+    /// Parameters of an enriched durable host-call `start` entry.
+    ///
+    /// The recorded `request` payload of every durable host call — including
+    /// durable P3 async calls such as HTTP send/consume-body, sockets, keyvalue,
+    /// and blobstore operations — surfaces as a generic `typed-schema-value`
+    /// tree, identified by `function-name`; there are no per-interface named WIT
+    /// variants for the payload shapes.
     record start-parameters {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
@@ -128,6 +135,9 @@ interface oplog {
         durable-function-type: wrapped-function-type,
     }
 
+    /// Parameters of an enriched durable host-call `end` entry. Like the
+    /// `start` `request`, the recorded `response` payload surfaces as a generic
+    /// `typed-schema-value` tree (no per-interface named WIT variants).
     record end-parameters {
         timestamp: datetime,
         start-index: oplog-index,
@@ -135,6 +145,9 @@ interface oplog {
         forced-commit: bool,
     }
 
+    /// Parameters of an enriched durable host-call `cancelled` entry. Like the
+    /// `start` `request`, the optional recorded `partial` result surfaces as a
+    /// generic `typed-schema-value` tree (no per-interface named WIT variants).
     record cancelled-parameters {
         timestamp: datetime,
         start-index: oplog-index,

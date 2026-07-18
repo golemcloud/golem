@@ -78,6 +78,12 @@ pub trait HttpClient4 {
     /// before the server sends response headers.
     async fn get_and_cancel_before_response(&self) -> String;
 
+    /// Starts a non-idempotent POST request and cancels the still-pending
+    /// response future before the server sends response headers. Unlike the
+    /// GET variant, the cancellable durable send is dropped mid-flight and
+    /// recorded as a `Cancelled` oplog entry.
+    async fn post_and_cancel_before_response(&self) -> String;
+
     /// Sends a GET request, reads one response-body chunk, then drops the body
     /// stream before EOF.
     async fn get_and_drop_body_after_first_chunk(&self) -> String;
@@ -205,6 +211,10 @@ impl HttpClient4 for HttpClient4Impl {
         do_get_and_cancel_before_response().await
     }
 
+    async fn post_and_cancel_before_response(&self) -> String {
+        do_post_and_cancel_before_response().await
+    }
+
     async fn get_and_drop_body_after_first_chunk(&self) -> String {
         do_get_and_drop_body_after_first_chunk().await
     }
@@ -255,6 +265,33 @@ async fn do_get_and_cancel_before_response() -> String {
     };
     let cancel = async {
         golem_rust::wasip3::clocks::monotonic_clock::wait_for(50_000_000).await;
+        "cancelled-before-response".to_string()
+    };
+
+    (request, cancel).race().await
+}
+
+async fn do_post_and_cancel_before_response() -> String {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let request = async {
+        let result = wasi_fetch::Client::new()
+            .post(&format!("http://localhost:{port}/delayed-response"))
+            .body("cancel-me")
+            .send()
+            .await;
+        match result {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                drop(response);
+                format!("completed({status})")
+            }
+            Err(error) => format!("error({error:?})"),
+        }
+    };
+    let cancel = async {
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(250_000_000).await;
         "cancelled-before-response".to_string()
     };
 

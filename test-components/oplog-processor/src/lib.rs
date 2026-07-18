@@ -26,12 +26,32 @@ struct BatchCallback {
     entry_count: u64,
     /// Invocations observed in this batch (only AgentInvocationFinished entries)
     invocations: Vec<InvocationRecord>,
+    /// Enriched durable host-call entries (Start/End/Cancelled) observed in this
+    /// batch, derived from the output of `enrich-oplog-entries`
+    durable_entries: Vec<DurableEntryRecord>,
 }
 
 #[derive(serde::Serialize)]
 struct InvocationRecord {
     oplog_index: u64,
     fn_name: String,
+}
+
+/// Evidence of an enriched durable host-call entry, taken from the enriched
+/// `public-oplog-entry` returned by the host's `enrich-oplog-entries` call.
+#[derive(serde::Serialize)]
+struct DurableEntryRecord {
+    oplog_index: u64,
+    /// "start", "end" or "cancelled"
+    kind: String,
+    /// The durable function name (present for `start` entries)
+    function_name: Option<String>,
+    /// The oplog index of the matching `start` entry (present for `end` and
+    /// `cancelled` entries)
+    start_index: Option<u64>,
+    /// Whether the entry carried a typed-schema-value payload
+    /// (`request`, `response` or `partial`)
+    has_payload: bool,
 }
 
 thread_local! {
@@ -42,7 +62,7 @@ thread_local! {
 struct OplogProcessorComponent;
 
 impl OplogProcessorGuest for OplogProcessorComponent {
-    fn process(
+    async fn process(
         account_info: golem_rust::oplog_processor::exports::golem::api::oplog_processor::AccountInfo,
         config: Vec<(String, String)>,
         component_id: ComponentId,
@@ -68,6 +88,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
         let comp_id = Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits);
 
         let mut invocations: Vec<InvocationRecord> = Vec::new();
+        let mut durable_entries: Vec<DurableEntryRecord> = Vec::new();
 
         let indexed_entries: Vec<(OplogIndex, OplogEntry)> = entries
             .into_iter()
@@ -84,6 +105,31 @@ impl OplogProcessorGuest for OplogProcessorComponent {
         for ((oplog_index, _raw_entry), entry) in
             indexed_entries.iter().zip(enriched_entries.iter())
         {
+            match entry {
+                PublicOplogEntry::Start(params) => durable_entries.push(DurableEntryRecord {
+                    oplog_index: *oplog_index,
+                    kind: "start".to_string(),
+                    function_name: Some(params.function_name.clone()),
+                    start_index: None,
+                    has_payload: params.request.is_some(),
+                }),
+                PublicOplogEntry::End(params) => durable_entries.push(DurableEntryRecord {
+                    oplog_index: *oplog_index,
+                    kind: "end".to_string(),
+                    function_name: None,
+                    start_index: Some(params.start_index),
+                    has_payload: params.response.is_some(),
+                }),
+                PublicOplogEntry::Cancelled(params) => durable_entries.push(DurableEntryRecord {
+                    oplog_index: *oplog_index,
+                    kind: "cancelled".to_string(),
+                    function_name: None,
+                    start_index: Some(params.start_index),
+                    has_payload: params.partial.is_some(),
+                }),
+                _ => {}
+            }
+
             if let PublicOplogEntry::AgentInvocationStarted(params) = entry {
                 CURRENT_INVOCATIONS.with(|ci| {
                     ci.borrow_mut()
@@ -135,9 +181,10 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                 first_entry_index,
                 entry_count,
                 invocations,
+                durable_entries,
             };
             let json = serde_json::to_string(&batch).map_err(|err| err.to_string())?;
-            wit_bindgen::block_on(send_http_post(&url, json.into_bytes()))?;
+            send_http_post(&url, json.into_bytes()).await?;
         }
 
         Ok(())
