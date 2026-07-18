@@ -136,9 +136,21 @@ units:
     prerequisites:
       - golem-add-http-endpoint
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T11:50:06.253Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-http-auth/attempt-1/http-endpoint-auth/amp-effect-http-endpoint-auth.json
+        thread: https://ampcode.com/threads/T-019f7510-01ee-74ad-a4b6-3102886175c1
+        finishedAt: 2026-07-18T12:11:04.850Z
+    evidence:
+      verifiedAt: 2026-07-18T12:11:04.850Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7510-01ee-74ad-a4b6-3102886175c1
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-http-auth/attempt-1/http-endpoint-auth/amp-effect-http-endpoint-auth.json
   - id: golem-add-http-endpoint
     targetSkill: golem-add-http-endpoint-effect
     verifyScenarios:
