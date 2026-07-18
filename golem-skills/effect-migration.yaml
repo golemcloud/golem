@@ -57,21 +57,21 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T09:59:12.735Z
+        finishedAt: 2026-07-18T10:17:58.710Z
+        thread: https://ampcode.com/threads/T-019f74aa-7b16-7389-ba49-054138ce642c
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-npm-package/attempt-1/add-third-party-dependency/amp-effect-add-third-party-dependency.json
-        thread: https://ampcode.com/threads/T-019f74aa-7b16-7389-ba49-054138ce642c
-        finishedAt: 2026-07-18T10:17:58.710Z
         error: |-
           add-third-party-dependency:
           ASSERTION_FAILED (result_json[$].equals): $ expected "helloWorld", got undefined; result_json=undefined
       - number: 2
         startedAt: 2026-07-18T10:17:58.714Z
+        finishedAt: 2026-07-18T10:38:22.803Z
+        thread: https://ampcode.com/threads/T-019f74bb-ab2e-74c0-a0a0-899a6da4de61
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-npm-package/attempt-2/add-third-party-dependency/amp-effect-add-third-party-dependency.json
-        thread: https://ampcode.com/threads/T-019f74bb-ab2e-74c0-a0a0-899a6da4de61
-        finishedAt: 2026-07-18T10:38:22.803Z
     evidence:
       verifiedAt: 2026-07-18T10:38:22.803Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -88,9 +88,23 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Map typed agent configuration to Effect Schema and constructor implementation inputs.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T10:39:47.514Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-cli/amp-effect-add-config-cli.json
+          - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-manifest/amp-effect-add-config-manifest.json
+        thread: https://ampcode.com/threads/T-019f74cf-a244-72bb-ab1e-196a255d03bd
+        finishedAt: 2026-07-18T11:00:02.755Z
+    evidence:
+      verifiedAt: 2026-07-18T11:00:02.755Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f74cf-a244-72bb-ab1e-196a255d03bd
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-cli/amp-effect-add-config-cli.json
+        - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-manifest/amp-effect-add-config-manifest.json
   - id: golem-add-cors
     targetSkill: golem-add-cors-effect
     verifyScenarios:
