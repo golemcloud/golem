@@ -494,11 +494,11 @@ units:
           error: Agent Service - Error: 500 Internal Server Error, Invocation Failed
       - number: 5
         startedAt: 2026-07-18T20:00:36.699Z
+        finishedAt: 2026-07-18T20:20:33.756Z
+        thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-5/atomic-block/amp-effect-atomic-block.json
-        thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
-        finishedAt: 2026-07-18T20:20:33.756Z
         error: |
           atomic-block:
           INVOKE_FAILED: Using generated idempotency key: eb072be6-041d-434d-a711-c2ba1386ec73
@@ -526,11 +526,11 @@ units:
           error: Agent Service - Error: 500 Internal Server Error, Invocation Failed
       - number: 6
         startedAt: 2026-07-18T20:20:33.759Z
+        finishedAt: 2026-07-18T20:32:15.739Z
+        thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-6/atomic-block/amp-effect-atomic-block.json
-        thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
-        finishedAt: 2026-07-18T20:32:15.739Z
     evidence:
       verifiedAt: 2026-07-18T20:32:15.739Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -545,9 +545,75 @@ units:
     prerequisites:
       - golem-add-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T21:23:09.278Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-call-another-agent/attempt-1/rpc-1-invoke-and-await/amp-effect-rpc-1-invoke-and-await.json
+        thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
+        finishedAt: 2026-07-18T21:40:26.050Z
+        error: "rpc-1-invoke-and-await:
+
+          DEPLOY_FAILED: Selected app: test-app, env: local, server: local - builtin (http://localhost:9881/)
+
+          Selecting components
+
+          \  Found components: test-app:effect-main
+
+          \  Selected components and layers:
+
+          \    test-app:effect-main: effect, effect[optimized], test-app:effect-main
+
+          Building components
+
+          \  Building test-app:effect-main
+
+          \    Skipping executing external command 'npx tsc --project \"/Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app\" --noEmit false --emitDeclarationOnly --declaration --outFile \"/Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app/golem-temp/ts-check/test-app-effect-main/main.d.ts\"' in directory /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app [UP-TO-DATE]
+
+          \    Skipping executing external command 'npx --no rollup -- -c \"/Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app/golem-temp/common/effect/rollup.config.component.mjs\"' in directory /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app [UP-TO-DATE]
+
+          \    Skipping injecting JS module /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app/golem-temp/ts-dist/test-app-effect-main/main.js into QuickJS WASM /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm [UP-TO-DATE]
+
+          \    Skipping pre-initializing JS component /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app/golem-temp/agents/test_app_effect_main.dynamic.wasm into /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app/golem-temp/agents/test_app_effect_main.preinitialized.wasm [UP-TO-DATE]
+
+          Adding metadata to components
+
+          \  Skipping adding metadata to test-app:effect-main [UP-TO-DATE]
+
+          Preparing deployment
+
+          \  Extracting test-app:effect-main agent types from /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/0cf07d7b-1646-4533-90f8-bbb3e65f5377/rpc-1-invoke-and-await/effect/test-app/golem-temp/agents/test_app_effect_main.wasm
+
+
+
+          Summary\ 
+
+          \  Failed to prepare deployment [ERROR]
+
+          \    error: Invalid type: effect-golem: 1 agent registration error
+
+          agent 'GlobalRegistry': Error: {\"reason\":\"index signatures cannot be represented in WIT\",\"_tag\":\"UnsupportedSchemaError\"}
+
+          \e[2m2026-07-18T21:40:25.981760Z\e[0m \e[31mERROR\e[0m \e[2mgolem_common::model::agent::extraction\e[0m\e[2m:\e[0m Error while discovering agent types: Invalid type: effect-golem: 1 agent registration error
+
+          agent 'GlobalRegistry': Error: {\"reason\":\"index signatures cannot be represented in WIT\",\"_tag\":\"UnsupportedSchemaError\"}
+
+          \n"
+      - number: 2
+        startedAt: 2026-07-18T21:40:26.054Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-call-another-agent/attempt-2/rpc-1-invoke-and-await/amp-effect-rpc-1-invoke-and-await.json
+        thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
+        finishedAt: 2026-07-18T21:52:00.763Z
+    evidence:
+      verifiedAt: 2026-07-18T21:52:00.763Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-call-another-agent/attempt-2/rpc-1-invoke-and-await/amp-effect-rpc-1-invoke-and-await.json
   - id: golem-call-from-external
     targetSkill: golem-call-from-external-effect
     verifyScenarios:

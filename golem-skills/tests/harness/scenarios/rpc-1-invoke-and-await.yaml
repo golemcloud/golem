@@ -38,6 +38,31 @@ steps:
         return a `boolean` — the value returned by `register`.
 
         Make sure the project builds successfully.
+      effect: >
+        In the Effect-based test-app project, add a second durable agent type called
+        `GlobalRegistry` as a singleton with `constructorParams: {}`. Define an Effect Schema
+        `RegistryEntry` with `name: Schema.String` and `count: Schema.Number`. Expose two typed
+        Effect methods: `register` with named parameters `name` and `count` and
+        `success: Schema.Boolean`, and `getAll` with no parameters and
+        `success: Schema.Array(RegistryEntry)`. Use that same array schema for the snapshot state
+        and initialize it with `snapshot.init([])`. Do not use `Schema.Record` or any index
+        signature: the Effect SDK cannot represent index signatures in WIT agent metadata. Upsert
+        entries immutably by finding the matching `name`, replacing that array element when found,
+        or appending `{ name, count }` otherwise. `register` must return `true` when `count < 5` and
+        `false` otherwise; `getAll` must return the snapshot array.
+
+        Modify the existing Effect `Counter` agent rather than creating a duplicate. Rename its
+        exported TypeScript binding and its `defineAgent` runtime name to exactly `CounterAgent`,
+        and update the matching `httpApi` agent key in `golem.yaml`. Preserve its constructor
+        parameter and snapshot-backed count state. Change `increment` to
+        `success: Schema.Boolean`. After incrementing, obtain the singleton through
+        `GlobalRegistry.client.get({})`, invoke `register({ name, count })`, yield both client
+        Effects, and return the awaited boolean result. Handle or convert typed RPC client errors
+        so the no-error `increment` contract type-checks; do not use Promise-based TypeScript SDK
+        APIs or invent an SDK helper.
+
+        Import every implementation module from `src/main.ts`. Make sure the project builds
+        successfully.
       scala: >
         In the test-app project, add a second agent type called `GlobalRegistry` that is a
         singleton (no constructor parameter / single global instance). It must expose two
@@ -73,6 +98,8 @@ steps:
         - "golem-call-another-agent-rust"
       ts:
         - "golem-call-another-agent-ts"
+      effect:
+        - "golem-call-another-agent-effect"
       scala:
         - "golem-call-another-agent-scala"
       moonbit:
@@ -150,6 +177,7 @@ steps:
       method:
         rust: "get_all"
         ts: "getAll"
+        effect: "getAll"
         scala: "getAll"
         moonbit: "get_all"
     expect:
