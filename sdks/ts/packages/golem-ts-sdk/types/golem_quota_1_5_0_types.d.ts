@@ -5,7 +5,7 @@
  */
 declare module 'golem:quota/types@1.5.0' {
   import * as golemApi150Host from 'golem:api/host@1.5.0';
-  import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
+  import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
   export class Reservation {
     /**
      * Commit actual usage, consuming the reservation.
@@ -55,7 +55,7 @@ declare module 'golem:quota/types@1.5.0' {
     static fromRecord(serialized: QuotaTokenRecord): QuotaToken;
   }
   export type EnvironmentId = golemApi150Host.EnvironmentId;
-  export type Datetime = wasiClocks023WallClock.Datetime;
+  export type Datetime = wasiClocks030SystemClock.Instant;
   /**
    * Error returned when a reservation cannot be satisfied because the
    * resource's enforcement policy is `reject`.

@@ -99,7 +99,7 @@ vi.mock('golem:quota/types@1.5.0', () => ({}));
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
-vi.mock('wasi:cli/environment@0.2.3', () => ({
+vi.mock('wasi:cli/environment@0.3.0', () => ({
   getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
 }));
 

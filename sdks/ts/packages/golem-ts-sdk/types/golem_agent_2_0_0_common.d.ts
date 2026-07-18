@@ -1,6 +1,6 @@
 declare module 'golem:agent/common@2.0.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
+  import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
@@ -8,7 +8,7 @@ declare module 'golem:agent/common@2.0.0' {
   export type AgentId = golemCore200Types.AgentId;
   export type AccountId = golemCore200Types.AccountId;
   export type ComponentId = golemCore200Types.ComponentId;
-  export type Duration = wasiClocks023MonotonicClock.Duration;
+  export type Duration = wasiClocks030Types.Duration;
   export type AgentMode = "durable" | "ephemeral";
   export type AutoInjectedKind = "principal";
   export type FieldSource = 

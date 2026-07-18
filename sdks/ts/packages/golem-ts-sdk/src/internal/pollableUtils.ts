@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Pollable } from 'wasi:io/poll@0.2.3';
-
 export function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
 
@@ -26,12 +24,43 @@ export function throwIfAborted(signal?: AbortSignal): void {
   throw err;
 }
 
-export async function awaitPollable(pollable: Pollable, signal?: AbortSignal): Promise<void> {
+export async function awaitAbortable<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: () => void,
+): Promise<T> {
   if (!signal) {
-    await pollable.promise();
-    return;
+    return promise;
   }
 
+  if (signal.aborted) {
+    promise.catch(() => undefined);
+  }
   throwIfAborted(signal);
-  await pollable.abortablePromise(signal);
+
+  let abortListener: (() => void) | undefined;
+  const abort = new Promise<never>((_, reject) => {
+    abortListener = () => {
+      try {
+        throwIfAborted(signal);
+      } catch (reason) {
+        reject(reason);
+      }
+
+      try {
+        onAbort?.();
+      } catch {
+        // Cancellation is best-effort; the signal reason determines the rejection.
+      }
+    };
+    signal.addEventListener('abort', abortListener, { once: true });
+  });
+
+  try {
+    return await Promise.race([promise, abort]);
+  } finally {
+    if (abortListener) {
+      signal.removeEventListener('abort', abortListener);
+    }
+  }
 }

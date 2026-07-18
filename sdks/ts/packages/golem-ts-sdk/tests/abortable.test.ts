@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { describe, it, expect } from 'vitest';
-import { throwIfAborted, awaitPollable } from '../src/internal/pollableUtils';
+import { awaitAbortable, throwIfAborted } from '../src/internal/pollableUtils';
 
 describe('throwIfAborted', () => {
   it('does nothing when signal is undefined', () => {
@@ -63,111 +63,86 @@ describe('throwIfAborted', () => {
   });
 });
 
-describe('awaitPollable', () => {
+describe('awaitAbortable', () => {
   it('rejects immediately with pre-aborted signal', async () => {
     const signal = AbortSignal.abort('pre-aborted');
-    const fakePollable = {
-      promise: () => new Promise<void>(() => {}), // never resolves
-      abortablePromise: (_signal: AbortSignal) => new Promise<void>(() => {}),
-      ready: () => false,
-      block: () => {},
-    };
+    const onAbort = vi.fn();
 
-    await expect(awaitPollable(fakePollable as any, signal)).rejects.toBe('pre-aborted');
+    await expect(awaitAbortable(new Promise<void>(() => {}), signal, onAbort)).rejects.toBe(
+      'pre-aborted',
+    );
+    expect(onAbort).not.toHaveBeenCalled();
   });
 
-  it('calls promise() when no signal is provided', async () => {
-    let promiseCalled = false;
-    const fakePollable = {
-      promise: () => {
-        promiseCalled = true;
-        return Promise.resolve();
-      },
-      abortablePromise: (_signal: AbortSignal) => Promise.resolve(),
-      ready: () => true,
-      block: () => {},
-    };
-
-    await awaitPollable(fakePollable as any);
-    expect(promiseCalled).toBe(true);
+  it('resolves the supplied promise when no signal is provided', async () => {
+    await expect(awaitAbortable(Promise.resolve('done'))).resolves.toBe('done');
   });
 
-  it('calls abortablePromise() when signal is provided and not aborted', async () => {
-    let abortablePromiseCalled = false;
+  it('rejects with the abort reason and invokes cancellation', async () => {
     const controller = new AbortController();
-    const fakePollable = {
-      promise: () => Promise.resolve(),
-      abortablePromise: (_signal: AbortSignal) => {
-        abortablePromiseCalled = true;
-        return Promise.resolve();
-      },
-      ready: () => true,
-      block: () => {},
-    };
+    const onAbort = vi.fn();
+    const result = awaitAbortable(new Promise<void>(() => {}), controller.signal, onAbort);
 
-    await awaitPollable(fakePollable as any, controller.signal);
-    expect(abortablePromiseCalled).toBe(true);
+    controller.abort('cancelled');
+    await expect(result).rejects.toBe('cancelled');
+    expect(onAbort).toHaveBeenCalledOnce();
   });
 
-  it('does not call abortablePromise when signal is already aborted', async () => {
-    let abortablePromiseCalled = false;
-    const signal = AbortSignal.abort('pre-aborted');
-
-    const fakePollable = {
-      promise: () => Promise.resolve(),
-      abortablePromise: (_signal: AbortSignal) => {
-        abortablePromiseCalled = true;
-        return Promise.resolve();
-      },
-      ready: () => false,
-      block: () => {},
-    };
-
-    await expect(awaitPollable(fakePollable as any, signal)).rejects.toBe('pre-aborted');
-    expect(abortablePromiseCalled).toBe(false);
-  });
-
-  it('passes the same signal to abortablePromise', async () => {
+  it('keeps the abort reason when cancellation rejects the operation', async () => {
     const controller = new AbortController();
-    let receivedSignal: AbortSignal | undefined;
+    const abortReason = new Error('caller aborted');
+    const cancellationError = new Error('host cancelled');
+    let rejectOperation!: (reason: unknown) => void;
+    const operation = new Promise<never>((_, reject) => {
+      rejectOperation = reject;
+    });
+    const result = awaitAbortable(operation, controller.signal, () => {
+      rejectOperation(cancellationError);
+    });
 
-    const fakePollable = {
-      promise: () => Promise.resolve(),
-      abortablePromise: (signal: AbortSignal) => {
-        receivedSignal = signal;
-        return Promise.resolve();
-      },
-      ready: () => true,
-      block: () => {},
-    };
+    controller.abort(abortReason);
 
-    await awaitPollable(fakePollable as any, controller.signal);
-    expect(receivedSignal).toBe(controller.signal);
+    await expect(result).rejects.toBe(abortReason);
   });
 
-  it('propagates rejection from promise()', async () => {
-    const err = new Error('poll failed');
-    const fakePollable = {
-      promise: () => Promise.reject(err),
-      abortablePromise: (_signal: AbortSignal) => Promise.resolve(),
-      ready: () => false,
-      block: () => {},
-    };
+  it('removes cancellation after the operation settles', async () => {
+    const controller = new AbortController();
+    const onAbort = vi.fn();
 
-    await expect(awaitPollable(fakePollable as any)).rejects.toBe(err);
+    await expect(awaitAbortable(Promise.resolve('done'), controller.signal, onAbort)).resolves.toBe(
+      'done',
+    );
+    controller.abort('too late');
+    expect(onAbort).not.toHaveBeenCalled();
   });
 
-  it('propagates rejection from abortablePromise()', async () => {
-    const err = new Error('abortable poll failed');
+  it('propagates rejection from the supplied promise', async () => {
+    const err = new Error('operation failed');
     const controller = new AbortController();
 
-    const fakePollable = {
-      promise: () => Promise.resolve(),
-      abortablePromise: (_signal: AbortSignal) => Promise.reject(err),
-      ready: () => false,
-      block: () => {},
-    };
+    await expect(awaitAbortable(Promise.reject(err), controller.signal)).rejects.toBe(err);
+  });
 
-    await expect(awaitPollable(fakePollable as any, controller.signal)).rejects.toBe(err);
+  it('observes a supplied operation rejection when the signal is already aborted', async () => {
+    const operationError = new Error('operation failed after abort');
+    let rejectOperation!: (reason: unknown) => void;
+    const operation = new Promise<never>((_, reject) => {
+      rejectOperation = reject;
+    });
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', recordUnhandled);
+
+    try {
+      await expect(awaitAbortable(operation, AbortSignal.abort('pre-aborted'))).rejects.toBe(
+        'pre-aborted',
+      );
+      rejectOperation(operationError);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
   });
 });

@@ -22,12 +22,6 @@
       "agentic-guest": [
         "types/exports.d.ts"
       ],
-      "golem:agent/common@1.5.0": [
-        "types/golem_agent_1_5_0_common.d.ts"
-      ],
-      "golem:agent/host@1.5.0": [
-        "types/golem_agent_1_5_0_host.d.ts"
-      ],
       "golem:agent/common@2.0.0": [
         "types/golem_agent_2_0_0_common.d.ts"
       ],
@@ -46,7 +40,7 @@
     "bench": "vitest bench",
     "lint": "eslint . --ext .ts,.tsx,.mjs",
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
-    "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types",
+    "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types --target wasi-p3",
     "build": "pnpm run generate-dts && rollup --failAfterWarnings -c",
     "clean": "node ./scripts/clean.mjs",
     "clean-test-data": "node ../../scripts/clean-test-data.mjs",
@@ -54,7 +48,7 @@
     "test": "pnpm run clean-test-data && pnpm run generate-sample-agents-types && vitest run",
     "dev": "rollup -c -w",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
-    "compile-agent-template": "cargo build --target wasm32-wasip2 --manifest-path=agent-template/Cargo.toml --release --features full,golem",
+    "compile-agent-template": "cargo build --target wasm32-wasip2 --manifest-path=agent-template/Cargo.toml --release --no-default-features --features full-p3,golem",
     "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
     "build-agent-template": "pnpm run generate-agent-template && pnpm run compile-agent-template && pnpm run copy-agent-template"
   },

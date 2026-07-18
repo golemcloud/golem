@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { agent, BaseAgent, endpoint } from '../src';
-import { Principal } from 'golem:agent/common@1.5.0';
+import { Principal } from 'golem:agent/common@2.0.0';
 
 @agent({
   mount: '/chats/{agent-type}/{foo}',

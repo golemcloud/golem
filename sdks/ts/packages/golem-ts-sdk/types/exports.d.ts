@@ -48,12 +48,12 @@ declare module 'agent-guest' {
     /**
      * Gets the agent type. If create was not called before, it fails
      */
-    export function getDefinition(): Promise<AgentType>;
+    export function getDefinition(): AgentType;
     /**
      * Gets the agent types defined by this component
      * @throws AgentError
      */
-    export function discoverAgentTypes(): Promise<AgentType[]>;
+    export function discoverAgentTypes(): AgentType[];
     export type SchemaValueTree = golemCore200Types.SchemaValueTree;
     export type AgentError = golemAgent200Common.AgentError;
     export type AgentType = golemAgent200Common.AgentType;

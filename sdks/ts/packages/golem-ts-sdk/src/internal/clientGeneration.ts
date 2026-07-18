@@ -19,7 +19,7 @@ import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { Uuid } from '../uuid';
 import { AgentClassName } from '../agentClassName';
 import { RemoteMethod } from '../baseAgent';
-import { awaitPollable, throwIfAborted } from './pollableUtils';
+import { awaitAbortable, throwIfAborted } from './pollableUtils';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
@@ -323,7 +323,6 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
   private createMethodProxy(prop: string): RemoteMethod<any[], any> {
     const methodInfo = this.shared.getMethodInfo(prop);
-    const agentIdString = this.agentId.value;
     const wasmRpc = this.wasmRpc;
 
     async function invokeAndAwaitInternal(fnArgs: any[], signal?: AbortSignal) {
@@ -333,43 +332,15 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
       const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(methodInfo.name, inputTree);
 
-      const onAbort = signal
-        ? () => {
-            try {
-              rpcResultFuture.cancel();
-            } catch {
-              // best-effort: ignore cancellation failures
-            }
-          }
-        : undefined;
-
-      if (signal && onAbort) {
-        signal.addEventListener('abort', onAbort, { once: true });
-      }
-
-      try {
-        const rpcResultPollable = rpcResultFuture.subscribe();
-
-        await awaitPollable(rpcResultPollable, signal);
-
-        const rpcResult = rpcResultFuture.get();
-
-        if (!rpcResult) {
-          throw new Error(
-            `RPC to remote agent failed. Failed to invoke ${methodInfo.name} in agent ${agentIdString}`,
-          );
+      const rpcResult = await awaitAbortable(rpcResultFuture.get(), signal, () => {
+        try {
+          rpcResultFuture.cancel();
+        } catch {
+          // best-effort: ignore cancellation failures
         }
+      });
 
-        if (rpcResult.tag === 'err') {
-          throw new Error('Remote agent returned error result: ' + JSON.stringify(rpcResult.val));
-        }
-
-        return deserializeRpcResult(rpcResult.val, methodInfo.returnType);
-      } finally {
-        if (signal && onAbort) {
-          signal.removeEventListener('abort', onAbort);
-        }
-      }
+      return deserializeRpcResult(rpcResult, methodInfo.returnType);
     }
 
     function invokeFireAndForget(...fnArgs: any[]) {

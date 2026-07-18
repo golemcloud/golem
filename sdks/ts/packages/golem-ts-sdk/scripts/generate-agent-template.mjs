@@ -1,16 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-// ---------------------------------------------------------------------------
-// The TypeScript SDK is fully migrated to golem:core@2.0.0 and no longer ships
-// golem:core@1.5.0 in its WIT (dropped by the `wit-sdks` task in Makefile.toml).
-// Keeping both core versions would make wasm-rquickjs emit version-suffixed
-// module paths (e.g. golem::core1_5_0) and break the generated wrapper crate,
-// so we assert the legacy package is absent before generating the wrapper.
-// ---------------------------------------------------------------------------
+// Multiple golem:core versions make wasm-rquickjs emit version-suffixed module paths that do not
+// match the generated wrapper's bindings, so the SDK WIT must only contain its 2.0 contract.
 
 const sourceWit = resolve(process.cwd(), '../../wit');
+const output = 'agent-template';
 
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
@@ -32,6 +28,8 @@ if (offenders.length > 0) {
   );
 }
 
+rmSync(output, { recursive: true, force: true });
+
 const result = spawnSync(
   'wasm-rquickjs',
   [
@@ -39,9 +37,11 @@ const result = spawnSync(
     '--wit',
     sourceWit,
     '--output',
-    'agent-template',
+    output,
     '--world',
     'agent-guest',
+    '--target',
+    'wasi-p3',
     '--js-modules',
     '@golemcloud/golem-ts-sdk=dist/index.mjs',
     '--js-modules',

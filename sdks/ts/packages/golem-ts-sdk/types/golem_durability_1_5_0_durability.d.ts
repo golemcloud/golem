@@ -2,8 +2,7 @@ declare module 'golem:durability/durability@1.5.0' {
   import * as golemApi150Host from 'golem:api/host@1.5.0';
   import * as golemApi150Oplog from 'golem:api/oplog@1.5.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
-  import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
+  import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
   /**
    * Observes a function call (produces logs and metrics)
    */
@@ -38,23 +37,10 @@ declare module 'golem:durability/durability@1.5.0' {
    * Reads the next persisted durable function invocation from the oplog during replay
    */
   export function readPersistedDurableFunctionInvocation(): PersistedDurableFunctionInvocation;
-  export class LazyInitializedPollable {
-    /**
-     * Creates a `pollable` that is never ready until it gets attached to a real `pollable` implementation
-     * using `set-lazy-initialized-pollable`.
-     */
-    constructor();
-    /**
-     * Sets the underlying `pollable` for a pollable created with `create-lazy-initialized-pollable`.
-     */
-    set(pollable: Pollable): void;
-    subscribe(): Pollable;
-  }
   export type PersistenceLevel = golemApi150Host.PersistenceLevel;
   export type OplogIndex = golemApi150Oplog.OplogIndex;
   export type WrappedFunctionType = golemApi150Oplog.WrappedFunctionType;
-  export type Datetime = wasiClocks023WallClock.Datetime;
-  export type Pollable = wasiIo023Poll.Pollable;
+  export type Datetime = wasiClocks030SystemClock.Instant;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type DurableFunctionType = WrappedFunctionType;
   /**

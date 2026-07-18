@@ -114,7 +114,7 @@ async function invoke(
   }
 }
 
-async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
+function discoverAgentTypes(): bindings.guest.AgentType[] {
   try {
     // Check if there were any validation errors during agent registration
     const validationError = getAgentValidationError();
@@ -134,7 +134,7 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
   }
 }
 
-async function getDefinition(): Promise<AgentType> {
+function getDefinition(): AgentType {
   if (!resolvedAgent) {
     throw new Error('Failed to get agent definition: agent is not initialized');
   }

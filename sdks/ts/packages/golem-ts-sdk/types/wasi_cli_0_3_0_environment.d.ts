@@ -1,4 +1,4 @@
-declare module 'wasi:cli/environment@0.2.3' {
+declare module 'wasi:cli/environment@0.3.0' {
   /**
    * Get the POSIX-style environment variables.
    * Each environment variable is provided as a pair of string variable names
@@ -16,5 +16,5 @@ declare module 'wasi:cli/environment@0.2.3' {
    * Return a path that programs should use as their initial current working
    * directory, interpreting `.` as shorthand for this.
    */
-  export function initialCwd(): string | undefined;
+  export function getInitialCwd(): string | undefined;
 }
