@@ -99,6 +99,7 @@ enum Transform {
     ComponentName,
     ManifestHints,
     TsSdk,
+    EffectSdk,
     RustSdk,
     ScalaSdk,
     MoonBitSdk,
@@ -292,7 +293,10 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                             Transform::MoonBitSdk,
                         ]
                     }
-                    (true, "package.json") => vec![Transform::TsSdk],
+                    (true, "package.json") => match ctx.template.language {
+                        crate::model::GuestLanguage::Effect => vec![Transform::EffectSdk],
+                        _ => vec![Transform::TsSdk],
+                    },
                     (true, "Cargo.toml") => vec![Transform::RustSdk],
                     (true, "build.sbt") => vec![Transform::ScalaSdk, Transform::ApplicationName],
                     (true, "plugins.sbt") => vec![Transform::ScalaSdk],
@@ -476,6 +480,48 @@ fn transform(
                 replacements.insert(
                     "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",
                     versions::ts_dep::ROLLUP_PLUGIN_ALIAS.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_NODE_RESOLVE_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_TYPESCRIPT_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_TYPESCRIPT.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_COMMONJS_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_COMMONJS.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_JSON_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_JSON.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_TYPES_NODE_VERSION",
+                    versions::ts_dep::TYPES_NODE.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_VERSION",
+                    versions::ts_dep::ROLLUP.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_TSLIB_VERSION",
+                    versions::ts_dep::TSLIB.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_TYPESCRIPT_VERSION",
+                    versions::ts_dep::TYPESCRIPT.to_string(),
+                );
+            }
+            Transform::EffectSdk => {
+                replacements.insert(
+                    "GOLEM_EFFECT_GOLEM_VERSION_OR_PATH",
+                    sdk_overrides.effect_golem_dep()?,
+                );
+                replacements.insert(
+                    "GOLEM_EFFECT_VERSION",
+                    versions::effect_dep::EFFECT.to_string(),
                 );
                 replacements.insert(
                     "GOLEM_TS_ROLLUP_PLUGIN_NODE_RESOLVE_VERSION",

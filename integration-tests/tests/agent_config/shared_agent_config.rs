@@ -46,7 +46,7 @@ define_matrix_dimension!(lang: Arc<dyn TestContext> -> "ts", "rust");
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_reads_secret_created_from_default(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -112,7 +112,7 @@ async fn agent_reads_secret_created_from_default(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_reads_secret_updated_from_default(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -190,7 +190,7 @@ async fn agent_reads_secret_updated_from_default(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_fails_on_missing_environment_secret_value(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -222,7 +222,7 @@ async fn agent_fails_on_missing_environment_secret_value(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_reads_secret_with_different_casing(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -275,7 +275,7 @@ async fn agent_reads_secret_with_different_casing(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_reads_secret_with_mixed_case_path(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,

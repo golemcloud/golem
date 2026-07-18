@@ -361,9 +361,9 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
             let raw: *const T = raw.cast();
             return Some(unsafe { Arc::from_raw(raw) });
         }
-        match current.inner() {
-            Some(inner) => current = inner,
-            None => return None,
+        {
+            let inner = current.inner()?;
+            current = inner
         }
     }
 }

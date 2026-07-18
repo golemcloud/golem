@@ -529,7 +529,7 @@ impl ApplicationContext {
 
                     for (site, deployment) in http_api_deployments {
                         logln(format!("  {}", site.to_string().log_color_highlight(),));
-                        for (agent_name, _) in deployment.value.agents.iter() {
+                        for agent_name in deployment.value.agents.keys() {
                             logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
                         }
                     }

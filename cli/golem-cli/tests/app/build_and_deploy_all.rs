@@ -15,6 +15,11 @@ async fn build_and_deploy_all_templates_for_ts() {
 }
 
 #[test]
+async fn build_and_deploy_all_templates_for_effect() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Effect).await;
+}
+
+#[test]
 async fn build_and_deploy_all_templates_for_rust() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::Rust).await;
 }
@@ -77,6 +82,20 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         .flatten()
         .collect::<Vec<_>>();
 
+    if language == GuestLanguage::Effect {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::AGENT,
+                cmd::INVOKE,
+                r#"Counter("integration-test")"#,
+                "increment",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains_ordered(["Invocation result in TypeScript syntax:", "1"]));
+    }
+
     // Checking bridge SDK generation for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
     for language in GuestLanguage::iter().filter(|l| l.supports_bridge_generation()) {
@@ -121,6 +140,11 @@ async fn scala_single_to_multi_component_upgrade_builds() {
 #[test]
 async fn moonbit_single_to_multi_component_upgrade_builds() {
     single_to_multi_component_upgrade_builds_for_lang(GuestLanguage::MoonBit).await;
+}
+
+#[test]
+async fn effect_single_to_multi_component_upgrade_builds() {
+    single_to_multi_component_upgrade_builds_for_lang(GuestLanguage::Effect).await;
 }
 
 async fn single_to_multi_component_upgrade_builds_for_lang(language: GuestLanguage) {

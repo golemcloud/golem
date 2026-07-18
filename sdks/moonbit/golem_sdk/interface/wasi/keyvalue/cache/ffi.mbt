@@ -69,16 +69,16 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
   #| local.tee 1 i32.const 0 call $moonbit.init_array8
-  #| local.get 1 i32.const 8 i32.add)
+  #| local.get 1)
 
 ///|
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
+  #|(func (param i32) (result i32) local.get 0)
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
+  #|(func (param i32) local.get 0 call $moonbit.decref)
 
 ///|
 extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =

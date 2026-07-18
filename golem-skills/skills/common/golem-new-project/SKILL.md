@@ -46,6 +46,7 @@ Running `golem new` deploys a large number of agent skills into the new project'
 |----------|---------------|
 | Rust | `rust` |
 | TypeScript | `ts` |
+| Effect | `effect` |
 | Scala | `scala` |
 
 ## Examples
@@ -58,6 +59,11 @@ golem new --template rust --yes my-rust-app
 Create a new TypeScript project:
 ```shell
 golem new --template ts --yes my-ts-app
+```
+
+Create a new Effect project:
+```shell
+golem new --template effect --yes my-effect-app
 ```
 
 Create a new Scala project:

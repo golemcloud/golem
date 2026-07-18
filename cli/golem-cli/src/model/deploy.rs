@@ -379,7 +379,7 @@ pub fn preferred_source_language_for_setup(
 
     match selected {
         Some(GuestLanguage::Rust) => SourceLanguage::Rust,
-        Some(GuestLanguage::TypeScript) => SourceLanguage::TypeScript,
+        Some(GuestLanguage::TypeScript | GuestLanguage::Effect) => SourceLanguage::TypeScript,
         Some(GuestLanguage::Scala) => SourceLanguage::Scala,
         Some(GuestLanguage::MoonBit) => SourceLanguage::MoonBit,
         None => SourceLanguage::Other(String::new()),

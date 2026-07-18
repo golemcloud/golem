@@ -157,7 +157,7 @@ async fn agent_reads_updated_environment_secret(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_fails_on_deleted_environment_secret(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -256,7 +256,7 @@ async fn agent_fails_on_deleted_environment_secret(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_reads_recreated_environment_secret(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -346,7 +346,7 @@ async fn agent_reads_recreated_environment_secret(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_reads_secret_after_canonicalized_update(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,

@@ -140,7 +140,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
                 None => match parsed_function_name.method_as_static() {
                     None => Err(WorkerExecutorError::invalid_request(format!(
                         "could not load function {} for interface {}",
-                        &parsed_function_name.function().function_name(),
+                        parsed_function_name.function().function_name(),
                         interface_name
                     ))),
                     Some(parsed_static) => instance
@@ -152,8 +152,8 @@ fn find_function<'a, Ctx: WorkerCtx>(
                         .and_then(|(_, idx)| instance.get_func(&mut store, idx))
                         .ok_or(WorkerExecutorError::invalid_request(format!(
                             "could not load function {} or {} for interface {}",
-                            &parsed_function_name.function().function_name(),
-                            &parsed_static.function().function_name(),
+                            parsed_function_name.function().function_name(),
+                            parsed_static.function().function_name(),
                             interface_name
                         )))
                         .map(FindFunctionResult::ExportedFunction),
@@ -164,7 +164,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
             .get_func(store, parsed_function_name.function().function_name())
             .ok_or(WorkerExecutorError::invalid_request(format!(
                 "could not load function {}",
-                &parsed_function_name.function().function_name()
+                parsed_function_name.function().function_name()
             )))
             .map(FindFunctionResult::ExportedFunction),
     }

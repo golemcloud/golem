@@ -35,7 +35,7 @@ The **check** step verifies that required system tools are installed and meet mi
 | `cargo` | `cargo version` (minimum version enforced) | Installed with Rust toolchain |
 | `wasm32-wasip2` target | `rustup target list --installed` | `rustup target add wasm32-wasip2` |
 
-### TypeScript Projects
+### TypeScript and Effect Projects
 | Tool | Check | Install Hint |
 |------|-------|--------------|
 | `node` | `node --version` (minimum version enforced) | https://nodejs.org/ |
@@ -74,6 +74,9 @@ The CLI also validates `tsconfig.json` settings:
 - `compilerOptions.experimentalDecorators` must be `true`
 - `compilerOptions.emitDecoratorMetadata` must be `true`
 
+### Effect Dependency Checks
+The CLI inspects the root `package.json` for `@golemcloud/effect-golem`, `effect`, and the shared Rollup/TypeScript build tooling. Effect components require `compilerOptions.moduleResolution` to be `"bundler"`, but do not require the TypeScript SDK's decorator settings or `golem-typegen` package.
+
 ### AGENTS.md and Skill Files
 The CLI checks that the project's `AGENTS.md` and `.agents/skills/` directory contain up-to-date content matching the current CLI version's templates. If they are stale, the CLI updates them automatically during the build.
 
@@ -90,7 +93,7 @@ golem build --step check --yes
 The CLI cannot find a required tool. Check that it is installed and on your `PATH`:
 ```shell
 which cargo     # Rust
-which node      # TypeScript
+which node      # TypeScript or Effect
 which moon      # MoonBit
 ```
 
@@ -106,8 +109,8 @@ Fix: `rustup target add wasm32-wasip2`
 ### Dependency Version Mismatch
 The CLI shows a diff of the changes it wants to make. Review the diff — it will update version numbers or add missing features. Pass `--yes` to auto-accept.
 
-### TypeScript `tsconfig.json` Issues
-If `moduleResolution` is not set to `"bundler"` or decorator settings are missing, the build will fail during type checking. The CLI auto-fixes these during the check step.
+### TypeScript or Effect `tsconfig.json` Issues
+Both profiles require `moduleResolution` to be `"bundler"`. Ordinary TypeScript SDK components additionally require the decorator settings listed above; Effect components do not. The CLI auto-fixes these during the check step.
 
 ### Up-to-Date Check Confusion
 `golem build` tracks file hashes to skip unchanged steps. If files were modified outside the build (e.g., by `cargo build`), the check may be stale. Force a full rebuild:
