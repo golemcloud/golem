@@ -140,9 +140,23 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Keep Rib and manifest routing behavior; adapt only the Effect agent implementation.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T11:00:03.777Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/add-http-endpoint/amp-effect-add-http-endpoint.json
+          - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/configure-api-domain/amp-effect-configure-api-domain.json
+        thread: https://ampcode.com/threads/T-019f74e2-31bc-75eb-b7bf-163d34ddbca9
+        finishedAt: 2026-07-18T11:36:14.857Z
+    evidence:
+      verifiedAt: 2026-07-18T11:36:14.857Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f74e2-31bc-75eb-b7bf-163d34ddbca9
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/add-http-endpoint/amp-effect-add-http-endpoint.json
+        - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/configure-api-domain/amp-effect-configure-api-domain.json
   - id: golem-add-ignite
     targetSkill: golem-add-ignite-effect
     verifyScenarios:

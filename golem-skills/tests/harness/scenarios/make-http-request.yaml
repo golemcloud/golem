@@ -10,24 +10,43 @@ steps:
       build: true
 
   - id: "add-request-recorder"
-    prompt: >
-      In the test-app project, add a new durable agent type called `RequestRecorder` identified by
-      a single constructor parameter named `name`. Give it an HTTP mount under `/requests/{name}`
-      and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+    prompt:
+      rust: &non-effect-add-request-recorder-prompt >
+        In the test-app project, add a new durable agent type called `RequestRecorder` identified by
+        a single constructor parameter named `name`. Give it an HTTP mount under `/requests/{name}`
+        and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
 
-      RequestRecorder must store a list of recorded messages in agent state, initially empty.
+        RequestRecorder must store a list of recorded messages in agent state, initially empty.
 
-      Expose these HTTP endpoints:
-      - `POST /record` — accepts a `message` string in the JSON request body and appends it to the
-        stored list. It may return unit / no content.
-      - `GET /messages` — returns all recorded messages as a JSON array of strings.
+        Expose these HTTP endpoints:
+        - `POST /record` — accepts a `message` string in the JSON request body and appends it to the
+          stored list. It may return unit / no content.
+        - `GET /messages` — returns all recorded messages as a JSON array of strings.
 
-      Do not modify CounterAgent yet. Make sure the project builds successfully.
+        Do not modify CounterAgent yet. Make sure the project builds successfully.
+      ts: *non-effect-add-request-recorder-prompt
+      effect: >
+        In the Effect-based test-app project, add a durable `RequestRecorder` with one
+        `constructorParams` string named `name`. Mount it with
+        `Http.mount("/requests/{name}")` from `@golemcloud/effect-golem` and expose it on
+        `test-app.localhost:9006`.
+
+        Store an initially empty durable list of message strings with Effect state and snapshot
+        APIs. Expose `POST /record`, taking an unbound `message` string from the camelCase JSON
+        body, appending it, and returning `Schema.Void`; expose `GET /messages`, returning the
+        stored string array. Implement both handlers as Effects and register the module from
+        `src/main.ts`.
+
+        Do not modify the existing `Counter` agent yet. Make sure the project builds successfully.
+      scala: *non-effect-add-request-recorder-prompt
+      moonbit: *non-effect-add-request-recorder-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
       ts:
         - "golem-add-http-endpoint-ts"
+      effect:
+        - "golem-add-http-endpoint-effect"
       scala:
         - "golem-add-http-endpoint-scala"
       moonbit:
@@ -37,28 +56,47 @@ steps:
 
   - id: "make-outgoing-http-request"
     continueSession: false
-    prompt: >
-      In the test-app project, modify CounterAgent to add a new externally invokable method named
-      `record_message_via_http` in Rust and `recordMessageViaHttp` in TypeScript and Scala.
+    prompt:
+      rust: &non-effect-make-outgoing-http-request-prompt >
+        In the test-app project, modify CounterAgent to add a new externally invokable method named
+        `record_message_via_http` in Rust and `recordMessageViaHttp` in TypeScript and Scala.
 
-      The method must take a single string parameter called `message`.
+        The method must take a single string parameter called `message`.
 
-      When called, it must make an outgoing HTTP POST request to exactly
-      `http://test-app.localhost:9006/requests/main/record`.
+        When called, it must make an outgoing HTTP POST request to exactly
+        `http://test-app.localhost:9006/requests/main/record`.
 
-      The request must use `Content-Type: application/json` and send the JSON body
-      `{"message": <message>}` where the JSON field name matches the RequestRecorder endpoint
-      parameter name exactly.
+        The request must use `Content-Type: application/json` and send the JSON body
+        `{"message": <message>}` where the JSON field name matches the RequestRecorder endpoint
+        parameter name exactly.
 
-      Do not directly invoke RequestRecorder as an agent. Use an actual outgoing HTTP request from
-      CounterAgent code. After the request succeeds, return the original `message` string.
+        Do not directly invoke RequestRecorder as an agent. Use an actual outgoing HTTP request from
+        CounterAgent code. After the request succeeds, return the original `message` string.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-make-outgoing-http-request-prompt
+      effect: >
+        In the Effect-based test-app project, modify the existing `Counter` agent to add an
+        externally invokable Effect method named `recordMessageViaHttp`. Rename its declared agent
+        name to `CounterAgent` and update the matching `golem.yaml` deployment entry so it can be
+        invoked as `CounterAgent("main")` below.
+
+        The method takes one `message` string. It must make an actual outgoing HTTP POST request to
+        exactly `http://test-app.localhost:9006/requests/main/record`, with
+        `Content-Type: application/json` and JSON body `{"message": <message>}`. Do not invoke
+        `RequestRecorder` through an agent client. After a successful response, the returned Effect
+        must succeed with the original `message` string.
+
+        Preserve the existing counter methods and make sure the project builds and deploys.
+      scala: *non-effect-make-outgoing-http-request-prompt
+      moonbit: *non-effect-make-outgoing-http-request-prompt
     expectedSkills:
       rust:
         - "golem-make-http-request-rust"
       ts:
         - "golem-make-http-request-ts"
+      effect:
+        - "golem-make-http-request-effect"
       scala:
         - "golem-make-http-request-scala"
       moonbit:
@@ -73,6 +111,7 @@ steps:
       method:
         rust: "record_message_via_http"
         ts: "recordMessageViaHttp"
+        effect: "recordMessageViaHttp"
         scala: "recordMessageViaHttp"
         moonbit: "record_message_via_http"
       args: '"hello from counter"'

@@ -10,30 +10,55 @@ steps:
       build: true
 
   - id: "add-todo-agent-with-http"
-    prompt: >
-      In the test-app project, add a new durable agent type called `TodoAgent` identified by
-      a single constructor parameter for the list name. Give it an HTTP mount under
-      `/todos/{list-name}` and make sure it is exposed through the app HTTP API on
-      `test-app.localhost:9006`.
+    prompt:
+      rust: &non-effect-add-todo-agent-with-http-prompt >
+        In the test-app project, add a new durable agent type called `TodoAgent` identified by
+        a single constructor parameter for the list name. Give it an HTTP mount under
+        `/todos/{list-name}` and make sure it is exposed through the app HTTP API on
+        `test-app.localhost:9006`.
 
-      TodoAgent must store a list of todo items in agent state. Each item has an `id` (string),
-      a `title` (string), and a `done` (boolean) field. Use a record, object type, or case class
-      named `TodoItem` for this.
+        TodoAgent must store a list of todo items in agent state. Each item has an `id` (string),
+        a `title` (string), and a `done` (boolean) field. Use a record, object type, or case class
+        named `TodoItem` for this.
 
-      Expose these HTTP endpoints:
-      - `POST /items` — accepts a `title` string in the JSON request body, creates a new
-        `TodoItem` with an auto-generated sequential id (starting from "1"), `done` set to
-        `false`, stores it, and returns the created item as JSON.
-      - `GET /items` — returns all stored items as a JSON array.
-      - `POST /items/{id}/complete` — finds the item with the given id, sets `done` to `true`,
-        and returns the updated item as JSON.
+        Expose these HTTP endpoints:
+        - `POST /items` — accepts a `title` string in the JSON request body, creates a new
+          `TodoItem` with an auto-generated sequential id (starting from "1"), `done` set to
+          `false`, stores it, and returns the created item as JSON.
+        - `GET /items` — returns all stored items as a JSON array.
+        - `POST /items/{id}/complete` — finds the item with the given id, sets `done` to `true`,
+          and returns the updated item as JSON.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-add-todo-agent-with-http-prompt
+      effect: >
+        In the Effect-based test-app project, add a new durable agent type called `TodoAgent`
+        with a single `constructorParams` string named `listName`. Declare its HTTP mount as
+        `/todos/{listName}` with the `Http` API from `@golemcloud/effect-golem`, and expose it
+        through the app HTTP API on `test-app.localhost:9006`.
+
+        Store a durable list of todo items using Effect state and snapshot APIs. Define a
+        `TodoItem` Effect Schema with `id` (string), `title` (string), and `done` (boolean).
+
+        Expose these HTTP endpoints through method-level `Http` declarations:
+        - `POST /items` — accepts a `title` string from the camelCase JSON request body, creates a
+          `TodoItem` with a sequential id starting from "1" and `done: false`, stores it, and
+          returns it.
+        - `GET /items` — returns all stored items as a JSON array.
+        - `POST /items/{id}/complete` — binds `id` from the path, marks that item done, and returns
+          the updated item.
+
+        Implement every handler as an Effect, import the implementation module from `src/main.ts`,
+        preserve existing manifest entries, and make sure the project builds and deploys.
+      scala: *non-effect-add-todo-agent-with-http-prompt
+      moonbit: *non-effect-add-todo-agent-with-http-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
       ts:
         - "golem-add-http-endpoint-ts"
+      effect:
+        - "golem-add-http-endpoint-effect"
       scala:
         - "golem-add-http-endpoint-scala"
       moonbit:

@@ -10,50 +10,82 @@ steps:
       build: true
 
   - id: "add-catalog-agent"
-    prompt: >
-      In the test-app project, add a new durable agent type called `CatalogAgent` identified by
-      a single constructor parameter for the catalog name. Give it an HTTP mount under
-      `/catalogs/{catalog-name}` and make sure it is exposed through the app HTTP API on
-      `test-app.localhost:9006`.
+    prompt:
+      rust: &non-effect-add-catalog-agent-prompt >
+        In the test-app project, add a new durable agent type called `CatalogAgent` identified by
+        a single constructor parameter for the catalog name. Give it an HTTP mount under
+        `/catalogs/{catalog-name}` and make sure it is exposed through the app HTTP API on
+        `test-app.localhost:9006`.
 
-      CatalogAgent must store a list of products in agent state. Each product has the following
-      fields: `id` (string), `name` (string), `price` (f64 / number / Double), and `inStock`
-      (boolean). Use a record, object type, or case class named `Product` for this.
+        CatalogAgent must store a list of products in agent state. Each product has the following
+        fields: `id` (string), `name` (string), `price` (f64 / number / Double), and `inStock`
+        (boolean). Use a record, object type, or case class named `Product` for this.
 
-      Expose these HTTP endpoints:
+        Expose these HTTP endpoints:
 
-      1. `POST /products` — accepts `name` (string), `price` (number), and `inStock` (boolean)
-         as JSON body fields. Creates a new Product with an auto-generated sequential id
-         (starting from "1"), stores it, and returns the created product as JSON.
+        1. `POST /products` — accepts `name` (string), `price` (number), and `inStock` (boolean)
+           as JSON body fields. Creates a new Product with an auto-generated sequential id
+           (starting from "1"), stores it, and returns the created product as JSON.
 
-      2. `GET /products/{product-id}` — returns the product with the given id as JSON, or 404
-         if not found. Use `Option` / `undefined` / `Option` return type.
+        2. `GET /products/{product-id}` — returns the product with the given id as JSON, or 404
+           if not found. Use `Option` / `undefined` / `Option` return type.
 
-      3. `GET /products/search?q={query}&min-price={minPrice}&in-stock-only={inStockOnly}` —
-         searches products. `query` filters by name (substring match, case-insensitive).
-         `minPrice` is an optional f64/number/Double that filters products with price >= that
-         value. `inStockOnly` is an optional boolean that when true only returns in-stock
-         products. Return the matching products as a JSON array.
+        3. `GET /products/search?q={query}&min-price={minPrice}&in-stock-only={inStockOnly}` —
+           searches products. `query` filters by name (substring match, case-insensitive).
+           `minPrice` is an optional f64/number/Double that filters products with price >= that
+           value. `inStockOnly` is an optional boolean that when true only returns in-stock
+           products. Return the matching products as a JSON array.
 
-      4. `PUT /products/{product-id}` — accepts `name` (string), `price` (number), and
-         `inStock` (boolean) as JSON body fields. Updates the product with the given id and
-         returns the updated product, or 404 if not found. The id comes from the path, the
-         other fields from the body.
+        4. `PUT /products/{product-id}` — accepts `name` (string), `price` (number), and
+           `inStock` (boolean) as JSON body fields. Updates the product with the given id and
+           returns the updated product, or 404 if not found. The id comes from the path, the
+           other fields from the body.
 
-      5. `DELETE /products/{product-id}` — deletes the product with the given id. Returns 204
-         (no content / unit) on success.
+        5. `DELETE /products/{product-id}` — deletes the product with the given id. Returns 204
+           (no content / unit) on success.
 
-      6. `POST /products/batch` — accepts a JSON body with a single field `products` which is
-         an array/list/vector of objects, each having `name` (string), `price` (number), and
-         `inStock` (boolean). Creates all of them with sequential ids continuing from the
-         current count, stores them, and returns the created products as a JSON array.
+        6. `POST /products/batch` — accepts a JSON body with a single field `products` which is
+           an array/list/vector of objects, each having `name` (string), `price` (number), and
+           `inStock` (boolean). Creates all of them with sequential ids continuing from the
+           current count, stores them, and returns the created products as a JSON array.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-add-catalog-agent-prompt
+      effect: >
+        In the Effect-based test-app project, add a durable `CatalogAgent` with one
+        `constructorParams` string named `catalogName`. Mount it with
+        `Http.mount("/catalogs/{catalogName}")` from `@golemcloud/effect-golem` and expose it on
+        `test-app.localhost:9006`. Store products durably with Effect state and snapshot APIs.
+
+        Define a `Product` Effect Schema with `id` and `name` strings, `price` as `Schema.Number`,
+        and `inStock` as `Schema.Boolean`. Expose Effect methods and `Http` routes for:
+
+        1. `POST /products`, with unbound camelCase JSON fields `name`, `price`, and `inStock`,
+           creating and returning a product with a sequential id starting from "1".
+        2. `GET /products/{productId}`, binding `productId` from the path and returning
+           `Schema.NullOr(Product)`; return `null` when missing so the HTTP response is 404.
+        3. `GET /products/search?q={query}&min-price={minPrice}&in-stock-only={inStockOnly}`,
+           binding all parameters from the query. Declare `minPrice` and `inStockOnly` with
+           `Schema.NullOr(...)` so omitted values decode to `null`. Apply the requested
+           case-insensitive name, minimum-price, and in-stock filters.
+        4. `PUT /products/{productId}`, binding only `productId` from the path and taking `name`,
+           `price`, and `inStock` from the JSON body. Return `Schema.NullOr(Product)` and `null`
+           when missing.
+        5. `DELETE /products/{productId}`, returning `Schema.Void` / `Effect.void` for HTTP 204.
+        6. `POST /products/batch`, taking one unbound `products` parameter containing an array of
+           input objects and returning the created `Product` array.
+
+        Implement every handler as an Effect, import the module from `src/main.ts`, preserve
+        existing manifest entries, and make sure the project builds and deploys successfully.
+      scala: *non-effect-add-catalog-agent-prompt
+      moonbit: *non-effect-add-catalog-agent-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
       ts:
         - "golem-add-http-endpoint-ts"
+      effect:
+        - "golem-add-http-endpoint-effect"
       scala:
         - "golem-add-http-endpoint-scala"
       moonbit:
@@ -73,6 +105,7 @@ steps:
       body:
         rust: '{"name":"Laptop","price":999.99,"in_stock":true}'
         ts: '{"name":"Laptop","price":999.99,"inStock":true}'
+        effect: '{"name":"Laptop","price":999.99,"inStock":true}'
         scala: '{"name":"Laptop","price":999.99,"inStock":true}'
         moonbit: '{"name":"Laptop","price":999.99,"in_stock":true}'
     expect:
@@ -86,6 +119,15 @@ steps:
           - path: "$.in_stock"
             equals: true
       ts:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Laptop"
+          - path: "$.price"
+            equals: 999.99
+          - path: "$.inStock"
+            equals: true
+      effect:
         status: 200
         body_json:
           - path: "$.name"
@@ -122,6 +164,7 @@ steps:
       body:
         rust: '{"name":"Mouse","price":25.50,"in_stock":true}'
         ts: '{"name":"Mouse","price":25.50,"inStock":true}'
+        effect: '{"name":"Mouse","price":25.50,"inStock":true}'
         scala: '{"name":"Mouse","price":25.50,"inStock":true}'
         moonbit: '{"name":"Mouse","price":25.50,"in_stock":true}'
     expect:
@@ -139,6 +182,7 @@ steps:
       body:
         rust: '{"name":"Keyboard","price":75.00,"in_stock":false}'
         ts: '{"name":"Keyboard","price":75.00,"inStock":false}'
+        effect: '{"name":"Keyboard","price":75.00,"inStock":false}'
         scala: '{"name":"Keyboard","price":75.00,"inStock":false}'
         moonbit: '{"name":"Keyboard","price":75.00,"in_stock":false}'
     expect:
@@ -150,6 +194,13 @@ steps:
           - path: "$.in_stock"
             equals: false
       ts:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Keyboard"
+          - path: "$.inStock"
+            equals: false
+      effect:
         status: 200
         body_json:
           - path: "$.name"
@@ -261,6 +312,7 @@ steps:
       body:
         rust: '{"name":"Gaming Mouse","price":49.99,"in_stock":true}'
         ts: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
+        effect: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         scala: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         moonbit: '{"name":"Gaming Mouse","price":49.99,"in_stock":true}'
     expect:
@@ -293,6 +345,7 @@ steps:
       body:
         rust: '{"name":"Ghost","price":0,"in_stock":false}'
         ts: '{"name":"Ghost","price":0,"inStock":false}'
+        effect: '{"name":"Ghost","price":0,"inStock":false}'
         scala: '{"name":"Ghost","price":0,"inStock":false}'
         moonbit: '{"name":"Ghost","price":0,"in_stock":false}'
     expect:
@@ -323,6 +376,7 @@ steps:
       body:
         rust: '{"products":[{"name":"Monitor","price":299.99,"in_stock":true},{"name":"Webcam","price":59.99,"in_stock":false}]}'
         ts: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
+        effect: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         scala: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         moonbit: '{"products":[{"name":"Monitor","price":299.99,"in_stock":true},{"name":"Webcam","price":59.99,"in_stock":false}]}'
     expect:
