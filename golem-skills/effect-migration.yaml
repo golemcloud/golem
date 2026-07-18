@@ -419,9 +419,21 @@ units:
     prerequisites:
       - golem-add-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-18T17:00:45.943Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-annotate-agent/attempt-1/annotate-agent/amp-effect-annotate-agent.json
+        thread: https://ampcode.com/threads/T-019f762c-6c7d-76a7-905a-eeac523afc88
+        finishedAt: 2026-07-18T17:14:53.564Z
+    evidence:
+      verifiedAt: 2026-07-18T17:14:53.564Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f762c-6c7d-76a7-905a-eeac523afc88
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-annotate-agent/attempt-1/annotate-agent/amp-effect-annotate-agent.json
   - id: golem-atomic-block
     targetSkill: golem-atomic-block-effect
     verifyScenarios:
