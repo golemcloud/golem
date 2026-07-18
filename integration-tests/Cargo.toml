@@ -50,7 +50,6 @@ goldenfile = { workspace = true }
 redis = { workspace = true }
 sqlx = { workspace = true }
 test-r = { workspace = true }
-wac-graph = { workspace = true }
 assert2 = { workspace = true }
 convert_case = { workspace = true }
 

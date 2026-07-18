@@ -3718,7 +3718,6 @@ dependencies = [
  "url",
  "uuid",
  "version-compare",
- "wac-graph",
  "walkdir",
  "wasm-metadata 0.248.0",
  "wasm-rquickjs",
@@ -5251,7 +5250,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "uuid",
- "wac-graph",
 ]
 
 [[package]]
@@ -11128,39 +11126,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wac-graph"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1294c33de03c933cceedb23457c9317ca87b3df11580250ec35a6fadc8c229da"
-dependencies = [
- "anyhow",
- "id-arena",
- "indexmap 2.14.0",
- "log",
- "petgraph 0.6.5",
- "semver",
- "thiserror 1.0.69",
- "wac-types",
- "wasm-encoder 0.247.0",
- "wasm-metadata 0.247.0",
- "wasmparser 0.247.0",
-]
-
-[[package]]
-name = "wac-types"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8d2a240ab5ee560f160b161886e53b7eded2d5a9949964c832edfa1636f283b"
-dependencies = [
- "anyhow",
- "id-arena",
- "indexmap 2.14.0",
- "semver",
- "wasm-encoder 0.247.0",
- "wasmparser 0.247.0",
-]
-
-[[package]]
 name = "wait-timeout"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11355,25 +11320,6 @@ dependencies = [
  "indexmap 2.14.0",
  "wasm-encoder 0.244.0",
  "wasmparser 0.244.0",
-]
-
-[[package]]
-name = "wasm-metadata"
-version = "0.247.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "665fe59e56cc9b419ca6fcca56673e3421d1a5011e3b65caf6b726fd9e041d10"
-dependencies = [
- "anyhow",
- "auditable-serde",
- "flate2",
- "indexmap 2.14.0",
- "serde",
- "serde_derive",
- "serde_json",
- "spdx",
- "url",
- "wasm-encoder 0.247.0",
- "wasmparser 0.247.0",
 ]
 
 [[package]]

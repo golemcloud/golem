@@ -110,7 +110,6 @@ unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }
-wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
 which = { workspace = true }
