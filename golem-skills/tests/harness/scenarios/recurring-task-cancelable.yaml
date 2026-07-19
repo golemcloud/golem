@@ -68,6 +68,41 @@ steps:
         (.scheduleCancelable() in TypeScript) which returns a CancellationToken.
 
         Make sure the project builds successfully.
+      effect: >
+        In the Effect-based test-app project, add a second durable agent type called
+        `Ticker`, defined with `defineAgent` and identified by one string constructor
+        parameter named `name`.
+
+        Keep mutable logical state in an Effect `Ref`:
+        - `tickCount` (number, initially 0): how many times `tick` has executed
+        - `running` (boolean, initially false): whether the recurring loop is active
+
+        It must expose these externally invokable camelCase methods as Effect handlers:
+
+        - `start` — sets `running` to true and immediately runs `tick`. Returns nothing.
+
+        - `tick` — if `running` is false, returns without doing anything. Otherwise,
+          increments `tickCount` by 1. If `tickCount` is less than 5, it obtains a typed
+          client for the same `Ticker` identity and schedules that client's `tick` method
+          to run again 5 seconds in the future. Returns nothing.
+
+        - `cancel` — sets `running` to false. If a pending scheduled invocation handle is
+          stored, run its `cancel()` Effect so the pending invocation is dropped immediately.
+          Returns nothing.
+
+        - `getTickCount` — returns `tickCount` as a number.
+
+        Use the real `@golemcloud/effect-golem` API: `TickerDefinition.client.get({ name })`
+        returns the self client, and `self.tick.schedule(scheduledAt, {})` returns a
+        `Client.ScheduledInvocation`. The Effect SDK's `.schedule(...)` is already cancelable;
+        do not invent `.scheduleCancelable()`. Store the live handle in a separate
+        `Ref<Client.ScheduledInvocation | null>` and cancel it with `yield* handle.cancel()`.
+        Do not put this non-serializable host handle in snapshot state. Construct
+        `scheduledAt` as `{ seconds: bigint, nanoseconds: number }` by yielding
+        `DateTime.now` and converting it with `DateTime.toEpochMillis(...)`.
+
+        Implement all methods with Effect, import the implementation module from `src/main.ts`,
+        and make sure the project builds successfully.
       scala: >
         In the test-app project, add a second durable agent type called `Ticker`
         identified by a single name constructor parameter.
@@ -133,6 +168,8 @@ steps:
         - "golem-recurring-task-rust"
       ts:
         - "golem-recurring-task-ts"
+      effect:
+        - "golem-recurring-task-effect"
       scala:
         - "golem-recurring-task-scala"
       moonbit:
@@ -147,6 +184,7 @@ steps:
       method:
         rust: "start"
         ts: "start"
+        effect: "start"
         scala: "start"
         moonbit: "start"
 
@@ -156,6 +194,7 @@ steps:
       method:
         rust: "get_tick_count"
         ts: "getTickCount"
+        effect: "getTickCount"
         scala: "getTickCount"
         moonbit: "get_tick_count"
     expect:
@@ -166,12 +205,18 @@ steps:
   - id: "wait-for-second-tick"
     sleep: 6
 
+  - id: "wait-for-effect-scheduler-poll"
+    sleep: 2
+    only_if:
+      language: "effect"
+
   - id: "verify-second-tick"
     invoke_json:
       agent: 'Ticker("t1")'
       method:
         rust: "get_tick_count"
         ts: "getTickCount"
+        effect: "getTickCount"
         scala: "getTickCount"
         moonbit: "get_tick_count"
     expect:
@@ -185,6 +230,7 @@ steps:
       method:
         rust: "cancel"
         ts: "cancel"
+        effect: "cancel"
         scala: "cancel"
         moonbit: "cancel"
 
@@ -197,6 +243,7 @@ steps:
       method:
         rust: "get_tick_count"
         ts: "getTickCount"
+        effect: "getTickCount"
         scala: "getTickCount"
         moonbit: "get_tick_count"
     expect:

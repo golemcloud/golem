@@ -1063,9 +1063,33 @@ units:
     prerequisites:
       - golem-add-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T14:45:13.534Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-recurring-task/attempt-1/recurring-task-cancelable/amp-effect-recurring-task-cancelable.json
+        thread: https://ampcode.com/threads/T-019f7ad6-b0e6-71f2-9991-622a910ca023
+        finishedAt: 2026-07-19T15:07:00.350Z
+        error: |-
+          recurring-task-cancelable:
+          ASSERTION_FAILED (result_json[$].equals): $ expected 2, got 1; result_json=1
+      - number: 2
+        startedAt: 2026-07-19T15:07:00.353Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-recurring-task/attempt-2/recurring-task-cancelable/amp-effect-recurring-task-cancelable.json
+          - golem-skills/tests/harness/results/effect-migration/golem-recurring-task/attempt-2/recurring-task-self-schedule/amp-effect-recurring-task-self-schedule.json
+        thread: https://ampcode.com/threads/T-019f7ad6-b0e6-71f2-9991-622a910ca023
+        finishedAt: 2026-07-19T15:22:32.773Z
+    evidence:
+      verifiedAt: 2026-07-19T15:22:32.773Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7ad6-b0e6-71f2-9991-622a910ca023
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-recurring-task/attempt-2/recurring-task-cancelable/amp-effect-recurring-task-cancelable.json
+        - golem-skills/tests/harness/results/effect-migration/golem-recurring-task/attempt-2/recurring-task-self-schedule/amp-effect-recurring-task-self-schedule.json
   - id: golem-retry-policies
     targetSkill: golem-retry-policies-effect
     verifyScenarios:
