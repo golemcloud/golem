@@ -1321,9 +1321,21 @@ units:
       - golem-invoke-agent
     strategy: direct
     notes: CLI-facing operation; Effect constructor and method values use TypeScript syntax.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T16:59:19.331Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-trigger-agent/attempt-1/trigger-agent/amp-effect-trigger-agent.json
+        thread: https://ampcode.com/threads/T-019f7b51-7756-7562-baa2-02c3b76fa5bc
+        finishedAt: 2026-07-19T17:12:07.911Z
+    evidence:
+      verifiedAt: 2026-07-19T17:12:07.911Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7b51-7756-7562-baa2-02c3b76fa5bc
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-trigger-agent/attempt-1/trigger-agent/amp-effect-trigger-agent.json
   - id: golem-wait-for-external-input
     targetSkill: golem-wait-for-external-input-effect
     verifyScenarios:
