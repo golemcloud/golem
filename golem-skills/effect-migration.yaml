@@ -744,9 +744,21 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Use Effect logging and spans while preserving OTLP plugin setup.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T09:06:15.418Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-enable-otlp/attempt-1/enable-otlp/amp-effect-enable-otlp.json
+        thread: https://ampcode.com/threads/T-019f79a0-5a8d-717b-b721-c38a4f68fd65
+        finishedAt: 2026-07-19T09:21:56.068Z
+    evidence:
+      verifiedAt: 2026-07-19T09:21:56.068Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f79a0-5a8d-717b-b721-c38a4f68fd65
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-enable-otlp/attempt-1/enable-otlp/amp-effect-enable-otlp.json
   - id: golem-file-io
     targetSkill: golem-file-io-effect
     verifyScenarios:
