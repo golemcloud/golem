@@ -647,9 +647,21 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Map durability modes to the Effect SDK Durability API.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T07:42:55.465Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-configure-durability/attempt-1/change-durability-mode/amp-effect-change-durability-mode.json
+        thread: https://ampcode.com/threads/T-019f7954-1188-725a-9b22-03c6c3b24336
+        finishedAt: 2026-07-19T08:05:59.818Z
+    evidence:
+      verifiedAt: 2026-07-19T08:05:59.818Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7954-1188-725a-9b22-03c6c3b24336
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-configure-durability/attempt-1/change-durability-mode/amp-effect-change-durability-mode.json
   - id: golem-create-agent-instance
     targetSkill: golem-create-agent-instance-effect
     verifyScenarios:
