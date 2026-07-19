@@ -1016,9 +1016,21 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Preserve durable concurrency semantics using Effect combinators supported by the SDK.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T14:04:17.183Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-parallel-workers/attempt-1/parallel-workers/amp-effect-parallel-workers.json
+        thread: https://ampcode.com/threads/T-019f7ab1-38c3-75de-a49c-9fd5073f52c7
+        finishedAt: 2026-07-19T14:27:35.586Z
+    evidence:
+      verifiedAt: 2026-07-19T14:27:35.586Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7ab1-38c3-75de-a49c-9fd5073f52c7
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-parallel-workers/attempt-1/parallel-workers/amp-effect-parallel-workers.json
   - id: golem-quota
     targetSkill: golem-quota-effect
     verifyScenarios:
