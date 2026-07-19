@@ -671,9 +671,42 @@ units:
       - golem-add-agent
     strategy: direct
     notes: CLI-facing operation; Effect constructor values use TypeScript syntax.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T08:06:01.087Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-create-agent-instance/attempt-1/create-agent-instance/amp-effect-create-agent-instance.json
+        thread: https://ampcode.com/threads/T-019f7969-351d-7415-94b7-cffcf249d665
+        finishedAt: 2026-07-19T08:20:31.078Z
+        error: |-
+          create-agent-instance:
+          ASSERTION_FAILED (exit_code): expected exit code 0, got 1
+          ASSERTION_FAILED (stdout_contains): stdout does not contain "create"
+      - number: 2
+        startedAt: 2026-07-19T08:20:31.084Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-create-agent-instance/attempt-2/create-agent-instance/amp-effect-create-agent-instance.json
+        thread: https://ampcode.com/threads/T-019f7969-351d-7415-94b7-cffcf249d665
+        finishedAt: 2026-07-19T08:30:26.103Z
+        error: |-
+          create-agent-instance:
+          ASSERTION_FAILED (stdout_contains): stdout does not contain "create"
+      - number: 3
+        startedAt: 2026-07-19T08:30:26.107Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-create-agent-instance/attempt-3/create-agent-instance/amp-effect-create-agent-instance.json
+        thread: https://ampcode.com/threads/T-019f7969-351d-7415-94b7-cffcf249d665
+        finishedAt: 2026-07-19T08:40:58.502Z
+    evidence:
+      verifiedAt: 2026-07-19T08:40:58.502Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7969-351d-7415-94b7-cffcf249d665
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-create-agent-instance/attempt-3/create-agent-instance/amp-effect-create-agent-instance.json
   - id: golem-custom-snapshot
     targetSkill: golem-custom-snapshot-effect
     verifyScenarios:
