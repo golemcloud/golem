@@ -213,7 +213,7 @@ pub(super) enum HttpTrailersResolution {
 /// exactly one child chunk is produced per real demand, identically live and on
 /// replay.
 pub(super) struct DurableHttpBodyProducer {
-    demand_tx: mpsc::UnboundedSender<HttpBodyDemand>,
+    demand_tx: mpsc::Sender<HttpBodyDemand>,
     pending: Option<PendingHttpBodyRead>,
     pending_cancel: Option<oneshot::Receiver<()>>,
     finished: bool,
@@ -227,7 +227,7 @@ pub(super) struct PendingHttpBodyRead {
 }
 
 impl DurableHttpBodyProducer {
-    fn new(demand_tx: mpsc::UnboundedSender<HttpBodyDemand>) -> Self {
+    fn new(demand_tx: mpsc::Sender<HttpBodyDemand>) -> Self {
         Self {
             demand_tx,
             pending: None,
@@ -370,9 +370,20 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 // immediately can leave an incomplete consume-body scope in the
                 // oplog and fail on replay.
                 let (tx, rx) = oneshot::channel();
-                if self.demand_tx.send(HttpBodyDemand::Cancel(tx)).is_err() {
-                    self.finished = true;
-                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                match self.demand_tx.try_send(HttpBodyDemand::Cancel(tx)) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        self.finished = true;
+                        return Poll::Ready(Ok(StreamResult::Cancelled));
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        // The producer keeps at most one demand in flight, so the
+                        // capacity-1 channel can never be full here.
+                        self.finished = true;
+                        return Poll::Ready(Err(wasmtime::Error::msg(
+                            "consume-body demand channel unexpectedly full",
+                        )));
+                    }
                 }
                 self.pending_cancel = Some(rx);
                 continue;
@@ -381,19 +392,26 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
             let (reply_tx, reply_rx) = oneshot::channel();
             let (cancel_tx, cancel_rx) = oneshot::channel();
             let (cancel_ack_tx, cancel_ack_rx) = oneshot::channel();
-            if self
-                .demand_tx
-                .send(HttpBodyDemand::Read {
-                    reply: reply_tx,
-                    cancel: cancel_rx,
-                    cancel_ack: cancel_ack_tx,
-                })
-                .is_err()
-            {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::msg(
-                    "consume-body durable task is gone",
-                )));
+            match self.demand_tx.try_send(HttpBodyDemand::Read {
+                reply: reply_tx,
+                cancel: cancel_rx,
+                cancel_ack: cancel_ack_tx,
+            }) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    self.finished = true;
+                    return Poll::Ready(Err(wasmtime::Error::msg(
+                        "consume-body durable task is gone",
+                    )));
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // The producer keeps at most one demand in flight, so the
+                    // capacity-1 channel can never be full here.
+                    self.finished = true;
+                    return Poll::Ready(Err(wasmtime::Error::msg(
+                        "consume-body demand channel unexpectedly full",
+                    )));
+                }
             }
             self.pending = Some(PendingHttpBodyRead {
                 reply: reply_rx,
@@ -647,7 +665,7 @@ pub(super) async fn skip_body_prefix(
 /// in the same order — no whole-body buffering, bounded memory.
 pub(super) struct HttpConsumeBodyTask<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
-    demand_rx: mpsc::UnboundedReceiver<HttpBodyDemand>,
+    demand_rx: mpsc::Receiver<HttpBodyDemand>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
     /// Open-response state of the send that produced this response (its
     /// `outgoing-http-request` span, retry properties, and — for a replayed
@@ -663,7 +681,7 @@ pub(super) struct HttpConsumeBodyTask<Ctx> {
 impl<Ctx> HttpConsumeBodyTask<Ctx> {
     fn new(
         body: UnsyncBoxBody<Bytes, ErrorCode>,
-        demand_rx: mpsc::UnboundedReceiver<HttpBodyDemand>,
+        demand_rx: mpsc::Receiver<HttpBodyDemand>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
         response_state: Option<OpenP3HttpResponseState>,
         activity: TailActivity,
@@ -1440,7 +1458,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // trailers future.
         upstream_trailers.close(store.as_context_mut())?;
 
-        let (demand_tx, demand_rx) = mpsc::unbounded_channel();
+        // Capacity 1 suffices (and bounds memory as defense in depth): the
+        // producer keeps at most one demand in flight at a time.
+        let (demand_tx, demand_rx) = mpsc::channel(1);
         let (trailers_tx, trailers_rx) = oneshot::channel();
 
         // Build both guest-facing handles before spawning the durable task. The

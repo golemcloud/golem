@@ -54,7 +54,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tracing::{Instrument, Level, Span, debug, span, warn};
+use tracing::{Instrument, Level, Span, debug, error, span, warn};
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -441,6 +441,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
+        self.check_no_active_tail_work_on_idle().await;
         self.waiting_for_command.store(true, Ordering::Release);
         self.release_concurrent_agent_permit();
         while let Some(cmd) = self.next_wakeup_or_initial().await {
@@ -499,6 +500,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
 
             // Returning to idle: release the concurrent-agent permit.
+            self.check_no_active_tail_work_on_idle().await;
             self.waiting_for_command.store(true, Ordering::Release);
             self.release_concurrent_agent_permit();
         }
@@ -514,6 +516,34 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         match self.deferred_wakeups.pop_front() {
             Some(command) => Some(command),
             None => self.next_wakeup().await,
+        }
+    }
+
+    /// Checks — before publishing `waiting_for_command = true`, which makes the
+    /// worker eligible for idle eviction — that no Golem-spawned store task is
+    /// still active. Every guest call drains its tail work before returning
+    /// (either the tasks finished or they are parked at a safe park point
+    /// awaiting future guest action), so an active task here means the activity
+    /// accounting regressed and eviction could race live durable work. Flags
+    /// the violation instead of silently entering idle.
+    async fn check_no_active_tail_work_on_idle(&self) {
+        let active = self
+            .store
+            .lock()
+            .await
+            .data()
+            .durable_ctx()
+            .tail_work_tracker()
+            .active_count();
+        if active != 0 {
+            error!(
+                "Worker entering idle with {active} active store-spawned task(s); \
+                 tail work must settle before an invocation completes"
+            );
+            debug_assert!(
+                active == 0,
+                "worker entered idle with {active} active store-spawned task(s)"
+            );
         }
     }
 

@@ -30,7 +30,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,14 +100,17 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
-    /// Hashes of log entries persisted since the last read non-hint oplog entry.
+    /// Hashes of log entries persisted since the last read non-hint oplog entry, with their
+    /// number of occurrences. A counted multiset (not a set) because large or repetitive
+    /// stdout/stderr output regularly produces identical consecutive log entries, each of which
+    /// must be deduplicated exactly once on re-run.
     ///
     /// Deliberately *not* part of [`CursorState`]: `seen_log`/`remove_seen_log` are called from
     /// the stdio host-call path, which runs on store-keeping wasm fibers, and must never queue on
     /// the cursor lock — a transaction holds that lock across oplog IO from store-polled futures,
     /// which can deadlock the store (wasmtime#11869/#11870). This std mutex is only ever held for
     /// synchronous set operations, never across an `await`.
-    log_hashes: std::sync::Mutex<HashSet<(u64, u64)>>,
+    log_hashes: std::sync::Mutex<HashMap<(u64, u64), usize>>,
     /// Fired (via `notify_waiters`) after a transaction that advanced the cursor, registered a
     /// resolver awaiter, or switched to live commits and releases [`Self::state`]. A durable call
     /// suspended in [`ReplayState::await_resolution_outcome`] — because its `End`/`Cancelled` is not
@@ -160,8 +163,8 @@ struct CursorState {
 }
 
 impl ReplayCursor {
-    /// Replaces the seen-log set and updates the `has_seen_logs` fast-path flag.
-    fn set_log_hashes(&self, logs: HashSet<(u64, u64)>) {
+    /// Replaces the seen-log multiset and updates the `has_seen_logs` fast-path flag.
+    fn set_log_hashes(&self, logs: HashMap<(u64, u64), usize>) {
         let has_logs = !logs.is_empty();
         *self.log_hashes.lock().unwrap() = logs;
         self.position
@@ -483,7 +486,7 @@ impl CursorTx<'_> {
     /// it.
     async fn skip_forward(&mut self) -> Result<(), WorkerExecutorError> {
         // Skipping hint entries and recording log entries
-        let mut logs = HashSet::new();
+        let mut logs: HashMap<(u64, u64), usize> = HashMap::new();
         while self.cursor.is_replay() {
             // Speculative peek: does not advance the published cursor. The cursor is advanced (via
             // `move_replay_idx`) only when a hint / persist-nothing-zone entry is actually skipped
@@ -506,7 +509,7 @@ impl CursorTx<'_> {
                     } = &entry
                     {
                         let hash = ReplayCursor::hash_log_entry(*level, context, message);
-                        logs.insert(hash);
+                        *logs.entry(hash).or_insert(0) += 1;
                     }
 
                     // Publish the advance past this hint (also performs the skipped-region jump for
@@ -1131,7 +1134,7 @@ impl CursorTx<'_> {
             .skipped_regions
             .find_next_deleted_region(OplogIndex::NONE);
         self.st.next_skipped_region = next;
-        self.cursor.set_log_hashes(HashSet::new());
+        self.cursor.set_log_hashes(HashMap::new());
         self.st.pending_replay_events.clear();
         self.st.claimed_starts.clear();
         self.cursor
@@ -1172,7 +1175,7 @@ impl ReplayState {
                 concurrent_resolver: ConcurrentReplayResolver::default(),
                 claimed_starts: HashSet::new(),
             }),
-            log_hashes: std::sync::Mutex::new(HashSet::new()),
+            log_hashes: std::sync::Mutex::new(HashMap::new()),
             progress: Notify::new(),
         };
         {
@@ -1309,21 +1312,29 @@ impl ReplayState {
         result
     }
 
-    /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
+    /// Returns true if the given log entry has unmatched persisted occurrences since the last
+    /// non-hint oplog entry.
     pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
         if self.cursor.position.has_seen_logs.load(Ordering::Relaxed) {
             let hash = ReplayCursor::hash_log_entry(level, context, message);
-            self.cursor.log_hashes.lock().unwrap().contains(&hash)
+            self.cursor.log_hashes.lock().unwrap().contains_key(&hash)
         } else {
             false
         }
     }
 
-    /// Removes a seen log from the set. If the set becomes empty, `seen_log` becomes a cheap operation
+    /// Removes one occurrence of a seen log from the multiset (identical log entries may be
+    /// persisted multiple times and each must be matched by exactly one re-emitted entry). If the
+    /// multiset becomes empty, `seen_log` becomes a cheap operation
     pub async fn remove_seen_log(&self, level: LogLevel, context: &str, message: &str) {
         let hash = ReplayCursor::hash_log_entry(level, context, message);
         let log_hashes = &mut *self.cursor.log_hashes.lock().unwrap();
-        log_hashes.remove(&hash);
+        if let Some(count) = log_hashes.get_mut(&hash) {
+            *count -= 1;
+            if *count == 0 {
+                log_hashes.remove(&hash);
+            }
+        }
         self.cursor
             .position
             .has_seen_logs
@@ -2002,6 +2013,52 @@ mod tests {
         ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
             .await
             .expect("failed to build replay state")
+    }
+
+    fn stdout_log(message: &str) -> OplogEntry {
+        OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            level: LogLevel::Stdout,
+            context: "stdout".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    /// Identical log entries persisted multiple times since the last non-hint entry must each be
+    /// deduplicated exactly once on re-run: the seen-log collection is a counted multiset, not a
+    /// set. Large or repetitive stdout output regularly produces identical consecutive chunks, so
+    /// losing multiplicity would re-persist all but the first occurrence on every recovery.
+    #[test]
+    async fn seen_log_tracks_multiplicity_of_identical_entries() {
+        // All entries are hints: constructing the replay state skips them all and records the
+        // log hashes.
+        let rs = replay_state_over(vec![
+            noop(),
+            stdout_log("X"),
+            stdout_log("X"),
+            stdout_log("X"),
+            stdout_log("Y"),
+        ])
+        .await;
+
+        for remaining in (1..=3).rev() {
+            assert!(
+                rs.seen_log(LogLevel::Stdout, "stdout", "X").await,
+                "X must still be seen with {remaining} unmatched occurrence(s) left"
+            );
+            rs.remove_seen_log(LogLevel::Stdout, "stdout", "X").await;
+        }
+        assert!(
+            !rs.seen_log(LogLevel::Stdout, "stdout", "X").await,
+            "all three occurrences of X are matched"
+        );
+
+        // Removing more occurrences than were recorded must not underflow or affect others.
+        rs.remove_seen_log(LogLevel::Stdout, "stdout", "X").await;
+        assert!(!rs.seen_log(LogLevel::Stdout, "stdout", "X").await);
+        assert!(rs.seen_log(LogLevel::Stdout, "stdout", "Y").await);
+        rs.remove_seen_log(LogLevel::Stdout, "stdout", "Y").await;
+        assert!(!rs.seen_log(LogLevel::Stdout, "stdout", "Y").await);
     }
 
     #[test]

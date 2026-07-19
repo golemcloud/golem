@@ -258,13 +258,13 @@ async fn wait_tcp_receive_result(
 /// exactly one child chunk is produced per real demand, identically live and on
 /// replay.
 struct DurableTcpReceiveProducer {
-    demand_tx: mpsc::UnboundedSender<TcpReceiveDemand>,
+    demand_tx: mpsc::Sender<TcpReceiveDemand>,
     pending: Option<oneshot::Receiver<TcpReceiveReply>>,
     finished: bool,
 }
 
 impl DurableTcpReceiveProducer {
-    fn new(demand_tx: mpsc::UnboundedSender<TcpReceiveDemand>) -> Self {
+    fn new(demand_tx: mpsc::Sender<TcpReceiveDemand>) -> Self {
         Self {
             demand_tx,
             pending: None,
@@ -355,11 +355,22 @@ impl<D> StreamProducer<D> for DurableTcpReceiveProducer {
             }
 
             let (tx, rx) = oneshot::channel();
-            if self.demand_tx.send(tx).is_err() {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::msg(
-                    "tcp receive durable task is gone",
-                )));
+            match self.demand_tx.try_send(tx) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    self.finished = true;
+                    return Poll::Ready(Err(wasmtime::Error::msg(
+                        "tcp receive durable task is gone",
+                    )));
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // The producer keeps at most one demand in flight, so the
+                    // capacity-1 channel can never be full here.
+                    self.finished = true;
+                    return Poll::Ready(Err(wasmtime::Error::msg(
+                        "tcp receive demand channel unexpectedly full",
+                    )));
+                }
             }
             self.pending = Some(rx);
             // Loop to register the receiver's waker (the reply is not ready yet).
@@ -398,12 +409,12 @@ enum ProducedTcpChunk {
 /// permit) so empty chunks are never persisted or delivered.
 struct TcpReceiveForwardConsumer {
     chunk_tx: PollSender<Vec<u8>>,
-    permit_rx: mpsc::UnboundedReceiver<()>,
+    permit_rx: mpsc::Receiver<()>,
     has_permit: bool,
 }
 
 impl TcpReceiveForwardConsumer {
-    fn new(chunk_tx: PollSender<Vec<u8>>, permit_rx: mpsc::UnboundedReceiver<()>) -> Self {
+    fn new(chunk_tx: PollSender<Vec<u8>>, permit_rx: mpsc::Receiver<()>) -> Self {
         Self {
             chunk_tx,
             permit_rx,
@@ -892,7 +903,7 @@ where
 
 struct TcpSocketReceiveTask<Ctx> {
     socket: Resource<TcpSocket>,
-    demand_rx: mpsc::UnboundedReceiver<TcpReceiveDemand>,
+    demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
@@ -901,7 +912,7 @@ struct TcpSocketReceiveTask<Ctx> {
 impl<Ctx> TcpSocketReceiveTask<Ctx> {
     fn new(
         socket: Resource<TcpSocket>,
-        demand_rx: mpsc::UnboundedReceiver<TcpReceiveDemand>,
+        demand_rx: mpsc::Receiver<TcpReceiveDemand>,
         result_tx: oneshot::Sender<TcpReceiveResolution>,
         activity: TailActivity,
     ) -> Self {
@@ -978,7 +989,7 @@ fn fail_tcp_receive_task(
 async fn run_tcp_socket_receive<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket: Resource<TcpSocket>,
-    mut demand_rx: mpsc::UnboundedReceiver<TcpReceiveDemand>,
+    mut demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
     activity: TailActivity,
 ) -> wasmtime::Result<()>
@@ -1005,14 +1016,14 @@ where
     // channel; the consumer forwards a chunk only after the task grants a permit,
     // so nothing is read into the Golem channel before a durable demand.
     let mut bytes_rx: Option<mpsc::Receiver<Vec<u8>>> = None;
-    let mut permit_tx: Option<mpsc::UnboundedSender<()>> = None;
+    let mut permit_tx: Option<mpsc::Sender<()>> = None;
     let mut socket_result_rx: Option<oneshot::Receiver<Result<(), types::ErrorCode>>> = None;
     if parent.is_live() {
         let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
         match <WasiSockets as types::HostTcpSocketWithStore<U>>::receive(&sockets, socket).await {
             Ok((stream, result_future)) => {
                 let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<u8>>(1);
-                let (demand_permit_tx, demand_permit_rx) = mpsc::unbounded_channel::<()>();
+                let (demand_permit_tx, demand_permit_rx) = mpsc::channel::<()>(1);
                 let (inner_result_tx, inner_result_rx) = oneshot::channel();
                 if let Err(error) = accessor.with(|mut store| -> wasmtime::Result<()> {
                     stream.pipe(
@@ -1151,7 +1162,20 @@ where
                 // failure means the consumer is already gone (upstream EOF/teardown),
                 // which surfaces below as a closed `bytes_rx`.
                 if let Some(permit_tx) = permit_tx.as_ref() {
-                    let _ = permit_tx.send(());
+                    // `Closed` is harmless (upstream EOF/teardown, surfaces below
+                    // as a closed `bytes_rx`). `Full` cannot happen — at most one
+                    // permit is outstanding per served demand — but if it ever
+                    // did, the already-queued permit serves this demand, so the
+                    // extra one is dropped after flagging the bug. Deliberately no
+                    // `debug_assert!` here: panicking would unwind through the
+                    // still-open `NotCancellable` child call handle below, which
+                    // itself panics on drop.
+                    if let Err(mpsc::error::TrySendError::Full(())) = permit_tx.try_send(()) {
+                        tracing::error!(
+                            "tcp receive permit channel unexpectedly full; \
+                             continuing with the already-queued permit"
+                        );
+                    }
                 }
                 // This live socket wait can park indefinitely (no bytes may ever
                 // arrive), so it must race the worker's interrupt signal: worker
@@ -1596,7 +1620,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             });
         }
 
-        let (demand_tx, demand_rx) = mpsc::unbounded_channel();
+        // Capacity 1 suffices (and bounds memory as defense in depth): the
+        // producer keeps at most one demand in flight at a time.
+        let (demand_tx, demand_rx) = mpsc::channel(1);
         let (result_tx, result_rx) = oneshot::channel();
 
         // Build both guest-facing handles before spawning the durable task. The
@@ -2120,7 +2146,7 @@ mod tests {
         let mut store = Store::new(&engine, ());
 
         let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<u8>>(1);
-        let (permit_tx, permit_rx) = mpsc::unbounded_channel::<()>();
+        let (permit_tx, permit_rx) = mpsc::channel::<()>(1);
 
         let chunks = store
             .run_concurrent(async move |accessor| -> wasmtime::Result<Vec<Vec<u8>>> {
@@ -2136,7 +2162,7 @@ mod tests {
                 let mut chunks = Vec::new();
                 loop {
                     // Grant one permit per demand, exactly like the durable task.
-                    let _ = permit_tx.send(());
+                    let _ = permit_tx.try_send(());
                     match chunk_rx.recv().await {
                         Some(chunk) => chunks.push(chunk),
                         None => break,
@@ -2160,7 +2186,7 @@ mod tests {
         let mut store = Store::new(&engine, ());
 
         let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<u8>>(1);
-        let (permit_tx, permit_rx) = mpsc::unbounded_channel::<()>();
+        let (permit_tx, permit_rx) = mpsc::channel::<()>(1);
 
         store
             .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
