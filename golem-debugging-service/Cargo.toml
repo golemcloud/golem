@@ -55,6 +55,7 @@ wasmtime-wasi-http = { workspace = true }
 
 
 [dev-dependencies]
+axum = { workspace = true }
 chrono = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }

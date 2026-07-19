@@ -423,6 +423,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Reads the entry at the given oplog index
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
 
+    /// Notifies the oplog implementation that the worker's replay cursor committed a new
+    /// position: `last_replayed_index` is the index of the last replayed entry. This fires only
+    /// when replay progress is actually published (consuming an entry, skipping hint entries or
+    /// deleted regions, or switching to live mode) — speculative or random-access oplog reads
+    /// never trigger it. The default implementation ignores it; wrapper oplogs that track replay
+    /// progress (such as the debugging service's oplog) override it.
+    async fn on_replay_progress(&self, _last_replayed_index: OplogIndex) {}
+
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
 

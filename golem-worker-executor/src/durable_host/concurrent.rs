@@ -2724,7 +2724,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 }
             }
             ResolutionOutcome::Incomplete => {
-                if self.retry.can_reexecute_on_incomplete_replay() {
+                if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
+                    // Debug sessions must never re-execute side effects; refuse instead of
+                    // switching to live repair.
+                    self.finished = true;
+                    Err(WorkerExecutorError::invalid_request(format!(
+                        "the replay target lies inside an in-flight durable call (Start at {start_idx} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions"
+                    )))
+                } else if self.retry.can_reexecute_on_incomplete_replay() {
                     // Switch the handle to live completion of the existing, committed `Start`: the
                     // caller re-runs the side effect and `complete`s, appending the missing `End`.
                     // A failure during re-execution stays grouped at this call's own retry point via
@@ -2837,7 +2844,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 }
             }
             ResolutionOutcome::Incomplete => {
-                if self.retry.can_reexecute_on_incomplete_replay() {
+                if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
+                    // Debug sessions must never re-execute side effects; refuse instead of
+                    // switching to live repair.
+                    self.finished = true;
+                    Err(WorkerExecutorError::invalid_request(format!(
+                        "the replay target lies inside an in-flight durable call (Start at {start_idx} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions"
+                    )))
+                } else if self.retry.can_reexecute_on_incomplete_replay() {
                     self.is_live = true;
                     self.persisted = true;
                     self.live_call_permit = Some(LiveCallPermit::new(store.with(|mut access| {

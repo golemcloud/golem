@@ -75,7 +75,6 @@ use golem_worker_executor::workerctx::{
     StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
-use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -473,21 +472,12 @@ impl HostCancellationToken for DebugContext {
     }
 }
 
-impl wasmtime_wasi::p2::bindings::cli::environment::Host for DebugContext {
-    fn get_environment(
-        &mut self,
-    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
-    }
-
-    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
-    }
-
-    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
-    }
-}
+// NOTE: `cli::environment` needs no debug-specific override on either WASI ABI. Both the P2 host
+// (`DurableWorkerCtx`'s `cli::environment::Host` impl, wired directly into the shared linker) and
+// the P3 host (`DurableP3View`'s `environment::Host` impl) resolve the guest-visible environment
+// through `DurableWorkerCtx::build_enriched_environment`, which is a pure function of the
+// persisted worker metadata — so a debug replay sees exactly the environment the original worker
+// saw.
 
 #[async_trait]
 impl InvocationContextManagement for DebugContext {
@@ -546,6 +536,12 @@ impl WorkerCtx for DebugContext {
     type PublicState = PublicDurableWorkerState<Self>;
 
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::Always;
+
+    // A debugging session must never perform real side effects: an incomplete durable call
+    // (committed `Start` with no terminal before the replay target) is surfaced as an explicit
+    // error instead of being repaired by live re-execution. The debug oplog also discards all
+    // writes, so a repaired call's `End` could never be persisted anyway.
+    const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = false;
 
     async fn create(
         _account_id: AccountId,

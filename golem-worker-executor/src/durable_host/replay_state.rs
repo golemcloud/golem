@@ -682,6 +682,14 @@ impl CursorTx<'_> {
         if was_replay && self.cursor.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
+        // Publish the committed cursor position to replay-progress observers (see
+        // `Oplog::on_replay_progress`). This chokepoint is only reached by committed advances —
+        // speculative reads return before calling it — so observers never see a position that is
+        // later rolled back.
+        self.cursor
+            .oplog
+            .on_replay_progress(self.cursor.last_replayed_index())
+            .await;
     }
 
     async fn get_out_of_skipped_region(&mut self) {
@@ -1192,6 +1200,12 @@ impl ReplayState {
         let mut tx = cursor.tx().await;
         tx.switch_to_live();
         cursor.finish_tx(tx);
+        // `CursorTx::switch_to_live` publishes the cursor position directly (not via
+        // `move_replay_idx`), so replay-progress observers are notified here.
+        cursor
+            .oplog
+            .on_replay_progress(cursor.last_replayed_index())
+            .await;
     }
 
     pub fn last_replayed_index(&self) -> OplogIndex {

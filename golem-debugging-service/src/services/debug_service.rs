@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::debug_context::DebugContext;
-use crate::debug_session::PlaybackOverridesInternal;
-use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
+use crate::debug_session::{
+    DebugSessionData, DebugSessionId, DebugSessions, PlaybackOverridesInternal,
+    validate_override_preserves_pairing,
+};
 use crate::model::params::*;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
@@ -236,13 +238,99 @@ impl DebugServiceDefault {
         agent_id: AgentId,
         current_index: OplogIndex,
         overrides: Vec<PlaybackOverride>,
+        raw_oplog: Arc<dyn Oplog>,
     ) -> Result<PlaybackOverridesInternal, DebugServiceError> {
-        PlaybackOverridesInternal::from_playback_override(overrides, current_index).map_err(|err| {
-            DebugServiceError::ValidationFailed {
+        let validated = PlaybackOverridesInternal::from_playback_override(overrides, current_index)
+            .map_err(|err| DebugServiceError::ValidationFailed {
                 agent_id: Some(agent_id.clone()),
                 errors: vec![err],
+            })?;
+
+        // Replay resolves paired durable constructs (`Start`/`End`/`Cancelled`, atomic regions,
+        // remote transactions) by oplog index, so each override must preserve the pairing
+        // signature of the entry it replaces or the replay resolver state gets corrupted.
+        let last_recorded_index = raw_oplog.current_oplog_index().await;
+        let mut errors = Vec::new();
+        let mut indices: Vec<OplogIndex> = validated.overrides.keys().copied().collect();
+        indices.sort();
+        for index in indices {
+            if index > last_recorded_index {
+                errors.push(format!(
+                    "Playback override at oplog index {index} is beyond the recorded oplog (last recorded index is {last_recorded_index})"
+                ));
+                continue;
             }
-        })
+            let underlying = raw_oplog.read(index).await;
+            if let Err(err) = validate_override_preserves_pairing(
+                index,
+                &underlying,
+                &validated.overrides[&index],
+                &raw_oplog,
+            )
+            .await
+            {
+                errors.push(err);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(validated)
+        } else {
+            Err(DebugServiceError::ValidationFailed {
+                agent_id: Some(agent_id),
+                errors,
+            })
+        }
+    }
+
+    /// Scans the recorded oplog up to `target_index` and returns the first durable call `Start`
+    /// that has no matching terminal (`End`/`Cancelled`) at or before the target — that is, a
+    /// durable call that is still in flight at the target index. Regions dropped by `Jump` or
+    /// `Revert` entries are excluded, mirroring how replay skips them.
+    ///
+    /// A debug session must refuse to start playback at such a target: replay would either
+    /// resolve the call from entries beyond the target or live re-execute it, and debug sessions
+    /// never live-repair incomplete durable calls
+    /// (`DebugContext::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS` is `false`).
+    pub async fn find_in_flight_durable_call_at(
+        raw_oplog: Arc<dyn Oplog>,
+        target_index: OplogIndex,
+    ) -> Option<(OplogIndex, String)> {
+        const CHUNK_SIZE: u64 = 1024;
+
+        let scan_end = target_index.min(raw_oplog.current_oplog_index().await);
+        let mut unmatched: std::collections::BTreeMap<OplogIndex, String> =
+            std::collections::BTreeMap::new();
+
+        let mut index = OplogIndex::INITIAL;
+        while index <= scan_end {
+            let available = u64::from(scan_end) - u64::from(index) + 1;
+            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
+            if entries.is_empty() {
+                break;
+            }
+            for (idx, entry) in &entries {
+                match entry {
+                    OplogEntry::Start { function_name, .. } => {
+                        unmatched.insert(*idx, function_name.to_string());
+                    }
+                    OplogEntry::End { start_index, .. }
+                    | OplogEntry::Cancelled { start_index, .. } => {
+                        unmatched.remove(start_index);
+                    }
+                    OplogEntry::Jump { jump, .. } => {
+                        unmatched.retain(|start, _| !jump.contains(*start));
+                    }
+                    OplogEntry::Revert { dropped_region, .. } => {
+                        unmatched.retain(|start, _| !dropped_region.contains(*start));
+                    }
+                    _ => {}
+                }
+            }
+            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+        }
+
+        unmatched.pop_first()
     }
 
     pub async fn target_index_at_invocation_boundary(
@@ -250,8 +338,12 @@ impl DebugServiceDefault {
         worker: &Arc<Worker<DebugContext>>,
         target_oplog_index: OplogIndex,
     ) -> Result<OplogIndex, DebugServiceError> {
-        // New target index to be calculated here
-        let oplog: Arc<dyn Oplog> = worker.oplog();
+        // The scan must read the raw underlying oplog: reading through the worker's `DebugOplog`
+        // would apply playback overrides and move the debug session's current index, and its
+        // `current_oplog_index` reports the session's (possibly stale) playback target instead of
+        // the recorded oplog end.
+        let debug_oplog = worker.oplog();
+        let oplog: Arc<dyn Oplog> = debug_oplog.inner().unwrap_or(debug_oplog);
 
         let original_current_oplog_index = oplog.current_oplog_index().await;
 
@@ -417,10 +509,37 @@ impl DebugService for DebugServiceDefault {
             ));
         }
 
+        // The raw underlying oplog: reading through the worker's `DebugOplog` would apply
+        // existing overrides and move the session's current index.
+        let raw_oplog = {
+            let debug_oplog = worker.oplog();
+            debug_oplog.inner().unwrap_or(debug_oplog)
+        };
+
+        // Refuse targets that fall inside an in-flight durable call: replay could neither
+        // resolve the call from the entries before the target nor safely re-execute it live
+        // (debug sessions never live-repair incomplete durable calls, as re-executing the
+        // recorded side effects would not be a faithful playback).
+        if let Some((start_index, function_name)) =
+            Self::find_in_flight_durable_call_at(raw_oplog.clone(), new_target_index).await
+        {
+            return Err(DebugServiceError::ValidationFailed {
+                agent_id: Some(agent_id.clone()),
+                errors: vec![format!(
+                    "Playback target index {new_target_index} is inside an in-flight durable call: {function_name} started at oplog index {start_index} and completes after the target. Debug sessions refuse live repair or re-execution of incomplete durable calls; choose a target index at or after the call's completion"
+                )],
+            });
+        }
+
         let playback_overrides_validated = if let Some(overrides) = playback_overrides {
             Some(
-                Self::validate_playback_overrides(agent_id.clone(), current_oplog_index, overrides)
-                    .await?,
+                Self::validate_playback_overrides(
+                    agent_id.clone(),
+                    current_oplog_index,
+                    overrides,
+                    raw_oplog,
+                )
+                .await?,
             )
         } else {
             None
@@ -450,8 +569,8 @@ impl DebugService for DebugServiceDefault {
             })?;
         }
 
-        // This might fail if we are replaying beyond the oplog index and trapping due to entering live mode, ignore.
-        let _ = worker.await_ready_to_process_commands().await;
+        // This might fail if we are replaying beyond the oplog index and trapping due to entering live mode.
+        let ready_result = worker.await_ready_to_process_commands().await;
 
         let stopped_at_index = self
             .debug_session
@@ -459,6 +578,22 @@ impl DebugService for DebugServiceDefault {
             .await
             .map(|d| d.current_oplog_index)
             .unwrap_or(OplogIndex::INITIAL);
+
+        // A replay failure before reaching the target is an error, not a successful playback (for
+        // example a replay target inside an in-flight durable call, whose live repair is refused
+        // in debug sessions). Failures at or past the target are the expected trap when playback
+        // runs off the end of the recorded oplog into live mode, and stay ignored.
+        if let Err(error) = &ready_result
+            && stopped_at_index < new_target_index
+        {
+            return Err(DebugServiceError::validation_failed(
+                vec![format!(
+                    "Playback worker {} stopped at index {} before reaching target index {}: {}",
+                    owned_agent_id.agent_id, stopped_at_index, new_target_index, error
+                )],
+                Some(agent_id.clone()),
+            ));
+        }
 
         Ok(PlaybackResult {
             agent_id: owned_agent_id.agent_id.clone(),
@@ -519,9 +654,17 @@ impl DebugService for DebugServiceDefault {
             DebugServiceError::internal(e.to_string(), Some(owned_agent_id.agent_id.clone()))
         })?;
 
+        // The raw underlying oplog: reading through the worker's `DebugOplog` would apply
+        // playback overrides, and its `current_oplog_index` reports the session's playback
+        // target instead of the recorded oplog end.
+        let raw_oplog = {
+            let debug_oplog = worker.oplog();
+            debug_oplog.inner().unwrap_or(debug_oplog)
+        };
+
         let new_target_index = if ensure_invocation_boundary {
             Self::get_target_oplog_index_at_invocation_boundary(
-                worker.oplog(),
+                raw_oplog.clone(),
                 target_index,
                 current_oplog_index,
             )
@@ -541,6 +684,20 @@ impl DebugService for DebugServiceDefault {
             ));
         };
 
+        // Refuse targets that fall inside an in-flight durable call, exactly like playback:
+        // replay could neither resolve the call from the entries before the target nor safely
+        // re-execute it live (debug sessions never live-repair incomplete durable calls).
+        if let Some((start_index, function_name)) =
+            Self::find_in_flight_durable_call_at(raw_oplog.clone(), new_target_index).await
+        {
+            return Err(DebugServiceError::ValidationFailed {
+                agent_id: Some(owned_agent_id.agent_id.clone()),
+                errors: vec![format!(
+                    "Rewind target index {new_target_index} is inside an in-flight durable call: {function_name} started at oplog index {start_index} and completes after the target. Debug sessions refuse live repair or re-execution of incomplete durable calls; choose a target index at or after the call's completion"
+                )],
+            });
+        }
+
         self.debug_session
             .update(debug_session_id.clone(), new_target_index, None)
             .await;
@@ -554,7 +711,18 @@ impl DebugService for DebugServiceDefault {
             let _ = receiver.recv().await;
         };
 
-        let _ = worker.await_ready_to_process_commands().await;
+        // `set_interrupting` is a no-op when the worker is already unloaded (for example it
+        // suspended and unloaded itself after a previous playback), so the worker must be
+        // explicitly started to run the rewind replay. This is harmless when the restart above
+        // already left it running.
+        Worker::start_if_needed(worker.clone()).await.map_err(|e| {
+            DebugServiceError::internal(
+                format!("Failed to start worker for rewind: {e}"),
+                Some(owned_agent_id.agent_id.clone()),
+            )
+        })?;
+
+        let ready_result = worker.await_ready_to_process_commands().await;
 
         let stopped_at_index = self
             .debug_session
@@ -562,6 +730,23 @@ impl DebugService for DebugServiceDefault {
             .await
             .map(|d| d.current_oplog_index)
             .unwrap_or(OplogIndex::NONE);
+
+        // A rewind target always lies inside the recorded oplog (it is strictly before the
+        // session's previous position), so a successful rewind must replay exactly to it;
+        // anything else is a failed rewind, not a success.
+        if stopped_at_index != new_target_index {
+            let reason = match &ready_result {
+                Err(error) => format!(": {error}"),
+                Ok(()) => String::new(),
+            };
+            return Err(DebugServiceError::validation_failed(
+                vec![format!(
+                    "Rewind worker {} stopped at index {} instead of the target index {}{}",
+                    owned_agent_id.agent_id, stopped_at_index, new_target_index, reason
+                )],
+                Some(owned_agent_id.agent_id.clone()),
+            ));
+        }
 
         Ok(RewindResult {
             agent_id: owned_agent_id.agent_id.clone(),

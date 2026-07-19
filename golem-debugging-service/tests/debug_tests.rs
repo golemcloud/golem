@@ -1,14 +1,21 @@
+use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use crate::*;
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
+use golem_common::model::oplog::public_oplog_entry::StartParams;
+use golem_common::model::oplog::public_oplog_entry::{
+    AgentInvocationFinishedParams, EndParams, NoOpParams,
+};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{AgentId, Timestamp};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -569,6 +576,683 @@ async fn test_playback_with_overrides(
     Ok(())
 }
 
+// Debug playback over a worker whose recorded history contains concurrent P3 durable calls
+// (`http::client::send` + a raced `monotonic_clock` sleep, both `Start`/terminal entry pairs).
+// Playback to the invocation boundary must replay the completed durable calls from the oplog
+// without re-executing the HTTP side effect.
+#[test]
+#[tracing::instrument]
+async fn test_playback_over_p3_http_durable_calls(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup = start_clock_debug_session(last_unique_id, deps, "playback-p3-full").await?;
+
+    let (_send_start_index, send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+    let boundary = invocation_boundary_after(&setup.oplogs, send_terminal_index);
+
+    let requests_before = setup.request_count.load(Ordering::SeqCst);
+
+    let playback_result = setup.debug_executor.playback(boundary, None).await?;
+
+    assert_eq!(playback_result.agent_id, setup.agent_id);
+    assert_eq!(playback_result.current_index, boundary);
+    assert_eq!(
+        setup.request_count.load(Ordering::SeqCst),
+        requests_before,
+        "debug playback must not re-execute the recorded HTTP call"
+    );
+
+    setup.server.abort();
+    Ok(())
+}
+
+// Targeting a raw oplog index (`ensure_invocation_boundary=false`) that lies *on* a durable
+// `Start` entry leaves that call without a terminal entry before the replay target. Debug
+// sessions must refuse live repair / re-execution and surface an explicit error instead.
+#[test]
+#[tracing::instrument]
+async fn test_playback_target_on_p3_start_refuses_live_repair(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup = start_clock_debug_session(last_unique_id, deps, "playback-p3-on-start").await?;
+
+    let (send_start_index, _send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+
+    let requests_before = setup.request_count.load(Ordering::SeqCst);
+    let oplog_len_before = setup.oplogs.len();
+
+    let playback_result = setup
+        .debug_executor
+        .playback_raw(send_start_index, None, false)
+        .await;
+
+    assert!(playback_result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("in-flight durable call"),
+        "expected an explicit in-flight durable call error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+    assert_eq!(
+        setup.request_count.load(Ordering::SeqCst),
+        requests_before,
+        "refused playback must not re-execute the recorded HTTP call"
+    );
+
+    // The debug session must not have modified the real oplog
+    let oplogs_after = setup
+        .regular_worker_executor
+        .get_oplog(&setup.agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(oplogs_after.len(), oplog_len_before);
+
+    setup.server.abort();
+    Ok(())
+}
+
+// Same as above, but the raw target lies strictly *inside* an in-flight durable call: past the
+// `Start` of the raced `monotonic_clock` sleep but before its `Cancelled` terminal entry (the
+// http send's `End` entry lies in that window).
+#[test]
+#[tracing::instrument]
+async fn test_playback_target_inside_p3_call_refuses_live_repair(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup =
+        start_clock_debug_session(last_unique_id, deps, "playback-p3-inside-call").await?;
+
+    let (send_start_index, send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+    assert!(send_terminal_index > send_start_index.next());
+
+    let requests_before = setup.request_count.load(Ordering::SeqCst);
+
+    let playback_result = setup
+        .debug_executor
+        .playback_raw(previous_index(send_terminal_index), None, false)
+        .await;
+
+    assert!(playback_result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("in-flight durable call"),
+        "expected an explicit in-flight durable call error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+    assert_eq!(
+        setup.request_count.load(Ordering::SeqCst),
+        requests_before,
+        "refused playback must not re-execute the recorded HTTP call"
+    );
+
+    setup.server.abort();
+    Ok(())
+}
+
+// A raw target *after* all terminal entries of the invocation's durable calls is safe: every
+// recorded durable call resolves completely from the oplog, so playback succeeds without
+// re-executing side effects.
+#[test]
+#[tracing::instrument]
+async fn test_playback_target_after_p3_terminals_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup =
+        start_clock_debug_session(last_unique_id, deps, "playback-p3-after-call").await?;
+
+    let (_send_start_index, send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+    let boundary = invocation_boundary_after(&setup.oplogs, send_terminal_index);
+    let last_terminal_index = last_durable_terminal_before(&setup.oplogs, boundary);
+    assert!(last_terminal_index < boundary);
+
+    let requests_before = setup.request_count.load(Ordering::SeqCst);
+
+    let playback_result = setup
+        .debug_executor
+        .playback_raw(last_terminal_index, None, false)
+        .await?;
+
+    // Playback replays every recorded durable call from the oplog and stops at the raw target
+    // (the worker suspends as soon as it would run live past it)
+    assert_eq!(playback_result.current_index, last_terminal_index);
+    assert_eq!(
+        setup.request_count.load(Ordering::SeqCst),
+        requests_before,
+        "debug playback must not re-execute the recorded HTTP call"
+    );
+
+    setup.server.abort();
+    Ok(())
+}
+
+// Playback overrides that would break the `Start`/terminal-entry pairing of the recorded oplog
+// must be rejected by validation; pairing-preserving overrides are accepted.
+#[test]
+#[tracing::instrument]
+async fn test_playback_override_pairing_validation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup =
+        start_clock_debug_session(last_unique_id, deps, "playback-p3-overrides").await?;
+
+    let (send_start_index, send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+    let boundary = invocation_boundary_after(&setup.oplogs, send_terminal_index);
+
+    // Replacing a durable `Start` with an unpaired entry breaks pairing
+    let result = setup
+        .debug_executor
+        .playback(
+            boundary,
+            Some(vec![PlaybackOverride {
+                index: send_start_index,
+                oplog: PublicOplogEntry::NoOp(NoOpParams {
+                    timestamp: Timestamp::now_utc(),
+                }),
+            }]),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("pairing"),
+        "expected a pairing validation error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+
+    // A terminal entry must keep referencing the same `Start` index
+    let result = setup
+        .debug_executor
+        .playback(
+            boundary,
+            Some(vec![PlaybackOverride {
+                index: send_terminal_index,
+                oplog: PublicOplogEntry::End(EndParams {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: previous_index(send_start_index),
+                    response: None,
+                    forced_commit: false,
+                }),
+            }]),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("pairing"),
+        "expected a pairing validation error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+
+    // Overrides beyond the recorded oplog are rejected
+    let beyond_index =
+        OplogIndex::from_u64(u64::from(setup.oplogs.last().unwrap().oplog_index) + 100);
+    let result = setup
+        .debug_executor
+        .playback(
+            boundary,
+            Some(vec![PlaybackOverride {
+                index: beyond_index,
+                oplog: PublicOplogEntry::NoOp(NoOpParams {
+                    timestamp: Timestamp::now_utc(),
+                }),
+            }]),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("beyond the recorded oplog"),
+        "expected a beyond-recorded-oplog validation error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+
+    // A pairing-preserving override (same signature as the recorded entry) is accepted
+    let recorded_start = setup.oplogs[u64::from(send_start_index) as usize - 1]
+        .entry
+        .clone();
+    assert!(matches!(recorded_start, PublicOplogEntry::Start(_)));
+    let playback_result = setup
+        .debug_executor
+        .playback(
+            boundary,
+            Some(vec![PlaybackOverride {
+                index: send_start_index,
+                oplog: recorded_start,
+            }]),
+        )
+        .await?;
+    assert_eq!(playback_result.current_index, boundary);
+
+    setup.server.abort();
+    Ok(())
+}
+
+// Playback overrides must preserve the full replay identity of a durable `Start` entry, not just
+// its variant: replay claims `Start` entries by function name, durable function type, parent
+// index, and request value (concurrent sibling calls are disambiguated by request), so changing
+// any of these would make a replayed call claim the wrong record.
+#[test]
+#[tracing::instrument]
+async fn test_playback_override_start_identity_validation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup =
+        start_clock_debug_session(last_unique_id, deps, "playback-p3-override-identity").await?;
+
+    let (send_start_index, send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+    let boundary = invocation_boundary_after(&setup.oplogs, send_terminal_index);
+
+    let recorded_send_start = setup
+        .oplogs
+        .iter()
+        .find(|e| e.oplog_index == send_start_index)
+        .expect("expected the recorded http::client::send Start entry")
+        .entry
+        .clone();
+
+    // Replacing the `Start` with another recorded `Start` of a different host function keeps the
+    // variant and pairing shape but changes the replay identity, so it must be rejected
+    let other_start = setup
+        .oplogs
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::Start(params) if params.function_name != "http::client::send" => {
+                Some(e.entry.clone())
+            }
+            _ => None,
+        })
+        .expect("expected a recorded Start entry of a different host function");
+    let result = setup
+        .debug_executor
+        .playback(
+            boundary,
+            Some(vec![PlaybackOverride {
+                index: send_start_index,
+                oplog: other_start,
+            }]),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("pairing"),
+        "expected a pairing validation error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+
+    // Dropping the request from the `Start` must be rejected
+    let without_request = match recorded_send_start.clone() {
+        PublicOplogEntry::Start(params) => PublicOplogEntry::Start(StartParams {
+            request: None,
+            ..params
+        }),
+        _ => panic!("expected a Start entry"),
+    };
+    let result = setup
+        .debug_executor
+        .playback(
+            boundary,
+            Some(vec![PlaybackOverride {
+                index: send_start_index,
+                oplog: without_request,
+            }]),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("pairing"),
+        "expected a pairing validation error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+
+    // Changing the request value (here: the requested uri path) must be rejected
+    let mut mutated_json = serde_json::to_value(&recorded_send_start)?;
+    mutate_json_strings(
+        &mut mutated_json,
+        "simulated-slow-request",
+        "simulated-other-request",
+    );
+    assert_ne!(
+        mutated_json,
+        serde_json::to_value(&recorded_send_start)?,
+        "expected the recorded Start entry to contain the request path"
+    );
+    let mutated_start: PublicOplogEntry = serde_json::from_value(mutated_json)?;
+    let result = setup
+        .debug_executor
+        .playback(
+            boundary,
+            Some(vec![PlaybackOverride {
+                index: send_start_index,
+                oplog: mutated_start,
+            }]),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("request values differ"),
+        "expected a request-value validation error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+
+    setup.server.abort();
+    Ok(())
+}
+
+// A raw rewind target inside an in-flight durable call must be rejected: replay could neither
+// resolve the call from the entries before the target nor re-execute its side effects.
+#[test]
+#[tracing::instrument]
+async fn test_rewind_target_inside_in_flight_durable_call_is_rejected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup = start_clock_debug_session(last_unique_id, deps, "rewind-p3-in-flight").await?;
+
+    let (send_start_index, send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+    let boundary = invocation_boundary_after(&setup.oplogs, send_terminal_index);
+
+    let playback_result = setup.debug_executor.playback(boundary, None).await?;
+    assert_eq!(playback_result.current_index, boundary);
+
+    let requests_before = setup.request_count.load(Ordering::SeqCst);
+
+    // Any raw index after the `Start` but before its terminal entry lies inside the call
+    let inside_call = previous_index(send_terminal_index);
+    assert!(inside_call > send_start_index);
+    let result = setup.debug_executor.rewind_raw(inside_call, false).await;
+    assert!(result.is_err());
+    assert!(
+        last_jrpc_error_message(&setup.debug_executor).contains("in-flight durable call"),
+        "expected an in-flight durable call validation error, got: {}",
+        last_jrpc_error_message(&setup.debug_executor)
+    );
+
+    assert_eq!(
+        setup.request_count.load(Ordering::SeqCst),
+        requests_before,
+        "a refused rewind must not re-execute the recorded HTTP call"
+    );
+
+    setup.server.abort();
+    Ok(())
+}
+
+// Rewind must work after a playback that left the debug worker suspended and unloaded (a raw
+// playback target stops the worker mid-invocation, so it unloads itself instead of idling in its
+// invocation loop).
+#[test]
+#[tracing::instrument]
+async fn test_rewind_after_playback_unloads_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut setup =
+        start_clock_debug_session(last_unique_id, deps, "rewind-p3-after-unload").await?;
+
+    let (send_start_index, send_terminal_index) = http_send_start_and_terminal(&setup.oplogs);
+    let boundary = invocation_boundary_after(&setup.oplogs, send_terminal_index);
+    let last_terminal_index = last_durable_terminal_before(&setup.oplogs, boundary);
+
+    let first_boundary = nth_invocation_boundary(&setup.oplogs, 1);
+    assert!(first_boundary < send_start_index);
+
+    let requests_before = setup.request_count.load(Ordering::SeqCst);
+
+    // Raw playback into the middle of the invocation: the worker suspends (and unloads) as soon
+    // as it would run live past the target
+    let playback_result = setup
+        .debug_executor
+        .playback_raw(last_terminal_index, None, false)
+        .await?;
+    assert_eq!(playback_result.current_index, last_terminal_index);
+
+    // Give the suspended worker time to fully unload
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let rewind_result = setup.debug_executor.rewind(first_boundary).await?;
+    assert_eq!(rewind_result.current_index, first_boundary);
+
+    assert_eq!(
+        setup.request_count.load(Ordering::SeqCst),
+        requests_before,
+        "debug playback and rewind must not re-execute the recorded HTTP call"
+    );
+
+    setup.server.abort();
+    Ok(())
+}
+
+// Debug playback over an invocation that reads the environment through the P3-native
+// `wasi:cli/environment@0.3` import: the replayed guest re-executes the (non-durable) P3
+// environment host call inside the debug session, exercising the debug-mode P3 environment path.
+#[test]
+#[tracing::instrument]
+async fn test_playback_with_p3_environment(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
+
+    let component = regular_worker_executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(
+            "Environment",
+            vec![("TEST_ENV".to_string(), "test-value".to_string())],
+        )
+        .store()
+        .await?;
+
+    let env_id = agent_id!("Environment", "debug-env-1");
+    let agent_id = regular_worker_executor
+        .start_agent(&component.id, env_id.clone())
+        .await?;
+
+    let result = regular_worker_executor
+        .invoke_and_await_agent(&component, &env_id, "get_environment_p3", data_value!())
+        .await?;
+    let result_str = format!("{result:?}");
+    assert!(
+        result_str.contains("TEST_ENV"),
+        "expected the enriched environment through the P3 import, got: {result_str}"
+    );
+
+    let oplogs = regular_worker_executor
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
+        .await?;
+    let last_boundary = oplogs
+        .iter()
+        .rfind(|e| matches!(&e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .map(|e| e.oplog_index)
+        .expect("expected an AgentInvocationFinished entry");
+
+    debug_executor.connect(&agent_id).await?;
+
+    let playback_result = debug_executor.playback(last_boundary, None).await?;
+    assert_eq!(playback_result.current_index, last_boundary);
+
+    Ok(())
+}
+
+struct ClockDebugSetup {
+    regular_worker_executor: TestWorkerExecutor,
+    debug_executor: DebugWorkerExecutorClient,
+    agent_id: AgentId,
+    oplogs: Vec<PublicOplogEntryWithIndex>,
+    request_count: Arc<AtomicUsize>,
+    server: tokio::task::JoinHandle<()>,
+}
+
+/// Starts a regular and a debug executor, records one `Clock::sleep_during_request` invocation
+/// (a P3 `http::client::send` raced against a P3 `monotonic_clock` sleep, producing concurrent
+/// durable `Start`/terminal entry pairs in the oplog), then connects a debug session to it.
+async fn start_clock_debug_session(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_name: &str,
+) -> anyhow::Result<ClockDebugSetup> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
+
+    let (port, request_count, server) =
+        counting_slow_request_server(Duration::from_millis(100)).await;
+
+    let component = regular_worker_executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+
+    let clock_id = agent_id!("Clock", agent_name);
+    let agent_id = regular_worker_executor
+        .start_agent(&component.id, clock_id.clone())
+        .await?;
+
+    regular_worker_executor
+        .invoke_and_await_agent(
+            &component,
+            &clock_id,
+            "sleep_during_request",
+            data_value!(30u64),
+        )
+        .await?;
+
+    let oplogs = regular_worker_executor
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
+        .await?;
+
+    debug_executor.connect(&agent_id).await?;
+
+    Ok(ClockDebugSetup {
+        regular_worker_executor,
+        debug_executor,
+        agent_id,
+        oplogs,
+        request_count,
+        server,
+    })
+}
+
+/// HTTP server for `/simulated-slow-request` that counts incoming requests, so tests can prove
+/// that debug playback never re-executes the recorded HTTP call.
+async fn counting_slow_request_server(
+    delay: Duration,
+) -> (u16, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let counter = request_count.clone();
+
+    let server = tokio::spawn(async move {
+        let route = axum::Router::new().route(
+            "/simulated-slow-request",
+            axum::routing::get(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    "slow response".to_string()
+                }
+            }),
+        );
+
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    (port, request_count, server)
+}
+
+/// Finds the recorded `http::client::send` durable call: its `Start` entry and the matching
+/// terminal (`End` or `Cancelled`) entry.
+fn http_send_start_and_terminal(oplogs: &[PublicOplogEntryWithIndex]) -> (OplogIndex, OplogIndex) {
+    let start_index = oplogs
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "http::client::send" => {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("expected a durable http::client::send Start entry");
+    let terminal_index = oplogs
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::End(params) if params.start_index == start_index => {
+                Some(e.oplog_index)
+            }
+            PublicOplogEntry::Cancelled(params) if params.start_index == start_index => {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("expected a terminal entry paired with the http::client::send Start");
+    (start_index, terminal_index)
+}
+
+/// The `AgentInvocationFinished` boundary of the invocation containing the given index.
+fn invocation_boundary_after(
+    oplogs: &[PublicOplogEntryWithIndex],
+    index: OplogIndex,
+) -> OplogIndex {
+    oplogs
+        .iter()
+        .find_map(|e| {
+            (e.oplog_index > index
+                && matches!(&e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .then_some(e.oplog_index)
+        })
+        .expect("expected an AgentInvocationFinished entry after the given index")
+}
+
+/// The last durable terminal entry (`End` / `Cancelled`) before the given boundary — a raw
+/// playback target at this index lies after all in-flight durable calls of the invocation.
+fn last_durable_terminal_before(
+    oplogs: &[PublicOplogEntryWithIndex],
+    boundary: OplogIndex,
+) -> OplogIndex {
+    oplogs
+        .iter()
+        .rfind(|e| {
+            e.oplog_index < boundary
+                && matches!(
+                    &e.entry,
+                    PublicOplogEntry::End(_) | PublicOplogEntry::Cancelled(_)
+                )
+        })
+        .map(|e| e.oplog_index)
+        .expect("expected a durable terminal entry before the invocation boundary")
+}
+
+/// The message of the most recent JRPC error response received by the debug client.
+fn last_jrpc_error_message(debug_executor: &DebugWorkerExecutorClient) -> String {
+    debug_executor
+        .all_read_messages()
+        .iter()
+        .rev()
+        .find_map(|m| m.error.as_ref().map(|e| format!("{e:?}")))
+        .unwrap_or_else(|| "no JRPC error message received".to_string())
+}
+
 fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> OplogIndex {
     oplogs
         .iter()
@@ -580,6 +1264,29 @@ fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> Op
 
 fn previous_index(index: OplogIndex) -> OplogIndex {
     OplogIndex::from_u64(u64::from(index) - 1)
+}
+
+/// Replaces `from` with `to` in every string of a JSON value, recursively — used to mutate the
+/// recorded request value inside a serialized oplog entry without depending on its exact shape.
+fn mutate_json_strings(value: &mut serde_json::Value, from: &str, to: &str) {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.contains(from) {
+                *s = s.replace(from, to);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                mutate_json_strings(item, from, to);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values_mut() {
+                mutate_json_strings(item, from, to);
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn run_repo_add_two(

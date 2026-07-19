@@ -72,6 +72,14 @@ pub struct DebugOplogState {
 impl Oplog for DebugOplog {
     // We don't allow debugging session to add anything into oplog
     // which internally can get committed.
+    //
+    // The returned `OplogIndex::NONE` is safe: it is never persisted (all writes are discarded)
+    // and replay-side pairing always reads real indices from the recorded oplog. Live-mode
+    // bookkeeping (`begin_index`, `parent_start_index`, an `End`'s `start_index`) may carry
+    // `NONE`, but that state only feeds further discarded writes. Debug sessions also never
+    // live-repair an incomplete durable call
+    // (`DebugContext::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS` is `false`), so no repaired
+    // `Start`/`End` pair is ever created against a `NONE` index during replay.
     async fn add(&self, _entry: OplogEntry) -> OplogIndex {
         OplogIndex::NONE
     }
@@ -128,6 +136,9 @@ impl Oplog for DebugOplog {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
+    // Reads never move the debug session's replay position: replay's single-entry reads are
+    // speculative (progress is only committed via `on_replay_progress`), and other components
+    // (for example P3 request-body reconstruction) perform unrelated point lookups.
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         let debug_session_data = self
             .oplog_state
@@ -136,11 +147,6 @@ impl Oplog for DebugOplog {
             .await
             .expect("Internal Error. Read failed. Debug session not found");
         let playback_overrides = debug_session_data.playback_overrides.clone();
-
-        self.oplog_state
-            .debug_session
-            .update_oplog_index(&self.oplog_state.debug_session_id, oplog_index)
-            .await;
 
         Self::get_oplog_entry_applying_overrides(
             playback_overrides.overrides,
@@ -151,13 +157,57 @@ impl Oplog for DebugOplog {
     }
 
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        // The read must be clamped to the debug session's view of the oplog end (the playback
+        // target index, when one is set): replay lookahead scans (for example resolving concurrent
+        // durable-call pairings) read fixed-size chunks that can extend past it, and the
+        // underlying oplog's single-entry `read` panics on a missing index. Clamping to the
+        // target — not the real recorded end — also guarantees that a durable call whose `End`
+        // lies beyond the playback target is seen as incomplete, so debug playback refuses to
+        // resolve it from entries the session is not supposed to observe yet. A target past the
+        // recorded end (playback running into live mode) is still bounded by the real oplog.
+        let last_recorded = self
+            .current_oplog_index()
+            .await
+            .min(self.inner.current_oplog_index().await);
         let mut result = BTreeMap::new();
-        let mut current = oplog_index;
-        for _ in 0..n {
-            result.insert(current, self.read(current).await);
-            current = current.next();
+        if n == 0 || oplog_index > last_recorded {
+            return result;
+        }
+        let available = u64::from(last_recorded) - u64::from(oplog_index) + 1;
+        let count = n.min(available);
+
+        // Like `read`, this never moves the debug session's replay position; it only applies the
+        // playback overrides on top of the underlying entries.
+        let debug_session_data = self
+            .oplog_state
+            .debug_session
+            .get(&self.oplog_state.debug_session_id)
+            .await
+            .expect("Internal Error. Read failed. Debug session not found");
+        let playback_overrides = debug_session_data.playback_overrides;
+
+        for (idx, entry) in self.inner.read_many(oplog_index, count).await {
+            let entry = playback_overrides
+                .overrides
+                .get(&idx)
+                .cloned()
+                .unwrap_or(entry);
+            result.insert(idx, entry);
         }
         result
+    }
+
+    // The single source of the debug session's replay position: the replay cursor publishes its
+    // committed advances here (speculative reads never fire this), so the session's
+    // `current_oplog_index` always reflects entries that were really replayed. The reported index
+    // is clamped to the recorded oplog end because switching to live mode publishes the replay
+    // target, which can lie past the recorded end when playback runs into live mode.
+    async fn on_replay_progress(&self, last_replayed_index: OplogIndex) {
+        let clamped = last_replayed_index.min(self.inner.current_oplog_index().await);
+        self.oplog_state
+            .debug_session
+            .update_oplog_index(&self.oplog_state.debug_session_id, clamped)
+            .await;
     }
 
     async fn length(&self) -> u64 {

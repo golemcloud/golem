@@ -2072,6 +2072,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(err.clone());
         }
 
+        // An unloaded worker has no invocation loop that could drain a queued readiness marker,
+        // and this method must not start one: the worker already reached a stopped state (for
+        // example a debugging worker that suspended itself after replaying to its target), which
+        // is exactly the "not processing anything until the next explicit start" condition
+        // callers wait for.
+        if matches!(&*instance_guard, WorkerInstance::Unloaded { .. }) {
+            return Ok(());
+        }
+
         let (sender, receiver) = oneshot::channel();
 
         self.queue
@@ -2085,6 +2094,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         drop(instance_guard);
 
+        // The marker is resolved either by the running invocation loop once it becomes idle, or
+        // by the stop transition when the worker stops without draining it (see
+        // `resolve_pending_readiness_awaiters_on_stop`), so this wait cannot hang on a worker
+        // that suspends mid-invocation.
         receiver.await.unwrap()
     }
 
@@ -2446,6 +2459,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 **instance_guard = final_state.into_instance();
+                if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
+                    self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
+                        .await;
+                }
                 StopResult::Stopped
             }
             WorkerInstance::Deleting => {
@@ -2504,6 +2521,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // memory grant (and component/storage permits) back to the
                     // gate.
                     **instance_guard = final_state.into_instance();
+                    if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
+                        self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
+                            .await;
+                    }
                     StopResult::Stopped
                 } else {
                     // drop the running worker, this signals to the invocation loop to start exiting.
@@ -2567,9 +2588,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     other => panic!("expected Stopping, got {other:?}"),
                 }
+                if let WorkerInstance::Unloaded { startup_failure } = &*instance_guard {
+                    self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
+                        .await;
+                }
                 drop(instance_guard);
 
                 notify.set();
+            }
+        }
+    }
+
+    /// Resolves all queued `AwaitReadyToProcessCommands` markers when the worker reaches the
+    /// `Unloaded` state without the invocation loop having drained them — for example when the
+    /// worker suspends itself mid-invocation, as debugging workers do as soon as their replay
+    /// goes live. Waiters observe the startup failure if there is one, otherwise a successful
+    /// stop. All other queued items are kept for the next start.
+    async fn resolve_pending_readiness_awaiters_on_stop(
+        &self,
+        startup_failure: Option<&WorkerExecutorError>,
+    ) {
+        let mut queue = self.queue.write().await;
+        let items = queue.drain(..).collect::<Vec<_>>();
+        for item in items {
+            match item {
+                QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                    let _ = sender.send(match startup_failure {
+                        Some(err) => Err(err.clone()),
+                        None => Ok(()),
+                    });
+                }
+                other => queue.push_back(other),
             }
         }
     }
