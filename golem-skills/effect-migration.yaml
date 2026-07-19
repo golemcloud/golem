@@ -1039,9 +1039,21 @@ units:
     prerequisites:
       - golem-add-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T14:27:36.890Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-quota/attempt-1/add-quota/amp-effect-add-quota.json
+        thread: https://ampcode.com/threads/T-019f7ac6-99c5-74c5-bfef-8573cea45f69
+        finishedAt: 2026-07-19T14:45:12.285Z
+    evidence:
+      verifiedAt: 2026-07-19T14:45:12.285Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7ac6-99c5-74c5-bfef-8573cea45f69
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-quota/attempt-1/add-quota/amp-effect-add-quota.json
   - id: golem-recurring-task
     targetSkill: golem-recurring-task-effect
     verifyScenarios:
