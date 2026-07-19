@@ -1126,9 +1126,31 @@ units:
       - golem-invoke-agent
     strategy: direct
     notes: CLI-facing operation; Effect constructor and method values use TypeScript syntax.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T15:48:56.750Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-schedule-agent/attempt-1/schedule-agent/amp-effect-schedule-agent.json
+        thread: https://ampcode.com/threads/T-019f7b11-0a16-7399-bc60-63c80f153ea2
+        finishedAt: 2026-07-19T16:02:49.488Z
+        error: |-
+          schedule-agent:
+          ASSERTION_FAILED (result_json[$].equals): $ expected 1, got undefined; result_json=undefined
+      - number: 2
+        startedAt: 2026-07-19T16:02:49.493Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-schedule-agent/attempt-2/schedule-agent/amp-effect-schedule-agent.json
+        thread: https://ampcode.com/threads/T-019f7b11-0a16-7399-bc60-63c80f153ea2
+        finishedAt: 2026-07-19T16:14:42.877Z
+    evidence:
+      verifiedAt: 2026-07-19T16:14:42.877Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7b11-0a16-7399-bc60-63c80f153ea2
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-schedule-agent/attempt-2/schedule-agent/amp-effect-schedule-agent.json
   - id: golem-schedule-future-call
     targetSkill: golem-schedule-future-call-effect
     verifyScenarios:
