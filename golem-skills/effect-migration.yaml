@@ -768,9 +768,45 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: QuickJS has no unrestricted Node filesystem; use supported WASI/runtime APIs only.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T09:21:57.340Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-file-io/attempt-1/read-large-provisioned-file/amp-effect-read-large-provisioned-file.json
+        thread: https://ampcode.com/threads/T-019f79ae-bcf8-7662-98b4-19730dcb33a9
+        finishedAt: 2026-07-19T09:45:49.978Z
+        error: |-
+          read-large-provisioned-file:
+          SKILL_NOT_ACTIVATED: expected "golem-add-initial-files" but activated [golem-file-io-effect]
+      - number: 2
+        startedAt: 2026-07-19T09:45:49.982Z
+        outcome: failed
+        reports: []
+        thread: https://ampcode.com/threads/T-019f79ae-bcf8-7662-98b4-19730dcb33a9
+        finishedAt: 2026-07-19T09:50:43.325Z
+        error: golem-skills/tests/harness/scenarios/read-large-provisioned-file.yaml changes existing non-Effect (ts) scenario behavior; only Effect branches may be added
+      - number: 3
+        startedAt: 2026-07-19T09:50:43.327Z
+        outcome: failed
+        reports: []
+        thread: https://ampcode.com/threads/T-019f79ae-bcf8-7662-98b4-19730dcb33a9
+        finishedAt: 2026-07-19T09:52:18.940Z
+        error: golem-skills/tests/harness/scenarios/read-large-provisioned-file.yaml changes existing non-Effect (ts) scenario behavior; only Effect branches may be added
+      - number: 4
+        startedAt: 2026-07-19T09:52:18.943Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-file-io/attempt-4/read-large-provisioned-file/amp-effect-read-large-provisioned-file.json
+        thread: https://ampcode.com/threads/T-019f79ae-bcf8-7662-98b4-19730dcb33a9
+        finishedAt: 2026-07-19T10:02:39.446Z
+    evidence:
+      verifiedAt: 2026-07-19T10:02:39.446Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f79ae-bcf8-7662-98b4-19730dcb33a9
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-file-io/attempt-4/read-large-provisioned-file/amp-effect-read-large-provisioned-file.json
   - id: golem-fire-and-forget
     targetSkill: golem-fire-and-forget-effect
     verifyScenarios:
