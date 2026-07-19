@@ -86,6 +86,7 @@ steps:
         - "golem-add-http-endpoint-ts"
       effect:
         - "golem-add-http-endpoint-effect"
+        - "golem-http-params-effect"
       scala:
         - "golem-add-http-endpoint-scala"
       moonbit:

@@ -838,9 +838,21 @@ units:
     prerequisites:
       - golem-add-http-endpoint
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T10:17:34.255Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-http-params/attempt-1/http-endpoint-parameters/amp-effect-http-endpoint-parameters.json
+        thread: https://ampcode.com/threads/T-019f79e1-a725-7705-ac1f-e3f413b3b7f8
+        finishedAt: 2026-07-19T10:45:12.148Z
+    evidence:
+      verifiedAt: 2026-07-19T10:45:12.148Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f79e1-a725-7705-ac1f-e3f413b3b7f8
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-http-params/attempt-1/http-endpoint-parameters/amp-effect-http-endpoint-parameters.json
   - id: golem-interactive-repl
     targetSkill: golem-interactive-repl-effect
     verifyScenarios:
