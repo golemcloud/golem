@@ -1297,9 +1297,21 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Omit Snapshot state while retaining Effect-based handlers and registration.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T16:44:15.279Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-stateless-agent/attempt-1/stateless-agent/amp-effect-stateless-agent.json
+        thread: https://ampcode.com/threads/T-019f7b43-abe8-72d5-b1ff-61dfe4fb77b1
+        finishedAt: 2026-07-19T16:59:18.138Z
+    evidence:
+      verifiedAt: 2026-07-19T16:59:18.138Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7b43-abe8-72d5-b1ff-61dfe4fb77b1
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-stateless-agent/attempt-1/stateless-agent/amp-effect-stateless-agent.json
   - id: golem-trigger-agent
     targetSkill: golem-trigger-agent-effect
     verifyScenarios:
