@@ -40,7 +40,7 @@ use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
@@ -2044,14 +2044,24 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 }
 
 async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
+    let (port, server, _) = counting_slow_request_server(delay).await;
+    (port, server)
+}
+
+/// Like [`simulated_slow_request_server`], but also returns a counter of how many requests the
+/// server has received.
+async fn counting_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let request_count_clone = request_count.clone();
 
     let http_server = spawn(
         async move {
             let route = Router::new().route(
                 "/simulated-slow-request",
                 get(move || async move {
+                    request_count_clone.fetch_add(1, Ordering::AcqRel);
                     tokio::time::sleep(delay).await;
                     "slow response".to_string()
                 }),
@@ -2062,7 +2072,7 @@ async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>)
         .in_current_span(),
     );
 
-    (host_http_port, http_server)
+    (host_http_port, http_server, request_count)
 }
 
 /// Creates an HTTP server with a streaming endpoint that sends many small chunks
@@ -2259,6 +2269,67 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     assert!(duration.as_secs() >= 15);
     assert!(duration.as_secs() < 30);
     assert_eq!(result, "Timeout");
+
+    Ok(())
+}
+
+/// Mixed-ABI suspend regression: one guest task awaits a slow P3 `wasi:http` send while another
+/// blocks in a P2 sleep (`thread::sleep` → `wasi:io/poll`) longer than the suspend threshold.
+/// The worker must not be suspended while the P3 request is in flight — a premature suspend
+/// would drop the pending host call and re-execute the HTTP request on resume, so the server
+/// receiving the request exactly once proves the P3 completion was delivered.
+#[test]
+#[tracing::instrument]
+async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let (port, server, request_count) = counting_slow_request_server(Duration::from_secs(5)).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "clock-service-p2-sleep-during-request");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_sleep_during_request",
+            data_value!(15u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
+
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    assert_eq!(result, "slow response, slept");
+    assert_eq!(
+        request_count.load(Ordering::Acquire),
+        1,
+        "the P3 HTTP request must be sent exactly once; a second request means the worker was \
+         suspended while the request was in flight and re-executed it on resume"
+    );
+    assert!(duration.as_secs() >= 15);
 
     Ok(())
 }

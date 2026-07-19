@@ -13,6 +13,7 @@ pub trait Clock {
     async fn sleep_during_parallel_requests(&self, secs: u64) -> String;
     async fn sleep_between_requests(&self, secs: u64, n: u64) -> String;
     async fn jump_during_request(&self) -> String;
+    async fn p2_sleep_during_request(&self, secs: u64) -> String;
 }
 
 pub struct ClockImpl {
@@ -105,6 +106,22 @@ impl Clock for ClockImpl {
         };
         let (request_result, jump_result) = (request, jump).join().await;
         format!("{request_result}, {jump_result}")
+    }
+
+    /// Blocks in a P2 sleep (`thread::sleep` goes through `wasi:io/poll@0.2.x`) while a P3 HTTP
+    /// request is still in flight. The executor must not suspend the worker while the request is
+    /// pending: a premature suspend would drop the in-flight call and re-execute the request on
+    /// resume.
+    async fn p2_sleep_during_request(&self, secs: u64) -> String {
+        let request = async { send_request().await.unwrap_or_else(|err| err) };
+        let sleep = async {
+            // Give the request future time to start and register its durable call
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(200_000_000).await;
+            thread::sleep(Duration::from_secs(secs));
+            "slept".to_string()
+        };
+        let (request_result, sleep_result) = (request, sleep).join().await;
+        format!("{request_result}, {sleep_result}")
     }
 }
 

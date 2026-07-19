@@ -143,6 +143,12 @@ where
                 if poll_ready_once(ready()).await {
                     return Ok(ParkOutcome::Ready);
                 }
+                // The yield above lets the store's event loop drive other guest tasks, which may
+                // have started new live host calls; suspending now would drop them mid-flight,
+                // so re-check and keep parking if suspension is no longer safe.
+                if !safe_to_suspend() {
+                    continue;
+                }
 
                 let next_deadline = context
                     .suspendable_waits
@@ -159,6 +165,17 @@ where
                             .unwrap()
                     });
                 context.wakeup_scheduler.sleep_until(next_deadline).await?;
+                // Scheduling the wakeup awaits (oplog index read, promise creation, schedule
+                // write) — another window in which new unsafe work can appear. Perform the final
+                // checks synchronously, with no awaits before returning `SuspendWorker`. If
+                // suspension became unsafe, keep parking: the already-scheduled wakeup then
+                // merely resumes a worker that never suspended, which is harmless.
+                if final_ready() {
+                    return Ok(ParkOutcome::Ready);
+                }
+                if !safe_to_suspend() {
+                    continue;
+                }
                 return Ok(ParkOutcome::SuspendWorker);
             }
         }
@@ -403,6 +420,146 @@ mod tests {
         }
     }
 
+    struct StubPromiseService;
+
+    #[async_trait]
+    impl PromiseService for StubPromiseService {
+        async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+            PromiseId {
+                agent_id: agent_id.clone(),
+                oplog_idx,
+            }
+        }
+
+        async fn poll(&self, _promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+            unreachable!("promise polling is unused by this test")
+        }
+
+        async fn complete(
+            &self,
+            _promise_id: PromiseId,
+            _data: Vec<u8>,
+        ) -> Result<bool, WorkerExecutorError> {
+            unreachable!("promise completion is unused by this test")
+        }
+
+        async fn cleanup(&self) {}
+    }
+
+    /// A scheduler whose `schedule` simulates a new live (not suspendable-parked) host call
+    /// appearing while the wakeup is being scheduled, by flipping the shared safety flag.
+    struct FlippingSchedulerService {
+        safe: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl SchedulerService for FlippingSchedulerService {
+        async fn schedule(&self, _time: DateTime<Utc>, _action: ScheduledAction) -> ScheduleId {
+            self.safe.store(false, Ordering::Release);
+            ScheduleId::fresh()
+        }
+
+        async fn schedule_with_id(
+            &self,
+            _schedule_id: ScheduleId,
+            _time: DateTime<Utc>,
+            _action: ScheduledAction,
+        ) -> ScheduleId {
+            unreachable!("schedule_with_id is unused by wakeup scheduling")
+        }
+
+        async fn cancel(&self, _id: ScheduleId) {
+            unreachable!("cancel is unused by this test")
+        }
+    }
+
+    struct StubOplog;
+
+    impl Debug for StubOplog {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("StubOplog").finish()
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for StubOplog {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+            unreachable!("oplog writes are unused by wakeup scheduling")
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            OplogIndex::NONE
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn read(&self, _oplog_index: OplogIndex) -> OplogEntry {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn read_many(
+            &self,
+            _oplog_index: OplogIndex,
+            _n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn length(&self) -> u64 {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn add_start_with_reserved_raw_payload(
+            &self,
+            _serialized_request: Vec<u8>,
+            _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<OrderedOplogStart, String> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
+    }
+
+    fn flipping_wakeup_scheduler(safe: Arc<AtomicBool>) -> WakeupScheduler {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "flipping".to_string(),
+        };
+        WakeupScheduler {
+            promise_service: Arc::new(StubPromiseService),
+            scheduler_service: Arc::new(FlippingSchedulerService { safe }),
+            oplog: Arc::new(StubOplog),
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent_id),
+            created_by: AccountId::new(),
+        }
+    }
+
     #[test]
     async fn durable_promise_wait_ready_race_does_not_suspend() {
         let ready = Arc::new(AtomicBool::new(false));
@@ -482,6 +639,86 @@ mod tests {
             },
             || ready.load(Ordering::Acquire),
             || true,
+            || None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, ParkOutcome::Ready);
+    }
+
+    #[test]
+    async fn new_live_host_call_during_wakeup_scheduling_prevents_suspend() {
+        let safe = Arc::new(AtomicBool::new(true));
+        let context = SuspendableWaitContext {
+            wait_id: 1,
+            agent_mode: AgentMode::Durable,
+            suspend: SuspendConfig {
+                suspend_after: Duration::from_secs(10),
+                ephemeral_max_sleep: Duration::from_secs(60),
+                wait_suspend_grace: Duration::ZERO,
+                wait_suspend_check_interval: Duration::from_millis(10),
+            },
+            wait_deadline: None,
+            suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
+            wakeup_scheduler: flipping_wakeup_scheduler(safe.clone()),
+        };
+
+        let outcome = park_suspendable_wait(
+            context,
+            Box::pin(pending::<InterruptKind>()),
+            || {
+                let safe = safe.clone();
+                async move {
+                    // Becomes ready only once the simulated new host call has appeared
+                    if safe.load(Ordering::Acquire) {
+                        pending::<()>().await;
+                    }
+                }
+            },
+            || false,
+            || safe.load(Ordering::Acquire),
+            || None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, ParkOutcome::Ready);
+    }
+
+    #[test]
+    async fn safety_revoked_during_pre_suspend_yield_prevents_suspend() {
+        let safe_checks = Arc::new(AtomicUsize::new(0));
+        let context = SuspendableWaitContext {
+            wait_id: 1,
+            agent_mode: AgentMode::Durable,
+            suspend: SuspendConfig {
+                suspend_after: Duration::from_secs(10),
+                ephemeral_max_sleep: Duration::from_secs(60),
+                wait_suspend_grace: Duration::ZERO,
+                wait_suspend_check_interval: Duration::from_millis(10),
+            },
+            wait_deadline: None,
+            suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
+            wakeup_scheduler: unused_wakeup_scheduler(),
+        };
+
+        let outcome = park_suspendable_wait(
+            context,
+            Box::pin(pending::<InterruptKind>()),
+            || {
+                let safe_checks = safe_checks.clone();
+                async move {
+                    // Becomes ready only after the post-yield safety re-check has run
+                    if safe_checks.load(Ordering::Acquire) < 2 {
+                        pending::<()>().await;
+                    }
+                }
+            },
+            || false,
+            // Safe on the first check, then a new live host call appears (simulating one started
+            // by another guest task during the pre-suspend yield)
+            || safe_checks.fetch_add(1, Ordering::AcqRel) == 0,
             || None,
         )
         .await

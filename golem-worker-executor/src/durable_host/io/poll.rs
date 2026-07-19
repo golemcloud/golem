@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
-use crate::durable_host::durability::{InFunctionRetryHost, mark_durable_call_trap_context};
+use crate::durable_host::durability::InFunctionRetryHost;
 use crate::durable_host::suspendable_wait::{
-    PromiseWaiting, chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
+    ParkOutcome, PromiseWaiting, SuspendableWaitContext, chrono_duration_to_nanos,
+    ephemeral_sleep_too_long_error, park_suspendable_wait, std_duration_to_nanos,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
@@ -110,11 +111,32 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    /// Mixed-ABI suspension semantics: the worker may only be suspended from a P2 `poll` when
+    /// every in-flight live durable host call is parked in a recognized suspendable wait
+    /// ([`PrivateDurableWorkerState::safe_to_suspend`](crate::durable_host::PrivateDurableWorkerState)).
+    /// Pending P3 host work in the same store (e.g. an in-flight `wasi:http` send spawned by
+    /// another guest task) therefore blocks suspension: suspending would drop the pending host
+    /// future, leave its `Start` entry incomplete and force the side effect to be re-executed on
+    /// resume. Instead, a long P2 sleep parks in a suspendable wait — mirroring the P3
+    /// `monotonic-clock` waits — and either suspends once it becomes safe, or, if the sleep
+    /// deadline is reached first, re-runs the poll without ever suspending.
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> wasmtime::Result<Vec<u32>> {
         // check if all pollables are promise backed. In this case we can suspend immediately
         // This check only needs to be done in live mode, as we will never even persist the oplog entry for polling
         // if we suspended in the last pass. Doing it this way also prevents us from initializing the promises until we are actually in live mode.
-        if self.durable_execution_state().is_live && self.agent_mode() != AgentMode::Ephemeral {
+        //
+        // The immediate suspension is additionally gated on `safe_to_suspend()`: pending live
+        // host work (e.g. an in-flight P3 HTTP send) must not be dropped by suspending. Note
+        // that `promise_backed_pollables` currently has no insertion sites (P2 promise pollables
+        // were superseded by the P3 promise-result API), so this fast path is unreachable for
+        // non-empty poll lists. If such registrations are ever reintroduced, this path must be
+        // turned into a suspendable-wait park (like the P3 promise wait) instead of skipping
+        // suspension entirely, so that a poll blocked only on promises still suspends once
+        // pending host work completes.
+        if self.durable_execution_state().is_live
+            && self.agent_mode() != AgentMode::Ephemeral
+            && self.state.safe_to_suspend()
+        {
             let promise_backed_pollables = self.state.promise_backed_pollables.read().await;
             let mut all_blocked = true;
 
@@ -146,25 +168,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        // Snapshot the call-owned trap context up front: the suspend-for-sleep path below abandons
-        // the handle and the ephemeral sleep-too-long error is then raised at a point where the
-        // handle is no longer usable, so we keep this call's own (pure, call-owned) retry/membership
-        // classification rather than falling back to ambient worker state a sibling could clobber.
-        let trap_context = handle.trap_context();
 
-        let result: Result<HostResponsePollResult, Duration> = 'poll: {
+        let response: HostResponsePollResult = 'poll: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'poll Ok(response),
+                    CallReplayOutcome::Replayed(response) => break 'poll response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
             }
-
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
 
             let record_ephemeral_promise_wait = if self.agent_mode() == AgentMode::Ephemeral {
                 let promise_backed_pollables = self.state.promise_backed_pollables.read().await;
@@ -193,89 +204,156 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 None
             };
 
-            let result = {
-                let mut view = self.as_wasi_view();
-                let mut io_data = view.io_data();
-                let poll = Host::poll(&mut io_data, in_);
-                pin_mut!(poll);
+            // The poll may need to be re-executed after parking on a suspend-for-sleep (see
+            // below), but `Host::poll` consumes its pollable arguments, so keep the raw reps
+            // around to recreate the borrows for retries.
+            let reps = in_.iter().map(|res| res.rep()).collect::<Vec<_>>();
+            let mut pollables = Some(in_);
 
-                let _promise_waiting = PromiseWaiting::new(record_ephemeral_promise_wait);
+            loop {
+                let in_ = pollables.take().unwrap_or_else(|| {
+                    reps.iter()
+                        .map(|rep| Resource::new_borrow(*rep))
+                        .collect::<Vec<_>>()
+                });
 
-                if let Some(timeout_duration) = ephemeral_poll_timeout {
-                    let timeout = tokio::time::sleep(timeout_duration);
-                    pin_mut!(timeout);
+                let interrupt_signal = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
 
-                    tokio::select! {
-                        result = &mut poll => {
-                            result
+                let result = {
+                    let mut view = self.as_wasi_view();
+                    let mut io_data = view.io_data();
+                    let poll = Host::poll(&mut io_data, in_);
+                    pin_mut!(poll);
+
+                    let _promise_waiting = PromiseWaiting::new(record_ephemeral_promise_wait);
+
+                    if let Some(timeout_duration) = ephemeral_poll_timeout {
+                        let timeout = tokio::time::sleep(timeout_duration);
+                        pin_mut!(timeout);
+
+                        tokio::select! {
+                            result = &mut poll => {
+                                result
+                            }
+                            interrupt_kind = interrupt_signal => {
+                                // Trap leaves the eager host-call `Start` incomplete (re-executed on
+                                // replay); never written as a `Cancelled`.
+                                handle.abandon_for_trap();
+                                return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
+                            }
+                            _ = &mut timeout => {
+                                let max_nanos = std_duration_to_nanos(timeout_duration);
+                                return Err(wasmtime::Error::from_anyhow(
+                                    handle.trap(ephemeral_sleep_too_long_error(max_nanos, max_nanos)),
+                                ));
+                            }
                         }
-                        interrupt_kind = interrupt_signal => {
-                            // Trap leaves the eager host-call `Start` incomplete (re-executed on
-                            // replay); never written as a `Cancelled`.
-                            handle.abandon_for_trap();
-                            return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
-                        }
-                        _ = &mut timeout => {
-                            let max_nanos = std_duration_to_nanos(timeout_duration);
-                            return Err(wasmtime::Error::from_anyhow(
-                                handle.trap(ephemeral_sleep_too_long_error(max_nanos, max_nanos)),
-                            ));
+                    } else {
+                        tokio::select! {
+                            result = &mut poll => {
+                                result
+                            }
+                            interrupt_kind = interrupt_signal => {
+                                handle.abandon_for_trap();
+                                return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
+                            }
                         }
                     }
-                } else {
-                    tokio::select! {
-                        result = &mut poll => {
-                            result
+                };
+
+                match is_suspend_for_sleep(&result) {
+                    Some(duration) => {
+                        if self.agent_mode() == AgentMode::Ephemeral {
+                            let max = self.state.config.suspend.ephemeral_max_sleep;
+                            return Err(wasmtime::Error::from_anyhow(handle.trap(
+                                ephemeral_sleep_too_long_error(
+                                    chrono_duration_to_nanos(duration),
+                                    std_duration_to_nanos(max),
+                                ),
+                            )));
                         }
-                        interrupt_kind = interrupt_signal => {
-                            handle.abandon_for_trap();
-                            return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
+
+                        // Do not suspend the worker right away: unrelated P3 host work (e.g. an
+                        // in-flight `wasi:http` send from another guest task) may be pending in
+                        // the same store, and suspending would drop it mid-flight. Park in a
+                        // suspendable wait instead — while parked, the store's event loop keeps
+                        // driving pending host futures. The worker is only suspended once every
+                        // live host call is parked in such a wait; if the sleep deadline arrives
+                        // first, the poll is simply re-executed.
+                        let deadline = tokio::time::Instant::now()
+                            + duration.to_std().unwrap_or(std::time::Duration::ZERO);
+                        let context = SuspendableWaitContext {
+                            wait_id: self.state.next_suspendable_wait_id(),
+                            agent_mode: self.agent_mode(),
+                            suspend: self.state.config.suspend.clone(),
+                            wait_deadline: Some(Utc::now() + duration),
+                            suspendable_waits: self.state.suspendable_waits(),
+                            wakeup_scheduler: self.state.wakeup_scheduler(),
+                        };
+                        let outcome = park_suspendable_wait(
+                            context,
+                            self.create_interrupt_signal(),
+                            || tokio::time::sleep_until(deadline),
+                            || tokio::time::Instant::now() >= deadline,
+                            || self.state.safe_to_suspend(),
+                            || {
+                                Some(
+                                    deadline.saturating_duration_since(tokio::time::Instant::now()),
+                                )
+                            },
+                        )
+                        .await
+                        .map_err(|err| wasmtime::Error::from_anyhow(handle.trap(err)))?;
+
+                        match outcome {
+                            ParkOutcome::Ready => {
+                                // The sleep deadline was reached while it was not safe to
+                                // suspend: re-execute the poll, which now completes without
+                                // requesting another suspend-for-sleep.
+                            }
+                            ParkOutcome::SuspendWorker => {
+                                // The worker suspends and re-executes this poll on resume; the
+                                // eager `Start` is left incomplete (resolved by incomplete-replay
+                                // re-execution), not persisted. The wakeup at the sleep deadline
+                                // was already scheduled by the park.
+                                handle.abandon_for_trap();
+                                return Err(wasmtime::Error::from_anyhow(
+                                    InterruptKind::Suspend(Timestamp::now_utc()).into(),
+                                ));
+                            }
+                            ParkOutcome::Interrupted(kind) => {
+                                handle.abandon_for_trap();
+                                return Err(wasmtime::Error::from_anyhow(kind.into()));
+                            }
+                            ParkOutcome::EphemeralTooLong {
+                                requested_nanos,
+                                max_nanos,
+                            } => {
+                                return Err(wasmtime::Error::from_anyhow(handle.trap(
+                                    ephemeral_sleep_too_long_error(requested_nanos, max_nanos),
+                                )));
+                            }
                         }
                     }
+                    None => {
+                        break 'poll handle
+                            .complete(
+                                self,
+                                HostResponsePollResult {
+                                    result: result.map_err(|err| err.to_string()),
+                                },
+                            )
+                            .await?;
+                    }
                 }
-            };
-
-            match is_suspend_for_sleep(&result) {
-                Some(duration) => {
-                    // The worker suspends and re-executes this poll on resume; the eager `Start`
-                    // is left incomplete (resolved by incomplete-replay re-execution), not persisted.
-                    handle.abandon_for_trap();
-                    Err(duration)
-                }
-                None => Ok(handle
-                    .complete(
-                        self,
-                        HostResponsePollResult {
-                            result: result.map_err(|err| err.to_string()),
-                        },
-                    )
-                    .await?),
             }
         };
 
-        match result {
-            Ok(result) => result.result.map_err(wasmtime::Error::msg),
-            Err(duration) => {
-                if self.agent_mode() == AgentMode::Ephemeral {
-                    let max = self.state.config.suspend.ephemeral_max_sleep;
-                    // The call was already abandoned on the suspend-for-sleep path above; the handle
-                    // is consumed, so attach this call's own trap classification directly rather than
-                    // falling back to ambient worker state a sibling could clobber under overlap.
-                    let err = ephemeral_sleep_too_long_error(
-                        chrono_duration_to_nanos(duration),
-                        std_duration_to_nanos(max),
-                    );
-                    Err(wasmtime::Error::from_anyhow(
-                        mark_durable_call_trap_context(err.into(), trap_context),
-                    ))
-                } else {
-                    self.state.sleep_until(Utc::now() + duration).await?;
-                    Err(wasmtime::Error::from_anyhow(
-                        InterruptKind::Suspend(Timestamp::now_utc()).into(),
-                    ))
-                }
-            }
-        }
+        response.result.map_err(wasmtime::Error::msg)
     }
 }
 

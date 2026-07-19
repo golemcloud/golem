@@ -5904,10 +5904,6 @@ impl PrivateDurableWorkerState {
         !self.is_live()
     }
 
-    pub async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), WorkerExecutorError> {
-        self.wakeup_scheduler().sleep_until(when).await
-    }
-
     pub fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.current_idempotency_key.clone()
     }
