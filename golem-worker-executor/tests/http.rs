@@ -368,10 +368,14 @@ async fn http_client_using_reqwest_async_parallel(
 
 /// Regression test for G35/T48: concurrent HTTP sends interleave their durable
 /// records in the oplog in network/scheduling order, so an executor restart
-/// must replay them claim-based rather than positionally. Runs an invocation
-/// with many parallel outgoing requests, restarts the executor (forcing a full
-/// oplog replay of the interleaved records), and runs a fresh invocation on
-/// the recovered worker.
+/// must replay them claim-based rather than positionally. The server holds
+/// every response of the first invocation until all 16 requests have arrived
+/// (forcing all 16 sends to overlap), then releases the responses in reverse
+/// request-id order (forcing completions out of initiation order). The durable
+/// record must show the overlap (every send `Start` precedes every send `End`)
+/// and the inversion (`End` order differs from `Start` order). A restart then
+/// forces a full oplog replay of the interleaved records before a fresh
+/// invocation runs live.
 #[test]
 #[tracing::instrument]
 async fn http_client_using_reqwest_async_parallel_replay(
@@ -380,10 +384,29 @@ async fn http_client_using_reqwest_async_parallel_replay(
     _tracing: &Tracing,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::sync::oneshot;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_body_clone = captured_body.clone();
+
+    // The first 16 requests (the first invocation) are held: each handler
+    // registers a release channel keyed by the guest-assigned `X-Test` request
+    // id (0..16) and answers only when the test releases it, so the release
+    // order is tied to request identity rather than network arrival order.
+    // Later requests (the post-restart invocation) respond immediately, as
+    // does everything once `holding` is cleared (the releaser gave up), so a
+    // straggler cannot block forever after a release timeout.
+    let held: Arc<Mutex<std::collections::HashMap<u16, oneshot::Sender<()>>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let held_in_server = held.clone();
+    let arrivals = Arc::new(AtomicUsize::new(0));
+    let arrivals_in_server = arrivals.clone();
+    let holding = Arc::new(AtomicBool::new(true));
+    let holding_in_server = holding.clone();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -392,23 +415,82 @@ async fn http_client_using_reqwest_async_parallel_replay(
         async move {
             let route = Router::new().route(
                 "/post-example",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers
-                        .get("X-Test")
-                        .map(|h| h.to_str().unwrap().to_string())
-                        .unwrap_or("no X-Test header".to_string());
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    {
-                        let mut capture = captured_body_clone.lock().unwrap();
-                        capture.push(body.clone());
+                post(move |headers: HeaderMap, body: Bytes| {
+                    let held = held_in_server.clone();
+                    let arrivals = arrivals_in_server.clone();
+                    let holding = holding_in_server.clone();
+                    let captured_body = captured_body_clone.clone();
+                    async move {
+                        let header = headers
+                            .get("X-Test")
+                            .map(|h| h.to_str().unwrap().to_string())
+                            .unwrap_or("no X-Test header".to_string());
+                        let body = String::from_utf8(body.to_vec()).unwrap();
+                        {
+                            let mut capture = captured_body.lock().unwrap();
+                            capture.push(body.clone());
+                        }
+                        if arrivals.fetch_add(1, Ordering::SeqCst) < 16
+                            && holding.load(Ordering::SeqCst)
+                        {
+                            let id: u16 = header
+                                .parse()
+                                .expect("the first invocation's requests carry numeric X-Test ids");
+                            let (release_tx, release_rx) = oneshot::channel();
+                            let previous = held.lock().unwrap().insert(id, release_tx);
+                            assert!(
+                                previous.is_none(),
+                                "request id {id} must arrive exactly once while responses are held"
+                            );
+                            let _ = release_rx.await;
+                        }
+                        format!(
+                            "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
+                        )
                     }
-                    format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
-                    )
                 }),
             );
 
             axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    // Releases the held responses once all 16 concurrent requests (ids 0..16)
+    // are in flight, in reverse request-id order, pacing the releases so the
+    // completions land in the oplog out of initiation order. On timeout it
+    // first stops the holding and drops every held channel so the blocked
+    // handlers answer and the invocation cannot hang the test.
+    let held_in_releaser = held.clone();
+    let holding_in_releaser = holding.clone();
+    let response_releaser = spawn(
+        async move {
+            let all_arrived = timeout(Duration::from_secs(30), async {
+                loop {
+                    if (0..16u16).all(|id| held_in_releaser.lock().unwrap().contains_key(&id)) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            if all_arrived.is_err() {
+                holding_in_releaser.store(false, Ordering::SeqCst);
+                held_in_releaser.lock().unwrap().clear();
+                panic!(
+                    "all 16 concurrent requests (distinct X-Test ids 0..16) must arrive while \
+                     every response is held"
+                );
+            }
+            for id in (0..16u16).rev() {
+                let release_tx = held_in_releaser
+                    .lock()
+                    .unwrap()
+                    .remove(&id)
+                    .expect("a held release channel exists for every request id");
+                let _ = release_tx.send(());
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
         .in_current_span(),
     );
@@ -425,15 +507,62 @@ async fn http_client_using_reqwest_async_parallel_replay(
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "run_parallel", data_value!(16u16))
-        .await?;
+    let result = timeout(
+        Duration::from_secs(120),
+        executor.invoke_and_await_agent(&component, &agent_id, "run_parallel", data_value!(16u16)),
+    )
+    .await
+    .expect("the first parallel invocation must complete once the held responses are released")?;
     let return_value = result.into_return_value().expect("Expected a return value");
     let SchemaValue::List { elements: lst } = &return_value else {
         panic!("Expected List, got {return_value:?}")
     };
     assert_eq!(lst.len(), 16);
     assert_eq!(captured_body.lock().unwrap().len(), 16);
+    response_releaser.await?;
+
+    // The durable record must prove both the overlap and the out-of-order
+    // completion the server enforced: all 16 send `Start` entries precede
+    // every send `End` entry, and the `End` order is not the `Start` order.
+    {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let sends = partition_starts(&oplog, "http::client::send");
+        assert_eq!(
+            sends.counts(),
+            (0, 16, 0),
+            "all 16 concurrent sends must complete with an End: {sends:?}"
+        );
+        let send_starts: std::collections::HashSet<_> = sends.ended.iter().copied().collect();
+        let max_start_index = *sends.ended.iter().max().unwrap();
+        let ends_in_oplog_order: Vec<_> = oplog
+            .iter()
+            .filter_map(|e| match &e.entry {
+                PublicOplogEntry::End(p) if send_starts.contains(&p.start_index) => {
+                    Some((e.oplog_index, p.start_index))
+                }
+                _ => None,
+            })
+            .collect();
+        let min_end_entry_index = ends_in_oplog_order
+            .iter()
+            .map(|(idx, _)| *idx)
+            .min()
+            .unwrap();
+        assert!(
+            min_end_entry_index > max_start_index,
+            "all 16 sends must overlap: every send Start (last at {max_start_index}) must \
+             precede every send End (first at {min_end_entry_index})"
+        );
+        let ends_by_start: Vec<_> = ends_in_oplog_order
+            .iter()
+            .map(|(_, start_index)| *start_index)
+            .collect();
+        assert!(
+            !ends_by_start.is_sorted(),
+            "the reverse-order releases must complete the sends out of initiation order, but \
+             the End entries follow the Start order exactly: {ends_by_start:?}"
+        );
+    }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -655,6 +784,24 @@ async fn wait_for_peer_close(stream: &mut tokio::net::TcpStream) -> anyhow::Resu
     Ok(closed)
 }
 
+/// Like [`wait_for_peer_close`], but tolerates the peer still writing data
+/// (e.g. a streamed request body) before aborting: reads and discards bytes
+/// until the peer closes the connection or the deadline expires.
+async fn wait_for_peer_close_draining_data(
+    stream: &mut tokio::net::TcpStream,
+) -> anyhow::Result<bool> {
+    let mut buffer = [0u8; 4096];
+    let closed = timeout(Duration::from_secs(5), async {
+        loop {
+            if stream.read(&mut buffer).await? == 0 {
+                break Ok::<bool, std::io::Error>(true);
+            }
+        }
+    })
+    .await??;
+    Ok(closed)
+}
+
 async fn recv_close_event(
     rx: &mut mpsc::UnboundedReceiver<anyhow::Result<bool>>,
 ) -> anyhow::Result<bool> {
@@ -662,6 +809,134 @@ async fn recv_close_event(
         .await?
         .transpose()
         .map(|closed| closed.unwrap_or(false))
+}
+
+/// Partitions every durable `Start` entry with the given public function name
+/// by its terminal in the oplog: terminated by `Cancelled`, terminated by
+/// `End`, or left without a terminal (`incomplete` — the durable shape of an
+/// idempotent call dropped mid-flight, re-executed live on replay).
+struct PartitionedStarts {
+    cancelled: Vec<golem_common::model::oplog::OplogIndex>,
+    ended: Vec<golem_common::model::oplog::OplogIndex>,
+    incomplete: Vec<golem_common::model::oplog::OplogIndex>,
+}
+
+impl PartitionedStarts {
+    fn counts(&self) -> (usize, usize, usize) {
+        (
+            self.cancelled.len(),
+            self.ended.len(),
+            self.incomplete.len(),
+        )
+    }
+}
+
+impl std::fmt::Debug for PartitionedStarts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PartitionedStarts")
+            .field("cancelled", &self.cancelled)
+            .field("ended", &self.ended)
+            .field("incomplete", &self.incomplete)
+            .finish()
+    }
+}
+
+fn partition_starts(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    function_name: &str,
+) -> PartitionedStarts {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let mut partitioned = PartitionedStarts {
+        cancelled: Vec::new(),
+        ended: Vec::new(),
+        incomplete: Vec::new(),
+    };
+    for entry in oplog {
+        let PublicOplogEntry::Start(params) = &entry.entry else {
+            continue;
+        };
+        if params.function_name != function_name {
+            continue;
+        }
+        let start_index = entry.oplog_index;
+        let terminals: Vec<bool> = oplog
+            .iter()
+            .filter_map(|e| match &e.entry {
+                PublicOplogEntry::End(p) if p.start_index == start_index => Some(true),
+                PublicOplogEntry::Cancelled(p) if p.start_index == start_index => Some(false),
+                _ => None,
+            })
+            .collect();
+        match terminals.as_slice() {
+            [] => partitioned.incomplete.push(start_index),
+            [true] => partitioned.ended.push(start_index),
+            [false] => partitioned.cancelled.push(start_index),
+            multiple => panic!(
+                "the durable Start at {start_index} has multiple terminals ({multiple:?}); \
+                 every Start must have at most one End or Cancelled"
+            ),
+        }
+    }
+    partitioned
+}
+
+/// Asserts the durable record of `expected_reads` guest-cancelled pending body
+/// reads (each a full `get_and_cancel_pending_body_read` run): the send and the
+/// `consume-body` parent complete with `End`, and each pending chunk read is
+/// terminated by an `End` persisting the `Cancelled` chunk marker — no orphaned
+/// `Start` anywhere.
+fn assert_cancelled_body_read_entries(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    expected_reads: usize,
+) {
+    use golem_common::model::oplog::payload::types::SerializableP3HttpBodyChunk;
+    use golem_common::model::oplog::{
+        HostResponse, HostResponseP3HttpClientConsumeBodyChunk, PublicOplogEntry,
+    };
+
+    let sends = partition_starts(oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (0, expected_reads, 0),
+        "each send must complete with an End: {sends:?}"
+    );
+    let bodies = partition_starts(oplog, "http::types::response::consume-body");
+    assert_eq!(
+        bodies.counts(),
+        (0, expected_reads, 0),
+        "each consume-body parent must complete with an End: {bodies:?}"
+    );
+    let chunks = partition_starts(oplog, "http::types::response::consume-body-chunk");
+    assert_eq!(
+        chunks.counts(),
+        (0, expected_reads, 0),
+        "each guest-cancelled chunk read must complete with an End carrying the Cancelled \
+         marker: {chunks:?}"
+    );
+    let chunk_ended = chunks.ended;
+
+    let expected_marker: HostResponse = HostResponseP3HttpClientConsumeBodyChunk {
+        chunk: SerializableP3HttpBodyChunk::Cancelled,
+    }
+    .into();
+    let expected_marker = expected_marker
+        .into_typed_schema_value()
+        .expect("rendering the expected Cancelled chunk marker failed");
+    for start_index in chunk_ended {
+        let response = oplog
+            .iter()
+            .find_map(|e| match &e.entry {
+                PublicOplogEntry::End(p) if p.start_index == start_index => p.response.clone(),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing End response for the chunk read at {start_index}"));
+        assert_eq!(
+            response, expected_marker,
+            "the guest-cancelled chunk read at {start_index} must persist the Cancelled chunk \
+             marker as its recorded terminal"
+        );
+    }
 }
 
 async fn recv_request_event(
@@ -833,6 +1108,16 @@ async fn outgoing_http_pending_body_read_cancellation_replays(
     .into_typed::<String>()?;
     assert_eq!(result, "cancelled-during-body-read(200)");
     recv_request_event(&mut request_rx).await?;
+
+    // The cancelled pending chunk read must be terminated durably: an `End`
+    // persisting the `Cancelled` chunk marker, with the send and consume-body
+    // parent completed normally and no orphaned `Start`.
+    {
+        use golem_common::model::oplog::OplogIndex;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_cancelled_body_read_entries(&oplog, 1);
+    }
+
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
@@ -851,6 +1136,15 @@ async fn outgoing_http_pending_body_read_cancellation_replays(
     .into_typed::<String>()?;
     assert_eq!(result2, "cancelled-during-body-read(200)");
     recv_request_event(&mut request_rx).await?;
+
+    // The first cancelled read replayed positionally and the second ran live:
+    // both must be recorded with the same shape.
+    {
+        use golem_common::model::oplog::OplogIndex;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_cancelled_body_read_entries(&oplog, 2);
+    }
+
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
@@ -859,11 +1153,12 @@ async fn outgoing_http_pending_body_read_cancellation_replays(
     Ok(())
 }
 
-/// Dropping a still-pending P3 response future must cancel the durable send
-/// (`Cancelled` on replay for the in-flight write) and abort the underlying
-/// HTTP request instead of leaving the socket parked waiting for response
-/// headers. The restarted invocation replays the cancellation and then runs a
-/// fresh cancellation live.
+/// Dropping a still-pending P3 response future of an idempotent (GET) send
+/// must abort the underlying HTTP request instead of leaving the socket
+/// parked waiting for response headers, and leave the committed `Start`
+/// without a terminal (`LeaveIncompleteOnDrop`): the restarted invocation
+/// re-executes the incomplete send live and the deterministic guest cancels
+/// it again, then a fresh cancellation runs live.
 #[test]
 #[tracing::instrument]
 async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
@@ -872,20 +1167,31 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
     _tracing: &Tracing,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
     let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let accepted_in_server = accepted.clone();
 
     let http_server = spawn(
         async move {
             while let Ok((mut stream, _)) = listener.accept().await {
+                accepted_in_server.fetch_add(1, Ordering::SeqCst);
                 let closed_tx = closed_tx.clone();
                 spawn(async move {
                     let result = async {
                         let request = read_request_headers(&mut stream).await?;
+                        if request.is_empty() {
+                            // The peer aborted the connection before sending the
+                            // request head (a send dropped mid-connect); already
+                            // closed.
+                            return Ok(true);
+                        }
                         anyhow::ensure!(
                             request.starts_with(b"GET /delayed-response "),
                             "unexpected request: {}",
@@ -927,6 +1233,27 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
         recv_close_event(&mut closed_rx).await?,
         "dropping the pending response future must close the in-flight request connection"
     );
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "the first invocation must issue exactly one live request"
+    );
+
+    // An idempotent (GET) send uses the `LeaveIncompleteOnDrop` drop policy:
+    // dropping the pending response future leaves its committed
+    // `Start`(http::client::send) without a terminal, so replay re-executes
+    // the send live and the deterministic guest cancels it again.
+    {
+        use golem_common::model::oplog::OplogIndex;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let sends = partition_starts(&oplog, "http::client::send");
+        assert_eq!(
+            sends.counts(),
+            (0, 0, 1),
+            "the dropped pending idempotent send must leave exactly one incomplete Start: \
+             {sends:?}"
+        );
+    }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -943,10 +1270,184 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
         .await?
         .into_typed::<String>()?;
     assert_eq!(result2, "cancelled-before-response");
+    // Post-restart connections: the replayed invocation re-executes the
+    // historical incomplete send live and the deterministic guest drops it
+    // again, then the fresh invocation issues its own send (also dropped).
+    // During replay the recorded cancel timer resolves instantly from the
+    // oplog, so the re-executed send may be aborted before or after its TCP
+    // connect reaches the server: the fresh invocation's connection is
+    // guaranteed, the re-executed one contributes at most one more. Every
+    // connection that did land must be aborted at the socket level.
+    let post_restart_accepted = accepted.load(Ordering::SeqCst) - 1;
+    assert!(
+        (1..=2).contains(&post_restart_accepted),
+        "post-restart there must be the fresh invocation's connection plus at most one from \
+         the re-executed incomplete send, got {post_restart_accepted}"
+    );
+    for _ in 0..post_restart_accepted {
+        assert!(
+            recv_close_event(&mut closed_rx).await?,
+            "every post-restart request connection must be aborted by the dropped send"
+        );
+    }
+
+    // The replayed first send re-executed live from its claimed incomplete
+    // `Start` and was cancelled again (no new entries); the second live send
+    // appended another `Start` that was likewise left incomplete on drop.
+    {
+        use golem_common::model::oplog::OplogIndex;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let sends = partition_starts(&oplog, "http::client::send");
+        assert_eq!(
+            sends.counts(),
+            (0, 0, 2),
+            "the replayed and the fresh cancelled idempotent sends must both leave \
+             incomplete Starts: {sends:?}"
+        );
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+/// Dropping a still-pending P3 response future of a non-idempotent (POST)
+/// send must record a durable `Start` + `Cancelled` pair (`Cancellable` drop
+/// policy) and abort the underlying HTTP request. On replay after restart the
+/// recorded `Cancelled` parks the send without touching the network — the
+/// POST is never re-issued — and a second cancellation then runs live.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_post_cancel_records_cancelled_and_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let connections_server = connections.clone();
+
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                connections_server.fetch_add(1, Ordering::SeqCst);
+                let closed_tx = closed_tx.clone();
+                spawn(async move {
+                    let result = async {
+                        let request = read_request_headers(&mut stream).await?;
+                        anyhow::ensure!(
+                            request.starts_with(b"POST /delayed-response "),
+                            "unexpected request: {}",
+                            String::from_utf8_lossy(&request)
+                        );
+                        // Never respond; drain any request-body bytes until
+                        // the peer aborts the request.
+                        wait_for_peer_close_draining_data(&mut stream).await
+                    }
+                    .await;
+                    let _ = closed_tx.send(result);
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_and_cancel_before_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "cancelled-before-response");
+    assert!(
+        recv_close_event(&mut closed_rx).await?,
+        "dropping the pending response future must close the in-flight request connection"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+
+    // A non-idempotent send uses the `Cancellable` drop policy: dropping the
+    // pending response future records a `Cancelled` terminal for the
+    // committed `Start`, so replay never re-issues the POST.
+    {
+        use golem_common::model::oplog::OplogIndex;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let sends = partition_starts(&oplog, "http::client::send");
+        assert_eq!(
+            sends.counts(),
+            (1, 0, 0),
+            "the dropped pending non-idempotent send must record exactly one Start + \
+             Cancelled pair: {sends:?}"
+        );
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_and_cancel_before_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result2, "cancelled-before-response");
     assert!(
         recv_close_event(&mut closed_rx).await?,
         "post-restart cancellation must still close the fresh live request connection"
     );
+
+    // The replay of the first invocation resolved its send from the recorded
+    // `Cancelled` entry without network I/O, so only the second live
+    // invocation opened a new connection.
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        2,
+        "replaying the cancelled POST send must not re-issue the request"
+    );
+
+    // Both the replayed and the fresh cancelled sends are recorded as
+    // `Start` + `Cancelled` pairs.
+    {
+        use golem_common::model::oplog::OplogIndex;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let sends = partition_starts(&oplog, "http::client::send");
+        assert_eq!(
+            sends.counts(),
+            (2, 0, 0),
+            "the replayed and the fresh cancelled non-idempotent sends must both record \
+             Start + Cancelled pairs: {sends:?}"
+        );
+    }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1316,6 +1817,238 @@ async fn outgoing_http_request_body_transmission_error_is_recorded_and_replayed(
     assert!(
         result2.contains("transmit=Err(ErrorCode::HttpRequestBodySize(Some(5)))"),
         "the post-restart transmission future must observe the same recorded error, got: {result2}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+/// A `client::send` failing with a *permanent* `ErrorCode` (a TLS handshake
+/// against a plain-HTTP server) must be recorded durably: the guest observes
+/// the error exactly once live (permanent HTTP errors are not retried at the
+/// worker level, so the server sees a single connection), the oplog contains a
+/// completed `Start`/`End` pair for the send, and after a restart the recorded
+/// invocation replays the same `ErrorCode` from the oplog without any new
+/// network attempt.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_send_permanent_error_is_recorded_and_replayed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogIndex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let accepted_in_server = accepted.clone();
+
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                accepted_in_server.fetch_add(1, Ordering::SeqCst);
+                spawn(async move {
+                    // Answer the TLS ClientHello with plain-HTTP bytes: rustls
+                    // rejects them as an invalid TLS message, which maps to the
+                    // permanent `TlsProtocolError`. Keep the socket open until
+                    // the client closes so the guest observes the bogus TLS
+                    // bytes rather than a connection reset (which would be
+                    // classified as transient and retried).
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                    let _ = stream.flush().await;
+                    let _ = wait_for_peer_close(&mut stream).await;
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "send_with_permanent_error",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        result, "send-error(ErrorCode::TlsProtocolError)",
+        "the live send must fail with the exact permanent TLS ErrorCode the bogus TLS bytes \
+         are classified as"
+    );
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "a permanent send error must not be retried at the worker level"
+    );
+
+    // The failed send must be durable: a completed `Start`(http::client::send)
+    // with a matching `End` carrying the recorded error, and no orphaned or
+    // cancelled send `Start`.
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let sends = partition_starts(&oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (0, 1, 0),
+        "the failed send must be recorded as exactly one Start completed by an End — not \
+         cancelled, not orphaned: {sends:?}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart: the recorded invocation (including the failed send) replays
+    // from the oplog before the next invocation runs. The stored agent state
+    // must be rebuilt to the same error string without any new connection to
+    // the server.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let stored = executor
+        .invoke_and_await_agent(&component, &agent_id, "stored_send_error", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        stored, result,
+        "replay must rebuild the same recorded send error"
+    );
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "replaying the failed send must not hit the network"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
+/// Replay roundtrip of a successful send: the guest performs a GET and stores
+/// the full response — status, a distinctive response header, and the body —
+/// in agent state. After an executor restart, the recorded invocation replays
+/// from the oplog and must rebuild the identical status/header/body without
+/// any new network request.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_full_response_is_replayed_without_network(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogIndex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let requests_in_server = requests.clone();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/full-response",
+                axum::routing::get(move || {
+                    let requests = requests_in_server.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        (
+                            [("x-resp-test", "distinctive-header-value")],
+                            "full-response-body",
+                        )
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_store_full_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        result,
+        "status=200;x-resp-test=distinctive-header-value;body=full-response-body"
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    // The send and its body consumption must be durable and complete.
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let sends = partition_starts(&oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (0, 1, 0),
+        "the successful send must be recorded as a completed Start/End pair: {sends:?}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart: replaying the recorded invocation must rebuild the identical
+    // stored status/header/body from the oplog without hitting the network.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let stored = executor
+        .invoke_and_await_agent(&component, &agent_id, "stored_full_response", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        stored, result,
+        "replay must rebuild the same recorded status, response header, and body"
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "replaying the recorded send must not issue a new network request"
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;

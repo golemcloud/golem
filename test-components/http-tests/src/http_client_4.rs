@@ -99,18 +99,42 @@ pub trait HttpClient4 {
     /// (`HttpRequestBodySize`), which must replay identically.
     async fn post_with_short_body_transmission_error(&self) -> String;
 
+    /// Sends a raw wasip3 GET over `https` to a plain-HTTP server, which fails
+    /// the TLS handshake with a permanent (non-retried) `ErrorCode`. The error
+    /// returned by `client::send` is stored in agent state and returned.
+    async fn send_with_permanent_error(&mut self) -> String;
+
+    /// Returns the error stored by the last `send_with_permanent_error` call
+    /// (rebuilt from the oplog on replay).
+    fn stored_send_error(&self) -> String;
+
+    /// Sends a raw wasip3 GET and stores the full response — status code, the
+    /// `x-resp-test` response header, and the body — in agent state, formatted
+    /// as a single string, which is also returned.
+    async fn get_and_store_full_response(&mut self) -> String;
+
+    /// Returns the response stored by the last `get_and_store_full_response`
+    /// call (rebuilt from the oplog on replay).
+    fn stored_full_response(&self) -> String;
+
     /// Spawns a guest task that performs a full HTTP GET (send and body read)
     /// and returns from the export immediately without awaiting it: the
     /// durable HTTP calls happen only after the export has returned.
     async fn get_in_spawned_task_after_return(&self) -> String;
 }
 
-struct HttpClient4Impl;
+struct HttpClient4Impl {
+    last_send_error: Option<String>,
+    last_full_response: Option<String>,
+}
 
 #[agent_implementation]
 impl HttpClient4 for HttpClient4Impl {
     fn new() -> Self {
-        Self
+        Self {
+            last_send_error: None,
+            last_full_response: None,
+        }
     }
 
     async fn post_non_idempotent(&self) -> String {
@@ -225,6 +249,30 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn post_with_short_body_transmission_error(&self) -> String {
         do_post_with_short_body_transmission_error().await
+    }
+
+    async fn send_with_permanent_error(&mut self) -> String {
+        let result = do_send_with_permanent_error().await;
+        self.last_send_error = Some(result.clone());
+        result
+    }
+
+    fn stored_send_error(&self) -> String {
+        self.last_send_error
+            .clone()
+            .unwrap_or_else(|| "none".to_string())
+    }
+
+    async fn get_and_store_full_response(&mut self) -> String {
+        let result = do_get_full_response().await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    fn stored_full_response(&self) -> String {
+        self.last_full_response
+            .clone()
+            .unwrap_or_else(|| "none".to_string())
     }
 
     async fn get_in_spawned_task_after_return(&self) -> String {
@@ -398,6 +446,95 @@ async fn do_post_with_short_body_transmission_error() -> String {
         Err(err) => format!("Err({err:?})"),
     };
     format!("send={send} transmit={transmit_result:?}")
+}
+
+async fn do_send_with_permanent_error() -> String {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let headers =
+        types::Fields::from_list(&[("x-test".to_string(), b"permanent-error".to_vec())]).unwrap();
+    let (_trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    // `https` against a plain-HTTP server: the TLS handshake fails with a
+    // permanent `ErrorCode` (e.g. `TlsProtocolError`), which is returned to
+    // the guest instead of triggering worker-level retries.
+    let (request, _transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Https)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+
+    match client::send(request).await {
+        Ok(response) => {
+            let status = response.get_status_code();
+            drop(response);
+            format!("unexpected-success({status})")
+        }
+        Err(err) => format!("send-error({err:?})"),
+    }
+}
+
+async fn do_get_full_response() -> String {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::wit_future;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let headers =
+        types::Fields::from_list(&[("x-test".to_string(), b"full-response".to_vec())]).unwrap();
+    let (_trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, _transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request
+        .set_path_with_query(Some("/full-response"))
+        .unwrap();
+
+    let response = client::send(request).await.expect("Request failed");
+    let status = response.get_status_code();
+    let header = response
+        .get_headers()
+        .get(&"x-resp-test".to_string())
+        .into_iter()
+        .map(|value| String::from_utf8_lossy(&value).into_owned())
+        .collect::<Vec<_>>()
+        .join(",");
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut body_bytes = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(n) => {
+                body_bytes.extend_from_slice(&buffer[..n]);
+                buffer.clear();
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("response body read was cancelled"),
+        }
+    }
+    drop(body);
+    trailers.await.expect("response trailers failed");
+    response_done_tx
+        .write(Ok(()))
+        .await
+        .expect("failed to acknowledge response body");
+    format!(
+        "status={status};x-resp-test={header};body={}",
+        String::from_utf8_lossy(&body_bytes)
+    )
 }
 
 async fn do_put_with_p3_trailers() -> String {

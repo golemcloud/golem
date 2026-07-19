@@ -2583,40 +2583,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             );
             self.finished = true;
             let persist_result: Result<(), WorkerExecutorError> = if self.persisted {
-                async {
-                    guard
-                        .call()
-                        .expect("terminal guard is armed")
-                        .wait_request_upload()
-                        .await
-                        .map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to serialize and store durable call request: {err}"
-                            ))
-                        })?;
-                    let host_response: HostResponse = response.clone().into();
-                    let response_payload =
-                        oplog.upload_payload(&host_response).await.map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to serialize and store durable call response: {err}"
-                            ))
-                        })?;
-                    let end = OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: self.start_idx,
-                        response: Some(response_payload),
-                        forced_commit: false,
-                    };
-                    let terminal_oplog = oplog.clone();
-                    let terminal = tokio::spawn(async move {
-                        terminal_oplog.add(end).await;
-                        Ok(())
-                    });
-                    guard.cleanup_after_terminal(terminal);
-                    guard.wait_terminal().await?;
-                    Ok(())
-                }
-                .await
+                Self::persist_access_terminal(oplog, &mut guard, self.start_idx, &response).await
             } else {
                 Ok(())
             };
@@ -2650,6 +2617,54 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             guard.disarm();
             Ok(response)
         }
+    }
+
+    /// Persistence stage of [`Self::complete_access_impl`]: wait for the (possibly deferred)
+    /// request upload, upload the response payload, hand the terminal `End` append to an owned
+    /// task via [`AccessTerminalGuard::cleanup_after_terminal`], and join it before returning.
+    ///
+    /// Deliberately store-free — it sees only the oplog and the armed guard, never the `Accessor`
+    /// — so nothing on this path can release the live-call permit or emit the guard's cleanup
+    /// event before the terminal entry is appended: the guard still owns both when this returns,
+    /// and they are only released downstream (`disarm` after `end_durable_function_access`), or
+    /// handed to the drain queue if the completion future is torn mid-await. The focused ordering
+    /// test `access_terminal_end_is_appended_before_cleanup_and_permit_release` drives this exact
+    /// function against a gated oplog to keep that invariant observable.
+    async fn persist_access_terminal(
+        oplog: Arc<dyn Oplog>,
+        guard: &mut AccessTerminalGuard<P>,
+        start_idx: OplogIndex,
+        response: &Pair::Resp,
+    ) -> Result<(), WorkerExecutorError> {
+        guard
+            .call()
+            .expect("terminal guard is armed")
+            .wait_request_upload()
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to serialize and store durable call request: {err}"
+                ))
+            })?;
+        let host_response: HostResponse = response.clone().into();
+        let response_payload = oplog.upload_payload(&host_response).await.map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "failed to serialize and store durable call response: {err}"
+            ))
+        })?;
+        let end = OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: start_idx,
+            response: Some(response_payload),
+            forced_commit: false,
+        };
+        let terminal_oplog = oplog.clone();
+        let terminal = tokio::spawn(async move {
+            terminal_oplog.add(end).await;
+            Ok(())
+        });
+        guard.cleanup_after_terminal(terminal);
+        guard.wait_terminal().await
     }
 
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
@@ -4331,16 +4346,30 @@ mod tests {
     }
 
     /// Minimal in-memory [`Oplog`] recording appended entries, for tests that assert what a
-    /// drained drop event writes durably.
+    /// drained drop event writes durably. With an `end_gate` installed, appending an `End` entry
+    /// first signals `reached` and then blocks until the gate semaphore yields a permit, so a
+    /// test can hold the terminal append open and observe what is (not) visible meanwhile.
     #[derive(Debug)]
     struct InMemoryOplog {
         entries: tokio::sync::Mutex<Vec<OplogEntry>>,
+        end_gate: Option<(mpsc::UnboundedSender<()>, Arc<tokio::sync::Semaphore>)>,
     }
 
     impl InMemoryOplog {
         fn new() -> Self {
             Self {
                 entries: tokio::sync::Mutex::new(Vec::new()),
+                end_gate: None,
+            }
+        }
+
+        fn with_end_gate(
+            reached: mpsc::UnboundedSender<()>,
+            gate: Arc<tokio::sync::Semaphore>,
+        ) -> Self {
+            Self {
+                entries: tokio::sync::Mutex::new(Vec::new()),
+                end_gate: Some((reached, gate)),
             }
         }
     }
@@ -4348,6 +4377,15 @@ mod tests {
     #[async_trait]
     impl Oplog for InMemoryOplog {
         async fn add(&self, entry: OplogEntry) -> OplogIndex {
+            if matches!(entry, OplogEntry::End { .. })
+                && let Some((reached, gate)) = &self.end_gate
+            {
+                let _ = reached.send(());
+                gate.acquire()
+                    .await
+                    .expect("end gate semaphore is never closed")
+                    .forget();
+            }
             let mut entries = self.entries.lock().await;
             entries.push(entry);
             OplogIndex::from_u64(entries.len() as u64)
@@ -4425,9 +4463,9 @@ mod tests {
 
         async fn upload_raw_payload(
             &self,
-            _data: Vec<u8>,
+            data: Vec<u8>,
         ) -> Result<golem_common::model::oplog::RawOplogPayload, String> {
-            unimplemented!()
+            Ok(golem_common::model::oplog::RawOplogPayload::SerializedInline(data))
         }
 
         async fn download_raw_payload(
@@ -4494,6 +4532,113 @@ mod tests {
             }
             other => panic!("expected Cancelled, got {other:?}"),
         }
+    }
+
+    #[test]
+    async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
+        // Seam-2 ordering, proven against the production persistence stage itself
+        // (`CallHandle::persist_access_terminal`, the exact code `complete_access_impl` runs for a
+        // persisted live call): while the terminal `End` append is still in flight, the live-call
+        // permit must stay held and no cleanup event may become visible; both are released only
+        // after the append completes (production releases them via `disarm()` after
+        // `end_durable_function_access`, strictly downstream of `wait_terminal()`).
+        use golem_common::model::oplog::HostResponseMonotonicClockTimestamp;
+
+        let (reached_tx, mut reached_rx) = mpsc::unbounded_channel();
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let oplog = Arc::new(InMemoryOplog::with_end_gate(reached_tx, gate.clone()));
+        let start_idx = oplog
+            .add(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::MonotonicClockNow,
+                request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                    golem_common::model::oplog::HostRequestNoInput {},
+                )))),
+                durable_function_type: DurableFunctionType::ReadRemote,
+            })
+            .await;
+
+        let permit_counter = Arc::new(AtomicUsize::new(0));
+        let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel();
+        let mut guard = AccessTerminalGuard::<NotCancellable>::new(
+            DroppedCall {
+                start_idx,
+                begin_index: start_idx,
+                function_type: DurableFunctionType::ReadRemote,
+                request_upload: PendingUpload::already_durable(),
+                atomic_region_registration: None,
+                trap_context: DurableCallTrapContext {
+                    retry_from: start_idx,
+                    in_atomic_region: false,
+                },
+                live_call_permit: Some(LiveCallPermit::new(permit_counter.clone())),
+            },
+            NotCancellable::production_drop_sink(Some(cleanup_tx.clone())),
+            Some(cleanup_tx),
+        );
+        assert_eq!(permit_counter.load(Ordering::Acquire), 1);
+
+        let persist_oplog: Arc<dyn Oplog> = oplog.clone();
+        let persist = tokio::spawn(async move {
+            let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
+            let result = CallHandle::<host_functions::MonotonicClockNow, NotCancellable>::
+                persist_access_terminal(persist_oplog, &mut guard, start_idx, &response)
+            .await;
+            (result, guard)
+        });
+
+        // The owned terminal task is now provably inside the gated `End` append...
+        reached_rx
+            .recv()
+            .await
+            .expect("terminal append must reach the gate");
+        // ...and while it is held open, the call is still counted as in flight and no cleanup
+        // event has escaped, so a positional boundary cannot slip in before the terminal.
+        assert_eq!(
+            permit_counter.load(Ordering::Acquire),
+            1,
+            "live-call permit must be held while the terminal append is pending"
+        );
+        assert!(
+            cleanup_rx.try_recv().is_err(),
+            "no cleanup event may be visible while the terminal append is pending"
+        );
+        assert_eq!(
+            oplog.entries.lock().await.len(),
+            1,
+            "the End entry must not be durable yet"
+        );
+
+        gate.add_permits(1);
+        let (result, mut guard) = persist.await.expect("persist task must not panic");
+        result.expect("persisting the terminal must succeed");
+
+        // The terminal is durably appended when the persistence stage returns...
+        {
+            let entries = oplog.entries.lock().await;
+            assert_eq!(entries.len(), 2, "expected [Start, End]");
+            match &entries[1] {
+                OplogEntry::End { start_index, .. } => assert_eq!(*start_index, start_idx),
+                other => panic!("expected End, got {other:?}"),
+            }
+        }
+        // ...while the guard still owns the permit and nothing has been queued: release happens
+        // only at the production `disarm()`, strictly after the terminal.
+        assert_eq!(
+            permit_counter.load(Ordering::Acquire),
+            1,
+            "the guard must still own the permit after the terminal is durable"
+        );
+        assert!(cleanup_rx.try_recv().is_err());
+
+        guard.disarm();
+        assert_eq!(
+            permit_counter.load(Ordering::Acquire),
+            0,
+            "disarm after the terminal releases the in-flight count"
+        );
+        assert!(cleanup_rx.try_recv().is_err());
     }
 
     #[test]
