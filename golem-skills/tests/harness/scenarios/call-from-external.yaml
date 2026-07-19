@@ -44,6 +44,26 @@ steps:
         4. Prints the result of the last increment to stdout
 
         Build and run the application to verify it works.
+      effect: >
+        In the Effect-based test-app project, call the counter agent from a regular standalone
+        Effect v4 CLI application running in Node.js outside Golem. Use the generated external
+        TypeScript bridge client because Effect components and their bridge values use TypeScript
+        names and syntax. Do not try to use the guest-side `Agent.client` or Golem host layers from
+        the external process.
+
+        Make the Effect agent's exported binding and `defineAgent` runtime name exactly
+        `CounterAgent` (the generated template starts with `Counter`), and update the matching
+        agent key in `golem.yaml`. Preserve its existing `name` constructor parameter and unsigned
+        64-bit `increment` result. Configure manifest-driven `bridge.ts` generation for this agent,
+        then write a standalone Effect CLI application outside the Golem component that:
+        1. Connects the generated client to the local Golem server
+        2. Creates or gets the CounterAgent instance named "ext-test"
+        3. Calls `increment` three times sequentially, awaiting each generated Promise through
+           deferred Effect v4 operations
+        4. Prints the result of the last increment to stdout
+
+        Build and deploy the component, build the generated bridge package, then build and run the
+        standalone Effect application to verify it works.
       scala: >
         I want to call my CounterAgent from an external Scala application that runs outside
         of Golem — not from another agent, but from a regular standalone Scala program.
@@ -74,6 +94,8 @@ steps:
         - "golem-call-from-external-rust"
       ts:
         - "golem-call-from-external-ts"
+      effect:
+        - "golem-call-from-external-effect"
       scala:
         - "golem-call-from-external-scala"
       moonbit:

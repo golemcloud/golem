@@ -549,11 +549,11 @@ units:
     attempts:
       - number: 1
         startedAt: 2026-07-18T21:23:09.278Z
+        finishedAt: 2026-07-18T21:40:26.050Z
+        thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
         outcome: failed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-call-another-agent/attempt-1/rpc-1-invoke-and-await/amp-effect-rpc-1-invoke-and-await.json
-        thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
-        finishedAt: 2026-07-18T21:40:26.050Z
         error: "rpc-1-invoke-and-await:
 
           DEPLOY_FAILED: Selected app: test-app, env: local, server: local - builtin (http://localhost:9881/)
@@ -603,11 +603,11 @@ units:
           \n"
       - number: 2
         startedAt: 2026-07-18T21:40:26.054Z
+        finishedAt: 2026-07-18T21:52:00.763Z
+        thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-call-another-agent/attempt-2/rpc-1-invoke-and-await/amp-effect-rpc-1-invoke-and-await.json
-        thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
-        finishedAt: 2026-07-18T21:52:00.763Z
     evidence:
       verifiedAt: 2026-07-18T21:52:00.763Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -623,9 +623,21 @@ units:
       - golem-add-http-endpoint
     strategy: adapted
     notes: Generated bridge clients and CLI values use TypeScript syntax for Effect components.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T07:17:24.587Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-call-from-external/attempt-1/call-from-external/amp-effect-call-from-external.json
+        thread: https://ampcode.com/threads/T-019f793c-b579-753d-8a4a-4ef73a740f3b
+        finishedAt: 2026-07-19T07:42:54.155Z
+    evidence:
+      verifiedAt: 2026-07-19T07:42:54.156Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f793c-b579-753d-8a4a-4ef73a740f3b
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-call-from-external/attempt-1/call-from-external/amp-effect-call-from-external.json
   - id: golem-configure-durability
     targetSkill: golem-configure-durability-effect
     verifyScenarios:
