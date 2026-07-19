@@ -78,8 +78,14 @@ pub async fn extract_agent_type_schemas_with_streams(
     // above only satisfies p2 imports; this adds the p3 ones so mixed
     // p2/p3 components instantiate cleanly.
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-    // `wasi:http` is not part of `wasmtime_wasi::p2::add_to_linker_*`; add the
-    // p2 http interfaces explicitly so components that import `wasi:http` link.
+    // `wasi:http` is not covered by either `wasmtime_wasi::p2::add_to_linker_*`
+    // or `wasmtime_wasi::p3::add_to_linker`; the p2 http interfaces are added
+    // explicitly here. P3 `wasi:http` — like every other import outside the
+    // allowlist in `dynamic_import` — is satisfied by the mock instances
+    // registered below, which fail loudly if actually invoked: agent
+    // discovery must never perform real HTTP calls. Because shadowing is
+    // allowed and `dynamic_import` runs after these static registrations,
+    // the mocks take precedence for the interfaces they cover.
     wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
 
     let mut builder = WasiCtx::builder();

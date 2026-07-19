@@ -14,6 +14,9 @@
 
 pub mod wit;
 
+#[cfg(test)]
+mod tests;
+
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
