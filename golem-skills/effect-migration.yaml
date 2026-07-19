@@ -717,9 +717,23 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Use Snapshot.define and schema evolution rather than custom JSON serialization.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T08:40:59.769Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/snapshot-recovery/amp-effect-snapshot-recovery.json
+          - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/manual-snapshot-update-agent/amp-effect-manual-snapshot-update-agent.json
+        thread: https://ampcode.com/threads/T-019f7989-3c8d-72ab-a2aa-ba7b3e45b2ea
+        finishedAt: 2026-07-19T09:06:14.173Z
+    evidence:
+      verifiedAt: 2026-07-19T09:06:14.173Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7989-3c8d-72ab-a2aa-ba7b3e45b2ea
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/snapshot-recovery/amp-effect-snapshot-recovery.json
+        - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/manual-snapshot-update-agent/amp-effect-manual-snapshot-update-agent.json
   - id: golem-enable-otlp
     targetSkill: golem-enable-otlp-effect
     verifyScenarios:

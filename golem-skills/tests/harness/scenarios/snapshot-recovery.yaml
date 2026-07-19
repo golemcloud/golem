@@ -10,15 +10,30 @@ steps:
 
   # 2. Add snapshot support with snapshotting enabled on every invocation
   - id: "add-snapshot-support"
-    prompt: >
-      In the test-app project, add custom save/load snapshot functions to the
-      CounterAgent that serialize the counter value as 4 big-endian bytes. 
-      Enable snapshotting on every invocation. Build and deploy.
+    prompt:
+      rust: &non-effect-add-snapshot-support >
+        In the test-app project, add custom save/load snapshot functions to the
+        CounterAgent that serialize the counter value as 4 big-endian bytes.  Enable
+        snapshotting on every invocation. Build and deploy.
+      ts: *non-effect-add-snapshot-support
+      effect: >
+        In the Effect-based test-app project, configure the existing counter for
+        schema-driven snapshot recovery on every successful invocation. Use
+        `Snapshot.define` with a `Schema.Struct` containing the counter value,
+        `Snapshot.policy.everyN(1)`, and exactly one `snapshot.init(...)` call whose returned
+        `Ref` remains the counter's state. Do not add custom byte or JSON save/load code. Rename
+        the `defineAgent` name from `Counter` to exactly `CounterAgent` if necessary, and update
+        the matching agent key in `golem.yaml`. Preserve the existing `increment` behavior.
+        Build and deploy.
+      scala: *non-effect-add-snapshot-support
+      moonbit: *non-effect-add-snapshot-support
     expectedSkills:
       rust:
         - "golem-custom-snapshot-rust"
       ts:
         - "golem-custom-snapshot-ts"
+      effect:
+        - "golem-custom-snapshot-effect"
       scala:
         - "golem-custom-snapshot-scala"
       moonbit:
