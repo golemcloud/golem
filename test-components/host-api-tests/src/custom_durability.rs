@@ -4,9 +4,9 @@ use golem_rust::{
     with_persistence_level,
 };
 use std::fmt::{Display, Formatter};
-use wasi::http::types::Method;
 
 use crate::raw_http;
+use crate::raw_http::Method;
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
 struct StructuredInput {

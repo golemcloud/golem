@@ -1,86 +1,51 @@
-use wasi::http::outgoing_handler;
-use wasi::http::types::{
-    FutureIncomingResponse, IncomingResponse, Method, OutgoingBody, OutgoingRequest, RequestOptions,
-    Scheme,
-};
-use wasi::io::streams::StreamError;
+use std::time::Duration;
 
-/// Sends an outgoing HTTP request through the synchronous `wasi:http` API and
-/// returns the pending response future without waiting for it.
+/// HTTP methods used by the test helpers.
+#[derive(Debug, Clone, Copy)]
+pub enum Method {
+    Get,
+    Post,
+    Delete,
+}
+
+/// Sends an outgoing HTTP request through the P3 `wasi:http` based `wasi-fetch`
+/// client and waits for the complete response, returning its status and body
+/// bytes.
 ///
-/// This path is used by the synchronous host-API tests: the requests are
-/// recorded durably in the oplog and the worker executor injects the Golem
-/// invocation-context trace headers, neither of which is available through the
-/// asynchronous `wasi-fetch` client.
-pub fn send(
+/// This path is used by the host-API tests: the requests are recorded durably
+/// in the oplog and the worker executor injects the Golem invocation-context
+/// trace headers.
+pub async fn request_async(
     method: Method,
     authority: &str,
     path: &str,
     body: Option<&[u8]>,
     content_type: Option<&str>,
-) -> FutureIncomingResponse {
-    let headers = wasi::http::types::Fields::new();
+) -> (u16, Vec<u8>) {
+    let url = format!("http://{authority}{path}");
+    let client = wasi_fetch::Client::new();
+    let mut builder = match method {
+        Method::Get => client.get(&url),
+        Method::Post => client.post(&url),
+        Method::Delete => client.delete(&url),
+    }
+    .timeout(Duration::from_secs(5))
+    .between_bytes_timeout(Duration::from_secs(5));
+
     if let Some(content_type) = content_type {
-        headers
-            .set(&"content-type".to_string(), &[content_type.as_bytes().to_vec()])
-            .unwrap();
+        builder = builder.header("content-type", content_type);
     }
-
-    let request = OutgoingRequest::new(headers);
-    request.set_method(&method).unwrap();
-    request.set_path_with_query(Some(path)).unwrap();
-    request.set_scheme(Some(&Scheme::Http)).unwrap();
-    request.set_authority(Some(authority)).unwrap();
-
-    let request_body = request.body().unwrap();
     if let Some(bytes) = body {
-        let stream = request_body.write().unwrap();
-        for chunk in bytes.chunks(4096) {
-            stream.blocking_write_and_flush(chunk).unwrap();
-        }
-        drop(stream);
+        builder = builder.body(bytes.to_vec());
     }
-    OutgoingBody::finish(request_body, None).unwrap();
 
-    let options = RequestOptions::new();
-    options.set_connect_timeout(Some(5_000_000_000)).unwrap();
-    options.set_first_byte_timeout(Some(5_000_000_000)).unwrap();
-    options.set_between_bytes_timeout(Some(5_000_000_000)).unwrap();
-
-    outgoing_handler::handle(request, Some(options)).unwrap()
+    let response = builder.send().await.expect("HTTP request failed");
+    let status = response.status().as_u16();
+    let body = response.into_body().bytes().await;
+    (status, body.to_vec())
 }
 
-/// Blocks until the pending response future resolves and returns the incoming
-/// response, panicking on transport or protocol errors.
-pub fn get_incoming_response(future: &FutureIncomingResponse) -> IncomingResponse {
-    match future.get() {
-        Some(Ok(Ok(incoming_response))) => incoming_response,
-        Some(Ok(Err(err))) => panic!("HTTP error code: {err:?}"),
-        Some(Err(err)) => panic!("HTTP error: {err:?}"),
-        None => {
-            future.subscribe().block();
-            get_incoming_response(future)
-        }
-    }
-}
-
-/// Reads the full body of an incoming response.
-pub fn read_body(response: &IncomingResponse) -> Vec<u8> {
-    let response_body = response.consume().unwrap();
-    let stream = response_body.stream().unwrap();
-    let mut body = Vec::new();
-    loop {
-        match stream.blocking_read(u64::MAX) {
-            Ok(mut chunk) => body.append(&mut chunk),
-            Err(StreamError::Closed) => break,
-            Err(err) => panic!("Error reading body: {err:?}"),
-        }
-    }
-    body
-}
-
-/// Sends a request and waits for the complete response, returning its status and
-/// body bytes.
+/// Blocking wrapper around [`request_async`] for synchronous agent methods.
 pub fn request(
     method: Method,
     authority: &str,
@@ -88,9 +53,5 @@ pub fn request(
     body: Option<&[u8]>,
     content_type: Option<&str>,
 ) -> (u16, Vec<u8>) {
-    let future = send(method, authority, path, body, content_type);
-    let response = get_incoming_response(&future);
-    let status = response.status();
-    let body = read_body(&response);
-    (status, body)
+    wit_bindgen::block_on(request_async(method, authority, path, body, content_type))
 }

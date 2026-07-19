@@ -1,8 +1,12 @@
+use crate::raw_http;
+use crate::raw_http::Method;
 use golem_rust::retry::{
     CountBoxConfig, NamedRetryPolicy, PolicyNode, PredicateNode, RetryPolicy, RetryPredicate,
     get_retry_policies, get_retry_policy_by_name, remove_retry_policy, set_retry_policy,
     use_retry_policy,
 };
+use golem_rust::wasip3::http::{client, types};
+use golem_rust::wasip3::{wit_future, wit_stream};
 use golem_rust::{
     AgentAnyFilter, AgentId, AgentMetadata, Checkpoint, CheckpointResultExt, ComponentId,
     ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId, Transaction,
@@ -10,12 +14,12 @@ use golem_rust::{
     fallible_transaction, fork, generate_idempotency_key, get_agent_metadata, get_oplog_index,
     get_self_metadata, golem_operation, infallible_transaction, oplog_commit, resolve_agent_id,
     resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
-    use_idempotence_mode, use_persistence_level, with_persistence_level,
-    with_persistence_level_async,
+    use_idempotence_mode, with_persistence_level, with_persistence_level_async,
 };
-use crate::raw_http;
 use serde::{Deserialize, Serialize};
-use wasi::http::types::Method;
+use std::future::poll_fn;
+use std::pin::pin;
+use std::task::Poll;
 
 #[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct ResolveComponentResult {
@@ -190,30 +194,118 @@ impl GolemHostApi for GolemHostApiImpl {
         let _guard = use_idempotence_mode(enabled);
 
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
-        let future_response = raw_http::send(
-            Method::Post,
-            &format!("localhost:{port}"),
-            "/side-effect",
-            Some(b"1"),
-            None,
-        );
 
-        atomically(|| {
-            let _guard = use_persistence_level(PersistenceLevel::PersistNothing);
-            let decision = remote_call(1);
-            if decision {
-                panic!("crash 1");
+        wit_bindgen::block_on(async move {
+            // The side-effect POST is kept open across the crash below: the
+            // test server records the event as soon as the request arrives but
+            // delays its first response (per the
+            // `x-test-first-response-delay-ms` header), so the durable send is
+            // still incomplete (`Start` without `End`) when the worker
+            // crashes. On the retry the idempotence flag decides whether the
+            // incomplete remote write may be re-executed (idempotence on) or
+            // must fail the invocation (idempotence off).
+            let headers = types::Fields::from_list(&[(
+                "x-test-first-response-delay-ms".to_string(),
+                b"30000".to_vec(),
+            )])
+            .unwrap();
+            let (mut body_writer, body_reader) = wit_stream::new();
+            let (trailers_writer, trailers_reader) =
+                wit_future::new::<Result<Option<types::Fields>, types::ErrorCode>>(|| Ok(None));
+            let (request, _transmitted) =
+                types::Request::new(headers, Some(body_reader), trailers_reader, None);
+            request.set_method(&types::Method::Post).unwrap();
+            request.set_path_with_query(Some("/side-effect")).unwrap();
+            request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+            request
+                .set_authority(Some(&format!("localhost:{port}")))
+                .unwrap();
+
+            let mut send = pin!(client::send(request));
+            let mut send_result = None;
+
+            // Drive the send only until the request body and trailers have been
+            // fully handed over to the host's HTTP client: at that point the
+            // server has received the request (and recorded the side effect),
+            // while the send itself — and with it the durable `End` — is still
+            // pending on the delayed response.
+            {
+                let mut write_body = pin!(async {
+                    let leftover = body_writer.write_all(b"1".to_vec()).await;
+                    assert!(leftover.is_empty());
+                    drop(body_writer);
+                    let _ = trailers_writer.write(Ok(None)).await;
+                });
+                poll_fn(|cx| {
+                    if send_result.is_none()
+                        && let Poll::Ready(result) = send.as_mut().poll(cx)
+                    {
+                        send_result = Some(result);
+                    }
+                    write_body.as_mut().poll(cx)
+                })
+                .await;
             }
+
+            // Race the pending send against a short timer. The test server
+            // delays only the *first* `/side-effect` response — by far longer
+            // than this timer — so on the first attempt the timer wins and the
+            // send is still incomplete when the worker crashes below. When the
+            // incomplete send is re-executed on a retry (idempotence on), the
+            // server responds immediately and the send wins the race, so the
+            // retry completes without crashing. The timer is a `ReadLocal`
+            // durable call, which — unlike a remote call — may interleave with
+            // the open send scope without making the incomplete send
+            // unreplayable.
+            if send_result.is_none() {
+                let mut timer = pin!(golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                    2_000_000_000
+                ));
+                poll_fn(|cx| {
+                    if let Poll::Ready(result) = send.as_mut().poll(cx) {
+                        send_result = Some(result);
+                        return Poll::Ready(());
+                    }
+                    timer.as_mut().poll(cx)
+                })
+                .await;
+            }
+
+            // The crash happens inside an atomic region: a guest panic is a
+            // deterministic trap that is only retried when it is inside an
+            // atomic region.
+            let send_ready = send_result.is_some();
+            atomically_async(|| async move {
+                if !send_ready {
+                    panic!("crash 1");
+                }
+            })
+            .await;
+
+            let response = match send_result {
+                Some(result) => result,
+                None => send.await,
+            }
+            .expect("HTTP request failed");
+            let status = response.get_status_code();
+            let (result_writer, result_reader) =
+                wit_future::new::<Result<(), types::ErrorCode>>(|| Ok(()));
+            let (body_stream, trailers) = types::Response::consume_body(response, result_reader);
+            let body = body_stream.collect().await;
+            if let Err(err) = trailers.await {
+                panic!("Error: {err:?}")
+            }
+            result_writer
+                .write(Ok(()))
+                .await
+                .expect("failed to acknowledge response body");
+
+            println!(
+                "Received response from remote side-effect: {} {}",
+                status,
+                String::from_utf8(body).unwrap()
+            );
         });
-
-        let incoming_response = raw_http::get_incoming_response(&future_response);
-        let body = raw_http::read_body(&incoming_response);
-
-        println!(
-            "Received response from remote side-effect: {} {}",
-            incoming_response.status(),
-            String::from_utf8(body).unwrap()
-        );
     }
 
     fn persist_nothing(&self) {
@@ -479,10 +571,15 @@ fn compensation_step(_: bool, step: u64) -> Result<(), String> {
 }
 
 fn remote_call(param: u64) -> bool {
+    wit_bindgen::block_on(remote_call_async(param))
+}
+
+async fn remote_call_async(param: u64) -> bool {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
     let path = format!("/step/{param}");
     println!("Sending GET {path}");
-    let (status, body) = raw_http::request(Method::Get, &format!("localhost:{port}"), &path, None, None);
+    let (status, body) =
+        raw_http::request_async(Method::Get, &format!("localhost:{port}"), &path, None, None).await;
     let body: bool = serde_json::from_slice(&body).expect("Invalid response");
     println!("Received {status} {body}");
     body
@@ -492,8 +589,13 @@ fn remote_call_undo(param: u64) -> bool {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
     let path = format!("/step/{param}");
     println!("Sending DEL {path}");
-    let (status, body) =
-        raw_http::request(Method::Delete, &format!("localhost:{port}"), &path, None, None);
+    let (status, body) = raw_http::request(
+        Method::Delete,
+        &format!("localhost:{port}"),
+        &path,
+        None,
+        None,
+    );
     let body: bool = serde_json::from_slice(&body).expect("Invalid response");
     println!("Received {status} {body}");
     body

@@ -1,9 +1,9 @@
 use crate::raw_http;
+use crate::raw_http::Method;
 use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
 use golem_rust::{agent_definition, agent_implementation};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use wasi::http::types::Method;
 
 #[agent_definition]
 pub trait InvocationContext {
