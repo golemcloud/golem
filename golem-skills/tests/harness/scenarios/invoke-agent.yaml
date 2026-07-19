@@ -8,15 +8,26 @@ steps:
       deploy: true
 
   - id: "invoke-via-agent"
-    prompt: >
-      I have the test-app project deployed with a CounterAgent that has a string constructor
-      parameter (the counter name) and an increment method. Use the CLI to invoke the
-      increment method for a counter named "c1".
+    prompt:
+      rust: &non-effect-invoke-agent-prompt >
+        I have the test-app project deployed with a CounterAgent that has a string constructor
+        parameter (the counter name) and an increment method. Use the CLI to invoke the
+        increment method for a counter named "c1".
+      ts: *non-effect-invoke-agent-prompt
+      effect: >
+        I have the Effect-based test-app project deployed with a `Counter` agent whose exact
+        `defineAgent` name is `Counter`. It has a string constructor parameter (the counter name)
+        and an `increment` method. Use the CLI and the Effect component's TypeScript value syntax
+        to invoke this Effect agent's `increment` method for a counter named "c1".
+      scala: *non-effect-invoke-agent-prompt
+      moonbit: *non-effect-invoke-agent-prompt
     expectedSkills:
       rust:
         - "golem-invoke-agent-rust"
       ts:
         - "golem-invoke-agent-ts"
+      effect:
+        - "golem-invoke-agent-effect"
       scala:
         - "golem-invoke-agent-scala"
       moonbit:
@@ -25,6 +36,22 @@ steps:
   - id: "verify-counter-incremented"
     invoke_json:
       agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      rust: &non-effect-counter-incremented-expect
+        result_json:
+          - path: "$"
+            equals: 2
+      ts: *non-effect-counter-incremented-expect
+      effect: {}
+      scala: *non-effect-counter-incremented-expect
+      moonbit: *non-effect-counter-incremented-expect
+
+  - id: "verify-effect-counter-incremented"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'Counter("c1")'
       method: "increment"
     expect:
       result_json:

@@ -886,9 +886,21 @@ units:
       - golem-add-agent
     strategy: direct
     notes: Effect components intentionally use TypeScript CLI value syntax.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T11:01:40.106Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-invoke-agent/attempt-1/invoke-agent/amp-effect-invoke-agent.json
+        thread: https://ampcode.com/threads/T-019f7a0a-0358-728f-9a75-408ad5299ff5
+        finishedAt: 2026-07-19T11:13:23.048Z
+    evidence:
+      verifiedAt: 2026-07-19T11:13:23.048Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7a0a-0358-728f-9a75-408ad5299ff5
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-invoke-agent/attempt-1/invoke-agent/amp-effect-invoke-agent.json
   - id: golem-logging
     targetSkill: golem-logging-effect
     verifyScenarios:
