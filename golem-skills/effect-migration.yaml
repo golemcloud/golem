@@ -1159,9 +1159,135 @@ units:
     prerequisites:
       - golem-call-another-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T16:14:44.112Z
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-schedule-future-call/attempt-1/rpc-3-schedule-future-call/amp-effect-rpc-3-schedule-future-call.json
+        thread: https://ampcode.com/threads/T-019f7b28-a467-747f-acbf-23ecc25766aa
+        finishedAt: 2026-07-19T16:32:43.846Z
+        error: |
+          rpc-3-schedule-future-call:
+          DEPLOY_FAILED: Selected app: test-app, env: local, server: local - builtin (http://localhost:9881/)
+          Selecting components
+            Found components: test-app:effect-main
+            Selected components and layers:
+              test-app:effect-main: effect, effect[optimized], test-app:effect-main
+          Building components
+            Building test-app:effect-main
+              Skipping executing external command 'npx tsc --project "/Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app" --noEmit false --emitDeclarationOnly --declaration --outFile "/Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app/golem-temp/ts-check/test-app-effect-main/main.d.ts"' in directory /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app [UP-TO-DATE]
+              Skipping executing external command 'npx --no rollup -- -c "/Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app/golem-temp/common/effect/rollup.config.component.mjs"' in directory /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app [UP-TO-DATE]
+              Skipping injecting JS module /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app/golem-temp/ts-dist/test-app-effect-main/main.js into QuickJS WASM /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm [UP-TO-DATE]
+              Skipping pre-initializing JS component /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app/golem-temp/agents/test_app_effect_main.dynamic.wasm into /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app/golem-temp/agents/test_app_effect_main.preinitialized.wasm [UP-TO-DATE]
+          Adding metadata to components
+            Skipping adding metadata to test-app:effect-main [UP-TO-DATE]
+          Preparing deployment
+            Extracting test-app:effect-main agent types from /Users/vigoo/projects/golem/golem-4/golem-skills/tests/harness/workspaces/11bc884a-da2a-4fa5-8c46-e877ecc54a2f/rpc-3-schedule-future-call/effect/test-app/golem-temp/agents/test_app_effect_main.wasm
+            Calculating hash for component test-app:effect-main binary
+            Diffing 
+              Comparing staging area with current deployment: SAME
+              Diffing with staging area and current deployment
+                @@ -0,0 +1,54 @@
+                +components:
+                +  test-app:effect-main:
+                +    binaryHash: 743d120dcd461208f10b531bafe59f35c4057e11cf0fbb3901e394334fe48cfb
+                +    agents:
+                +      CounterAgent:
+                +        constructor: 'CounterAgent(name: string)'
+                +        description: A durable named counter
+                +        sourceLanguage: typescript
+                +        mode: Durable
+                +        snapshotting:
+                +          configType: EveryNInvocation
+                +          count: 10
+                +          type: Enabled
+                +        httpMount:
+                +          path: /counters/{name}
+                +          phantomAgent: false
+                +          cors:
+                +          - '*'
+                +        methods:
+                +          increment:
+                +            signature: increment() -> number
+                +            description: Increments the counter and returns the new value
+                +            http:
+                +            - method: POST
+                +              path: /increment
+                +          scheduleReport:
+                +            signature: scheduleReport() -> number
+                +            description: Increments the counter and schedules the new value
+                +          value:
+                +            signature: value() -> number
+                +            description: Returns the current value
+                +            http:
+                +            - method: GET
+                +              path: /value
+                +      DelayedRecorder:
+                +        constructor: 'DelayedRecorder(name: string)'
+                +        sourceLanguage: typescript
+                +        mode: Durable
+                +        snapshotting:
+                +          configType: EveryNInvocation
+                +          count: 10
+                +          type: Enabled
+                +        methods:
+                +          recordCount:
+                +            signature: 'recordCount(value: number)'
+                +          recordedCounts:
+                +            signature: recordedCounts() -> number[]
+                +httpApiDeployments:
+                +  test-app.localhost:9006:
+                +    hash: 6b0a592d63bb96fcd829486004308c5c1f3689ff2ccf89a18a1d59d692c49bfd
+                +    webhooksPrefix: /webhooks/
+                +    openapiEndpointPrefix: /
+                +    agents:
+                +      Counter: {}
+            Planning 
+              Planned changes to be applied to the environment:
+                
+                Component changes:
+                  - create component test-app:effect-main
+                
+                HTTP API deployment changes:
+                  - create HTTP API deployment test-app.localhost:9006
+                
+
+          Auto confirming 
+          > The above plan will be applied to the following environment:
+          >     Application Name: test-app
+          >     Environment Name: local
+          >     Server          : local - builtin (http://localhost:9881/)
+          > 
+          > Do you want to continue the deployment?
+          Applying changes to the staging area
+            Creating component test-app:effect-main
+              Created component revision: test-app:effect-main 0
+            Creating HTTP API deployment test-app.localhost:9006
+              
+              Auto confirming 
+              > The following domain is not registered for the environment: test-app.localhost:9006
+              > Do you want to register it?
+              Created HTTP API deployment revision: test-app.localhost:9006 0
+          Deploying staged changes to the environment
+
+          Summary 
+            Failed to deploy [ERROR]
+              error: Environment Service - Error: 400 Bad Request, HTTP_API_MISSING_AGENT_TYPE: Agent type Counter requested by http api deployment test-app.localhost:9006 is not part of the deployment
+      - number: 2
+        startedAt: 2026-07-19T16:32:43.850Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-schedule-future-call/attempt-2/rpc-3-schedule-future-call/amp-effect-rpc-3-schedule-future-call.json
+        thread: https://ampcode.com/threads/T-019f7b28-a467-747f-acbf-23ecc25766aa
+        finishedAt: 2026-07-19T16:44:14.111Z
+    evidence:
+      verifiedAt: 2026-07-19T16:44:14.111Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7b28-a467-747f-acbf-23ecc25766aa
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-schedule-future-call/attempt-2/rpc-3-schedule-future-call/amp-effect-rpc-3-schedule-future-call.json
   - id: golem-stateless-agent
     targetSkill: golem-stateless-agent-effect
     verifyScenarios:
