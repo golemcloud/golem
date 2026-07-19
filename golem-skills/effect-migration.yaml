@@ -910,9 +910,21 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Use Effect logging and spans, not console-only TypeScript guidance.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T11:13:24.293Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-logging/attempt-1/add-logging/amp-effect-add-logging.json
+        thread: https://ampcode.com/threads/T-019f7a14-c33b-7400-abb7-faf53e8cddf0
+        finishedAt: 2026-07-19T11:32:36.975Z
+    evidence:
+      verifiedAt: 2026-07-19T11:32:36.975Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7a14-c33b-7400-abb7-faf53e8cddf0
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-logging/attempt-1/add-logging/amp-effect-add-logging.json
   - id: golem-make-http-request
     targetSkill: golem-make-http-request-effect
     verifyScenarios:
