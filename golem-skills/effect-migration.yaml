@@ -862,9 +862,21 @@ units:
       - golem-add-agent
     strategy: direct
     notes: Effect components intentionally use the TypeScript REPL binding and value syntax.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T10:45:13.416Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-interactive-repl/attempt-1/interactive-repl/amp-effect-interactive-repl.json
+        thread: https://ampcode.com/threads/T-019f79fa-f7c9-7228-9b4f-ae6c303fd7ac
+        finishedAt: 2026-07-19T11:01:38.891Z
+    evidence:
+      verifiedAt: 2026-07-19T11:01:38.892Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f79fa-f7c9-7228-9b4f-ae6c303fd7ac
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-interactive-repl/attempt-1/interactive-repl/amp-effect-interactive-repl.json
   - id: golem-invoke-agent
     targetSkill: golem-invoke-agent-effect
     verifyScenarios:
