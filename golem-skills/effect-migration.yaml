@@ -815,9 +815,21 @@ units:
     prerequisites:
       - golem-call-another-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T10:02:40.760Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-fire-and-forget/attempt-1/rpc-2-trigger/amp-effect-rpc-2-trigger.json
+        thread: https://ampcode.com/threads/T-019f79d4-0203-7608-8478-c89457e05e40
+        finishedAt: 2026-07-19T10:17:33.097Z
+    evidence:
+      verifiedAt: 2026-07-19T10:17:33.097Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f79d4-0203-7608-8478-c89457e05e40
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-fire-and-forget/attempt-1/rpc-2-trigger/amp-effect-rpc-2-trigger.json
   - id: golem-http-params
     targetSkill: golem-http-params-effect
     verifyScenarios:
