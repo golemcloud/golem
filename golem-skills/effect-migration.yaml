@@ -1345,6 +1345,18 @@ units:
       - golem-add-agent
     strategy: adapted
     notes: Use durable Effect suspension primitives exposed by the Effect SDK.
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T17:12:09.140Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-wait-for-external-input/attempt-1/wait-for-external-input/amp-effect-wait-for-external-input.json
+        thread: https://ampcode.com/threads/T-019f7b5d-351e-73d9-8a06-0a81306a11c1
+        finishedAt: 2026-07-19T17:32:26.548Z
+    evidence:
+      verifiedAt: 2026-07-19T17:32:26.548Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7b5d-351e-73d9-8a06-0a81306a11c1
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-wait-for-external-input/attempt-1/wait-for-external-input/amp-effect-wait-for-external-input.json
