@@ -37,14 +37,15 @@ steps:
         `mock-model` and API key `test-mock-key`. Send the question as a user message and return the
         assistant's reply text.
 
-        Use only APIs and component capabilities actually provided by the installed Effect SDK. If
-        it has no supported host LLM API or outgoing HTTP transport, do not invent an API, copy a
-        plain-TypeScript `fetch` example, or add a fake/stub response. Leave the project buildable
-        and report the precise SDK capability blocker instead. Even in that blocker case, still
-        perform the requested `Counter` to `CounterAgent` rename, update `golem.yaml`, and preserve
-        the existing `increment` method unchanged.
+        POST directly to `{{openai_mock_url}}/v1/chat/completions`. Keep the handler Effect-based by
+        using root `Effect.tryPromise` around the QuickJS runtime's WASI-backed
+        `globalThis.fetch`. Send `Authorization: Bearer test-mock-key` and JSON with the model and
+        user message, check the HTTP status, parse and validate the JSON response, and extract
+        `choices[0].message.content`. Do not use Node networking libraries, a fake/stub response,
+        or `effect/unstable/http` (that subpath is not shared with the embedded Effect runtime).
 
-        Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully. Verify this task only by building and
+        deploying; do not manually invoke `askLlm`, because the harness invokes it after this step.
       scala: *non-effect-add-llm-prompt
       moonbit: *non-effect-add-llm-prompt
     expectedSkills:
@@ -54,6 +55,7 @@ steps:
         - "golem-add-llm-ts"
       effect:
         - "golem-add-llm-effect"
+        - "golem-make-http-request-effect"
       scala:
         - "golem-add-llm-scala"
       moonbit:
@@ -68,7 +70,6 @@ steps:
         - "golem-add-secret-ts"
         - "golem-add-npm-package"
       effect:
-        - "golem-make-http-request-effect"
         - "golem-add-secret-effect"
         - "golem-add-npm-package"
       scala:
@@ -89,13 +90,13 @@ steps:
       method:
         rust: "ask_llm"
         ts: "askLlm"
-        effect: "increment"
+        effect: "askLlm"
         scala: "askLlm"
         moonbit: "ask_llm"
       args:
         rust: &non-effect-llm-question '"hello"'
         ts: *non-effect-llm-question
-        effect: ""
+        effect: '"hello"'
         scala: *non-effect-llm-question
         moonbit: *non-effect-llm-question
     expect:
@@ -107,6 +108,6 @@ steps:
       effect:
         result_json:
           - path: "$"
-            equals: 1
+            equals: "mock-llm-ok"
       scala: *non-effect-llm-result
       moonbit: *non-effect-llm-result
