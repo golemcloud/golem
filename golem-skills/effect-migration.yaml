@@ -973,11 +973,11 @@ units:
         error: "\e[=0u\e[<u\e[?25h"
       - number: 5
         startedAt: 2026-07-19T12:56:05.942Z
+        finishedAt: 2026-07-19T13:24:20.058Z
+        thread: https://ampcode.com/threads/T-019f7a26-5ee2-741d-afa6-36ce20d4c0ee
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-make-http-request/attempt-5/make-http-request/amp-effect-make-http-request.json
-        thread: https://ampcode.com/threads/T-019f7a26-5ee2-741d-afa6-36ce20d4c0ee
-        finishedAt: 2026-07-19T13:24:20.058Z
     evidence:
       verifiedAt: 2026-07-19T13:24:20.058Z
       effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
@@ -992,9 +992,21 @@ units:
     prerequisites:
       - golem-call-another-agent
     strategy: adapted
-    state: pending
-    attempts: []
-    evidence: null
+    state: passed
+    attempts:
+      - number: 1
+        startedAt: 2026-07-19T13:44:52.460Z
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/effect-migration/golem-multi-instance-agent/attempt-1/rpc-4-phantom-agents/amp-effect-rpc-4-phantom-agents.json
+        thread: https://ampcode.com/threads/T-019f7a9f-7124-773f-aca1-5af91b1f7285
+        finishedAt: 2026-07-19T14:04:15.861Z
+    evidence:
+      verifiedAt: 2026-07-19T14:04:15.861Z
+      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+      thread: https://ampcode.com/threads/T-019f7a9f-7124-773f-aca1-5af91b1f7285
+      reports:
+        - golem-skills/tests/harness/results/effect-migration/golem-multi-instance-agent/attempt-1/rpc-4-phantom-agents/amp-effect-rpc-4-phantom-agents.json
   - id: golem-parallel-workers
     targetSkill: golem-parallel-workers-effect
     verifyScenarios:
