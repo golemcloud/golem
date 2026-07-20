@@ -355,12 +355,21 @@ export type ToolHelpArgumentKind =
 export interface ToolHelpArgument {
   readonly kind: ToolHelpArgumentKind;
   readonly name: string;
+  readonly short?: string;
   readonly aliases: readonly string[];
   readonly doc: Doc;
   readonly required?: boolean;
   readonly valueName?: string;
   readonly default?: CodecValue;
   readonly envVar?: string;
+  readonly acceptsStdio?: boolean;
+  readonly min?: number;
+  readonly max?: number;
+  readonly separator?: string;
+  readonly verbatim?: boolean;
+  readonly flagDefault?: boolean;
+  readonly negatable?: boolean;
+  readonly countMax?: number;
 }
 
 export interface ToolHelpProjection {
@@ -522,6 +531,7 @@ export class ExtendedToolType {
         ? {
             kind: 'global-option',
             name: entry.option.long,
+            short: entry.option.short,
             aliases: entry.option.aliases,
             doc: entry.option.doc,
             required: entry.option.required,
@@ -532,9 +542,15 @@ export class ExtendedToolType {
         : {
             kind: 'global-flag',
             name: entry.flag.long,
+            short: entry.flag.short,
             aliases: entry.flag.aliases,
             doc: entry.flag.doc,
             envVar: entry.flag.envVar,
+            flagDefault:
+              entry.flag.shape.tag === 'bool-flag' ? entry.flag.shape.val.default_ : undefined,
+            negatable:
+              entry.flag.shape.tag === 'bool-flag' ? entry.flag.shape.val.negatable : undefined,
+            countMax: entry.flag.shape.tag === 'count-flag' ? entry.flag.shape.val : undefined,
           },
     );
     const body = command.body;
@@ -548,6 +564,7 @@ export class ExtendedToolType {
           required: entry.required,
           valueName: entry.valueName,
           default: entry.default,
+          acceptsStdio: entry.acceptsStdio,
         })),
       );
       if (body.positionals.tail) {
@@ -558,12 +575,18 @@ export class ExtendedToolType {
           doc: body.positionals.tail.doc,
           required: body.positionals.tail.min > 0,
           valueName: body.positionals.tail.valueName,
+          acceptsStdio: body.positionals.tail.acceptsStdio,
+          min: body.positionals.tail.min,
+          max: body.positionals.tail.max,
+          separator: body.positionals.tail.separator,
+          verbatim: body.positionals.tail.verbatim,
         });
       }
       arguments_.push(
         ...body.options.map((entry) => ({
           kind: 'option' as const,
           name: entry.long,
+          short: entry.short,
           aliases: entry.aliases,
           doc: entry.doc,
           required: entry.required,
@@ -574,15 +597,23 @@ export class ExtendedToolType {
         ...body.flags.map((entry) => ({
           kind: 'flag' as const,
           name: entry.long,
+          short: entry.short,
           aliases: entry.aliases,
           doc: entry.doc,
           envVar: entry.envVar,
+          flagDefault: entry.shape.tag === 'bool-flag' ? entry.shape.val.default_ : undefined,
+          negatable: entry.shape.tag === 'bool-flag' ? entry.shape.val.negatable : undefined,
+          countMax: entry.shape.tag === 'count-flag' ? entry.shape.val : undefined,
         })),
       );
     }
+    const canonicalCommandPath = this.commandPath(command);
+    if (!canonicalCommandPath) {
+      toolBuildError('command-not-found', `command not found in tool tree: ${command.name}`);
+    }
     return {
       command,
-      commandPath: [...commandPath],
+      commandPath: canonicalCommandPath,
       arguments: arguments_,
       subcommands: command.subcommands,
     };

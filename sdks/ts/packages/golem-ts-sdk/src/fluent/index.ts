@@ -50,7 +50,7 @@ export type { KeyValueOptions, PathOptions, QuantityOptions } from './schema/mar
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { FluentCodec, SchemaWalker } from './schema/codec';
 
-export { c, command, err, ok, toolDefinition } from './tool';
+export { c, command, err, ok, renderArgumentHelp, renderHelp, toolDefinition } from './tool';
 export type {
   CamelCase,
   ConstraintRef,
@@ -76,6 +76,8 @@ export type {
   ToolDefinition,
   ToolErr,
   ToolHandler,
+  ToolHelpError,
+  ToolHelpResult,
   ToolImplementation,
   ToolInvocationContext,
   ToolOk,

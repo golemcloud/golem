@@ -34,6 +34,8 @@ import {
   type ExtendedResultSpec,
   type ExtendedToolRuntime,
   type SubtreeForward,
+  type ToolHelpArgument,
+  type ToolHelpProjection,
   ExtendedToolType,
   codecValue,
   emptyDoc,
@@ -42,6 +44,7 @@ import {
   graftSubtree,
   listCodec,
   normalizeExtendedTool,
+  parseSourceValue,
   toolBuildError,
 } from '../internal/tool';
 import { ToolRegistry } from '../internal/registry/toolRegistry';
@@ -309,6 +312,21 @@ export type ToolImplementation<Definition> = RootImplementation<ToolCommandModel
 export interface ImplementedTool<Name extends string = string> {
   readonly name: Name;
 }
+
+export type ToolHelpError =
+  | {
+      readonly tag: 'invalid-command-path';
+      readonly commandPath: readonly string[];
+    }
+  | {
+      readonly tag: 'invalid-argument-name';
+      readonly commandPath: readonly string[];
+      readonly argumentName: string;
+    };
+
+export type ToolHelpResult =
+  | { readonly tag: 'ok'; readonly value: string }
+  | { readonly tag: 'err'; readonly error: ToolHelpError };
 
 export type DocInput = string | Partial<Doc>;
 export type RepeatableMode = 'repeated' | 'delimited' | 'either';
@@ -695,6 +713,7 @@ export class CommandBuilder<
   Root extends boolean = false,
 > {
   private implemented = false;
+  private compiled?: ExtendedToolType;
 
   private constructor(
     readonly name: Name,
@@ -940,9 +959,11 @@ export class CommandBuilder<
   }
 
   [BUILD_TOOL](this: CommandBuilder<Name, Globals, Body, Children, true>): ExtendedToolType {
+    if (this.compiled) return this.compiled;
     const tool = normalizeExtendedTool(new ExtendedToolType(this.toolVersion, this.finalizeNode()));
     validateTypeScriptProjection(tool);
-    return tool;
+    this.compiled = tool;
+    return this.compiled;
   }
 }
 
@@ -962,6 +983,295 @@ export function getExtendedToolDefinition<Definition extends AnyToolDefinition>(
   definition: Definition,
 ): ExtendedToolType {
   return definition[BUILD_TOOL]();
+}
+
+/** Render descriptor-based help for the root or a nested command. */
+export function renderHelp(
+  definition: AnyToolDefinition,
+  commandPath: readonly string[] = [],
+): ToolHelpResult {
+  const tool = getExtendedToolDefinition(definition);
+  const projection = tool.projectHelp(commandPath);
+  if (!projection) {
+    return {
+      tag: 'err',
+      error: { tag: 'invalid-command-path', commandPath: [...commandPath] },
+    };
+  }
+  return { tag: 'ok', value: renderToolHelp(tool, projection) };
+}
+
+/** Render descriptor-based help for one argument at the selected command. */
+export function renderArgumentHelp(
+  definition: AnyToolDefinition,
+  commandPath: readonly string[],
+  argumentName: string,
+): ToolHelpResult {
+  const tool = getExtendedToolDefinition(definition);
+  const projection = tool.projectHelp(commandPath);
+  if (!projection) {
+    return {
+      tag: 'err',
+      error: { tag: 'invalid-command-path', commandPath: [...commandPath] },
+    };
+  }
+  const argument = projection.arguments.find(
+    (entry) => entry.name === argumentName || entry.aliases.includes(argumentName),
+  );
+  if (!argument) {
+    return {
+      tag: 'err',
+      error: {
+        tag: 'invalid-argument-name',
+        commandPath: [...projection.commandPath],
+        argumentName,
+      },
+    };
+  }
+  return { tag: 'ok', value: renderToolArgumentHelp(argument) };
+}
+
+function renderToolHelp(tool: ExtendedToolType, projection: ToolHelpProjection): string {
+  const { command, arguments: arguments_, subcommands } = projection;
+  const lines = [
+    `Usage: ${[tool.toolName, ...projection.commandPath].join(' ')}`,
+    '',
+    command.doc.summary,
+    command.doc.description,
+  ];
+  appendAliases(lines, command.aliases);
+  appendExamples(lines, command.doc, '');
+  appendArgumentSection(
+    lines,
+    'Globals',
+    arguments_.filter((entry) => entry.kind === 'global-option' || entry.kind === 'global-flag'),
+  );
+  appendArgumentSection(
+    lines,
+    'Positionals',
+    arguments_.filter((entry) => entry.kind === 'positional'),
+  );
+  appendArgumentSection(
+    lines,
+    'Tail',
+    arguments_.filter((entry) => entry.kind === 'tail'),
+  );
+  appendArgumentSection(
+    lines,
+    'Options',
+    arguments_.filter((entry) => entry.kind === 'option'),
+  );
+  appendArgumentSection(
+    lines,
+    'Flags',
+    arguments_.filter((entry) => entry.kind === 'flag'),
+  );
+  if (subcommands.length > 0) {
+    lines.push('', 'Subcommands:');
+    subcommands.forEach((entry) => {
+      const aliases = entry.aliases.length > 0 ? ` (aliases: ${entry.aliases.join(', ')})` : '';
+      lines.push(`  ${entry.name}${aliases}\t${entry.doc.summary}`);
+    });
+  }
+  const body = command.body;
+  if (body) {
+    if (body.stdin) appendStreamHelp(lines, 'Stdin', body.stdin);
+    if (body.stdout) appendStreamHelp(lines, 'Stdout', body.stdout);
+    if (body.result) appendResultHelp(lines, body.result);
+    if (body.errors.length > 0) appendErrorHelp(lines, body.errors);
+    if (body.annotations) appendAnnotationHelp(lines, body.annotations);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function renderToolArgumentHelp(argument: ToolHelpArgument): string {
+  const global = argument.kind === 'global-option' || argument.kind === 'global-flag';
+  const type =
+    argument.kind === 'global-option' || argument.kind === 'option'
+      ? 'option'
+      : argument.kind === 'global-flag' || argument.kind === 'flag'
+        ? 'flag'
+        : argument.kind === 'tail'
+          ? 'tail positional'
+          : 'positional';
+  const required = type === 'positional' && argument.required ? ', required' : '';
+  const globalSuffix = global ? ', global' : '';
+  const lines = [
+    `${argumentDisplayName(argument)} (${type}${required}${globalSuffix})`,
+    argument.doc.summary,
+    argument.doc.description,
+  ];
+  const aliases = [
+    ...argument.aliases.map((alias) => `--${alias}`),
+    ...(argument.short ? [`-${argument.short}`] : []),
+  ];
+  appendAliases(lines, aliases);
+  if (argument.valueName) lines.push(`Value: ${argument.valueName}`);
+  if (argument.required !== undefined) lines.push(`Required: ${String(argument.required)}`);
+  if (argument.default) lines.push(`Default: ${formatDefaultValue(argument.default)}`);
+  if (argument.flagDefault !== undefined) {
+    lines.push(`Default: ${String(argument.flagDefault)}`);
+  }
+  if (argument.envVar) lines.push(`Environment: ${argument.envVar}`);
+  if (argument.min !== undefined) lines.push(`Minimum occurrences: ${argument.min}`);
+  if (argument.max !== undefined) lines.push(`Maximum occurrences: ${argument.max}`);
+  if (argument.separator !== undefined) lines.push(`Separator: ${argument.separator}`);
+  if (argument.verbatim) lines.push('Verbatim: true');
+  if (argument.negatable) lines.push('Negatable: true');
+  if (argument.countMax !== undefined) lines.push(`Maximum count: ${argument.countMax}`);
+  if (argument.acceptsStdio) lines.push('Accepts standard input: true');
+  appendExamples(lines, argument.doc, '');
+  return `${lines.join('\n')}\n`;
+}
+
+function appendArgumentSection(
+  lines: string[],
+  title: string,
+  arguments_: readonly ToolHelpArgument[],
+): void {
+  if (arguments_.length === 0) return;
+  lines.push('', `${title}:`);
+  arguments_.forEach((argument) => {
+    const details = argumentSummaryDetails(argument);
+    lines.push(
+      `  ${argumentDisplayName(argument)}${details.length > 0 ? ` [${details.join('; ')}]` : ''}\t${argument.doc.summary}`,
+    );
+  });
+}
+
+function argumentDisplayName(argument: ToolHelpArgument): string {
+  if (argument.kind === 'positional') {
+    return `${argument.name}${argument.valueName ? ` <${argument.valueName}>` : ''}`;
+  }
+  if (argument.kind === 'tail') {
+    return `${argument.name}...${argument.valueName ? ` <${argument.valueName}>...` : ''}`;
+  }
+  const surfaces = [
+    `--${argument.name}`,
+    ...argument.aliases.map((alias) => `--${alias}`),
+    ...(argument.short ? [`-${argument.short}`] : []),
+  ];
+  return `${surfaces.join(', ')}${argument.valueName ? ` <${argument.valueName}>` : ''}`;
+}
+
+function argumentSummaryDetails(argument: ToolHelpArgument): string[] {
+  const details: string[] = [];
+  if (argument.required !== undefined) details.push(argument.required ? 'required' : 'optional');
+  if (argument.default) details.push(`default: ${formatDefaultValue(argument.default)}`);
+  if (argument.flagDefault !== undefined) details.push(`default: ${String(argument.flagDefault)}`);
+  if (argument.envVar) details.push(`env: ${argument.envVar}`);
+  if (argument.acceptsStdio) details.push('accepts stdio');
+  if (argument.min !== undefined) details.push(`min: ${argument.min}`);
+  if (argument.max !== undefined) details.push(`max: ${argument.max}`);
+  if (argument.separator !== undefined) details.push(`separator: ${argument.separator}`);
+  if (argument.verbatim) details.push('verbatim');
+  if (argument.negatable) details.push('negatable');
+  if (argument.countMax !== undefined) details.push(`max count: ${argument.countMax}`);
+  return details;
+}
+
+function appendAliases(lines: string[], aliases: readonly string[]): void {
+  if (aliases.length > 0) lines.push(`Aliases: ${aliases.join(', ')}`);
+}
+
+function appendExamples(lines: string[], doc: Doc, indent: string): void {
+  if (doc.examples.length === 0) return;
+  lines.push(`${indent}Examples:`);
+  doc.examples.forEach((example) => {
+    lines.push(`${indent}  ${example.title}:`);
+    example.body.split('\n').forEach((line) => lines.push(`${indent}    ${line}`));
+  });
+}
+
+function appendStreamHelp(lines: string[], title: string, stream: StreamSpec): void {
+  const details = [stream.required ? 'required' : 'optional'];
+  if (stream.mime.length > 0) details.push(`MIME: ${stream.mime.join(', ')}`);
+  lines.push('', `${title}:`, `  ${details.join('; ')}\t${stream.doc.summary}`);
+  appendIndentedDoc(lines, stream.doc);
+}
+
+function appendResultHelp(lines: string[], result: ExtendedResultSpec): void {
+  lines.push('', 'Result:', `  ${result.doc.summary}`);
+  appendIndentedDoc(lines, result.doc);
+  lines.push(
+    `  Formatters: ${result.formatters
+      .map((formatter) =>
+        formatter.name === result.defaultFormatter ? `${formatter.name} (default)` : formatter.name,
+      )
+      .join(', ')}`,
+  );
+  result.formatters.forEach((formatter) => {
+    if (formatter.doc.summary || formatter.doc.description || formatter.doc.examples.length > 0) {
+      lines.push(`    ${formatter.name}\t${formatter.doc.summary}`);
+      if (formatter.doc.description) lines.push(`      ${formatter.doc.description}`);
+      appendExamples(lines, formatter.doc, '      ');
+    }
+  });
+}
+
+function appendErrorHelp(lines: string[], errors: readonly ExtendedErrorCase[]): void {
+  lines.push('', 'Errors:');
+  errors.forEach((error) => {
+    const details = [error.kind, `exit: ${error.exitCode}`];
+    if (error.payloadCodec) details.push('payload');
+    lines.push(`  ${error.name} [${details.join('; ')}]\t${error.doc.summary}`);
+    appendIndentedDoc(lines, error.doc);
+  });
+}
+
+function appendAnnotationHelp(lines: string[], annotations: CommandAnnotations): void {
+  lines.push(
+    '',
+    'Annotations:',
+    `  read-only: ${String(annotations.readOnly)}`,
+    `  destructive: ${String(annotations.destructive)}`,
+    `  idempotent: ${String(annotations.idempotent)}`,
+    `  open-world: ${String(annotations.openWorld)}`,
+  );
+}
+
+function appendIndentedDoc(lines: string[], doc: Doc): void {
+  if (doc.description) lines.push(`    ${doc.description}`);
+  appendExamples(lines, doc, '    ');
+}
+
+function formatDefaultValue(value: NonNullable<ToolHelpArgument['default']>): string {
+  const parsed = parseSourceValue(value.codec, value.value);
+  return formatHelpValue(parsed.tag === 'valid' ? parsed.value : value.value);
+}
+
+function formatHelpValue(
+  value: unknown,
+  ancestors: Set<object> = new Set(),
+  nested = false,
+): string {
+  if (typeof value === 'string') return nested ? JSON.stringify(value) : value;
+  if (typeof value === 'number') return Object.is(value, -0) ? '-0' : String(value);
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'boolean' || value === null || value === undefined) return String(value);
+  if (typeof value !== 'object') return String(value);
+  if (ancestors.has(value)) return '[Circular]';
+  if (value instanceof Uint8Array) return `[${Array.from(value).join(', ')}]`;
+  if (value instanceof Date) return value.toISOString();
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return `[${value.map((entry) => formatHelpValue(entry, ancestors, true)).join(', ')}]`;
+    }
+    if (value instanceof Map) {
+      return `{${Array.from(
+        value,
+        ([key, entry]) =>
+          `${formatHelpValue(key, ancestors, true)}: ${formatHelpValue(entry, ancestors, true)}`,
+      ).join(', ')}}`;
+    }
+    return `{${Object.entries(value)
+      .map(([key, entry]) => `${JSON.stringify(key)}: ${formatHelpValue(entry, ancestors, true)}`)
+      .join(', ')}}`;
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function bindToolImplementation(

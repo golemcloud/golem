@@ -18,6 +18,12 @@ import { z } from 'zod/v4';
 import { compileSchema } from '../src/fluent/schema/adapter';
 import type { FluentCodec } from '../src/fluent/schema/codec';
 import { Bytes, KeyValue, Quantity, s } from '../src/fluent/schema/markers';
+import {
+  getExtendedToolDefinition,
+  renderArgumentHelp,
+  renderHelp,
+  toolDefinition,
+} from '../src/fluent/tool';
 import { field, schemaType, t, v, validateSchemaGraph } from '../src/internal/schema-model';
 import {
   CanonicalInputModel,
@@ -157,6 +163,295 @@ describe('internal extended tool model', () => {
       'option',
       'flag',
     ]);
+  });
+
+  it('renders descriptor help at every depth with canonical paths and rich metadata', () => {
+    const definition = toolDefinition('git')
+      .aliases('g')
+      .doc({
+        summary: 'Version control',
+        description: 'Manage source repositories.',
+        examples: [{ title: 'Status', body: 'git status' }],
+      })
+      .global('profile', z.string(), {
+        aliases: ['profile-name'],
+        short: 'p',
+        doc: { summary: 'Configuration profile', description: 'Selects a profile.' },
+        valueName: 'PROFILE',
+        default: 'prod',
+        env: 'GIT_PROFILE',
+      })
+      .global('verbose', {
+        kind: 'count-flag',
+        aliases: ['verbosity'],
+        short: 'v',
+        doc: 'Increase verbosity',
+        env: 'GIT_VERBOSE',
+        max: 3,
+      })
+      .command('remote', (remote) =>
+        remote
+          .aliases('r')
+          .doc('Manage remotes')
+          .global('endpoint', z.string(), {
+            doc: 'Remote endpoint',
+            required: true,
+          })
+          .command('add', (add) =>
+            add
+              .aliases('a')
+              .doc({
+                summary: 'Add a remote',
+                description: 'Registers a named remote.',
+                examples: [{ title: 'Origin', body: 'git remote add origin URL' }],
+              })
+              .annotations({ readOnly: false, destructive: false, idempotent: true })
+              .body((body) =>
+                body
+                  .positional('name', z.string(), {
+                    doc: { summary: 'Remote name', description: 'Name to register.' },
+                    valueName: 'NAME',
+                  })
+                  .tail('refspecs', z.string(), {
+                    doc: 'Refspecs',
+                    valueName: 'REFSPEC',
+                    min: 1,
+                    max: 3,
+                    separator: '--',
+                    verbatim: true,
+                    acceptsStdio: true,
+                  })
+                  .option('fetch-depth', s.u32(), {
+                    aliases: ['depth'],
+                    short: 'd',
+                    doc: {
+                      summary: 'Fetch depth',
+                      description: 'Limits fetched history.',
+                      examples: [{ title: 'Shallow', body: '--fetch-depth 1' }],
+                    },
+                    valueName: 'DEPTH',
+                    required: true,
+                    default: 1,
+                    env: 'GIT_DEPTH',
+                  })
+                  .flag('force', {
+                    aliases: ['overwrite'],
+                    short: 'f',
+                    doc: 'Replace an existing remote',
+                    default: true,
+                    negatable: true,
+                    env: 'GIT_FORCE',
+                  })
+                  .stdin({ doc: 'Refspec input', mime: ['text/plain'], required: true })
+                  .stdout({ doc: 'Progress output', mime: ['text/plain'] })
+                  .returns(z.object({ added: z.boolean() }), {
+                    doc: 'Added remote',
+                    formatters: [
+                      {
+                        name: 'human',
+                        doc: {
+                          summary: 'Human-readable result',
+                          description: '',
+                          examples: [],
+                        },
+                      },
+                      {
+                        name: 'json',
+                        doc: { summary: 'JSON result', description: '', examples: [] },
+                      },
+                    ],
+                    defaultFormatter: 'json',
+                  })
+                  .error('already-exists', {
+                    kind: 'usage',
+                    exitCode: 2,
+                    doc: 'Remote already exists',
+                    payload: z.object({ name: z.string() }),
+                  }),
+              ),
+          ),
+      );
+
+    const root = renderHelp(definition);
+    expect(root.tag).toBe('ok');
+    if (root.tag !== 'ok') throw new Error('expected root help');
+    expect(root.value).toContain('Usage: git');
+    expect(root.value).toContain('Aliases: g');
+    expect(root.value).toContain('Status:');
+    expect(root.value).toContain('--profile, --profile-name, -p <PROFILE>');
+    expect(root.value).toContain('[optional; default: prod; env: GIT_PROFILE]');
+    expect(root.value).toContain('remote (aliases: r)');
+
+    const dispatcher = renderHelp(definition, ['r']);
+    expect(dispatcher.tag).toBe('ok');
+    if (dispatcher.tag !== 'ok') throw new Error('expected dispatcher help');
+    expect(dispatcher.value).toContain('Usage: git remote');
+    expect(dispatcher.value).toContain('--profile, --profile-name, -p <PROFILE>');
+    expect(dispatcher.value).toContain('--endpoint [required]');
+    expect(dispatcher.value).toContain('add (aliases: a)');
+
+    const nested = renderHelp(definition, ['r', 'a']);
+    expect(nested.tag).toBe('ok');
+    if (nested.tag !== 'ok') throw new Error('expected nested help');
+    expect(nested.value).toContain('Usage: git remote add');
+    expect(nested.value).toContain('Aliases: a');
+    expect(nested.value).toContain('--profile, --profile-name, -p <PROFILE>');
+    expect(nested.value).toContain('--endpoint [required]');
+    expect(nested.value).toContain('name <NAME> [required]');
+    expect(nested.value).toContain(
+      'refspecs... <REFSPEC>... [required; accepts stdio; min: 1; max: 3; separator: --; verbatim]',
+    );
+    expect(nested.value).toContain('--fetch-depth, --depth, -d <DEPTH>');
+    expect(nested.value).toContain('[required; default: 1; env: GIT_DEPTH]');
+    expect(nested.value).toContain(
+      '--force, --overwrite, -f [default: true; env: GIT_FORCE; negatable]',
+    );
+    expect(nested.value).toContain('Stdin:\n  required; MIME: text/plain');
+    expect(nested.value).toContain('Stdout:\n  optional; MIME: text/plain');
+    expect(nested.value).toContain('Formatters: human, json (default)');
+    expect(nested.value).toContain('already-exists [usage-error; exit: 2; payload]');
+    expect(nested.value).toContain('read-only: false');
+    expect(nested.value).toContain('idempotent: true');
+
+    expect(getExtendedToolDefinition(definition)).toBe(getExtendedToolDefinition(definition));
+    expect(getExtendedToolDefinition(definition).projectHelp(['r', 'a'])?.commandPath).toEqual([
+      'remote',
+      'add',
+    ]);
+
+    const tail = renderArgumentHelp(definition, ['r', 'a'], 'refspecs');
+    expect(tail.tag).toBe('ok');
+    if (tail.tag !== 'ok') throw new Error('expected tail help');
+    expect(tail.value).toContain('Minimum occurrences: 1');
+    expect(tail.value).toContain('Maximum occurrences: 3');
+    expect(tail.value).toContain('Separator: --');
+    expect(tail.value).toContain('Verbatim: true');
+    expect(tail.value).toContain('Accepts standard input: true');
+
+    const booleanFlag = renderArgumentHelp(definition, ['r', 'a'], 'overwrite');
+    expect(booleanFlag.tag).toBe('ok');
+    if (booleanFlag.tag !== 'ok') throw new Error('expected boolean flag help');
+    expect(booleanFlag.value).toContain('Default: true');
+    expect(booleanFlag.value).toContain('Negatable: true');
+
+    const countFlag = renderArgumentHelp(definition, ['r', 'a'], 'verbosity');
+    expect(countFlag.tag).toBe('ok');
+    if (countFlag.tag !== 'ok') throw new Error('expected count flag help');
+    expect(countFlag.value).toContain('Maximum count: 3');
+  });
+
+  it('renders argument help by canonical name or alias and returns structured lookup errors', () => {
+    const definition = toolDefinition('grep')
+      .global('profile', z.string(), {
+        aliases: ['configuration'],
+        short: 'p',
+        doc: {
+          summary: 'Profile',
+          description: 'Configuration profile.',
+          examples: [{ title: 'Production', body: '--profile prod' }],
+        },
+        valueName: 'PROFILE',
+        default: 'prod',
+        env: 'GREP_PROFILE',
+      })
+      .command('search', (search) =>
+        search
+          .aliases('s')
+          .body((body) =>
+            body
+              .positional('pattern', z.string(), { doc: 'Pattern' })
+              .option('color', z.string(), { aliases: ['colour'], doc: 'Color mode' }),
+          ),
+      );
+
+    const global = renderArgumentHelp(definition, ['s'], 'configuration');
+    expect(global.tag).toBe('ok');
+    if (global.tag !== 'ok') throw new Error('expected global argument help');
+    expect(global.value).toContain('--profile, --configuration, -p <PROFILE> (option, global)');
+    expect(global.value).toContain('Aliases: --configuration, -p');
+    expect(global.value).toContain('Required: false');
+    expect(global.value).toContain('Default: prod');
+    expect(global.value).toContain('Environment: GREP_PROFILE');
+    expect(global.value).toContain('Production:');
+
+    const positional = renderArgumentHelp(definition, ['search'], 'pattern');
+    expect(positional).toEqual(expect.objectContaining({ tag: 'ok' }));
+    if (positional.tag !== 'ok') throw new Error('expected positional help');
+    expect(positional.value).toContain('pattern (positional, required)');
+
+    expect(renderHelp(definition, ['missing'])).toEqual({
+      tag: 'err',
+      error: { tag: 'invalid-command-path', commandPath: ['missing'] },
+    });
+    expect(renderArgumentHelp(definition, ['missing'], 'profile')).toEqual({
+      tag: 'err',
+      error: { tag: 'invalid-command-path', commandPath: ['missing'] },
+    });
+    expect(renderArgumentHelp(definition, ['s'], 'missing')).toEqual({
+      tag: 'err',
+      error: {
+        tag: 'invalid-argument-name',
+        commandPath: ['search'],
+        argumentName: 'missing',
+      },
+    });
+    expect(renderArgumentHelp(definition, ['s'], 'p')).toEqual({
+      tag: 'err',
+      error: {
+        tag: 'invalid-argument-name',
+        commandPath: ['search'],
+        argumentName: 'p',
+      },
+    });
+
+    const transformedDefault = toolDefinition('defaults').body((body) =>
+      body.option(
+        'name',
+        z.string().transform((value) => `${value}!`),
+        {
+          default: 'golem',
+        },
+      ),
+    );
+    const transformedDefaultHelp = renderArgumentHelp(transformedDefault, [], 'name');
+    expect(transformedDefaultHelp.tag).toBe('ok');
+    if (transformedDefaultHelp.tag !== 'ok') throw new Error('expected transformed default help');
+    expect(transformedDefaultHelp.value).toContain('Default: golem!');
+
+    const emptySeparator = toolDefinition('tail').body((body) =>
+      body.tail('args', z.string(), { separator: '' }),
+    );
+    const emptySeparatorHelp = renderArgumentHelp(emptySeparator, [], 'args');
+    expect(emptySeparatorHelp.tag).toBe('ok');
+    if (emptySeparatorHelp.tag !== 'ok') throw new Error('expected empty separator help');
+    expect(emptySeparatorHelp.value).toContain('Separator: ');
+
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const floatDefault = toolDefinition('float').body((body) =>
+        body.option('threshold', s.f32(), { default: value }),
+      );
+      const floatDefaultHelp = renderArgumentHelp(floatDefault, [], 'threshold');
+      expect(floatDefaultHelp.tag).toBe('ok');
+      if (floatDefaultHelp.tag !== 'ok') throw new Error('expected float default help');
+      expect(floatDefaultHelp.value).toContain(`Default: ${String(value)}`);
+    }
+  });
+
+  it('renders non-finite numbers inside repeatable defaults without replacing them with null', () => {
+    const definition = toolDefinition('float-list').body((body) =>
+      body.option('threshold', s.f32(), {
+        repeatable: 'repeated',
+        default: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+      }),
+    );
+
+    const help = renderArgumentHelp(definition, [], 'threshold');
+    expect(help.tag).toBe('ok');
+    if (help.tag !== 'ok') throw new Error('expected float-list default help');
+    expect(help.value).toContain('NaN');
+    expect(help.value).toContain('Infinity');
+    expect(help.value).toContain('-Infinity');
+    expect(help.value).not.toContain('null');
   });
 
   it('resolves deferred value-is literals after inherited globals are composed', () => {
