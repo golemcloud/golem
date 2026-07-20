@@ -22,9 +22,9 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
     BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseTopologyArg,
-    DensityPromiseWaiterPresenceArg, DensityScenarioArg,
-    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
-    DensitySharingArg, DensitySnapshottingArg, RunMetadata,
+    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
+    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
+    DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
