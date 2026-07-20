@@ -15,7 +15,7 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
-    WrappedOplogArchive,
+    TransferFiber, WrappedOplogArchive,
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogService, downcast_oplog};
 use async_lock::Mutex;
@@ -29,7 +29,7 @@ use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -42,7 +42,7 @@ pub struct EphemeralOplog {
     state: Arc<Mutex<EphemeralOplogState>>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
-    transfer_fiber: Arc<StdMutex<Option<tokio::task::JoinHandle<()>>>>,
+    transfer_fiber: TransferFiber,
     multi_layer_oplog_service: MultiLayerOplogService,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
@@ -89,7 +89,7 @@ impl EphemeralOplogState {
 
 impl EphemeralOplog {
     #[allow(clippy::too_many_arguments)]
-    pub async fn new(
+    pub(crate) async fn new(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_idx: OplogIndex,
@@ -97,14 +97,11 @@ impl EphemeralOplog {
         primary_service: Arc<dyn OplogService>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
-        transfer_fiber: tokio::task::JoinHandle<()>,
+        transfer_fiber: TransferFiber,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let target = lower.first().clone();
-        let transfer_fiber = Arc::new(StdMutex::new(Some(transfer_fiber)));
-        multi_layer_oplog_service
-            .register_transfer(owned_agent_id.agent_id.clone(), &transfer_fiber);
         Self {
             owned_agent_id,
             agent_mode,
@@ -201,8 +198,13 @@ impl EphemeralOplog {
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         rx: UnboundedReceiver<BackgroundTransferMessage>,
+        start: tokio::sync::oneshot::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(Self::background_transfer(owned_agent_id, lower, rx))
+        tokio::spawn(async move {
+            if start.await.is_ok() {
+                Self::background_transfer(owned_agent_id, lower, rx).await;
+            }
+        })
     }
 
     async fn background_transfer(
@@ -350,9 +352,8 @@ impl Drop for EphemeralOplog {
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        if let Some(fiber) = self.transfer_fiber.lock().unwrap().take() {
-            fiber.abort();
-        }
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
     }
 }
 
