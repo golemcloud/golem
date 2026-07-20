@@ -20,6 +20,7 @@ import {
   method,
   Principal,
   Snapshot,
+  Unstructured,
 } from "@golemcloud/effect-golem"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
@@ -93,6 +94,45 @@ export const Counter = defineAgent({
       success: Schema.String,
       http: [Http.get("/key-tail")],
     }),
+    textResponse: method({
+      params: {},
+      success: Unstructured.UnstructuredText({
+        restrictions: [{ languageCode: "en" }],
+      }),
+      http: [Http.get("/response/text")],
+    }),
+    binaryResponse: method({
+      params: {},
+      success: Unstructured.UnstructuredBinary({
+        restrictions: [{ mimeType: "application/octet-stream" }],
+      }),
+      http: [Http.get("/response/binary")],
+    }),
+    jsonResponse: method({
+      params: {},
+      success: Schema.Struct({ kind: Schema.String, count: Schema.Number }),
+      http: [Http.get("/response/json")],
+    }),
+    emptyResponse: method({
+      params: {},
+      success: Schema.Void,
+      http: [Http.get("/response/empty")],
+    }),
+    collectionBindings: method({
+      params: {
+        tags: Schema.Array(Schema.String),
+        scores: Schema.Array(Schema.Number),
+      },
+      success: Schema.Struct({
+        tags: Schema.Array(Schema.String),
+        scores: Schema.Array(Schema.Number),
+      }),
+      http: [
+        Http.get("/bindings/collections?tag={tags}", {
+          headers: { "X-Score": "scores" } as const,
+        }),
+      ],
+    }),
     /**
      * Sleeps for `seconds` then returns the current value. Driver for
      * the abort-in-flight integration test: the caller forks a remote
@@ -150,6 +190,26 @@ export const Counter = defineAgent({
           const r = yield* cfg.apiKey.get
           return Redacted.value(r).slice(-4)
         }),
+      textResponse: () =>
+        Effect.succeed({
+          _tag: "inline" as const,
+          val: {
+            data: "hello from Effect",
+            textType: { languageCode: "en" },
+          },
+        }),
+      binaryResponse: () =>
+        Effect.succeed({
+          _tag: "inline" as const,
+          val: {
+            data: new Uint8Array([0, 127, 255]),
+            binaryType: { mimeType: "application/octet-stream" },
+          },
+        }),
+      jsonResponse: () =>
+        Ref.get(state).pipe(Effect.map((s) => ({ kind: "counter", count: s.count }))),
+      emptyResponse: () => Effect.void,
+      collectionBindings: ({ tags, scores }) => Effect.succeed({ tags, scores }),
       slowValue: ({ seconds }) =>
         Effect.gen(function* () {
           yield* Effect.logInfo("slowValue: sleeping").pipe(Effect.annotateLogs({ seconds }))

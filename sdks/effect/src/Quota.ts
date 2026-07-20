@@ -43,8 +43,10 @@
  */
 import { Cause, Effect, Exit, Schema, SchemaGetter, Scope } from "effect"
 import * as QuotaHost from "golem:quota/types@1.5.0"
+import { Datetime } from "./Datetime.js"
 import { QuotaClient } from "./host/QuotaClient.js"
-import { Int64, Uint32, Uint64 } from "./WitTypes.js"
+import { EnvironmentId, Uuid } from "./Ids.js"
+import { Int64, Uint64 } from "./WitTypes.js"
 
 // ---------------------------------------------------------------------------
 // Re-exported runtime handle types
@@ -174,37 +176,28 @@ export class QuotaHostError {
 // ---------------------------------------------------------------------------
 
 /**
- * Schema for `golem:core/types@1.5.0`.Uuid — a 128-bit value carried as
- * two 64-bit halves.
+ * Backward-compatible alias for {@link Ids.Uuid}.
  *
  * @since 1.5.0
  * @category codecs
  */
-export const Uuid = Schema.Struct({
-  highBits: Uint64,
-  lowBits: Uint64,
-})
+export { Uuid }
 
 /**
- * Schema for `golem:api/host@1.5.0`.EnvironmentId.
+ * Backward-compatible alias for {@link Ids.EnvironmentId}.
  *
  * @since 1.5.0
  * @category codecs
  */
-export const EnvironmentId = Schema.Struct({
-  uuid: Uuid,
-})
+export { EnvironmentId }
 
 /**
- * Schema for `wasi:clocks/wall-clock@0.2.3`.Datetime.
+ * Backward-compatible alias for the canonical {@link Datetime} schema.
  *
  * @since 1.5.0
  * @category codecs
  */
-export const Datetime = Schema.Struct({
-  seconds: Int64,
-  nanoseconds: Uint32,
-})
+export { Datetime }
 
 /**
  * Schema for the wire shape of a `QuotaToken` — the record returned by

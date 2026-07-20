@@ -37,7 +37,6 @@ const externalPackages = (id) =>
   id === "@golemcloud/effect-golem/mysql" ||
   id === "@golemcloud/effect-golem/ignite2" ||
   id === "effect" ||
-  id === "node:sqlite" ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:") ||
   id === "agent-guest"

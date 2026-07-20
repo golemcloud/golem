@@ -1,8 +1,14 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
+import { Cause, DateTime, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
 import { defineAgent } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import { defineConfig } from "../src/Config.js"
+import {
+  UnstructuredBinary,
+  UnstructuredText,
+  type BinaryReferenceValue,
+  type TextReferenceValue,
+} from "../src/Unstructured.js"
 import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import * as RpcFake from "./host/RpcFake.js"
 import { __resetIdempotency } from "./mocks/golem-api-host.js"
@@ -32,6 +38,32 @@ const Worker = defineAgent({
 }).implement(() =>
   Effect.succeed({
     run: () => Effect.succeed("ok"),
+  }),
+)
+
+const RawOutputs = defineAgent({
+  name: "RawOutputs",
+  mode: "durable",
+  constructorParams: { name: Schema.String },
+  methods: {
+    text: method({ params: {}, success: UnstructuredText() }),
+    binary: method({ params: {}, success: UnstructuredBinary() }),
+  },
+}).implement(() =>
+  Effect.succeed({
+    text: () =>
+      Effect.succeed<TextReferenceValue>({
+        _tag: "inline",
+        val: { data: "unused" },
+      }),
+    binary: () =>
+      Effect.succeed<BinaryReferenceValue>({
+        _tag: "inline",
+        val: {
+          data: new Uint8Array(),
+          binaryType: { mimeType: "application/octet-stream" },
+        },
+      }),
   }),
 )
 
@@ -142,6 +174,71 @@ describe("AgentClient (durable)", () => {
     }),
   )
 
+  it.effect("decodes unstructured text and binary method outputs", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(({ methodName }) => {
+        if (methodName === "text") {
+          return {
+            tag: "ok",
+            val: {
+              tag: "tuple",
+              val: [
+                {
+                  tag: "unstructured-text",
+                  val: {
+                    tag: "inline",
+                    val: { data: "hello", textType: { languageCode: "en" } },
+                  },
+                },
+              ],
+            } as any,
+          }
+        }
+        if (methodName === "binary") {
+          return {
+            tag: "ok",
+            val: {
+              tag: "tuple",
+              val: [
+                {
+                  tag: "unstructured-binary",
+                  val: {
+                    tag: "inline",
+                    val: {
+                      data: new Uint8Array([1, 2, 3]),
+                      binaryType: { mimeType: "application/octet-stream" },
+                    },
+                  },
+                },
+              ],
+            } as any,
+          }
+        }
+        return { tag: "throw", error: new Error("unexpected method") }
+      })
+
+      const [text, binary] = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* RawOutputs.client.get({ name: "raw" })
+          return [yield* remote.text({}), yield* remote.binary({})] as const
+        }),
+        layer,
+      )
+      expect(text).toEqual({
+        _tag: "inline",
+        val: { data: "hello", textType: { languageCode: "en" } },
+      })
+      expect(binary).toEqual({
+        _tag: "inline",
+        val: {
+          data: new Uint8Array([1, 2, 3]),
+          binaryType: { mimeType: "application/octet-stream" },
+        },
+      })
+    }),
+  )
+
   it.effect("trigger(): uses fire-and-forget invoke and resolves to void", () =>
     Effect.gen(function* () {
       const { fake, layer } = yield* makeRpcRuntime
@@ -181,6 +278,35 @@ describe("AgentClient (durable)", () => {
       const cancellations = yield* fake.getCancellations
       expect(cancellations.length).toBe(1)
       expect(cancellations[0]).toEqual({ kind: "scheduled", methodName: "add" })
+    }),
+  )
+
+  it.effect("schedule(): converts Date, DateTime, and epoch-millisecond inputs", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      const epochMilliseconds = 1_700_000_000_123
+      const inputs = [
+        new Date(epochMilliseconds),
+        DateTime.makeZonedUnsafe(epochMilliseconds, { timeZone: "Pacific/Auckland" }),
+        epochMilliseconds,
+      ] as const
+
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          for (const scheduledAt of inputs) {
+            yield* remote.add.schedule(scheduledAt, { by: 1 })
+          }
+        }) as Effect.Effect<void, unknown, never>,
+        layer,
+      )
+
+      const calls = yield* fake.getRecordedCalls
+      expect(calls.map((call) => call.scheduledTime)).toEqual([
+        { seconds: 1_700_000_000n, nanoseconds: 123_000_000 },
+        { seconds: 1_700_000_000n, nanoseconds: 123_000_000 },
+        { seconds: 1_700_000_000n, nanoseconds: 123_000_000 },
+      ])
     }),
   )
 

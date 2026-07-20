@@ -7,6 +7,7 @@ import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as AgentHost from "golem:agent/host@1.5.0"
 import { parseUuid, uuidToString } from "golem:core/types@1.5.0"
 import type { AgentMetadata } from "./Agent.js"
+import * as Datetime from "./Datetime.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import {
   RpcClient,
@@ -21,6 +22,8 @@ import {
   type MethodInput,
   type MethodParams,
   type MethodSpec,
+  type MethodSuccess,
+  type MethodSuccessType,
   type ParamBinding,
 } from "./Method.js"
 import { type UnsupportedSchemaError } from "./WitCodec.js"
@@ -147,9 +150,10 @@ export interface ScheduledInvocation {
  *   cancel on the caller side after that.
  *
  * - **`.schedule(scheduledAt, input)`** — schedules the invocation for
- *   later. Returns a {@link ScheduledInvocation} whose `cancel` Effect
- *   calls the host's `cancellation-token.cancel()` (a separate WIT
- *   primitive from the in-flight `future-invoke-result.cancel`).
+ *   later. The scheduled time may be a WIT datetime, JavaScript `Date`, Effect
+ *   `DateTime`, or epoch milliseconds. Returns a {@link ScheduledInvocation}
+ *   whose `cancel` Effect calls the host's `cancellation-token.cancel()` (a
+ *   separate WIT primitive from the in-flight `future-invoke-result.cancel`).
  *
  * The canonical "future + cancel" pattern — Scala-style
  * `cancelableAwaitWith(...)` — is just `Effect.forkChild(method(input))`
@@ -161,15 +165,17 @@ export interface ScheduledInvocation {
  */
 export interface RemoteMethod<
   Params extends MethodParams,
-  Success extends Schema.Top,
+  Success extends MethodSuccess,
   Error extends Schema.Top,
 > {
-  (input: MethodInput<Params>): Effect.Effect<Success["Type"], RemoteCallError | Error["Type"]>
+  (
+    input: MethodInput<Params>,
+  ): Effect.Effect<MethodSuccessType<Success>, RemoteCallError | Error["Type"]>
   readonly trigger: (input: MethodInput<Params>) => Effect.Effect<void, RemoteCallError>
   readonly schedule: (
-    scheduledAt: AgentHost.Datetime,
+    scheduledAt: Datetime.Input,
     input: MethodInput<Params>,
-  ) => Effect.Effect<ScheduledInvocation, RemoteCallError>
+  ) => Effect.Effect<ScheduledInvocation, RemoteCallError | Datetime.DatetimeConversionError>
 }
 
 /**
@@ -276,7 +282,7 @@ export type AgentClient<
 
 interface CompiledClient {
   readonly constructorBindings: ReadonlyArray<ParamBinding>
-  readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, Schema.Top, Schema.Top>>
+  readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
 }
 
 /** Lazily compile a definition's codecs (constructor + methods), then cache. */
@@ -291,11 +297,11 @@ const makeCompiler = (
         `${def.name} constructor`,
         def.constructorParams,
       )) as ReadonlyArray<ParamBinding>
-      const methodCodecs = new Map<string, MethodCodec<MethodParams, Schema.Top, Schema.Top>>()
+      const methodCodecs = new Map<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>()
       for (const [name, spec] of Object.entries(def.methods)) {
         const mc = (yield* compileMethodSpec(name, spec)) as MethodCodec<
           MethodParams,
-          Schema.Top,
+          MethodSuccess,
           Schema.Top
         >
         methodCodecs.set(name, mc)
@@ -339,7 +345,7 @@ const encodeConstructor = (
 
 /** Encode a method's named-input record positionally to a Golem `DataValue`. */
 const encodeMethodInput = (
-  mc: MethodCodec<MethodParams, Schema.Top, Schema.Top>,
+  mc: MethodCodec<MethodParams, MethodSuccess, Schema.Top>,
   input: Record<string, unknown>,
 ): Effect.Effect<CoreTypes.DataValue, RemoteCallError> => {
   const mm = mc.bindings.find(
@@ -359,7 +365,7 @@ const encodeMethodInput = (
 
 /** Decode a method's `DataValue` response into the success type. */
 const decodeMethodOutput = (
-  mc: MethodCodec<MethodParams, Schema.Top, Schema.Top>,
+  mc: MethodCodec<MethodParams, MethodSuccess, Schema.Top>,
   output: CoreTypes.DataValue,
 ): Effect.Effect<unknown, RemoteCallError> =>
   Effect.gen(function* () {
@@ -488,8 +494,8 @@ const asyncInvoke = (
 /** Build a single `RemoteMethod` bound to an open {@link RpcConnection}. */
 const buildRemoteMethod = (
   rpc: RpcConnection,
-  mc: MethodCodec<MethodParams, Schema.Top, Schema.Top>,
-): RemoteMethod<MethodParams, Schema.Top, Schema.Top> => {
+  mc: MethodCodec<MethodParams, MethodSuccess, Schema.Top>,
+): RemoteMethod<MethodParams, MethodSuccess, Schema.Top> => {
   const call = (input: Record<string, unknown>) =>
     Effect.flatMap(encodeMethodInput(mc, input), (dv) =>
       Effect.flatMap(asyncInvoke(rpc, mc.name, dv), (out) =>
@@ -519,23 +525,25 @@ const buildRemoteMethod = (
         catch: wrapHostThrow,
       }),
     )
-  const schedule = (scheduledAt: AgentHost.Datetime, input: Record<string, unknown>) =>
-    Effect.flatMap(encodeMethodInput(mc, input), (dv) =>
-      Effect.map(
-        Effect.try({
-          try: () => rpc.scheduleCancelableInvocation(scheduledAt, mc.name, dv),
-          catch: wrapHostThrow,
-        }),
-        (token: RpcCancellationToken): ScheduledInvocation => ({
-          cancel: () =>
-            Effect.sync(() => {
-              try {
-                token.cancel()
-              } catch {
-                // best-effort
-              }
-            }),
-        }),
+  const schedule = (scheduledAt: Datetime.Input, input: Record<string, unknown>) =>
+    Effect.flatMap(Datetime.fromInput(scheduledAt), (at) =>
+      Effect.flatMap(encodeMethodInput(mc, input), (dv) =>
+        Effect.map(
+          Effect.try({
+            try: () => rpc.scheduleCancelableInvocation(at, mc.name, dv),
+            catch: wrapHostThrow,
+          }),
+          (token: RpcCancellationToken): ScheduledInvocation => ({
+            cancel: () =>
+              Effect.sync(() => {
+                try {
+                  token.cancel()
+                } catch {
+                  // best-effort
+                }
+              }),
+          }),
+        ),
       ),
     )
   const fn = ((input: Record<string, unknown>) => call(input)) as RemoteMethod<
