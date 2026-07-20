@@ -394,6 +394,8 @@ pub trait TestDsl {
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
+    async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64>;
+
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
@@ -1013,6 +1015,15 @@ pub fn log_event_to_string(event: &LogEvent) -> String {
         Some(log_event::Event::InvocationStarted(_)) => "".to_string(),
         Some(log_event::Event::ClientLagged { .. }) => "".to_string(),
         Some(log_event::Event::PluginError(err)) => err.message.clone(),
+        Some(log_event::Event::SnapshotRecoverySucceeded(event)) => {
+            format!("snapshot recovery loaded {}", event.snapshot_index)
+        }
+        Some(log_event::Event::SnapshotRecoveryFailed(event)) => {
+            format!(
+                "snapshot recovery failed {}: {}",
+                event.snapshot_index, event.error
+            )
+        }
         None => std::panic!("Unexpected event type"),
     }
 }

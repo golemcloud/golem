@@ -26,7 +26,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,7 +59,10 @@ pub struct ReplayState {
     last_replayed_non_hint_index: AtomicOplogIndex,
     internal: Arc<RwLock<InternalReplayState>>,
     has_seen_logs: Arc<AtomicBool>,
+    replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
 }
+
+const REPLAY_READ_CHUNK_SIZE: u64 = 1024;
 
 #[derive(Debug, Clone)]
 struct InternalReplayState {
@@ -92,6 +95,7 @@ impl ReplayState {
                 pending_replay_events: Vec::new(),
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
+            replay_buffer: VecDeque::new(),
         };
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
         result.skip_forward().await?;
@@ -134,6 +138,9 @@ impl ReplayState {
     }
 
     pub fn set_replay_target(&mut self, new_target: OplogIndex) {
+        if new_target < self.replay_target.get() {
+            self.replay_buffer.clear();
+        }
         self.replay_target.set(new_target)
     }
 
@@ -260,11 +267,22 @@ impl ReplayState {
 
             Ok(Some((read_idx, entry)))
         } else {
+            self.rewind_replay_buffer(read_idx, entry);
             self.last_replayed_index.set(saved_replay_idx);
             let mut internal = self.internal.write().await;
             internal.next_skipped_region = saved_next_skipped_region;
 
             Ok(None)
+        }
+    }
+
+    fn rewind_replay_buffer(&mut self, idx: OplogIndex, entry: OplogEntry) {
+        if self
+            .replay_buffer
+            .front()
+            .is_none_or(|(front_idx, _)| *front_idx != idx)
+        {
+            self.replay_buffer.push_front((idx, entry));
         }
     }
 
@@ -300,6 +318,7 @@ impl ReplayState {
                     // We've found the first non-hint entry after the first read one,
                     // so we move everything back the last position (saved_replay_idx), including
                     // possibly skipped regions.
+                    self.rewind_replay_buffer(saved_replay_idx.next(), entry);
                     self.last_replayed_index.set(saved_replay_idx);
                     let mut internal = self.internal.write().await;
                     // TODO: cache the last hint entry to avoid reading it again
@@ -354,8 +373,45 @@ impl ReplayState {
     async fn internal_get_next_oplog_entry(&mut self) -> Result<OplogEntry, WorkerExecutorError> {
         let read_idx = self.last_replayed_index.get().next();
 
-        let oplog_entries = self.read_oplog(read_idx, 1).await;
-        let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
+        while self
+            .replay_buffer
+            .front()
+            .is_some_and(|(idx, _)| *idx < read_idx)
+        {
+            self.replay_buffer.pop_front();
+        }
+
+        if self
+            .replay_buffer
+            .front()
+            .is_some_and(|(idx, _)| *idx > read_idx)
+        {
+            self.replay_buffer.clear();
+        }
+
+        if self.replay_buffer.is_empty() {
+            let remaining = u64::from(self.replay_target.get())
+                .saturating_sub(u64::from(read_idx))
+                .saturating_add(1);
+            self.replay_buffer = self
+                .read_oplog(read_idx, remaining.min(REPLAY_READ_CHUNK_SIZE))
+                .await
+                .into_iter()
+                .collect();
+
+            // Snapshot/cache churn can make a cross-layer batch start after the requested index.
+            if self
+                .replay_buffer
+                .front()
+                .is_none_or(|(idx, _)| *idx != read_idx)
+            {
+                self.replay_buffer = self.read_oplog(read_idx, 1).await.into_iter().collect();
+            }
+        }
+
+        let oplog_entry = if let Some((idx, oplog_entry)) = self.replay_buffer.pop_front()
+            && idx == read_idx
+        {
             oplog_entry
         } else {
             // Use `unexpected_oplog_entry` so the typing survives the wasmtime
@@ -430,6 +486,13 @@ impl ReplayState {
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         self.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region().await;
+        while self
+            .replay_buffer
+            .front()
+            .is_some_and(|(idx, _)| *idx <= self.last_replayed_index.get())
+        {
+            self.replay_buffer.pop_front();
+        }
     }
 
     pub async fn lookup_oplog_entry(
@@ -473,13 +536,11 @@ impl ReplayState {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
 
-        const CHUNK_SIZE: u64 = 1024;
-
         let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
         let mut violation = false;
 
         while start < replay_target {
-            let entries = self.read_oplog(start, CHUNK_SIZE).await;
+            let entries = self.read_oplog(start, REPLAY_READ_CHUNK_SIZE).await;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()
@@ -629,7 +690,9 @@ impl ReplayState {
     }
 
     async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<(OplogIndex, OplogEntry)> {
-        self.oplog.read_many(idx, n).await.into_iter().collect()
+        let result: Vec<(OplogIndex, OplogEntry)> =
+            self.oplog.read_many(idx, n).await.into_iter().collect();
+        result
     }
 }
 
@@ -644,4 +707,244 @@ pub enum OplogEntryLookupResult {
     NotFound {
         violates_for_all: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::oplog::CommitLevel;
+    use async_trait::async_trait;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::{PayloadId, RawOplogPayload};
+    use golem_common::model::{AgentId, Timestamp};
+    use std::collections::BTreeMap;
+    use std::fmt::{Debug, Formatter};
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use test_r::test;
+
+    struct SparseBatchOplog;
+
+    struct MutableBatchOplog {
+        entries: Mutex<BTreeMap<OplogIndex, OplogEntry>>,
+    }
+
+    impl MutableBatchOplog {
+        fn new(entries: BTreeMap<OplogIndex, OplogEntry>) -> Self {
+            Self {
+                entries: Mutex::new(entries),
+            }
+        }
+
+        fn replace(&self, index: OplogIndex, entry: OplogEntry) {
+            self.entries.lock().unwrap().insert(index, entry);
+        }
+    }
+
+    impl Debug for MutableBatchOplog {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MutableBatchOplog").finish()
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for MutableBatchOplog {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+            unimplemented!()
+        }
+
+        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+            unimplemented!()
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            *self.entries.lock().unwrap().last_key_value().unwrap().0
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            None
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            unimplemented!()
+        }
+
+        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            self.entries.lock().unwrap()[&oplog_index].clone()
+        }
+
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.entries
+                .lock()
+                .unwrap()
+                .range(oplog_index..)
+                .take(n as usize)
+                .map(|(index, entry)| (*index, entry.clone()))
+                .collect()
+        }
+
+        async fn length(&self) -> u64 {
+            self.entries.lock().unwrap().len() as u64
+        }
+
+        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
+            unimplemented!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unimplemented!()
+        }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {
+            unimplemented!()
+        }
+    }
+
+    impl Debug for SparseBatchOplog {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("SparseBatchOplog").finish()
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for SparseBatchOplog {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+            unimplemented!()
+        }
+
+        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+            unimplemented!()
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            OplogIndex::from_u64(3)
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            None
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            unimplemented!()
+        }
+
+        async fn read(&self, _oplog_index: OplogIndex) -> OplogEntry {
+            OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+            }
+        }
+
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            let entry = OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+            };
+            if n == 1 || oplog_index == OplogIndex::INITIAL.next() {
+                BTreeMap::from([(oplog_index, entry)])
+            } else {
+                BTreeMap::from([(oplog_index.next(), entry)])
+            }
+        }
+
+        async fn length(&self) -> u64 {
+            3
+        }
+
+        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
+            unimplemented!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unimplemented!()
+        }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    async fn replay_reads_sparse_batch_entries_individually() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "test".to_string(),
+        };
+        let mut state = ReplayState::new(
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id),
+            Arc::new(SparseBatchOplog),
+            DeletedRegions::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            state.get_oplog_entry().await.unwrap().1,
+            OplogEntry::NoOp { .. }
+        ));
+        assert!(matches!(
+            state.get_oplog_entry().await.unwrap().1,
+            OplogEntry::NoOp { .. }
+        ));
+    }
+
+    #[test]
+    async fn lowering_replay_target_discards_prefetched_future_entries() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "test".to_string(),
+        };
+        let original = OplogEntry::NoOp {
+            timestamp: Timestamp::from(1),
+        };
+        let replacement = OplogEntry::NoOp {
+            timestamp: Timestamp::from(2),
+        };
+        let oplog = Arc::new(MutableBatchOplog::new(BTreeMap::from([
+            (OplogIndex::INITIAL, original.clone()),
+            (OplogIndex::INITIAL.next(), original.clone()),
+            (OplogIndex::INITIAL.next().next(), original.clone()),
+        ])));
+        let mut state = ReplayState::new(
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id),
+            oplog.clone(),
+            DeletedRegions::new(),
+        )
+        .await
+        .unwrap();
+
+        state.set_replay_target(OplogIndex::INITIAL.next());
+        state.get_oplog_entry().await.unwrap();
+        oplog.replace(OplogIndex::INITIAL.next().next(), replacement.clone());
+        state.set_replay_target(OplogIndex::INITIAL.next().next());
+
+        assert_eq!(
+            state.get_oplog_entry().await.unwrap().1,
+            replacement,
+            "replay must not consume entries prefetched before its target moved backward"
+        );
+    }
 }

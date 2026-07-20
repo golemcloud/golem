@@ -1264,6 +1264,15 @@ pub enum AgentEvent {
         plugin_name: String,
         message: String,
     },
+    SnapshotRecoverySucceeded {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+    },
+    SnapshotRecoveryFailed {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+        error: String,
+    },
     /// The client fell behind and the point it left of is no longer in our buffer.
     /// {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
     ClientLagged { number_of_missed_messages: u64 },
@@ -1314,6 +1323,16 @@ impl Display for AgentEvent {
                 ..
             } => {
                 write!(f, "<plugin-error> [{plugin_name}] {message}")
+            }
+            AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
+                write!(f, "<snapshot-recovery-succeeded> {snapshot_index}")
+            }
+            AgentEvent::SnapshotRecoveryFailed {
+                snapshot_index,
+                error,
+                ..
+            } => {
+                write!(f, "<snapshot-recovery-failed> {snapshot_index}: {error}")
             }
             AgentEvent::ClientLagged {
                 number_of_missed_messages,

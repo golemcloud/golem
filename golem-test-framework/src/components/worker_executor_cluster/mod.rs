@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 pub mod provided;
 pub mod spawned;
+pub mod unavailable;
 
 #[async_trait]
 pub trait WorkerExecutorCluster: Send + Sync {

@@ -575,7 +575,9 @@ jobs:
           cache-all-crates: true
           save-if: false
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.1
+        with:
+          components: rustfmt,clippy
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust
@@ -735,17 +737,11 @@ jobs:
       - name: Remove any pre-existing WASMs
         run: find test-components -maxdepth 1 -name '*.wasm' -delete
 
-      - name: Setup Rust toolchain for Golem 1.5 guest components
-        if: startsWith(matrix.chunk.name, 'rust-')
-        run: |
-          rustup toolchain install 1.96.1 --profile minimal --no-self-update
-          rustup target add --toolchain 1.96.1 wasm32-wasip1 wasm32-wasip2
-
       - name: Build test components
         working-directory: test-components
         env:
           GOLEM_TS_PRESET: quick
-          RUSTUP_TOOLCHAIN: ${{ startsWith(matrix.chunk.name, 'rust-') && '1.96.1' || 'stable' }}
+          RUSTUP_TOOLCHAIN: '1.96.1'
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
@@ -843,10 +839,14 @@ jobs:
           - platform: linux/amd64
             name: linux/amd64
             target: x86_64-unknown-linux-gnu
+            rustflags_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-cpu=x86-64-v3"
           - platform: linux/arm64
             name: linux/arm64
             target: aarch64-unknown-linux-gnu
             cross: true
+            rustflags_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-feature=+neon,+crc,+lse,+aes,+sha2,+dotprod"
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - uses: actions/checkout@v5
@@ -861,6 +861,13 @@ jobs:
         run: |
           platform=${{ matrix.platform.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          # Target-scoped rustflags pin the instruction-set baseline for the
+          # published images: x86-64-v3 on amd64 and Neoverse N1's stable
+          # optional target features on arm64. The per-target
+          # CARGO_TARGET_*_RUSTFLAGS form is used because plain RUSTFLAGS is
+          # ignored when cross-compiling; CARGO_-prefixed vars are also passed
+          # through into the cross container automatically.
+          echo "${{ matrix.platform.rustflags_env }}=${{ matrix.platform.rustflags }}" >> $GITHUB_ENV
 
       - run: cargo install cross
         if: ${{ matrix.platform.cross }}

@@ -121,19 +121,16 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
 
                 tracing::debug!("Calling agent {self} on pod: {pod:?}");
 
-                Ok((
-                    Some(
-                        clients
-                            .call(description, pod.uri(clients.uses_tls()), f)
-                            .await
-                            .map_err(|err| {
-                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    err, *pod,
-                                )
-                            })?,
-                    ),
-                    Some(*pod),
-                ))
+                let result = clients
+                    .call(description.as_ref(), pod.uri(clients.uses_tls()), f)
+                    .await;
+
+                match result {
+                    Ok(out) => Ok((Some(out), Some(*pod))),
+                    Err(err) => {
+                        Err(CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(err, *pod))
+                    }
+                }
             }
         }
     }
