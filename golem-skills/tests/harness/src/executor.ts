@@ -192,7 +192,14 @@ const ACTION_FIELDS = [
 
 // Language-conditional: accepts either T or { ts: T, effect: T, rust: T, ... }
 function langConditional<T extends z.ZodType>(schema: T) {
-  return z.union([schema, z.record(z.string(), schema)]);
+  const languageMap = z.record(z.string(), schema).refine(
+    (value) => {
+      const keys = Object.keys(value);
+      return keys.length > 0 && keys.every((key) => SUPPORTED_LANG_KEYS.has(key));
+    },
+    { message: "language-conditional map keys must be language codes" },
+  );
+  return z.union([languageMap, schema]);
 }
 
 const CreateProjectSchema = z.object({
@@ -200,11 +207,13 @@ const CreateProjectSchema = z.object({
   presets: langConditional(z.array(z.string())).optional(),
 });
 
-const VerifySchema = z.object({
-  build: z.boolean().optional(),
-  deploy: z.boolean().optional(),
-  expectedFiles: langConditional(z.array(z.string())).optional(),
-});
+const VerifySchema = z
+  .object({
+    build: z.boolean().optional(),
+    deploy: z.boolean().optional(),
+    expectedFiles: langConditional(z.array(z.string())).optional(),
+  })
+  .strict();
 
 const StepSpecSchema = z
   .object({
@@ -278,6 +287,7 @@ const PrerequisitesSchema = z
 
 const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
+  semanticRequirements: z.record(z.array(z.string().min(1))).optional(),
   languageAgnostic: z.boolean().optional(),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,

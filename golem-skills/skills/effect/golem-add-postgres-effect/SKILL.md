@@ -17,9 +17,41 @@ Import PostgreSQL support from its package subpath:
 
 ```typescript
 import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/unstable/sql";
 import { method } from "@golemcloud/effect-golem";
 import { Pg, PgClient } from "@golemcloud/effect-golem/postgres";
 ```
+
+## Prefer the Canonical `SqlClient` Service
+
+`PgClient.layer` provides both the PostgreSQL-specific adapter service and Effect's canonical
+`SqlClient.SqlClient` tag. Keep portable repository code dependent on that generic tag and provide
+the Golem adapter at the application boundary:
+
+```typescript
+const PostgresLive = PgClient.layer({
+  connectionAddress: "postgres://user:password@localhost:5432/app",
+});
+
+const findNote = (noteId: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql<{ id: number; body: string }>`
+      SELECT id, body FROM notes WHERE id = ${noteId}
+    `;
+  });
+
+const runnable = findNote(1).pipe(Effect.provide(PostgresLive));
+```
+
+Import `SqlSchema`, `SqlResolver`, or `Migrator` from `effect/unstable/sql` when a repository needs
+schema decoding, request batching, or migrations. They consume the same canonical `SqlClient`
+service; do not replace them with PostgreSQL-driver-specific wrappers. Keep `Pg` imports only for
+PostgreSQL-specific rich parameter values or dialect-specific behavior.
+
+Direct `PgClient.make` remains supported for a simple agent implementation that constructs one
+client and closes over it. Use `.layer` when generic services or repository layers should receive
+the client through Effect context.
 
 ## Open and Reuse a Connection
 
@@ -229,6 +261,9 @@ adapter does not read `DATABASE_URL` or another environment variable automatical
 ## Key Constraints
 
 - Keep SQL work inside Effects; do not replace handlers with `async` functions.
+- Prefer repository code that consumes `SqlClient.SqlClient`; provide it with `PgClient.layer`.
+- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` with the same adapter
+  layer when their schema, batching, or migration behavior is needed.
 - Create and reuse a client in the implementation closure rather than opening one per method call.
 - Declare every added handler in the agent's `methods` map with an Effect Schema.
 - Keep the `defineAgent` name and `golem.yaml` agent key equal to the type used for invocation.

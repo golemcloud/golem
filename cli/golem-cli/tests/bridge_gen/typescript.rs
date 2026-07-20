@@ -31,7 +31,9 @@ use golem_common::model::agent::{
 };
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{bool, f64, field, list, option, record, s32, str};
+use golem_wasm::analysis::analysed_type::{
+    bool, f64, field, list, option, record, result, s32, s64, str, u64,
+};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValueAndType, Value};
 use pretty_assertions::assert_eq;
@@ -194,6 +196,56 @@ fn ts_counter_agent() -> GeneratedPackage {
                     name: "returnValue".to_string(),
                     schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                         element_type: f64(),
+                    }),
+                }],
+            }),
+            http_endpoint: vec![],
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: Vec::new(),
+    };
+
+    GeneratedPackage::new(agent_type)
+}
+
+#[test_dep(tagged_as = "int64_transport_agent")]
+fn ts_int64_transport_agent() -> GeneratedPackage {
+    let transport_type = record(vec![
+        field("unsigned-values", list(u64())),
+        field("signed-values", list(s64())),
+        field("maybe-unsigned", option(u64())),
+        field("outcome", result(u64(), s64())),
+    ]);
+    let agent_type = AgentType {
+        type_name: AgentTypeName("Int64TransportAgent".to_string()),
+        description: "Exercises lossless signed and unsigned 64-bit bridge transport".to_string(),
+        source_language: "rust".to_string(),
+        constructor: AgentConstructor {
+            name: Some("Int64TransportAgent".to_string()),
+            description: "Constructs the agent Int64TransportAgent".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![AgentMethod {
+            name: "round-trip".to_string(),
+            description: "Returns all values unchanged".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "transport".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: transport_type.clone(),
+                    }),
+                }],
+            }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return-value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: transport_type,
                     }),
                 }],
             }),
@@ -373,6 +425,17 @@ fn multi_agent_wrapper_2_types_2_compiles(
 fn counter_agent_compiles(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {}
 
 #[test]
+fn int64_transport_agent_compiles(#[tagged_as("int64_transport_agent")] pkg: &GeneratedPackage) {
+    let generated =
+        std::fs::read_to_string(pkg.target_dir().join("int64-transport-agent-client.ts"))
+            .expect("generated TypeScript bridge source is missing");
+    assert!(generated.contains("unsignedValues: bigint[];"));
+    assert!(generated.contains("signedValues: bigint[];"));
+    assert!(generated.contains("maybeUnsigned?: bigint;"));
+    assert!(generated.contains("base.JsonResult<bigint, bigint>"));
+}
+
+#[test]
 fn collision_parameter_names_agent_compiles(
     #[tagged_as("ts_collision_parameter_names_agent")] _pkg: &GeneratedPackage,
 ) {
@@ -539,6 +602,112 @@ fn bridge_tests_number(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &Ge
                 },
             )],
         }),
+    );
+}
+
+#[test]
+fn bridge_tests_int64_nested_input_uses_exact_decimal_tokens(
+    #[tagged_as("int64_transport_agent")] pkg: &GeneratedPackage,
+) {
+    let public_value = json!({
+        "unsignedValues": [
+            { "$bigint": 9_007_199_254_740_991u64.to_string() },
+            { "$bigint": 9_007_199_254_740_992u64.to_string() },
+            { "$bigint": u64::MAX.to_string() },
+        ],
+        "signedValues": [
+            { "$bigint": i64::MIN.to_string() },
+            { "$bigint": (-9_007_199_254_740_992i64).to_string() },
+            { "$bigint": i64::MAX.to_string() },
+        ],
+        "maybeUnsigned": { "$bigint": u64::MAX.to_string() },
+        "outcome": { "err": { "$bigint": i64::MIN.to_string() } },
+    });
+    let wire_value = json!({
+        "unsigned-values": [
+            9_007_199_254_740_991u64,
+            9_007_199_254_740_992u64,
+            u64::MAX,
+        ],
+        "signed-values": [
+            i64::MIN,
+            -9_007_199_254_740_992i64,
+            i64::MAX,
+        ],
+        "maybe-unsigned": u64::MAX,
+        "outcome": { "err": i64::MIN },
+    });
+
+    assert_function_input_encoding(
+        pkg.target_dir(),
+        "RoundTrip",
+        json!([public_value]),
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue { value: wire_value },
+            )],
+        }),
+    );
+}
+
+#[test]
+fn bridge_tests_int64_nested_output_decodes_to_bigints(
+    #[tagged_as("int64_transport_agent")] pkg: &GeneratedPackage,
+) {
+    let wire_value = json!({
+        "unsigned-values": [
+            9_007_199_254_740_991u64,
+            9_007_199_254_740_992u64,
+            u64::MAX,
+        ],
+        "signed-values": [
+            i64::MIN,
+            -9_007_199_254_740_992i64,
+            i64::MAX,
+        ],
+        "maybe-unsigned": u64::MAX,
+        "outcome": { "ok": u64::MAX },
+    });
+    let public_value = json!({
+        "unsignedValues": [
+            "9007199254740991",
+            "9007199254740992",
+            "18446744073709551615",
+        ],
+        "signedValues": [
+            "-9223372036854775808",
+            "-9007199254740992",
+            "9223372036854775807",
+        ],
+        "maybeUnsigned": "18446744073709551615",
+        "outcome": { "ok": "18446744073709551615" },
+    });
+
+    assert_function_output_decoding(
+        pkg.target_dir(),
+        "RoundTrip",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue { value: wire_value },
+            )],
+        }),
+        public_value,
+    );
+}
+
+#[test]
+fn bridge_tests_int64_output_accepts_safe_legacy_number(
+    #[tagged_as("rust_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
+    assert_function_output_decoding(
+        pkg.target_dir(),
+        "FunU64",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue { value: json!(42) },
+            )],
+        }),
+        json!("42"),
     );
 }
 
@@ -1663,6 +1832,24 @@ fn bridge_tests_number_output(
             )],
         }),
         json!(42),
+    );
+}
+
+#[test]
+fn bridge_tests_large_integer_shaped_f64_output_stays_number(
+    #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
+) {
+    let expected = serde_json::from_str("100000000000000000000")
+        .expect("large integer-shaped f64 should be valid JSON");
+    assert_function_output_decoding(
+        pkg.target_dir(),
+        "FunNumber",
+        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
+            elements: vec![UntypedJsonElementValue::ComponentModel(
+                JsonComponentModelValue { value: json!(1e20) },
+            )],
+        }),
+        expected,
     );
 }
 

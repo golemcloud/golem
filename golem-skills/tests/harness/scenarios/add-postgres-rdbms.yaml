@@ -1,4 +1,7 @@
 name: "add-postgres-rdbms"
+semanticRequirements:
+  effect:
+    - The Effect implementation must resolve SqlClient.SqlClient from effect/unstable/sql and provide it with PgClient.layer; PgClient.make and adapter-specific service access are not substitutes.
 prerequisites:
   services:
     - postgres
@@ -46,12 +49,15 @@ steps:
         as `Counter`; change its `defineAgent` name to exactly `CounterAgent` and update the matching
         agent key in `golem.yaml` so it can be invoked as `CounterAgent("db-test")` below. Declare
         `checkPostgres` in the methods map with `success: Schema.String`. Implement its handler as
-        an Effect using `PgClient` from `@golemcloud/effect-golem/postgres`, not a native Node
-        driver. Hardcode `{{postgres_url}}`, create and reuse the client in the outer agent
-        implementation Effect, run `SELECT 'postgres-ok'::text`, use the statement's `.values`
-        Effect to read row 0, column 0, verify that cell is a string, and explicitly return that
-        string. Keep the existing `increment` method unchanged and make sure the project builds and
-        deploys successfully.
+        an Effect using `PgClient` from `@golemcloud/effect-golem/postgres`, not a native Node driver.
+        Import `SqlClient` from `effect/unstable/sql`, hardcode `{{postgres_url}}` in a
+        `PgClient.layer`, resolve `SqlClient.SqlClient` in the outer agent implementation Effect,
+        and provide the adapter layer around that outer Effect so every handler closes over and
+        reuses the canonical client. Do not call `PgClient.make` or resolve the adapter-specific
+        service. Run `SELECT 'postgres-ok'::text`, use the statement's `.values` Effect to read row
+        0, column 0, verify that cell is a string, and explicitly return that string. Keep the
+        existing `increment` method unchanged and make sure the project builds and deploys
+        successfully.
     expectedSkills:
       rust:
         - "golem-add-postgres-rust"

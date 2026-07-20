@@ -1,4 +1,7 @@
 name: "transactions-1-fallible-rollback-http-ledger"
+semanticRequirements:
+  effect:
+    - Transaction execute and compensation steps must perform actual HTTP requests through Effect HttpClient; typed agent RPC is not a substitute.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -70,12 +73,20 @@ steps:
         `{ input }` and uses the two fields from that record.
 
         Implement `processOrder` as an Effect using `Saga.fallibleTransaction` and two
-        `Saga.withFallibleCompensation` steps from `@golemcloud/effect-golem`. The Effect runtime has
-        no supported outgoing `fetch`, so obtain the same HTTP-visible ledger agent through
-        `OrderLedger.client.get({ orderId })`. The first step must invoke `reserve` and compensate
-        with `release`; the second must invoke `charge` and compensate with `refund`. After both
-        steps succeed, use a typed `Effect.fail` when `failAfterCharge` is true so rollback runs in
-        reverse order. Convert complete or partial saga transaction failures into
+        `Saga.withFallibleCompensation` steps from `@golemcloud/effect-golem`. Implement every
+        execute and compensation action as an actual outgoing HTTP request through `HttpClient`,
+        `HttpClientRequest`, and `HttpClientResponse` from `effect/unstable/http`, using
+        `http://test-app.localhost:9006/orders/${encodeURIComponent(orderId)}` as the base URL. The
+        first step must POST to `/reserve` and compensate by sending DELETE `/reserve`; the second
+        must POST to `/charge` and compensate by sending DELETE `/charge`. Execute and await every
+        request, require a
+        successful status with `HttpClientResponse.filterStatusOk`, and provide
+        `FetchHttpClient.layer` around the composed handler Effect. Do not obtain an `OrderLedger`
+        typed client or substitute typed agent RPC, direct fetch, Node networking, or stubs for any
+        execute or compensation request.
+
+        After both steps succeed, use a typed `Effect.fail` when `failAfterCharge` is true so
+        rollback runs in reverse order. Convert complete or partial saga transaction failures into
         `{ success: false, error: <string> }`, return `{ success: true, error: null }` on success,
         and do not disguise unexpected host failures as successful rollback. Return this mapping
         Effect directly from the `processOrder` handler, with an explicit `ProcessOrderResult` value
@@ -83,7 +94,9 @@ steps:
         a void result.
 
         Import both agent implementation modules from `src/main.ts`, preserve existing manifest
-        entries, and make sure the project builds and deploys successfully.
+        entries, and make sure the project builds and deploys successfully. The order IDs `order-1`
+        and `order-2` are reserved for the scenario assertions; do not use them in any manual smoke
+        test performed while implementing this task.
       scala: *non-effect-fallible-transaction-with-http-ledger-prompt
       moonbit: *non-effect-fallible-transaction-with-http-ledger-prompt
     expectedSkills:
@@ -93,6 +106,7 @@ steps:
         - "golem-add-transactions-ts"
       effect:
         - "golem-add-transactions-effect"
+        - "golem-make-http-request-effect"
       scala:
         - "golem-add-transactions-scala"
       moonbit:

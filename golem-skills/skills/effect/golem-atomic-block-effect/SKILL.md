@@ -10,7 +10,13 @@ change for a specific group of externally observable effects. Import the Effect 
 package root; do not translate callback helpers from `@golemcloud/golem-ts-sdk`.
 
 ```typescript
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Schema } from "effect";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
 import { Durability, Retry } from "@golemcloud/effect-golem";
 ```
 
@@ -49,43 +55,58 @@ region, again. When validating a state-changing recovery example, start the atom
 against a fresh agent identity. Do not run it during build/deploy validation if a test harness will
 start the same identity afterward.
 
-### Agent-to-Agent Atomic Effects
+### Atomic Outgoing HTTP Effects
 
-The pinned Effect component has no outgoing HTTP client or global `fetch`. Call another Golem
-agent through its typed client instead. The target methods may also have `Http` declarations, so
-the same state remains externally observable over incoming HTTP.
-
-Given a durable `SideEffectRecorder` with `record` and `decide` methods, a separate durable runner
-can own the crash-prone atomic work:
+Use Effect's `HttpClient` when the atomic region must call an external service. The stable request
+ID in this example is supplied by the caller, and each state-changing remote operation gets a
+distinct idempotency key so whole-region replay can safely repeat it:
 
 ```typescript
-const runAtomicWork = Effect.gen(function* () {
-  const recorder = yield* SideEffectRecorder.client.get({ name: "main" });
-
-  yield* Durability.atomically(
-    Effect.gen(function* () {
-      yield* recorder.record({ event: "a" });
-      yield* recorder.record({ event: "b" });
-
-      if (yield* recorder.decide({})) {
-        return yield* Effect.dieMessage("retry the complete atomic region");
-      }
-
-      yield* recorder.record({ event: "c" });
-    }),
+const record = (event: string, requestId: string) =>
+  HttpClientRequest.post("https://effects.example.com/record").pipe(
+    HttpClientRequest.setHeader("Idempotency-Key", `${requestId}:${event}`),
+    HttpClientRequest.bodyJson({ event }),
+    Effect.flatMap(HttpClient.execute),
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.asVoid,
   );
 
-  yield* recorder.record({ event: "d" });
-}).pipe(Effect.orDie);
+const shouldRetry = (requestId: string) =>
+  HttpClientRequest.get(
+    `https://effects.example.com/decide?requestId=${encodeURIComponent(requestId)}`,
+  ).pipe(
+    HttpClient.execute,
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(Schema.Boolean)),
+  );
+
+const runAtomicWork = (requestId: string) =>
+  Effect.gen(function* () {
+    yield* Durability.atomically(
+      Effect.gen(function* () {
+        yield* record("a", requestId);
+        yield* record("b", requestId);
+
+        if (yield* shouldRetry(requestId)) {
+          return yield* Effect.die(
+            new Error("retry the complete atomic region"),
+          );
+        }
+
+        yield* record("c", requestId);
+      }),
+    );
+
+    yield* record("d", requestId);
+  }).pipe(Effect.provide(FetchHttpClient.layer), Effect.orDie);
 ```
 
-`SideEffectRecorder.client.get(...)` and every remote method invocation are Effects. Even methods
-with no parameters are called with an empty named-input record, such as `decide({})`.
-
-The typed client input is independent of the recorder's incoming HTTP exposure. With the pinned
-SDK, a normal `Schema.String` parameter named `event` on `Http.post("/record")` binds from a JSON
-body such as `{ "event": "a" }`; the SDK does not provide a documented `text/plain` body codec.
-Do not hand-build `Unstructured.ElementSpec` values to imitate plain-text binding.
+The remote service must actually deduplicate each stable key. Merely setting an idempotency header
+does not make the operation idempotent. `FetchHttpClient.layer` provides the HTTP service at the
+handler boundary, and HTTP transport, status, encoding, and decoding failures inside the region
+all trigger the same atomic trap behavior as any other unsuccessful Effect. The read-only decision
+must eventually change after the condition that caused the trap is repaired; an unchanged `true`
+response makes recovery fail repeatedly.
 
 ### Failure Semantics
 
@@ -247,8 +268,8 @@ host-visible retry behavior is required.
 - Keep agent methods Effect-based; do not wrap `Durability.atomically` in an `async` callback.
 - Prefer `Durability.atomically` over manual begin/end markers.
 - Keep externally observable actions duplicate-safe because recovery may execute them again.
-- Use typed agent clients rather than `fetch` for same-application agent calls in the pinned Effect
-  component.
+- Use Effect `HttpClient` with `FetchHttpClient.layer` for outgoing HTTP rather than wrapping raw
+  `fetch` in `Effect.tryPromise`.
 - Do not assume an awaited caller or fire-and-forget trigger can observe completion after an
   intentional atomic trap; use executor-specific recovery tooling for that test.
 
@@ -258,6 +279,4 @@ host-visible retry behavior is required.
 - [Atomic and durability-mode implementation](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/internal/durabilityMode.ts)
 - [Durability tests](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/test/durability.test.ts)
 - [`Retry` policy API](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Retry.ts)
-- [Typed agent client API](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Client.ts)
-- [HTTP declaration and body-binding API](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Http.ts)
-- [Pinned component world](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/wit/main.wit)
+- [Effect HTTP client skill](../golem-make-http-request-effect/SKILL.md)

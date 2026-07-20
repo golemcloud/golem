@@ -1,4 +1,7 @@
 name: "add-cors"
+semanticRequirements:
+  effect:
+    - The Effect scenario must configure a mount-level explicit origin and an endpoint-level wildcard through Effect-Golem CORS metadata, then verify host-generated preflight and ordinary response headers; application OPTIONS handlers and manual CORS responses are not substitutes.
 settings:
   golem_server:
     custom_request_port: 9006

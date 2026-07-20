@@ -1,83 +1,217 @@
 ---
 name: golem-add-llm-effect
-description: "Adding LLM and AI capabilities to an Effect-based Golem agent. Use when an @golemcloud/effect-golem project needs chat completions, embeddings, tool calling, or an AI provider integration."
+description: "Adding provider-backed LLM text generation to an Effect-based Golem agent with effect/unstable/ai and an Effect AI provider. Use when an @golemcloud/effect-golem project needs a non-streaming language-model request or OpenAI-compatible provider integration."
 ---
 
-# Adding LLM and AI Capabilities to an Effect Golem Agent
+# Adding LLM Capabilities to an Effect Golem Agent
 
-## Current SDK Limitation
+Use the provider-independent `LanguageModel` service from `effect/unstable/ai`, an exactly
+version-aligned Effect AI provider package, and `FetchHttpClient.layer` from
+`effect/unstable/http`. For OpenAI or an OpenAI-compatible endpoint, use `@effect/ai-openai`.
 
-`@golemcloud/effect-golem` 1.5.0 does not provide an LLM host API or a supported way for component
-code to make an outgoing HTTP request. An Effect agent therefore cannot call OpenAI-compatible
-chat completions, Anthropic messages, embeddings, or another remote AI API with this SDK version.
-
-This is a component capability limitation, not just a missing convenience wrapper:
-
-- The SDK's `agent-guest` world in `wit/main.wit` imports neither a Golem LLM interface nor
-  `wasi:http/outgoing-handler`.
-- The prebuilt QuickJS component does not install a global `fetch` implementation.
-- The package exports no outbound `HttpClient` or LLM service. Its `Http` namespace only declares
-  incoming agent routes.
-- The exported `Websocket` client is a specialized host capability, not an HTTP transport for REST
-  APIs such as OpenAI's chat completions endpoint.
-- `@effect/platform` is not embedded, and the SDK supplies no WASI HTTP layer for it.
-
-See the pinned SDK sources:
-
-- [`wit/main.wit`](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/wit/main.wit)
-- [`src/index.ts`](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/index.ts)
-- [`src/host/HostLive.ts`](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/host/HostLive.ts)
-- [`scripts/generate-agent-template.mjs`](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/scripts/generate-agent-template.mjs)
-
-## Handling an LLM Request
-
-1. Check the installed `@golemcloud/effect-golem` version and its authoritative WIT world and
-   exports. Do not assume plain TypeScript SDK capabilities also exist in the Effect SDK.
-2. If it has the limitation above, explain that the requested provider call cannot be implemented
-   in this component. Keep independent supported edits buildable, but do not add an LLM method that
-   only traps, returns `undefined`, returns a canned response, or pretends to call the provider.
-3. Offer one of these supported alternatives:
-   - use a Golem language SDK whose component world supports outgoing HTTP;
-   - perform the LLM call in an external service or orchestrator and invoke the Effect agent for
-     the durable agent work;
-   - upgrade to a later Effect SDK release only when its source or documentation explicitly shows
-     the required host LLM or outgoing HTTP capability.
-4. If a later SDK adds the capability, inspect its exact exports and examples before writing code.
-   Keep the agent contract in `defineAgent`/`method`, declare all values with Effect `Schema`, and
-   implement the handler as an `Effect` rather than a plain `async` function.
-
-## Do Not Use Apparent Workarounds
-
-These approaches do not work with the current Effect component:
-
-```typescript
-// No global fetch implementation or wasi:http capability is present.
-Effect.tryPromise(() => fetch(url, request));
-
-// Installing a client cannot add a component-model host capability.
-import OpenAI from "openai";
-
-// @effect/platform has no HTTP transport layer in this runtime.
-import { HttpClient } from "@effect/platform";
-
-// Rollup externalization does not add this missing import to the component world.
-import * as OutgoingHandler from "wasi:http/outgoing-handler@0.2.3";
+```diagram
+┌────────────────────┐    provides     ┌───────────────────────────┐
+│ Application method │◀───────────────│ LanguageModel service     │
+└────────────────────┘                 └─────────────┬─────────────┘
+                                                    │ OpenAiLanguageModel.layer
+                                      ┌─────────────▼─────────────┐
+                                      │ OpenAiClient              │
+                                      └─────────────┬─────────────┘
+                                                    │ FetchHttpClient.layer
+                                      ┌─────────────▼─────────────┐
+                                      │ WASI-backed global fetch  │
+                                      └───────────────────────────┘
 ```
 
-Do not invent helpers such as `Llm.chat`, `GolemLlm`, or `EffectGolemHttpClient`; none are exported.
-Do not import `@golemcloud/golem-ts-sdk` into an Effect component or copy its `fetch` examples. An
-npm package can bundle successfully and still fail at runtime when the underlying host capability
-is absent. Likewise, a successful build or deployment does not prove that an unavailable outbound
-host call will work at invocation time.
+The currently validated contract is non-streaming `generateText`. Do not add structured
+generation, streaming, embeddings, or tool calling unless the task explicitly requires it and the
+installed pinned versions are verified for that capability.
 
-## Capability Checklist for a Future SDK
+## Install the Matching Provider Version
 
-Before implementing an LLM provider call, verify all of the following in the installed Effect SDK:
+Effect packages use matching versions. Inspect the exact installed `effect` version, then install
+the same `@effect/ai-openai` version. For the current template:
 
-- its WIT world imports a host LLM interface or `wasi:http/outgoing-handler`;
-- generated bindings or a documented public client expose that import to application code;
-- the prebuilt QuickJS component supplies the required JavaScript or Effect transport;
-- the provider client supports that transport without native Node addons or unsupported globals;
-- secrets remain redacted and are only unwrapped at the call boundary.
+```shell
+npm install --save-exact @effect/ai-openai@4.0.0-beta.98
+```
 
-If any item is missing, stop and report the precise missing capability instead of guessing an API.
+Do not add the provider to `@golemcloud/effect-golem` or the common project template. Install it only
+in applications that select OpenAI. A version mismatch can create incompatible Effect service
+identities or types.
+
+## Imports
+
+```typescript
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Effect, Layer, Schema } from "effect";
+import { LanguageModel } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
+import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem";
+```
+
+Application methods depend on `LanguageModel.LanguageModel`, not provider-specific response types.
+Provider modules appear only in layer construction.
+
+## Store Provider Configuration and Secrets
+
+Declare the API key as a typed redacted secret. Keep the provider URL and model configurable so
+development and tests can target an OpenAI-compatible service:
+
+```typescript
+export class LlmConfig extends defineConfig("Llm.Config", {
+  apiKey: Schema.Redacted(Schema.String),
+  apiUrl: Schema.String,
+  model: Schema.String,
+}) {}
+```
+
+Attach `config: LlmConfig` to the agent. Supply `apiKey` through Golem secrets and `apiUrl`/`model`
+through ordinary config in `golem.yaml`. The OpenAI client's option is named **`apiUrl`**, and an
+OpenAI-compatible base normally includes its `/v1` prefix.
+
+Never log, return, snapshot, or interpolate the secret. `cfg.apiKey.get` already returns the
+`Redacted<string>` required by `OpenAiClient.layer`; do not unwrap it in application code.
+
+## Compose the Layers
+
+The provider client requires the canonical `HttpClient` service, and the language-model layer
+requires the provider client:
+
+```typescript
+const OpenAiClientLive = OpenAiClient.layer({
+  apiKey,
+  apiUrl,
+}).pipe(Layer.provide(FetchHttpClient.layer));
+
+const LanguageModelLive = OpenAiLanguageModel.layer({ model }).pipe(
+  Layer.provide(OpenAiClientLive),
+);
+```
+
+This composition provides the same `LanguageModel.LanguageModel` tag imported by application code
+without bundling another Effect runtime.
+
+## Generate Text
+
+`LanguageModel.generateText` accepts a plain string prompt and returns a normalized,
+provider-independent response. Read `response.text`:
+
+```typescript
+const answer = (question: string) =>
+  LanguageModel.generateText({
+    prompt: question,
+    toolChoice: "none",
+  }).pipe(
+    Effect.map((response) => response.text),
+    Effect.provide(LanguageModelLive),
+  );
+```
+
+Provider status, transport, and response-decoding failures remain typed `AiError` failures. Map
+them to a method's declared `error` schema when callers should handle them. Use `Effect.orDie` only
+when the method intentionally exposes no recoverable provider failure.
+
+## Complete Effect-Golem Agent
+
+This example resolves typed Golem config when constructing the agent instance, builds the provider
+layers from the resolved values, and keeps the handler provider-independent:
+
+```typescript
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Effect, Layer, Schema } from "effect";
+import { LanguageModel } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
+import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem";
+
+export class LlmConfig extends defineConfig("Llm.Config", {
+  apiKey: Schema.Redacted(Schema.String),
+  apiUrl: Schema.String,
+  model: Schema.String,
+}) {}
+
+export const LlmAgent = defineAgent({
+  name: "LlmAgent",
+  mode: "durable",
+  constructorParams: { name: Schema.String },
+  config: LlmConfig,
+  methods: {
+    ask: method({
+      params: { question: Schema.String },
+      success: Schema.String,
+    }),
+  },
+}).implement(() =>
+  Effect.gen(function* () {
+    const cfg = yield* LlmConfig;
+    const apiKey = yield* cfg.apiKey.get;
+    const apiUrl = yield* cfg.apiUrl;
+    const model = yield* cfg.model;
+
+    const OpenAiClientLive = OpenAiClient.layer({ apiKey, apiUrl }).pipe(
+      Layer.provide(FetchHttpClient.layer),
+    );
+    const LanguageModelLive = OpenAiLanguageModel.layer({ model }).pipe(
+      Layer.provide(OpenAiClientLive),
+    );
+
+    const ask = ({ question }: { readonly question: string }) =>
+      LanguageModel.generateText({
+        prompt: question,
+        toolChoice: "none",
+      }).pipe(
+        Effect.map((response) => response.text),
+        Effect.provide(LanguageModelLive),
+        Effect.orDie,
+      );
+
+    return { ask };
+  }),
+);
+```
+
+Import the implementation module from `src/main.ts` using its emitted `.js` suffix so the
+top-level registration runs.
+
+## Durability and Provider Side Effects
+
+`FetchHttpClient.layer` uses the same WASI-backed outgoing HTTP path as other Effect HTTP requests.
+Golem records the call for durable replay of the same invocation. Replay is not cross-invocation
+deduplication: invoking `ask` twice can send two provider requests and incur two charges.
+
+Do not log request headers or provider configuration. Public oplog conversion redacts recognized
+credential-bearing HTTP headers, but application code must still keep secrets out of logs, return
+values, error strings, snapshots, and diagnostics.
+
+When testing against a mock provider, verify the request URL, bearer authorization, model, prompt,
+and returned text. Also verify that replay does not unexpectedly resend a recorded request.
+
+## Do Not Substitute Other Capabilities
+
+- Do not call the provider with `Effect.tryPromise(globalThis.fetch)`; use `LanguageModel` and the
+  provider layer.
+- Do not return canned or stubbed text while claiming a provider request occurred.
+- Do not use typed Golem RPC as a substitute for a requested external provider call.
+- Do not install the Node `openai` package or another transport that bypasses Effect's canonical
+  `HttpClient` service.
+- Do not invent `Llm.chat`, `GolemLlm`, or `EffectGolemHttpClient` helpers.
+- Do not import `@golemcloud/golem-ts-sdk` into an Effect component.
+
+## Key Constraints
+
+- Pin `@effect/ai-openai` exactly to the installed `effect` version.
+- Import `LanguageModel` from `effect/unstable/ai`.
+- Provide `FetchHttpClient.layer` to `OpenAiClient.layer`.
+- Provide the client layer to `OpenAiLanguageModel.layer`.
+- Keep application logic provider-independent and return `response.text`.
+- Keep API keys as `Redacted<string>` from typed Golem secrets.
+- Start with non-streaming `generateText` and `toolChoice: "none"`.
+- Preserve typed provider errors unless the method intentionally converts them to defects.
+
+## Authoritative API Sources
+
+- [Effect v4 `LanguageModel`](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/ai/LanguageModel.ts)
+- [Effect v4 fetch client](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/FetchHttpClient.ts)
+- [`@effect/ai-openai` client](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/ai/openai/src/OpenAiClient.ts)
+- [`@effect/ai-openai` language model](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/ai/openai/src/OpenAiLanguageModel.ts)
+- [Effect-Golem typed config](https://github.com/golemcloud/effect-golem/blob/HEAD/src/Config.ts)

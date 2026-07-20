@@ -1,4 +1,7 @@
 name: "atomic-block"
+semanticRequirements:
+  effect:
+    - Every side effect specified as HTTP must be performed through Effect HttpClient; typed agent RPC is not a substitute.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -79,12 +82,14 @@ steps:
         mount as `/recorder/{name}` with the `Http` API from `@golemcloud/effect-golem`, and expose
         it through the app HTTP API on `test-app.localhost:9006`.
 
-        Store snapshot-backed Effect state containing `events`, an array of strings. New recorder
-        agents start with an empty event list. Expose these methods with method-level HTTP
-        declarations:
+        Store snapshot-backed Effect state containing `events`, an array of strings, and a numeric
+        `decisionCalls` count. New recorder agents start with an empty event list and zero decision
+        calls. Expose these methods with method-level HTTP declarations:
         - `record` has one `Schema.String` parameter named `event`; `POST /record` accepts the normal
           JSON body `{ "event": "<value>" }` and appends `event` to `events`
         - `getEvents` has no parameters; `GET /events` returns `events` as a JSON array of strings
+        - `decide` has no parameters; `POST /decide` increments `decisionCalls` and returns `true`
+          only for the first call, then returns `false` for every later call
 
         Then modify the existing Effect `Counter` agent definition rather than creating a
         duplicate. Rename both its exported TypeScript binding and its `defineAgent` runtime `name`
@@ -93,16 +98,26 @@ steps:
 
         Add an externally invokable `runAtomicTest` method with no parameters and
         `success: Schema.Void`. Implement it as an Effect using `Durability.atomically` from
-        `@golemcloud/effect-golem`. The Effect runtime has no supported outgoing `fetch`, so obtain
-        the recorder through `SideEffectRecorder.client.get({ name: "main" })` and invoke its typed
-        methods with named input records.
+        `@golemcloud/effect-golem`. Implement every recorder operation as an actual outgoing HTTP
+        request through `HttpClient`, `HttpClientRequest`, and `HttpClientResponse` from
+        `effect/unstable/http` to the routes under
+        `http://test-app.localhost:9006/recorder/main`. Send record values with
+        `HttpClientRequest.bodyJson({ event })`, execute and await every request, require a
+        successful status with `HttpClientResponse.filterStatusOk`, and decode `/decide` as a JSON
+        boolean with the Effect response schema helper. Provide `FetchHttpClient.layer` around the
+        composed handler Effect. Do not obtain a `SideEffectRecorder` typed client or substitute
+        typed agent RPC, direct fetch, Node networking, stubs, manual retries, or polling for any
+        recorder operation.
 
-        Inside the Effect passed to `Durability.atomically`, invoke `record({ event: "a" })`, then
-        `record({ event: "b" })`, then `record({ event: "c" })`. Let the atomic Effect complete
-        successfully; do not deliberately fail, defect, interrupt, or trap it. After
-        `Durability.atomically` succeeds, invoke `record({ event: "d" })`. Yield every remote call
-        Effect and convert typed client errors as needed so `runAtomicTest` remains void and
-        buildable.
+        Inside the Effect passed to `Durability.atomically`, POST record event `"a"`, then POST
+        record event `"b"`, then POST to `/decide` and read its boolean response. When that response
+        is `true`, fail the atomic Effect so `Durability.atomically` traps and durable recovery
+        re-executes the complete region. Do not catch or convert that failure outside the atomic
+        region. After recovery obtains `false` from `/decide`, POST record event `"c"` and let the
+        atomic Effect complete. After `Durability.atomically` succeeds, POST record event `"d"`.
+        The expected external event sequence is exactly `a, b, a, b, c, d`; the repeated `a, b`
+        pair must come from host-driven whole-region recovery, not an application retry loop or a
+        second `runAtomicTest` invocation.
 
         Import both agent implementation modules from `src/main.ts` and preserve existing manifest
         entries. Make sure the project builds and deploys successfully. Limit your own validation to
@@ -178,6 +193,7 @@ steps:
         - "golem-atomic-block-ts"
       effect:
         - "golem-atomic-block-effect"
+        - "golem-make-http-request-effect"
       scala:
         - "golem-atomic-block-scala"
       moonbit:
@@ -215,7 +231,7 @@ steps:
         status: 200
         body_json:
           - path: "$"
-            equals: ["a", "b", "c", "d"]
+            equals: ["a", "b", "a", "b", "c", "d"]
       scala:
         status: 200
         body_json:

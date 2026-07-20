@@ -1,4 +1,7 @@
 name: "add-llm"
+semanticRequirements:
+  effect:
+    - The Effect implementation must call the configured provider through Effect AI LanguageModel and an Effect AI provider layer; direct fetch and stubbed responses are not substitutes.
 prerequisites:
   services:
     - openai-mock
@@ -37,12 +40,14 @@ steps:
         `mock-model` and API key `test-mock-key`. Send the question as a user message and return the
         assistant's reply text.
 
-        POST directly to `{{openai_mock_url}}/v1/chat/completions`. Keep the handler Effect-based by
-        using root `Effect.tryPromise` around the QuickJS runtime's WASI-backed
-        `globalThis.fetch`. Send `Authorization: Bearer test-mock-key` and JSON with the model and
-        user message, check the HTTP status, parse and validate the JSON response, and extract
-        `choices[0].message.content`. Do not use Node networking libraries, a fake/stub response,
-        or `effect/unstable/http` (that subpath is not shared with the embedded Effect runtime).
+        Install the exactly version-matched `@effect/ai-openai` package. Implement the request
+        through `LanguageModel.generateText` from `effect/unstable/ai`, with
+        `OpenAiLanguageModel.layer` and `OpenAiClient.layer` from `@effect/ai-openai`. Configure the
+        client with API URL `{{openai_mock_url}}/v1` and the redacted API key, configure the language
+        model layer with `mock-model`, provide `FetchHttpClient.layer`, send `question` as the prompt
+        with tool choice disabled, and return the provider-independent response text. Do not issue
+        the provider request manually through a direct Fetch API call or an HTTP request, and do not
+        use Node networking libraries, a fake/stub response, canned text, or typed agent RPC.
 
         Make sure the project builds and deploys successfully. Verify this task only by building and
         deploying; do not manually invoke `askLlm`, because the harness invokes it after this step.

@@ -1,4 +1,7 @@
 name: "make-http-request"
+semanticRequirements:
+  effect:
+    - The Effect implementation must perform the outgoing request through Effect HttpClient with FetchHttpClient.layer; typed agent RPC and direct fetch are not substitutes.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -89,11 +92,13 @@ steps:
         The method takes one `message` string. It must make an actual outgoing HTTP POST request to
         exactly `http://test-app.localhost:9006/requests/main/record`, with
         `Content-Type: application/json` and JSON body `{"message": <message>}`. Do not invoke
-        `RequestRecorder` through an agent client. Keep the handler Effect-based by using root
-        `Effect.tryPromise` around the QuickJS runtime's WASI-backed `globalThis.fetch`; do not use
-        Node networking libraries or import `effect/unstable/http`. Check for a successful HTTP
-        response and consume its body. The returned Effect must then succeed with the original
-        `message` string.
+        `RequestRecorder` through an agent client. Keep the handler Effect-based: import
+        `FetchHttpClient`, `HttpClient`, `HttpClientRequest`, and `HttpClientResponse` from
+        `effect/unstable/http`; construct the POST with `HttpClientRequest.post`, encode the body
+        with `HttpClientRequest.bodyJson({ message })`, execute it with `HttpClient.execute`, require
+        a successful status with `HttpClientResponse.filterStatusOk`, consume its body, and provide
+        `FetchHttpClient.layer`. Do not use direct `globalThis.fetch` or Node networking libraries.
+        The returned Effect must then succeed with the original `message` string.
 
         Preserve the existing counter methods and make sure the project builds and deploys. Verify
         this task only by building and deploying: do not invoke `recordMessageViaHttp`, manually

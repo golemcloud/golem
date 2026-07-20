@@ -13,12 +13,43 @@ Use the Effect SDK's MySQL adapter. It implements Effect's SQL client API over t
 
 ```typescript
 import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/unstable/sql";
 import { method } from "@golemcloud/effect-golem";
 import { MySql, MySqlClient } from "@golemcloud/effect-golem/mysql";
 ```
 
 Generated Effect projects already depend on `effect` and `@golemcloud/effect-golem`. Keep their
 generated versions aligned; do not install a native MySQL driver.
+
+## Prefer the Canonical `SqlClient` Service
+
+`MySqlClient.layer` provides both the MySQL adapter service and Effect's canonical
+`SqlClient.SqlClient` tag. Keep portable repository code on that generic tag and provide the Golem
+adapter at the application boundary:
+
+```typescript
+const MySqlLive = MySqlClient.layer({
+  connectionAddress: "mysql://user:password@localhost:3306/app",
+});
+
+const findNote = (noteId: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql<{ id: number; body: string }>`
+      SELECT id, body FROM notes WHERE id = ${noteId}
+    `;
+  });
+
+const runnable = findNote(1).pipe(Effect.provide(MySqlLive));
+```
+
+`SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` use this same service for
+schema decoding, batching, and migrations. Keep `MySql` imports only for MySQL-specific rich
+parameter values or dialect behavior.
+
+Direct `MySqlClient.make` remains supported for a simple implementation that constructs one client
+and closes over it. Use `.layer` when generic services or repository layers receive the client
+through Effect context.
 
 ## Open and Reuse a Connection
 
@@ -207,6 +238,9 @@ Nested `withTransaction` calls use savepoints. Do not invent public `begin`, `co
 ## Key Constraints
 
 - Import the adapter from `@golemcloud/effect-golem/mysql`, not a native Node driver.
+- Prefer repository code that consumes `SqlClient.SqlClient`; provide it with `MySqlClient.layer`.
+- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` with the same adapter
+  layer when their schema, batching, or migration behavior is needed.
 - Return Effects from agent handlers; do not replace them with `async` functions.
 - Reuse one `MySqlClient` per implemented agent instance.
 - Declare every added handler in the agent's `methods` map with an Effect Schema.

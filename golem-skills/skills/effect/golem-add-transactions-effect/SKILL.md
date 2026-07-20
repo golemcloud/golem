@@ -11,6 +11,12 @@ registered compensations in reverse order when the body fails.
 
 ```typescript
 import { Cause, Effect, Exit, Schema } from "effect";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
 import { method, Saga } from "@golemcloud/effect-golem";
 ```
 
@@ -28,9 +34,9 @@ The Effect SDK provides three ways to define a step:
 - `Saga.operation({ execute, compensate })` creates a reusable `(input) => Effect` step. The
   compensation receives `(input, output, cause)`, but it must be infallible.
 
-Use `withFallibleCompensation` for remote calls because a remote compensation has a typed
-`Client.RemoteCallError`. Do not hide that error merely to satisfy `Saga.operation`'s `never`
-requirement.
+Use `withFallibleCompensation` for outgoing HTTP calls because a remote compensation can fail in
+the HTTP client's typed error channel. Do not hide that error merely to satisfy
+`Saga.operation`'s `never` requirement.
 
 Assuming these application functions already return Effects, a reusable infallible operation looks
 like this:
@@ -38,8 +44,7 @@ like this:
 ```typescript
 const reserveInventory = Saga.operation({
   execute: (sku: string) => reserve(sku),
-  compensate: (_sku, reservation, _cause) =>
-    release(reservation.reservationId),
+  compensate: (_sku, reservation, _cause) => release(reservation.reservationId),
 });
 ```
 
@@ -82,18 +87,18 @@ type TransactionFailure<E> =
 returns a business-result DTO, convert only the two transaction-failure tags into that DTO. Do not
 misreport unexpected host failures as a successful rollback.
 
-## Agent-to-Agent Ledger Pattern
+## External HTTP Ledger Pattern
 
-The pinned Effect component does not provide an outgoing HTTP client or a global `fetch`
-implementation. When a saga step targets another Golem agent, use the supported typed agent client.
-The same target methods can also have `Http` endpoint metadata, so external HTTP verification sees
-the state mutated by agent-to-agent calls.
+Use Effect's `HttpClient` when saga execute and compensation steps call an external service. The
+caller supplies a stable `requestId`, and each logical action gets its own idempotency key so replay
+or compensation retries do not duplicate that action. The external service must enforce those
+keys; headers alone do not provide deduplication.
 
-Given an implemented `OrderLedger` definition with `reserve`, `release`, `charge`, and `refund`
-methods, this handler performs two steps and reports rollback as a `ProcessOrderResult`:
+This handler performs two HTTP steps and reports rollback as a `ProcessOrderResult`:
 
 ```typescript
 const ProcessOrderInputSchema = Schema.Struct({
+  requestId: Schema.String,
   orderId: Schema.String,
   failAfterCharge: Schema.Boolean,
 });
@@ -112,21 +117,36 @@ const processOrderMethod = method({
   success: ProcessOrderResultSchema,
 });
 
-const processOrder = ({ orderId, failAfterCharge }: ProcessOrderInput) =>
-  Effect.gen(function* () {
-    const ledger = yield* OrderLedger.client.get({ orderId });
+const ledgerCall = (
+  action: "reserve" | "release" | "charge" | "refund",
+  orderId: string,
+  requestId: string,
+) =>
+  HttpClientRequest.post(`https://ledger.example.com/orders/${action}`).pipe(
+    HttpClientRequest.setHeader("Idempotency-Key", `${requestId}:${action}`),
+    HttpClientRequest.bodyJson({ orderId }),
+    Effect.flatMap(HttpClient.execute),
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.asVoid,
+  );
 
+const processOrder = ({
+  requestId,
+  orderId,
+  failAfterCharge,
+}: ProcessOrderInput) =>
+  Effect.gen(function* () {
     const exit = yield* Effect.exit(
       Saga.fallibleTransaction(
         Effect.gen(function* () {
           yield* Saga.withFallibleCompensation(
-            ledger.reserve({}),
-            () => ledger.release({}),
+            ledgerCall("reserve", orderId, requestId),
+            () => ledgerCall("release", orderId, requestId),
           );
 
           yield* Saga.withFallibleCompensation(
-            ledger.charge({}),
-            () => ledger.refund({}),
+            ledgerCall("charge", orderId, requestId),
+            () => ledgerCall("refund", orderId, requestId),
           );
 
           if (failAfterCharge) {
@@ -161,11 +181,11 @@ const processOrder = ({ orderId, failAfterCharge }: ProcessOrderInput) =>
     }
 
     return yield* Effect.die(exit.cause);
-  });
+  }).pipe(Effect.provide(FetchHttpClient.layer));
 ```
 
 Put `processOrder: processOrderMethod` in the agent definition's `methods` record. The one
-top-level parameter named `input` is intentional: it lets callers provide the two fields as one
+top-level parameter named `input` is intentional: it lets callers provide the three fields as one
 TypeScript record value. The implementation receives the named-parameter wrapper, so expose the
 handler as follows:
 
@@ -183,16 +203,17 @@ above, invoke it with one record positional:
 
 ```shell
 golem agent invoke 'CounterAgent("main")' processOrder \
-  '{ orderId: "order-1", failAfterCharge: true }'
+  '{ requestId: "request-1", orderId: "order-1", failAfterCharge: true }'
 ```
 
-If instead a method declares `params: { orderId: ..., failAfterCharge: ... }`, pass two separate
-shell positionals. Do not combine two top-level parameters into one comma-separated argument.
+If instead a method declares
+`params: { requestId: ..., orderId: ..., failAfterCharge: ... }`, pass three separate shell
+positionals. Do not combine multiple top-level parameters into one comma-separated argument.
 
 For rollback order `refund` then `release`, register the reserve step first and the charge step
-second. Define the ledger's DELETE HTTP routes with `Http.del(...)`, but invoke the same underlying
-methods through `OrderLedger.client` from the saga; do not try to fetch the ledger's HTTP URL from
-inside the Effect component.
+second. Execute every request with `HttpClient.execute`, reject non-`2xx` responses with
+`HttpClientResponse.filterStatusOk`, and provide `FetchHttpClient.layer` around the composed
+handler Effect.
 
 ## Infallible Transactions
 
@@ -216,14 +237,13 @@ choice for methods returning `{ success, error }`.
 - Do not use compensation combinators outside a transaction; the step runs but no rollback is
   retained.
 - Saga atomic regions make each durable step recoverable; they do not make external systems ACID.
-- Use normal awaited agent-client calls in steps, not `.trigger(...)` or scheduled calls.
+- Await every outgoing HTTP execute and compensation request; do not start either one in a detached
+  Effect.
 - Keep the agent durable and use the default durable persistence level for oplog recovery.
 
 ## Authoritative API Sources
 
 - [`Saga` implementation and signatures](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Saga.ts)
 - [Pinned booking-saga agent example](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/integration-test/components/agents/src/booking-saga-agent.ts)
-- [Typed agent client API](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Client.ts)
 - [Method schemas and handler input](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/internal/method.ts)
-- [Declarative HTTP metadata](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/Http.ts)
-- [Pinned component world showing available host imports](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/wit/main.wit)
+- [Effect HTTP client skill](../golem-make-http-request-effect/SKILL.md)

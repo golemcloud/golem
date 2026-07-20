@@ -1,4 +1,7 @@
 name: "rpc-1-invoke-and-await"
+semanticRequirements:
+  effect:
+    - GlobalRegistry private snapshot state must use Schema.Record; an array representation is not a substitute.
 steps:
   - id: "create-project"
     create_project:
@@ -44,12 +47,11 @@ steps:
         `RegistryEntry` with `name: Schema.String` and `count: Schema.Number`. Expose two typed
         Effect methods: `register` with named parameters `name` and `count` and
         `success: Schema.Boolean`, and `getAll` with no parameters and
-        `success: Schema.Array(RegistryEntry)`. Use that same array schema for the snapshot state
-        and initialize it with `snapshot.init([])`. Do not use `Schema.Record` or any index
-        signature: the Effect SDK cannot represent index signatures in WIT agent metadata. Upsert
-        entries immutably by finding the matching `name`, replacing that array element when found,
-        or appending `{ name, count }` otherwise. `register` must return `true` when `count < 5` and
-        `false` otherwise; `getAll` must return the snapshot array.
+        `success: Schema.Array(RegistryEntry)`. Use `Schema.Record(Schema.String, RegistryEntry)`
+        for the private snapshot state and initialize it with `snapshot.init({})`. Upsert entries
+        immutably by using `name` as the record key. `register` must return `true` when `count < 5`
+        and `false` otherwise; `getAll` must return `Object.values` of the snapshot record so its
+        public result remains the declared array schema.
 
         Modify the existing Effect `Counter` agent rather than creating a duplicate. Rename its
         exported TypeScript binding and its `defineAgent` runtime name to exactly `CounterAgent`,

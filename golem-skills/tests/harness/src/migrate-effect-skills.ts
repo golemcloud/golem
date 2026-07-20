@@ -8,6 +8,74 @@ import { z } from "zod";
 
 const LANGUAGE_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit"]);
 const EXPECTED_UNIT_COUNT = 38;
+const PROTECTED_EFFECT_SEMANTIC_REQUIREMENTS: Record<string, string[]> = {
+  "add-cors": [
+    "The Effect scenario must configure a mount-level explicit origin and an endpoint-level wildcard through Effect-Golem CORS metadata, then verify host-generated preflight and ordinary response headers; application OPTIONS handlers and manual CORS responses are not substitutes.",
+  ],
+  "add-http-endpoint": [
+    "The Effect scenario must exercise plain-text, raw binary, ordinary JSON, and empty 204 endpoint response mappings; omitting or replacing any response kind is not a substitute.",
+  ],
+  "add-ignite-rdbms": [
+    "The Effect implementation must resolve SqlClient.SqlClient from effect/unstable/sql and provide it with IgniteClient.layer; IgniteClient.make and adapter-specific service access are not substitutes.",
+  ],
+  "add-llm": [
+    "The Effect implementation must call the configured provider through Effect AI LanguageModel and an Effect AI provider layer; direct fetch and stubbed responses are not substitutes.",
+  ],
+  "add-mysql-rdbms": [
+    "The Effect implementation must resolve SqlClient.SqlClient from effect/unstable/sql and provide it with MySqlClient.layer; MySqlClient.make and adapter-specific service access are not substitutes.",
+  ],
+  "add-postgres-rdbms": [
+    "The Effect implementation must resolve SqlClient.SqlClient from effect/unstable/sql and provide it with PgClient.layer; PgClient.make and adapter-specific service access are not substitutes.",
+  ],
+  "add-webhook": [
+    "SenderAgent must POST to the public webhook URL through Effect HttpClient; direct promise completion, typed RPC, and stubs are not substitutes.",
+  ],
+  "atomic-block": [
+    "Every side effect specified as HTTP must be performed through Effect HttpClient; typed agent RPC is not a substitute.",
+  ],
+  "http-endpoint-parameters": [
+    "The Effect scenario must send repeated query instances and repeated raw header fields and verify they bind in arrival order to collection schemas; comma-joined substitutes are not acceptable.",
+    "The repeated collection endpoint must return an ordinary Schema.Struct JSON result; unstructured responses, manual JSON serialization, and byte encoding are not substitutes.",
+    "The Effect scenario must verify the existing structured 400 contract for missing, malformed, repeated-scalar, and unparsable-collection request values, including JSON content type, stable error code, and exactly one relevant error message.",
+  ],
+  "make-http-request": [
+    "The Effect implementation must perform the outgoing request through Effect HttpClient with FetchHttpClient.layer; typed agent RPC and direct fetch are not substitutes.",
+  ],
+  "read-large-provisioned-file": [
+    "The Effect implementation must read the provisioned /data/large.bin file through the filesystem; Blobstore, generated data, and hardcoded results are not substitutes.",
+  ],
+  "recurring-task-cancelable": [
+    "Cancellation covers only the live ScheduledInvocation handle returned and canceled during the current agent lifetime; reconstructing a handle after recovery is not required.",
+  ],
+  "rpc-1-invoke-and-await": [
+    "GlobalRegistry private snapshot state must use Schema.Record; an array representation is not a substitute.",
+  ],
+  "snapshot-recovery": [
+    "Private snapshot history must remain record-shaped with Schema.Record through snapshot and recovery; an array representation is not a substitute.",
+  ],
+  "transactions-1-fallible-rollback-http-ledger": [
+    "Transaction execute and compensation steps must perform actual HTTP requests through Effect HttpClient; typed agent RPC is not a substitute.",
+  ],
+};
+
+const EFFECT_WORKAROUND_MARKERS: Record<string, string[]> = {
+  "add-llm": ["`globalThis.fetch`", "POST directly to"],
+  "add-webhook": ["`Agents.Promises.complete`", "without claiming to POST"],
+  "atomic-block": ["`SideEffectRecorder.client.get`", "do not deliberately fail"],
+  "transactions-1-fallible-rollback-http-ledger": [
+    "`OrderLedger.client.get`",
+    "no supported outgoing `fetch`",
+  ],
+};
+
+const SemanticStatusSchema = z.enum([
+  "pending",
+  "passed",
+  "passed-with-workaround",
+  "blocked-by-sdk",
+  "blocked-by-host",
+  "blocked-by-generator",
+]);
 
 const AttemptSchema = z.object({
   number: z.number().int().positive(),
@@ -36,6 +104,7 @@ const UnitSchema = z.object({
   strategy: z.enum(["direct", "adapted"]),
   notes: z.string().optional(),
   state: z.enum(["pending", "editing", "verifying", "passed", "blocked"]),
+  semanticStatus: SemanticStatusSchema,
   attempts: z.array(AttemptSchema).default([]),
   evidence: EvidenceSchema.nullable().default(null),
 });
@@ -309,17 +378,38 @@ export function selectNextUnit(
   const active = manifest.units.find(
     (unit) =>
       (unit.state === "editing" || unit.state === "verifying") &&
-      unit.attempts.length < manifest.policy.maxAttempts,
+      unit.attempts.length < attemptLimitFor(unit, manifest.policy.maxAttempts),
   );
   if (active) return active;
 
   return manifest.units.find(
     (unit) =>
-      unit.state === "pending" &&
-      unit.prerequisites.every(
-        (id) => manifest.units.find((candidate) => candidate.id === id)?.state === "passed",
-      ),
+      (unit.state === "pending" ||
+        (unit.state === "passed" && unit.semanticStatus === "passed-with-workaround")) &&
+      prerequisitesAreComplete(manifest, unit),
   );
+}
+
+export function attemptLimitFor(unit: MigrationUnit, maxAttempts: number): number {
+  if (unit.semanticStatus !== "passed-with-workaround") return maxAttempts;
+  let lastPassedAttempt = -1;
+  for (let index = unit.attempts.length - 1; index >= 0; index--) {
+    if (unit.attempts[index].outcome === "passed") {
+      lastPassedAttempt = index;
+      break;
+    }
+  }
+  return lastPassedAttempt + 1 + maxAttempts;
+}
+
+export function prerequisitesAreComplete(
+  manifest: MigrationManifest,
+  unit: MigrationUnit,
+): boolean {
+  return unit.prerequisites.every((id) => {
+    const prerequisite = manifest.units.find((candidate) => candidate.id === id);
+    return prerequisite?.state === "passed" && prerequisite.semanticStatus === "passed";
+  });
 }
 
 function unitReferences(unit: MigrationUnit): string[] {
@@ -449,9 +539,12 @@ async function validateNonEffectScenariosUnchanged(
   const committed = await loadCommittedScenario(repoRoot, scenarioRelativePath);
   if (!committed) return;
 
+  const { semanticRequirements: _currentRequirements, ...currentBehavior } = current;
+  const { semanticRequirements: _committedRequirements, ...committedBehavior } = committed;
+
   for (const language of ["ts", "rust", "scala", "moonbit"]) {
-    const before = resolveScenarioForLanguage(committed, language);
-    const after = resolveScenarioForLanguage(current, language);
+    const before = resolveScenarioForLanguage(committedBehavior, language);
+    const after = resolveScenarioForLanguage(currentBehavior, language);
     if (!isDeepStrictEqual(before, after)) {
       throw new Error(
         `${scenarioRelativePath} changes existing non-Effect (${language}) scenario behavior; only Effect branches may be added`,
@@ -467,6 +560,71 @@ function scenarioExpectedSkills(document: Record<string, unknown>): unknown[] {
     .filter((step) => !scenarioExcludesEffect(step))
     .map((step) => step.expectedSkills)
     .filter((value) => value !== undefined);
+}
+
+function scenarioSemanticRequirements(document: Record<string, unknown>): string[] {
+  const requirements = document.semanticRequirements;
+  if (!requirements || typeof requirements !== "object" || Array.isArray(requirements)) return [];
+  const effect = (requirements as Record<string, unknown>).effect;
+  return Array.isArray(effect) && effect.every((entry) => typeof entry === "string") ? effect : [];
+}
+
+export function semanticRemediationFailure(
+  scenarioName: string,
+  document: Record<string, unknown>,
+): string | undefined {
+  const { semanticRequirements: _requirements, ...scenarioBehavior } = document;
+  const resolvedEffectScenario = resolveScenarioForLanguage(scenarioBehavior, "effect");
+  const serializedEffectScenario = JSON.stringify(resolvedEffectScenario);
+  const presentWorkarounds = (EFFECT_WORKAROUND_MARKERS[scenarioName] ?? []).filter((marker) =>
+    serializedEffectScenario.includes(marker),
+  );
+  if (presentWorkarounds.length > 0) {
+    return `${scenarioName} still encodes the accepted workaround markers: ${presentWorkarounds.join(", ")}`;
+  }
+
+  if (scenarioName === "atomic-block") {
+    const steps = (document.steps as unknown[] | undefined) ?? [];
+    const verificationStep = steps.find(
+      (step): step is Record<string, unknown> =>
+        Boolean(step && typeof step === "object") &&
+        (step as Record<string, unknown>).id === "verify-event-sequence",
+    );
+    const expected = verificationStep?.expect;
+    if (
+      !expected ||
+      !isDeepStrictEqual(
+        resolveScenarioForLanguage(expected, "effect"),
+        resolveScenarioForLanguage(expected, "ts"),
+      )
+    ) {
+      return "atomic-block Effect verification must require the same event sequence as TypeScript";
+    }
+  }
+
+  return undefined;
+}
+
+export async function validateSemanticRemediation(
+  repoRoot: string,
+  unit: MigrationUnit,
+): Promise<void> {
+  if (unit.semanticStatus !== "passed-with-workaround") return;
+  for (const scenarioName of unit.verifyScenarios) {
+    const scenarioPath = path.join(
+      repoRoot,
+      "golem-skills",
+      "tests",
+      "harness",
+      "scenarios",
+      `${scenarioName}.yaml`,
+    );
+    const document = yaml.parse(await fs.readFile(scenarioPath, "utf8")) as Record<string, unknown>;
+    const failure = semanticRemediationFailure(scenarioName, document);
+    if (failure) {
+      throw new Error(`${failure}; semantic parity has not been demonstrated`);
+    }
+  }
 }
 
 export async function validateUnitStatic(repoRoot: string, unit: MigrationUnit): Promise<void> {
@@ -500,6 +658,16 @@ export async function validateUnitStatic(repoRoot: string, unit: MigrationUnit):
     );
     const scenarioPath = path.join(repoRoot, scenarioRelativePath);
     const document = yaml.parse(await fs.readFile(scenarioPath, "utf8")) as Record<string, unknown>;
+    const protectedRequirements = PROTECTED_EFFECT_SEMANTIC_REQUIREMENTS[scenarioName] ?? [];
+    const semanticRequirements = scenarioSemanticRequirements(document);
+    const missingProtectedRequirements = protectedRequirements.filter(
+      (requirement) => !semanticRequirements.includes(requirement),
+    );
+    if (missingProtectedRequirements.length > 0) {
+      throw new Error(
+        `${scenarioName} is missing protected Effect semanticRequirements:\n${missingProtectedRequirements.map((requirement) => `  - ${requirement}`).join("\n")}`,
+      );
+    }
     await validateNonEffectScenariosUnchanged(repoRoot, scenarioRelativePath, document);
     const steps = [
       ...((document.steps as unknown[] | undefined) ?? []),
@@ -532,7 +700,7 @@ export async function validateUnitStatic(repoRoot: string, unit: MigrationUnit):
   }
 }
 
-async function buildWorkerPrompt(
+export async function buildWorkerPrompt(
   repoRoot: string,
   manifest: MigrationManifest,
   unit: MigrationUnit,
@@ -546,6 +714,21 @@ async function buildWorkerPrompt(
   const scenarios = unitScenarioNames(unit).map(
     (name) => `golem-skills/tests/harness/scenarios/${name}.yaml`,
   );
+  const semanticRequirements = (
+    await Promise.all(
+      unitScenarioNames(unit).map(async (name) => {
+        const document = yaml.parse(
+          await fs.readFile(
+            path.join(repoRoot, "golem-skills", "tests", "harness", "scenarios", `${name}.yaml`),
+            "utf8",
+          ),
+        ) as Record<string, unknown>;
+        return scenarioSemanticRequirements(document).map(
+          (requirement) => `  - ${name}: ${requirement}`,
+        );
+      }),
+    )
+  ).flat();
   const prerequisiteSkills = unit.prerequisites.map((id) => {
     const prerequisite = manifest.units.find((candidate) => candidate.id === id)!;
     return `golem-skills/skills/effect/${prerequisite.targetSkill}/SKILL.md`;
@@ -569,6 +752,8 @@ ${localSdkPath ? `- Local Effect SDK checkout: ${localSdkPath}` : "- Use Librari
 ${references.map((reference) => `  - ${reference}`).join("\n")}
 - Scenarios you may edit:
 ${scenarios.map((scenario) => `  - ${scenario}`).join("\n")}
+- Semantic requirements (these are acceptance criteria and may not be weakened or removed):
+${semanticRequirements.length > 0 ? semanticRequirements.join("\n") : "  - none beyond the scenario's behavioral assertions"}
 - Passed prerequisite Effect skills:
 ${prerequisiteSkills.length > 0 ? prerequisiteSkills.map((skill) => `  - ${skill}`).join("\n") : "  - none"}
 - Canary reference: golem-skills/skills/effect/golem-add-agent-effect/SKILL.md
@@ -824,6 +1009,22 @@ function finishAttempt(
   attempt.error = error;
 }
 
+export function recordSuccessfulVerification(
+  manifest: MigrationManifest,
+  unit: MigrationUnit,
+  attempt: MigrationAttempt,
+): void {
+  finishAttempt(attempt, "passed");
+  unit.state = "passed";
+  unit.semanticStatus = "passed";
+  unit.evidence = {
+    verifiedAt: timestamp(),
+    effectGolemRef: manifest.effectGolem.ref,
+    thread: attempt.thread,
+    reports: [...attempt.reports],
+  };
+}
+
 async function commitUnit(
   options: RunOptions,
   unit: MigrationUnit,
@@ -856,6 +1057,7 @@ async function verifyUnit(
 ): Promise<string | undefined> {
   await assertScopedChanges(options.repoRoot, unit, options.manifestPath);
   await validateUnitStatic(options.repoRoot, unit);
+  await validateSemanticRemediation(options.repoRoot, unit);
   const targetDir = await buildGolem(options.repoRoot, manifest.policy.buildProfile);
   await dryRunScenarios(options, unit, targetDir);
 
@@ -919,14 +1121,7 @@ async function runUnit(
       const failure = await verifyUnit(options, manifest, unit, attempt);
       if (failure) throw new Error(failure);
 
-      finishAttempt(attempt, "passed");
-      unit.state = "passed";
-      unit.evidence = {
-        verifiedAt: timestamp(),
-        effectGolemRef: manifest.effectGolem.ref,
-        thread: attempt.thread,
-        reports: [...attempt.reports],
-      };
+      recordSuccessfulVerification(manifest, unit, attempt);
       await saveManifest(options.manifestPath, manifest);
       await commitUnit(options, unit, manifest);
       console.log(`Passed: ${unit.id}`);
@@ -1017,10 +1212,12 @@ async function main(): Promise<void> {
   if (values["dry-run"]) {
     const units = values.unit
       ? [selectNextUnit(manifest, values.unit)!]
-      : manifest.units.filter(({ state }) => state !== "passed");
+      : manifest.units.filter(
+          ({ state, semanticStatus }) => state !== "passed" || semanticStatus !== "passed",
+        );
     for (const unit of units) {
       console.log(
-        `${unit.state.padEnd(9)} ${unit.id} -> ${unit.targetSkill} [${unit.verifyScenarios.join(", ")}]`,
+        `${unit.state.padEnd(9)} ${unit.semanticStatus.padEnd(22)} ${unit.id} -> ${unit.targetSkill} [${unit.verifyScenarios.join(", ")}]`,
       );
     }
     return;
@@ -1036,7 +1233,11 @@ async function main(): Promise<void> {
   let processed = 0;
   while (true) {
     const unit = selectNextUnit(manifest, values.unit);
-    if (!unit || (unit.state === "passed" && !options.verifyOnly)) break;
+    if (
+      !unit ||
+      (unit.state === "passed" && unit.semanticStatus === "passed" && !options.verifyOnly)
+    )
+      break;
     const retryingBlocked =
       values["retry-blocked"] &&
       (unit.state === "blocked" || unit.attempts.length >= manifest.policy.maxAttempts);
@@ -1045,7 +1246,7 @@ async function main(): Promise<void> {
     }
     const attemptLimit = retryingBlocked
       ? unit.attempts.length + manifest.policy.maxAttempts
-      : manifest.policy.maxAttempts;
+      : attemptLimitFor(unit, manifest.policy.maxAttempts);
     if (retryingBlocked) {
       console.log(
         `Retrying blocked unit ${unit.id} with ${manifest.policy.maxAttempts} additional attempts.`,

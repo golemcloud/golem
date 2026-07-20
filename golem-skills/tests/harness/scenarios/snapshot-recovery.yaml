@@ -1,4 +1,7 @@
 name: "snapshot-recovery"
+semanticRequirements:
+  effect:
+    - Private snapshot history must remain record-shaped with Schema.Record through snapshot and recovery; an array representation is not a substitute.
 steps:
   # 1. Create and deploy a default project (revision 0)
   - id: "create-project"
@@ -18,13 +21,17 @@ steps:
       ts: *non-effect-add-snapshot-support
       effect: >
         In the Effect-based test-app project, configure the existing counter for
-        schema-driven snapshot recovery on every successful invocation. Use
-        `Snapshot.define` with a `Schema.Struct` containing the counter value,
-        `Snapshot.policy.everyN(1)`, and exactly one `snapshot.init(...)` call whose returned
-        `Ref` remains the counter's state. Do not add custom byte or JSON save/load code. Rename
-        the `defineAgent` name from `Counter` to exactly `CounterAgent` if necessary, and update
-        the matching agent key in `golem.yaml`. Preserve the existing `increment` behavior.
-        Build and deploy.
+        schema-driven snapshot recovery on every successful invocation. Use `Snapshot.define`
+        with a private `Schema.Struct` containing the counter value and a `history` field declared
+        as `Schema.Record(Schema.String, Schema.Number)`. Initialize history to `{}` and, on each
+        increment, immutably add the new count under its decimal string key. Use
+        `Snapshot.policy.everyN(1)` and exactly one `snapshot.init(...)` call whose returned `Ref`
+        remains the counter's state. Add a public `getHistory` method with no parameters and
+        `success: Schema.Array(Schema.Number)` that returns `Object.values(state.history)`. Do not
+        expose the record schema in a public method and do not add custom byte or JSON save/load
+        code. Rename the `defineAgent` name from `Counter` to exactly `CounterAgent` if necessary,
+        and update the matching agent key in `golem.yaml`. Preserve the existing `increment`
+        behavior. Build and deploy.
       scala: *non-effect-add-snapshot-support
       moonbit: *non-effect-add-snapshot-support
     expectedSkills:
@@ -73,7 +80,7 @@ steps:
   - id: "verify-snapshots-in-oplog"
     shell:
       command: "golem"
-      args: ["agent", "oplog", "CounterAgent(\"c1\")"]
+      args: ["agent", "oplog", 'CounterAgent("c1")']
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -83,7 +90,7 @@ steps:
   - id: "simulate-crash"
     shell:
       command: "golem"
-      args: ["agent", "simulate-crash", "CounterAgent(\"c1\")"]
+      args: ["agent", "simulate-crash", 'CounterAgent("c1")']
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -92,7 +99,19 @@ steps:
   - id: "wait-for-recovery"
     sleep: 2
 
-  # 7. Verify state was fully recovered
+  # 7. Verify private record state was fully recovered
+  - id: "verify-record-state-recovered"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "getHistory"
+    expect:
+      result_json:
+        - path: "$"
+          equals: [1, 2, 3]
+
+  # 8. Verify the counter state was fully recovered
   - id: "verify-recovered"
     invoke_json:
       agent: 'CounterAgent("c1")'

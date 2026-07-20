@@ -77,12 +77,12 @@ The emitted `.js` suffix is required by the generated ESM/NodeNext project layou
 
 `Snapshot.define` requires a policy:
 
-| Policy | Meaning |
-| --- | --- |
-| `Snapshot.policy.default` | Use the host's default cadence |
-| `Snapshot.policy.manual` | Alias of `default`; useful when snapshots are primarily for manual updates |
-| `Snapshot.policy.everyN(10)` | Snapshot after every 10 successful invocations |
-| `Snapshot.policy.periodic("30 seconds")` | Snapshot at most once per interval |
+| Policy                                   | Meaning                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------- |
+| `Snapshot.policy.default`                | Use the host's default cadence                                             |
+| `Snapshot.policy.manual`                 | Alias of `default`; useful when snapshots are primarily for manual updates |
+| `Snapshot.policy.everyN(10)`             | Snapshot after every 10 successful invocations                             |
+| `Snapshot.policy.periodic("30 seconds")` | Snapshot at most once per interval                                         |
 
 The server default is disabled, so use `everyN(...)` or `periodic(...)` when periodic snapshots
 must actually occur. `everyN` accepts an integer from 1 through 65,535. Use `everyN(1)` when a
@@ -96,6 +96,9 @@ recovery scenario must produce a snapshot after every successful invocation.
   `Ref.set`, `Ref.update`, `Ref.modify`, or `Ref.updateAndGet`.
 - Keep all persisted values compatible with the declared schema. Do not put functions, services,
   or JavaScript `Map` instances in snapshot state.
+- Automatic snapshot state is private JSON rather than public WIT. JSON-representable schemas such
+  as `Schema.Record(Schema.String, ValueSchema)`, including nested arrays and optional fields, are
+  supported even though open-ended records cannot be constructor or method schemas.
 - Constructor parameters remain the durable agent identity; include them in snapshot state only
   if the methods also need them as mutable persisted data.
 - Preserve the `snapshot` definition and `snapshot.init(...)` binding when changing methods in a

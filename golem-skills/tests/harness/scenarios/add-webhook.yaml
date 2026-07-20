@@ -1,4 +1,7 @@
 name: "add-webhook"
+semanticRequirements:
+  effect:
+    - SenderAgent must POST to the public webhook URL through Effect HttpClient; direct promise completion, typed RPC, and stubs are not substitutes.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -62,24 +65,24 @@ steps:
 
         `WebhookAgent` must keep `webhookUrl` and `result` string state, both initially empty. Its
         `POST /start` Effect must create a webhook with `Webhook.create`, store `handle.url`, get
-        the same-name `SenderAgent` through its typed client, and hand off both the URL and
-        `handle.promiseId` with `yield* sender.receiveUrl.trigger(...)`. Use this fire-and-forget
-        RPC so `start` reaches the webhook wait without waiting on the receiver. Keep the handle
-        local to this invocation, await
-        `handle.await`, decode the payload with `text()`, store the text in `result`, and return
-        it. Expose `GET /result` to return the current result string.
+        the same-name `SenderAgent` through its typed client, and hand off the URL with
+        `yield* sender.receiveUrl.trigger({ url: handle.url })`. Use this fire-and-forget RPC
+        so `start` reaches the webhook wait without waiting on the receiver. Keep the handle local
+        to this invocation, await `handle.await`, decode the payload with `text()`, store the text
+        in `result`, and return it. Expose `GET /result` to return the current result string.
 
-        `SenderAgent` must store the received URL and promise ID in per-instance Effect state.
-        Define the promise ID parameter with its exact WIT shape, using `WitTypes.Uint64` for UUID
-        halves and the oplog index. Expose `POST /receive-url` as the `receiveUrl` method with
-        unbound `url` and `promiseId` parameters, storing both and returning `Schema.Void`.
+        `SenderAgent` must store only the received URL in per-instance Effect state. Expose
+        `POST /receive-url` as the `receiveUrl` method with an unbound `url` parameter, storing it
+        and returning `Schema.Void`.
 
-        The pinned Effect SDK has no outgoing HTTP capability. Therefore adapt `POST /send`
-        honestly instead of using `fetch` or inventing an HTTP client: accept the unbound
-        camelCase JSON `message` string and call `Agents.Promises.complete` with the stored promise
-        ID and `new TextEncoder().encode(message)`. Return the resulting success boolean. This
-        intentionally resumes the webhook's underlying promise without claiming to POST to the
-        public URL.
+        Implement `POST /send` with `HttpClient`, `HttpClientRequest`, `HttpClientResponse`, and
+        `FetchHttpClient.layer` from `effect/unstable/http`. Accept the unbound camelCase JSON
+        `message` string. If no URL has been received yet, return false without sending a request.
+        Otherwise POST to the stored public webhook URL with `message` as the plain-text request
+        body, execute it through `HttpClient`, require a successful status with
+        `HttpClientResponse.filterStatusOk`, and return true only when that HTTP operation
+        succeeds. Do not complete `handle.promiseId` directly and do not substitute raw fetch,
+        Node networking, typed agent RPC, or a stubbed response for the outgoing webhook POST.
 
         Implement every handler as an Effect, preserve existing manifest entries, and make sure
         the project builds successfully.
@@ -92,6 +95,7 @@ steps:
         - "golem-add-webhook-ts"
       effect:
         - "golem-add-webhook-effect"
+        - "golem-make-http-request-effect"
       scala:
         - "golem-add-webhook-scala"
       moonbit:
@@ -138,7 +142,7 @@ steps:
   - id: "verify-webhook-agent-suspended"
     shell:
       command: "golem"
-      args: ["agent", "get", "WebhookAgent(\"w1\")"]
+      args: ["agent", "get", 'WebhookAgent("w1")']
       cwd: "test-app"
     expect:
       exit_code: 0

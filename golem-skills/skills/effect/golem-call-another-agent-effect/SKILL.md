@@ -11,8 +11,11 @@ record. Both operations return Effects; do not translate Promise-based SDK examp
 additional `.await()` call.
 
 ```typescript
-const registry = yield* GlobalRegistry.client.get({});
-const accepted = yield* registry.register({ name, count });
+const registerCount = (name: string, count: number) =>
+  Effect.gen(function* () {
+    const registry = yield* GlobalRegistry.client.get({});
+    return yield* registry.register({ name, count });
+  });
 ```
 
 The function-call form of `register(...)` invokes the target and suspends the caller until the
@@ -26,18 +29,15 @@ retains the same typed `client` as the unimplemented agent spec.
 
 ```typescript
 import { Effect, Ref, Schema } from "effect";
-import {
-  defineAgent,
-  method,
-  Snapshot,
-} from "@golemcloud/effect-golem";
+import { defineAgent, method, Snapshot } from "@golemcloud/effect-golem";
 
 const RegistryEntry = Schema.Struct({
   name: Schema.String,
   count: Schema.Number,
 });
 
-const RegistryState = Schema.Array(RegistryEntry);
+const RegistryState = Schema.Record(Schema.String, RegistryEntry);
+const RegistryEntries = Schema.Array(RegistryEntry);
 
 export const GlobalRegistry = defineAgent({
   name: "GlobalRegistry",
@@ -54,50 +54,48 @@ export const GlobalRegistry = defineAgent({
     }),
     getAll: method({
       params: {},
-      success: RegistryState,
+      success: RegistryEntries,
     }),
   },
 }).implement((_constructorParams, snapshot) =>
   Effect.gen(function* () {
-    const state = yield* snapshot.init([]);
+    const state = yield* snapshot.init({});
 
     return {
       register: ({ name, count }) =>
-        Ref.update(state, (entries) => {
-          const index = entries.findIndex((entry) => entry.name === name);
+        Ref.update(state, (entries) => ({
+          ...entries,
+          [name]: { name, count },
+        })).pipe(Effect.as(count < 5)),
 
-          return index === -1
-            ? [...entries, { name, count }]
-            : entries.map((entry, currentIndex) =>
-                currentIndex === index ? { name, count } : entry,
-              );
-        }).pipe(Effect.as(count < 5)),
-
-      getAll: () => Ref.get(state),
+      getAll: () => Ref.get(state).pipe(Effect.map(Object.values)),
     };
   }),
 );
 ```
 
-Use WIT-representable schemas for constructor parameters, method parameters/results/errors, and
-snapshot state. In this SDK version, `Schema.Record(...)` creates an index signature and agent
-registration fails with `UnsupportedSchemaError` because WIT records have fixed fields. Represent a
-dynamic string-keyed collection as `Schema.Array(Schema.Struct(...))` and update it immutably by its
-key field, as above. This restriction applies even though snapshots are serialized as JSON because
-the SDK compiles the snapshot schema to WIT metadata during registration.
+Constructor parameters and method parameters/results/errors must use WIT-representable schemas.
+Automatic snapshot schemas are private JSON state and may additionally use JSON-representable
+Effect schemas such as `Schema.Record(...)`. For a dynamic string-keyed snapshot collection, use a
+record when keyed lookup is the natural state model; convert it to an array only at a public method
+boundary whose WIT schema is `Schema.Array(...)`.
 
 Constructor parameters identify the durable target instance. Pass the complete named record to
 `client.get`:
 
 ```typescript
-const counter = yield* CounterAgent.client.get({ name: "my-counter" });
+const getCounter = Effect.gen(function* () {
+  return yield* CounterAgent.client.get({ name: "my-counter" });
+});
 ```
 
 For a singleton declared with `constructorParams: {}`, pass an empty record; `get()` and
 `get(undefined)` are not the typed API:
 
 ```typescript
-const registry = yield* GlobalRegistry.client.get({});
+const getRegistry = Effect.gen(function* () {
+  return yield* GlobalRegistry.client.get({});
+});
 ```
 
 Getting a handle does not eagerly run the target constructor. The target agent is created or loaded

@@ -1,0 +1,54 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/responses",
+    "headers": {
+      "Authorization": {
+        "equalTo": "Bearer test-mock-key"
+      }
+    },
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$[?(@.model == 'mock-model')]"
+      },
+      {
+        "matchesJsonPath": "$.input[?(@.role == 'user')]"
+      },
+      {
+        "matchesJsonPath": "$..[?(@.text == 'hello')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "id": "resp-mock-001",
+      "object": "response",
+      "model": "mock-model",
+      "created_at": 1753027200,
+      "output": [
+        {
+          "id": "msg-mock-001",
+          "type": "message",
+          "role": "assistant",
+          "status": "completed",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "mock-llm-ok",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 3,
+        "total_tokens": 13
+      }
+    }
+  }
+}

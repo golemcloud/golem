@@ -1,4 +1,7 @@
 name: "add-http-endpoint"
+semanticRequirements:
+  effect:
+    - The Effect scenario must exercise plain-text, raw binary, ordinary JSON, and empty 204 endpoint response mappings; omitting or replacing any response kind is not a substitute.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -47,6 +50,19 @@ steps:
         - `GET /items` — returns all stored items as a JSON array.
         - `POST /items/{id}/complete` — binds `id` from the path, marks that item done, and returns
           the updated item.
+
+        Also expose four deterministic endpoints that exercise the existing Effect-Golem response
+        mappings. Import `Unstructured` from `@golemcloud/effect-golem`, declare every endpoint in
+        the methods map, and implement every handler as an Effect:
+        - `GET /responses/text` — use `Unstructured.UnstructuredText` restricted to language code
+          `en` and return an inline text reference containing exactly `effect-text-ok` with that
+          language code.
+        - `GET /responses/binary` — use `Unstructured.UnstructuredBinary` restricted to MIME type
+          `application/octet-stream` and return an inline binary reference whose `Uint8Array`
+          contains the ASCII bytes for exactly `effect-binary-ok` with that MIME type.
+        - `GET /responses/json` — use an ordinary `Schema.Struct` success and return exactly
+          `{ kind: "json", source: "effect" }`.
+        - `DELETE /responses/empty` — use `Schema.Void` success and return `Effect.void`.
 
         Implement every handler as an Effect, import the implementation module from `src/main.ts`,
         preserve existing manifest entries, and make sure the project builds and deploys.
@@ -126,3 +142,54 @@ steps:
       body_json:
         - path: "$"
           equals: []
+
+  - id: "http-effect-text-response"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/responses/text"
+      method: "GET"
+    expect:
+      status: 200
+      header_contains:
+        Content-Type: "text/plain"
+        Content-Language: "en"
+      body_matches: "^effect-text-ok$"
+
+  - id: "http-effect-binary-response"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/responses/binary"
+      method: "GET"
+    expect:
+      status: 200
+      header_contains:
+        Content-Type: "application/octet-stream"
+      body_matches: "^effect-binary-ok$"
+
+  - id: "http-effect-json-response"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/responses/json"
+      method: "GET"
+    expect:
+      status: 200
+      header_contains:
+        Content-Type: "application/json"
+      body_json:
+        - path: "$.kind"
+          equals: "json"
+        - path: "$.source"
+          equals: "effect"
+
+  - id: "http-effect-empty-response"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/responses/empty"
+      method: "DELETE"
+    expect:
+      status: 204
+      body_matches: "^$"

@@ -1,4 +1,9 @@
 name: "http-endpoint-parameters"
+semanticRequirements:
+  effect:
+    - The Effect scenario must send repeated query instances and repeated raw header fields and verify they bind in arrival order to collection schemas; comma-joined substitutes are not acceptable.
+    - The repeated collection endpoint must return an ordinary Schema.Struct JSON result; unstructured responses, manual JSON serialization, and byte encoding are not substitutes.
+    - The Effect scenario must verify the existing structured 400 contract for missing, malformed, repeated-scalar, and unparsable-collection request values, including JSON content type, stable error code, and exactly one relevant error message.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -57,6 +62,13 @@ steps:
         `Http.mount("/catalogs/{catalogName}")` from `@golemcloud/effect-golem` and expose it on
         `test-app.localhost:9006`. Store products durably with Effect state and snapshot APIs.
 
+        Make changes only inside the generated `test-app`. Do not modify dependencies, linked SDK
+        source or build outputs, Effect-Golem, the Golem host, or WIT. The documented optional
+        scalar and repeated collection query/header binding capabilities already exist; use those
+        supported schemas directly rather than patching or replacing their implementation.
+        Build and deploy to verify the app, but do not call any HTTP endpoint after deployment; the
+        harness owns all runtime requests and its durable test state must remain untouched.
+
         Define a `Product` Effect Schema with `id` and `name` strings, `price` as `Schema.Number`,
         and `inStock` as `Schema.Boolean`. Expose Effect methods and `Http` routes for:
 
@@ -74,6 +86,16 @@ steps:
         5. `DELETE /products/{productId}`, returning `Schema.Void` / `Effect.void` for HTTP 204.
         6. `POST /products/batch`, taking one unbound `products` parameter containing an array of
            input objects and returning the created `Product` array.
+
+        Also add `GET /bindings/collections?tag={tags}&score={scores}`. Declare `tags` as
+        `Schema.Array(Schema.String)` and `scores` as `Schema.Array(Schema.Number)`. Bind repeated
+        raw `X-Trace-Id` header fields to `traceIds: Schema.Array(Schema.String)` and repeated raw
+        `X-Weight` header fields to `weights: Schema.Array(Schema.Number)` through endpoint header
+        mappings. Return an ordinary JSON struct containing exactly `{ tags, scores, traceIds,
+        weights }`. Do not split comma-joined values; each collection element must come from a
+        distinct query instance or raw header field, preserving arrival order.
+        Declare the success schema with `Schema.Struct`; do not use `Unstructured` responses,
+        `JSON.stringify`, manual UTF-8 encoding, or response bytes for this endpoint.
 
         Implement every handler as an Effect, import the module from `src/main.ts`, preserve
         existing manifest entries, and make sure the project builds and deploys successfully.
@@ -402,3 +424,113 @@ steps:
       body_json:
         - path: "$"
           equals: []
+
+  - id: "effect-repeated-query-and-raw-headers"
+    only_if:
+      language: effect
+    shell:
+      command: "node"
+      args:
+        - "-e"
+        - >-
+          const { execFileSync } = require("node:child_process");
+          const actual = JSON.parse(execFileSync("curl", [
+            "--silent", "--show-error",
+            "--header", "X-Trace-Id: first",
+            "--header", "X-Trace-Id: second",
+            "--header", "X-Trace-Id: first",
+            "--header", "X-Weight: 10",
+            "--header", "X-Weight: 20",
+            "--header", "X-Weight: 10",
+            "http://test-app.localhost:9006/catalogs/electronics/bindings/collections?tag=red&tag=blue&tag=red&score=1&score=2&score=1"
+          ], { encoding: "utf8" }));
+          const expected = {
+            tags: ["red", "blue", "red"],
+            scores: [1, 2, 1],
+            traceIds: ["first", "second", "first"],
+            weights: [10, 20, 10]
+          };
+          for (const key of Object.keys(expected)) {
+            if (JSON.stringify(actual[key]) !== JSON.stringify(expected[key])) {
+              throw new Error(`${key}: expected ${JSON.stringify(expected[key])}, got ${JSON.stringify(actual[key])}`);
+            }
+          }
+          console.log("collections-ok");
+    expect:
+      exit_code: 0
+      stdout_contains: "collections-ok"
+
+  - id: "effect-missing-required-query-is-structured-400"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search"
+      method: "GET"
+    expect:
+      status: 400
+      header_contains:
+        Content-Type: "application/json"
+      body_json:
+        - path: "$.code"
+          equals: "REQUEST_MISSING_VALUE"
+        - path: "$.errors.length"
+          equals: 1
+        - path: "$.errors[0]"
+          contains: "Expected single value values to be provided, but found none"
+
+  - id: "effect-malformed-scalar-query-is-structured-400"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=mouse&min-price=not-a-number"
+      method: "GET"
+    expect:
+      status: 400
+      header_contains:
+        Content-Type: "application/json"
+      body_json:
+        - path: "$.code"
+          equals: "REQUEST_VALUE_PARSING_FAILED"
+        - path: "$.errors.length"
+          equals: 1
+        - path: "$.errors[0]"
+          contains: "Failed parsing value; Provided: not-a-number; Expected type: f64"
+
+  - id: "effect-repeated-scalar-query-is-structured-400"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=mouse&q=laptop"
+      method: "GET"
+    expect:
+      status: 400
+      header_contains:
+        Content-Type: "application/json"
+      body_json:
+        - path: "$.code"
+          equals: "REQUEST_TOO_MANY_VALUES"
+        - path: "$.errors.length"
+          equals: 1
+        - path: "$.errors[0]"
+          contains: "Expected single value values to be provided, but found too many"
+
+  - id: "effect-unparsable-collection-item-is-structured-400"
+    only_if:
+      language: effect
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/bindings/collections?tag=alpha&score=1"
+      method: "GET"
+      headers:
+        X-Trace-Id: "trace"
+        X-Weight: "not-a-number"
+    expect:
+      status: 400
+      header_contains:
+        Content-Type: "application/json"
+      body_json:
+        - path: "$.code"
+          equals: "REQUEST_VALUE_PARSING_FAILED"
+        - path: "$.errors.length"
+          equals: 1
+        - path: "$.errors[0]"
+          contains: "Failed parsing value; Provided: not-a-number; Expected type: f64"

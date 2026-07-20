@@ -1,4 +1,7 @@
 name: "read-large-provisioned-file"
+semanticRequirements:
+  effect:
+    - The Effect implementation must read the provisioned /data/large.bin file through the filesystem; Blobstore, generated data, and hardcoded results are not substitutes.
 steps:
   - id: "create-project"
     create_project:
@@ -20,7 +23,7 @@ steps:
       command: "bash"
       args:
         - "-c"
-        - "mkdir -p test-app/data && python3 -c \"open('test-app/data/large.bin', 'wb').write(b'A' * 200000)\""
+        - 'mkdir -p test-app/data && python3 -c "open(''test-app/data/large.bin'', ''wb'').write(b''A'' * 200000)"'
 
   - id: "verify-generated-file-size"
     shell:
@@ -119,37 +122,28 @@ steps:
 
         Make sure the project builds and deploys successfully.
       effect: >
-        In the Effect-based test-app project, load and follow the `golem-file-io-effect` skill,
-        then implement the supported Blobstore adaptation using Effect v4 and
-        `@golemcloud/effect-golem`.
+        In the Effect-based test-app project, load and follow both the `golem-add-initial-files`
+        and `golem-file-io-effect` skills.
 
-        The current Effect QuickJS component does not expose the WASI Initial File System. Keep the
-        scenario's manifest contract by provisioning the existing `test-app/data/large.bin` at
-        `/data/large.bin` with read-only permission, but do not try to open that path from agent
-        code, import `node:fs`, or use raw `wasi:filesystem` imports. Preserve the runtime large
-        binary I/O behavior with the SDK's supported `Blobstore` API.
+        1. The file `test-app/data/large.bin` already exists — do NOT regenerate or modify it.
+           Provision it into the agent's filesystem at the target path `/data/large.bin` with
+           read-only permission.
 
-        1. Add a new durable agent type called `BigFileChecksum`, defined with `defineAgent` and
-           identified by one string constructor parameter for the instance name. Acquire a
-           Blobstore container named from that identity once in the outer implementation Effect.
+        2. Add a new durable Effect agent type called `BigFileChecksum`, defined with `defineAgent`
+           and identified by one string constructor parameter for the instance name.
 
-        2. Still in that outer initialization Effect, allocate a 200000-byte `Uint8Array`, fill it
-           with byte value 65, and persist it under the object key `data/large.bin` using
-           `container.writeData` before returning the method handlers. Keep this initialization
-           separate from the checksum method.
-
-        3. Declare `fileStats` with no parameters and a string success schema. Its handler must use
-           `container.getData("data/large.bin")` to read the complete stored object, then return a
-           string formatted EXACTLY as:
+        3. Declare `fileStats` with no parameters and a string success schema. Its Effect handler
+           must import `readFile` from `node:fs/promises`, read the complete provisioned file at
+           `/data/large.bin`, and return a string formatted EXACTLY as:
 
                size=<N>,sum=<S>
 
            where `<N>` is the total byte count and `<S>` is the sum of all unsigned byte values.
-           Use `bigint` for the accumulator. The handler must return an Effect, not a plain async
-           function.
+           Use `bigint` for the accumulator. Wrap the Promise-based file read in Effect; the method
+           handler itself must return an Effect, not a plain async function.
 
-        Import the implementation module from `src/main.ts`. Do not hard-code the expected checksum
-        in `fileStats`. Make sure the project builds and deploys successfully.
+        Import the implementation module from `src/main.ts`. Do not hard-code the file contents or
+        expected checksum in `fileStats`. Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-initial-files"
@@ -164,6 +158,7 @@ steps:
         - "golem-add-initial-files"
         - "golem-file-io-moonbit"
       effect:
+        - "golem-add-initial-files"
         - "golem-file-io-effect"
     verify:
       build: true

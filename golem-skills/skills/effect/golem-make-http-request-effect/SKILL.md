@@ -1,202 +1,206 @@
 ---
 name: golem-make-http-request-effect
-description: "Making outgoing HTTP requests from an Effect-based Golem agent through the QuickJS runtime's WASI-backed fetch API. Use when calling external REST APIs, sending JSON, reading HTTP responses, or integrating an HTTP service from @golemcloud/effect-golem code."
+description: "Making outgoing HTTP requests from an Effect-based Golem agent with Effect HttpClient and FetchHttpClient.layer. Use when calling external REST APIs, sending JSON, reading HTTP responses, or integrating an HTTP service from @golemcloud/effect-golem code."
 ---
 
 # Making Outgoing HTTP Requests from Effect Golem Agents
 
-Effect Golem components run in a QuickJS-based WebAssembly runtime whose `globalThis.fetch` is
-implemented over WASI HTTP. Wrap that promise API with root Effect operators so agent handlers stay
-Effect-based:
+Use the Effect v4 HTTP client from `effect/unstable/http`. `FetchHttpClient.layer` supplies the
+canonical `HttpClient.HttpClient` service through QuickJS's WASI-backed `globalThis.fetch`, while
+keeping request construction, failures, response decoding, and dependency provision in Effect.
 
 ```typescript
 import { Effect, Schema } from "effect";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
 ```
 
-Use `Effect.tryPromise` around `globalThis.fetch`. Do not make the handler itself `async`, and do
-not use `node:http`, `node:https`, `@effect/platform-node`, or another Node networking transport.
-
-## Why Not `effect/unstable/http`?
-
-Effect 4.0.0-beta.98 contains `FetchHttpClient`, but the generated Golem Rollup configuration
-externalizes only the exact module ID `effect`. Importing `effect/unstable/http` makes Rollup bundle
-a second copy of Effect into the user module, while `@golemcloud/effect-golem` and imports from
-`effect` use the embedded runtime. Do not mix those runtimes.
-
-The supported application boundary with the current template is:
+Do not wrap `globalThis.fetch` in `Effect.tryPromise` for ordinary application HTTP. Do not use
+`node:http`, `node:https`, `@effect/platform-node`, or another Node networking transport.
 
 ```diagram
-┌───────────────┐    Effect.tryPromise    ┌──────────────────┐    WASI HTTP    ┌────────────┐
-│ Agent handler │────────────────────────▶│ globalThis.fetch │────────────────▶│ Remote API │
-└───────────────┘                         └──────────────────┘                 └────────────┘
+┌───────────────┐    HttpClient request    ┌───────────────────────┐    WASI HTTP    ┌────────────┐
+│ Agent handler │─────────────────────────▶│ FetchHttpClient.layer │────────────────▶│ Remote API │
+└───────────────┘                          └───────────────────────┘                 └────────────┘
 ```
 
-The `Http` namespace from `@golemcloud/effect-golem` is unrelated: `Http.mount`, `Http.get`, and
+The `Http` namespace from `@golemcloud/effect-golem` is separate: `Http.mount`, `Http.get`, and
 `Http.post` declare **incoming** agent routes. They do not execute outbound requests.
+
+## Provide the Fetch Client
+
+Provide `FetchHttpClient.layer` at the narrowest common application boundary. A one-off request can
+provide it directly:
+
+```typescript
+const readText = HttpClient.get("https://api.example.com/health").pipe(
+  Effect.flatMap(HttpClientResponse.filterStatusOk),
+  Effect.flatMap((response) => response.text),
+  Effect.provide(FetchHttpClient.layer),
+);
+```
+
+For agent handlers, provide the layer to the composed HTTP effect returned by the handler. If a
+larger application has several HTTP-dependent services, compose them into an application layer and
+provide `FetchHttpClient.layer` once at that layer boundary.
 
 ## GET and Decode JSON
 
-Keep the fetch, status check, and response-body read in the promise wrapped by `tryPromise`. Then
-decode the unknown JSON value with Effect Schema:
+Build immutable requests, execute them through the service, require a `2xx` status, and decode the
+JSON body with Effect Schema:
 
 ```typescript
-import { Effect, Schema } from "effect";
-
 const ApiUser = Schema.Struct({
   id: Schema.Number,
   name: Schema.String,
 });
 
 const getUser = (id: number) =>
-  Effect.gen(function* () {
-    const json = yield* Effect.tryPromise({
-      try: async (signal) => {
-        const response = await globalThis.fetch(
-          `https://api.example.com/users/${id}`,
-          {
-            method: "GET",
-            headers: {
-              Accept: "application/json",
-              Authorization: "Bearer my-token",
-            },
-            signal,
-          },
-        );
-
-        if (!response.ok) {
-          const errorBody = await response.text();
-          throw new Error(`HTTP ${response.status}: ${errorBody}`);
-        }
-
-        return response.json();
-      },
-      catch: (cause) =>
-        new Error(`request failed: ${String(cause)}`, { cause }),
-    });
-
-    return yield* Schema.decodeUnknownEffect(ApiUser)(json);
-  });
+  HttpClientRequest.get(`https://api.example.com/users/${id}`).pipe(
+    HttpClientRequest.setHeaders({
+      Accept: "application/json",
+      Authorization: "Bearer my-token",
+    }),
+    HttpClient.execute,
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(ApiUser)),
+    Effect.provide(FetchHttpClient.layer),
+  );
 ```
 
-`response.json()` parses JSON but does not validate its shape. `Schema.decodeUnknownEffect` keeps
-that validation in the Effect error channel.
+`HttpClientResponse.schemaBodyJson` both parses JSON and validates its shape. Transport, status,
+body-decoding, and schema failures remain in the Effect error channel.
+
+For several calls, filter the client once:
+
+```typescript
+const program = Effect.gen(function* () {
+  const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
+  const response = yield* client.get("https://api.example.com/users/1", {
+    headers: { Accept: "application/json" },
+  });
+  return yield* HttpClientResponse.schemaBodyJson(ApiUser)(response);
+}).pipe(Effect.provide(FetchHttpClient.layer));
+```
+
+Choose either client-level `HttpClient.filterStatusOk` or response-level
+`HttpClientResponse.filterStatusOk`; do not apply both to the same request.
 
 ## POST JSON
 
-JSON-stringify the request body and set its content type explicitly. The WASI fetch implementation
-does not automatically serialize arbitrary JavaScript objects:
+Use `HttpClientRequest.bodyJson` so serialization and the JSON content type are handled by the
+Effect HTTP request model:
 
 ```typescript
 const createUser = (name: string, email: string) =>
-  Effect.tryPromise({
-    try: async (signal) => {
-      const response = await globalThis.fetch(
-        "https://api.example.com/users",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({ name, email }),
-          signal,
-        },
-      );
-
-      const body = await response.text();
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${body}`);
-      }
-
-      return body;
-    },
-    catch: (cause) =>
-      new Error(`create user request failed: ${String(cause)}`, { cause }),
-  });
+  HttpClientRequest.post("https://api.example.com/users").pipe(
+    HttpClientRequest.setHeader("Accept", "application/json"),
+    HttpClientRequest.bodyJson({ name, email }),
+    Effect.flatMap(HttpClient.execute),
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap((response) => response.text),
+    Effect.provide(FetchHttpClient.layer),
+  );
 ```
 
-Use the same request shape with `method: "PUT"`, `"PATCH"`, or `"DELETE"` as required. Supported
-body forms include strings, `ArrayBuffer`, `Uint8Array`, `URLSearchParams`, `Blob`, `FormData`, and
-`ReadableStream`. For JSON, always use `JSON.stringify`.
+`bodyJson` is effectful because JSON encoding can fail. When a request body has an Effect Schema,
+prefer `HttpClientRequest.schemaBodyJson(InputSchema)(input)`. Other request helpers include
+`bodyText`, `bodyUint8Array`, `bodyUrlParams`, `bodyFormData`, and `bodyStream`.
 
-## Reading a Response
+Use `HttpClientRequest.put`, `patch`, or `delete` for the corresponding HTTP method.
 
-The runtime exposes the standard Web response subset:
+## Read Responses
+
+Status and headers are immediate response fields. Body readers are Effects:
 
 ```typescript
 const inspectResponse = (url: string) =>
-  Effect.tryPromise({
-    try: async (signal) => {
-      const response = await globalThis.fetch(url, { signal });
-
-      return {
-        status: response.status,
-        ok: response.ok,
-        contentType: response.headers.get("content-type"),
-        body: await response.text(),
-      };
-    },
-    catch: (cause) =>
-      new Error(`failed to read response: ${String(cause)}`, { cause }),
-  });
+  Effect.gen(function* () {
+    const response = yield* HttpClient.get(url);
+    const body = yield* response.text;
+    return {
+      status: response.status,
+      contentType: response.headers["content-type"],
+      body,
+    };
+  }).pipe(Effect.provide(FetchHttpClient.layer));
 ```
 
-Choose one body reader because the response body is one-shot:
+Use:
 
-- `await response.text()` for text;
-- `await response.json()` for an unvalidated parsed JSON value; or
-- `await response.arrayBuffer()` / `await response.bytes()` for binary data.
+- `response.text` for text;
+- `response.json` for an unvalidated parsed JSON value;
+- `HttpClientResponse.schemaBodyJson(Schema)` for validated JSON;
+- `response.arrayBuffer` for binary data; or
+- `response.stream` for streaming consumption.
 
-`fetch` rejects for request/transport failures, but it resolves normally for HTTP `4xx` and `5xx`
-responses. Always inspect `response.ok` or `response.status` when non-2xx responses are failures.
+Apply `HttpClientResponse.filterStatusOk` when non-`2xx` responses are failures. If the application
+must inspect a non-`2xx` body before deciding, read the response and branch on `response.status`
+instead.
 
 ## Agent Handler Error Types
 
-`Effect.tryPromise({ try, catch })` places the value returned by `catch` in the Effect error
-channel. An Effect Golem method with no `error` schema cannot return that typed failure. Either:
+The HTTP client keeps transport, non-`2xx`, body-decoding, timeout, and schema failures typed in the
+Effect error channel. An Effect-Golem method with no `error` schema cannot return those failures.
+Either:
 
-1. declare an Effect Schema for caller-visible failures and map transport/status/schema errors to
-   that type; or
+1. declare an Effect Schema for caller-visible failures and map the HTTP errors to that type; or
 2. use `Effect.orDie` for genuinely unexpected failures that should become defects.
-
-For example, when an upstream failure is unexpected:
 
 ```typescript
 const infallibleHandlerEffect = getUser(1).pipe(Effect.orDie);
 ```
 
-Do not use defects for expected business outcomes. Give those outcomes a method `error` schema or
-represent them in the success type.
+Do not use defects for expected business outcomes.
+
+## Timeouts and Cancellation
+
+Put the timeout around request execution **and body consumption**, because receiving response
+headers does not mean the body is complete:
+
+```typescript
+const timed = HttpClient.get("https://api.example.com/slow").pipe(
+  Effect.flatMap(HttpClientResponse.filterStatusOk),
+  Effect.flatMap((response) => response.text),
+  Effect.timeout("5 seconds"),
+  Effect.provide(FetchHttpClient.layer),
+);
+```
+
+`FetchHttpClient` passes Effect interruption to a fetch `AbortSignal`. Prompt cancellation of the
+underlying WASI HTTP operation is currently blocked by the QuickJS runtime issue tracked in
+[`GOL-325`](https://linear.app/golem-cloud/issue/GOL-325/propagate-fetch-abortsignal-cancellation-to-the-underlying-wasi-http).
+Do not claim that a timeout has already stopped the remote request until that runtime fix is
+consumed and verified.
 
 ## Durability, Retries, and Duplicate Requests
 
 Outgoing WASI HTTP calls are recorded by Golem. During replay of the **same agent invocation**,
-Golem normally reuses the recorded response instead of sending the request again unless a
-durability boundary explicitly requires re-execution.
+Golem normally reuses the recorded response rather than sending the request again unless a
+durability boundary explicitly requires re-execution. Using `FetchHttpClient.layer` preserves that
+host behavior because it still executes through the same WASI-backed fetch implementation.
 
-This is not cross-invocation deduplication. Two calls to the same agent method are two independent
-invocations and can send two requests, even when their method names and arguments are identical.
-`Durability.atomically` does not change that: it controls recovery within one invocation and is not
-a distributed transaction with the remote HTTP server.
+This is not cross-invocation deduplication. Two calls to the same agent method are independent and
+can send two requests. `Durability.atomically` controls recovery within one invocation; it is not a
+distributed transaction with the remote HTTP server.
 
-For a state-changing request that a caller may retry:
+For state-changing requests that callers may retry:
 
-- accept a stable caller-supplied request ID and send it in the idempotency header understood by the
-  remote API;
-- require the remote API to deduplicate that key; and
-- do not assume `Durability.generateIdempotencyKey` deduplicates separate method invocations. Its
-  generated value is stable when replaying one durable execution, but a new invocation gets a new
-  value.
+- accept a stable caller-supplied request ID;
+- send it in the remote API's idempotency header; and
+- require the remote API to deduplicate that key.
 
-When verification only asks for a build or deployment, do not manually invoke a method that sends a
-state-changing HTTP request. A later automated invocation is a separate call and would repeat the
-remote side effect.
+Do not assume `Durability.generateIdempotencyKey` deduplicates separate method invocations. Do not
+manually invoke a state-changing method when an automated verification will invoke it later.
 
-### Preferred for HTTP statuses: host retry policy
+### Host status retry policy
 
-Define a named policy whose predicate references `status-code`. The host retries before returning
-the response to `globalThis.fetch`, so application code receives the final attempt. No
-Effect-specific HTTP wrapper is required:
+Use a named host retry policy when retry depends only on HTTP status. The host applies it below
+`FetchHttpClient` and returns the final response to application code:
 
 ```yaml
 # golem.yaml — under retryPolicyDefaults / <environment>:
@@ -213,53 +217,36 @@ http-5xx-retry:
           factor: 2.0
 ```
 
-POST/PUT/PATCH requests are eligible by default because Golem's idempotence mode defaults to
-`true`. A host retry can issue another HTTP attempt, so use status retries for state-changing
-operations only when the operation is naturally idempotent or the remote API deduplicates a stable
-idempotency key.
+A retry can repeat a state-changing operation. Use it only when the operation is naturally
+idempotent or the remote server deduplicates a stable key.
 
-### Application-level validation: atomic region
+### Atomic application-level validation
 
-When retry depends on parsed content or combines several side effects, put the request, complete
-body read, parsing, and validation inside `Durability.atomically`:
+When retry depends on decoded content or several side effects, include request execution, complete
+body consumption, and validation in the atomic region:
 
 ```typescript
-import { Effect, Schema } from "effect";
 import { Durability } from "@golemcloud/effect-golem";
 
 const validatedCall = Durability.atomically(
-  Effect.gen(function* () {
-    const json = yield* Effect.tryPromise({
-      try: async (signal) => {
-        const response = await globalThis.fetch(
-          "https://api.example.com/result",
-          { signal },
-        );
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-        }
-        return response.json();
-      },
-      catch: (cause) => new Error(`request failed: ${String(cause)}`, { cause }),
-    });
-
-    return yield* Schema.decodeUnknownEffect(ApiUser)(json);
-  }),
+  HttpClient.get("https://api.example.com/users/1").pipe(
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(ApiUser)),
+    Effect.provide(FetchHttpClient.layer),
+  ),
 );
 ```
 
-A failed atomic region traps so durable recovery can re-execute the complete region. If a remote
-server accepted a request before the failure, re-execution can repeat that remote side effect.
-Therefore, do not use an atomic region as an exactly-once wrapper and do not put a request inside one
-merely for status-code retries: inline host status retries are skipped inside atomic regions. Load
-`golem-atomic-block-effect` for the full replay and duplicate-side-effect constraints.
+A failed atomic region can re-execute the complete region and repeat a remote side effect. Do not
+use it as an exactly-once wrapper or merely for status-code retries. Load `golem-atomic-block-effect`
+for the full replay constraints.
 
 ## Calling a Golem HTTP Endpoint
 
-For an incoming Golem endpoint, unbound method parameters are read from a JSON object whose keys
-match the Effect method's camelCase `params` keys. Even one body parameter requires an object.
+For an incoming Golem endpoint, unbound method parameters come from a JSON object whose keys match
+the method's camelCase `params` keys. Even one body parameter requires an object.
 
-Given:
+Given an incoming method:
 
 ```typescript
 record: method({
@@ -269,42 +256,20 @@ record: method({
 });
 ```
 
-send:
-
-```typescript
-const recordMessage = (message: string) =>
-  Effect.tryPromise({
-    try: async (signal) => {
-      const response = await globalThis.fetch(
-        "http://my-app.localhost:9006/requests/main/record",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
-          signal,
-        },
-      );
-
-      // Drain the final response body before completing the effect.
-      const errorBody = await response.text();
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${errorBody}`);
-      }
-    },
-    catch: (cause) =>
-      new Error(`record request failed: ${String(cause)}`, { cause }),
-  });
-```
-
-Do not send a raw string such as `body: message`; it does not match Golem's named JSON body
-mapping.
+send `{ "message": "..." }`, not a raw string.
 
 ## Complete Agent Method
 
-This agent method performs a real HTTP POST and remains Effect-based:
+This durable agent performs the POST through one shared `HttpClient` service:
 
 ```typescript
 import { Effect, Schema } from "effect";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
 import { defineAgent, method } from "@golemcloud/effect-golem";
 
 export const MessageForwarder = defineAgent({
@@ -320,114 +285,45 @@ export const MessageForwarder = defineAgent({
 }).implement(() =>
   Effect.succeed({
     recordMessageViaHttp: ({ message }) =>
-      Effect.tryPromise({
-        try: async (signal) => {
-          const response = await globalThis.fetch(
-            "http://test-app.localhost:9006/requests/main/record",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ message }),
-              signal,
-            },
-          );
-
-          const errorBody = await response.text();
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${errorBody}`);
-          }
-
-          return message;
-        },
-        catch: (cause) =>
-          new Error(`record request failed: ${String(cause)}`, { cause }),
-      }).pipe(Effect.orDie),
+      HttpClientRequest.post(
+        "http://test-app.localhost:9006/requests/main/record",
+      ).pipe(
+        HttpClientRequest.bodyJson({ message }),
+        Effect.flatMap(HttpClient.execute),
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.text),
+        Effect.as(message),
+        Effect.provide(FetchHttpClient.layer),
+        Effect.orDie,
+      ),
   }),
 );
 ```
 
 Import the implementation module from `src/main.ts` using its emitted `.js` suffix so the
-top-level `defineAgent(...).implement(...)` call registers.
+top-level registration runs.
 
-## OpenAI-Compatible REST APIs
-
-An OpenAI-compatible chat endpoint is an ordinary JSON POST. No Node provider client is required:
-
-```typescript
-const ChatCompletion = Schema.Struct({
-  choices: Schema.Array(
-    Schema.Struct({
-      message: Schema.Struct({
-        content: Schema.NullOr(Schema.String),
-      }),
-    }),
-  ),
-});
-
-const askLlm = (baseUrl: string, apiKey: string, question: string) =>
-  Effect.gen(function* () {
-    const json = yield* Effect.tryPromise({
-      try: async (signal) => {
-        const response = await globalThis.fetch(
-          `${baseUrl.replace(/\/$/, "")}/v1/chat/completions`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify({
-              model: "mock-model",
-              messages: [{ role: "user", content: question }],
-            }),
-            signal,
-          },
-        );
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-        }
-        return response.json();
-      },
-      catch: (cause) =>
-        new Error(`LLM request failed: ${String(cause)}`, { cause }),
-    });
-
-    const completion = yield* Schema.decodeUnknownEffect(ChatCompletion)(json);
-    const content = completion.choices[0]?.message.content;
-    if (content === undefined || content === null) {
-      return yield* Effect.fail(new Error("LLM response contained no message"));
-    }
-    return content;
-  });
-```
-
-In a method without an `error` schema, apply `Effect.orDie` to this composed Effect or map every
-failure to a declared error type. Store real provider credentials with Golem secrets; never embed
-them in source or logs.
+For provider-backed LLM tasks, load `golem-add-llm-effect` and use `LanguageModel` plus the selected
+Effect AI provider instead of hand-writing provider REST calls.
 
 ## Key Constraints
 
-- Import Effect APIs from the exact root module `effect` so the app and SDK share one runtime.
-- Use `Effect.tryPromise` around the runtime's WASI-backed `globalThis.fetch`.
-- Do not import `effect/unstable/http` with the current generated Rollup/base-WASM setup.
-- Do not use Node networking modules or native HTTP client packages.
-- Keep handlers as Effects; do not return a raw `Promise` or mark a handler `async`.
-- JSON request bodies require `JSON.stringify` and `Content-Type: application/json`.
-- `fetch` does not fail for HTTP error statuses; check `response.ok` or `response.status`.
-- Consume a response body at most once, and validate parsed JSON with Effect Schema.
+- Import root Effect APIs from `effect` and HTTP APIs from `effect/unstable/http`.
+- Use the canonical `HttpClient.HttpClient` service with `FetchHttpClient.layer`.
+- Do not use direct `globalThis.fetch`, Node networking modules, or native HTTP client packages.
+- Keep handlers as Effects; do not return raw Promises or mark handlers `async`.
+- Use Effect request-body helpers instead of manually setting a fetch body.
+- Filter or inspect HTTP statuses explicitly and decode unknown JSON with Effect Schema.
+- Bound body consumption as well as request execution when applying a timeout.
 - Let Golem handle durable retries; do not add manual retry loops around host operations.
 - Durable replay does not deduplicate separate agent method invocations.
-- Do not manually invoke a state-changing request method when an automated check will invoke it.
-- Use named camelCase fields when posting JSON to another Golem endpoint.
+- Use named camelCase JSON fields when posting to another Golem endpoint.
 
 ## Authoritative API Sources
 
-- [Pinned Effect dependency and component build scripts](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/package.json)
-- [Generated application Rollup externalization](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/integration-test/rollup.config.component.mjs)
-- [Embedded root Effect module](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/effect-bundle.mjs)
-- [Effect 4.0.0-beta.98 `tryPromise` API](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/Effect.ts)
-- [Effect 4.0.0-beta.98 Schema decoding API](https://github.com/Effect-TS/effect-smol/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/Schema.ts)
-- [Pinned QuickJS runtime fetch implementation](https://github.com/golemcloud/wasm-rquickjs/blob/ec23071c7769be5a240d6a44f6f691972040f466/crates/wasm-rquickjs/skeleton/src/builtin/http.js)
-- [`Durability.atomically` implementation](https://github.com/golemcloud/effect-golem/blob/4b75f5e4d3cc306c3df75050db93d93aaa379ec3/src/internal/durabilityMode.ts)
+- [Effect v4 HTTP client](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClient.ts)
+- [Effect v4 HTTP request](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClientRequest.ts)
+- [Effect v4 HTTP response](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/HttpClientResponse.ts)
+- [Effect v4 fetch client layer](https://github.com/Effect-TS/effect/blob/3e4abbcb0d0e9a5e82b6b88c7ef7ab69900105ec/packages/effect/src/unstable/http/FetchHttpClient.ts)
+- [Effect-Golem durability modes](https://github.com/golemcloud/effect-golem/blob/HEAD/src/internal/durabilityMode.ts)
+- [GOL-325 cancellation follow-up](https://linear.app/golem-cloud/issue/GOL-325/propagate-fetch-abortsignal-cancellation-to-the-underlying-wasi-http)

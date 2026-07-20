@@ -18,6 +18,7 @@ units:
     strategy: adapted
     notes: Canonical Effect v4 agent, Schema, Snapshot, Ref, and registration patterns.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T08:23:45.000Z
@@ -54,6 +55,7 @@ units:
     strategy: adapted
     notes: Effect uses npm, but dependencies must also be compatible with QuickJS and Wasm.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T09:59:12.735Z
@@ -89,6 +91,7 @@ units:
     strategy: adapted
     notes: Map typed agent configuration to Effect Schema and constructor implementation inputs.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T10:39:47.514Z
@@ -114,6 +117,7 @@ units:
       - golem-add-http-endpoint
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T11:36:15.933Z
@@ -122,12 +126,21 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-cors/attempt-1/add-cors/amp-effect-add-cors.json
+      - number: 2
+        startedAt: 2026-07-20T18:47:22.425Z
+        finishedAt: 2026-07-20T18:50:44.152Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/codex-effect-add-cors.json
+          - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/summary.json
     evidence:
-      verifiedAt: 2026-07-18T11:50:05.182Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7503-5514-751b-a45b-08b3d9b5095f
+      verifiedAt: 2026-07-20T18:50:44.152Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-cors/attempt-1/add-cors/amp-effect-add-cors.json
+        - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/codex-effect-add-cors.json
+        - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/summary.json
   - id: golem-add-http-auth
     targetSkill: golem-add-http-auth-effect
     verifyScenarios:
@@ -137,6 +150,7 @@ units:
       - golem-add-http-endpoint
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T11:50:06.253Z
@@ -165,6 +179,7 @@ units:
     strategy: adapted
     notes: Keep Rib and manifest routing behavior; adapt only the Effect agent implementation.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T11:00:03.777Z
@@ -174,13 +189,21 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/add-http-endpoint/amp-effect-add-http-endpoint.json
           - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/configure-api-domain/amp-effect-configure-api-domain.json
+      - number: 2
+        startedAt: 2026-07-20T17:48:19.759Z
+        finishedAt: 2026-07-20T17:52:01.452Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/http-response-mappings/codex-effect-add-http-endpoint.json
+          - golem-skills/tests/harness/results/p5.3/http-response-mappings/summary.json
     evidence:
-      verifiedAt: 2026-07-18T11:36:14.857Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f74e2-31bc-75eb-b7bf-163d34ddbca9
+      verifiedAt: 2026-07-20T17:52:01.452Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/add-http-endpoint/amp-effect-add-http-endpoint.json
-        - golem-skills/tests/harness/results/effect-migration/golem-add-http-endpoint/attempt-1/configure-api-domain/amp-effect-configure-api-domain.json
+        - golem-skills/tests/harness/results/p5.3/http-response-mappings/codex-effect-add-http-endpoint.json
+        - golem-skills/tests/harness/results/p5.3/http-response-mappings/summary.json
   - id: golem-add-ignite
     targetSkill: golem-add-ignite-effect
     verifyScenarios:
@@ -191,6 +214,7 @@ units:
     strategy: adapted
     notes: Use @golemcloud/effect-golem/ignite2 rather than a native Node driver.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T12:11:06.141Z
@@ -209,12 +233,21 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-ignite/attempt-2/add-ignite-rdbms/amp-effect-add-ignite-rdbms.json
+      - number: 3
+        startedAt: 2026-07-20T17:36:26.864Z
+        finishedAt: 2026-07-20T17:40:00.251Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/codex-effect-add-ignite-rdbms.json
+          - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/summary.json
     evidence:
-      verifiedAt: 2026-07-18T12:47:34.333Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7536-ad4c-7119-9346-b9949900e66d
+      verifiedAt: 2026-07-20T17:40:00.251Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-ignite/attempt-2/add-ignite-rdbms/amp-effect-add-ignite-rdbms.json
+        - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/codex-effect-add-ignite-rdbms.json
+        - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/summary.json
   - id: golem-add-llm
     targetSkill: golem-add-llm-effect
     verifyScenarios:
@@ -224,6 +257,7 @@ units:
       - golem-add-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T12:47:35.656Z
@@ -242,12 +276,30 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-llm/attempt-2/add-llm/amp-effect-add-llm.json
+      - number: 3
+        startedAt: 2026-07-20T16:14:23.322Z
+        finishedAt: 2026-07-20T16:17:06.458Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/add-llm/codex-effect-add-llm.json
+          - golem-skills/tests/harness/results/p5.3/add-llm/summary.json
+        error: The Effect AI request reached the unsupported /v1/responses mock path, and language-conditional assertion parsing dropped the invocation assertion, causing a false-positive report.
+      - number: 4
+        startedAt: 2026-07-20T16:20:56.713Z
+        finishedAt: 2026-07-20T16:24:51.522Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/codex-effect-add-llm.json
+          - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/summary.json
     evidence:
-      verifiedAt: 2026-07-18T13:25:59.728Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7556-d799-71a8-9a3f-4297b0f0a27c
+      verifiedAt: 2026-07-20T16:24:51.522Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-llm/attempt-2/add-llm/amp-effect-add-llm.json
+        - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/codex-effect-add-llm.json
+        - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/summary.json
   - id: golem-add-mysql
     targetSkill: golem-add-mysql-effect
     verifyScenarios:
@@ -258,6 +310,7 @@ units:
     strategy: adapted
     notes: Use @golemcloud/effect-golem/mysql rather than a native Node driver.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T13:26:01.137Z
@@ -276,12 +329,21 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-mysql/attempt-2/add-mysql-rdbms/amp-effect-add-mysql-rdbms.json
+      - number: 3
+        startedAt: 2026-07-20T17:32:09.631Z
+        finishedAt: 2026-07-20T17:36:03.234Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/codex-effect-add-mysql-rdbms.json
+          - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/summary.json
     evidence:
-      verifiedAt: 2026-07-18T14:09:34.728Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f757b-7daf-77e6-b330-b09155161018
+      verifiedAt: 2026-07-20T17:36:03.234Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-mysql/attempt-2/add-mysql-rdbms/amp-effect-add-mysql-rdbms.json
+        - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/codex-effect-add-mysql-rdbms.json
+        - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/summary.json
   - id: golem-add-postgres
     targetSkill: golem-add-postgres-effect
     verifyScenarios:
@@ -292,6 +354,7 @@ units:
     strategy: adapted
     notes: Use @golemcloud/effect-golem/postgres rather than a native Node driver.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T14:09:37.275Z
@@ -310,12 +373,21 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-postgres/attempt-2/add-postgres-rdbms/amp-effect-add-postgres-rdbms.json
+      - number: 3
+        startedAt: 2026-07-20T17:26:06.898Z
+        finishedAt: 2026-07-20T17:31:43.087Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/codex-effect-add-postgres-rdbms.json
+          - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/summary.json
     evidence:
-      verifiedAt: 2026-07-18T14:45:55.763Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f759f-594f-7132-a384-ebce0874fe99
+      verifiedAt: 2026-07-20T17:31:43.087Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-postgres/attempt-2/add-postgres-rdbms/amp-effect-add-postgres-rdbms.json
+        - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/codex-effect-add-postgres-rdbms.json
+        - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/summary.json
   - id: golem-add-secret
     targetSkill: golem-add-secret-effect
     verifyScenarios:
@@ -328,6 +400,7 @@ units:
     strategy: adapted
     notes: Preserve redaction with Schema.Redacted throughout Effect values and logs.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T14:45:58.266Z
@@ -354,6 +427,7 @@ units:
     strategy: adapted
     notes: Map rollback behavior to the Effect SDK Saga APIs.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T15:12:19.907Z
@@ -372,12 +446,39 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-transactions/attempt-2/transactions-1-fallible-rollback-http-ledger/amp-effect-transactions-1-fallible-rollback-http-ledger.json
+      - number: 3
+        startedAt: 2026-07-20T16:49:05.029Z
+        finishedAt: 2026-07-20T16:54:23.218Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/transactions-http-ledger/codex-effect-transactions-1-fallible-rollback-http-ledger.json
+          - golem-skills/tests/harness/results/p5.3/transactions-http-ledger/summary.json
+        error: The implementation agent reused order-1 during its own smoke test, so the durable ledger contained the expected rollback sequence twice when the harness reused that identity.
+      - number: 4
+        startedAt: 2026-07-20T16:58:09.459Z
+        finishedAt: 2026-07-20T17:02:57.208Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-2/codex-effect-transactions-1-fallible-rollback-http-ledger.json
+          - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-2/summary.json
+        error: The deployed Effect scenario passed, but changing shared assertion URLs to isolate Effect identities violated the unchanged non-Effect scenario gate.
+      - number: 5
+        startedAt: 2026-07-20T17:05:05.338Z
+        finishedAt: 2026-07-20T17:10:04.493Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/codex-effect-transactions-1-fallible-rollback-http-ledger.json
+          - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/summary.json
     evidence:
-      verifiedAt: 2026-07-18T16:08:10.766Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f75dc-8c94-763c-a835-2dc1166809af
+      verifiedAt: 2026-07-20T17:10:04.493Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-transactions/attempt-2/transactions-1-fallible-rollback-http-ledger/amp-effect-transactions-1-fallible-rollback-http-ledger.json
+        - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/codex-effect-transactions-1-fallible-rollback-http-ledger.json
+        - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/summary.json
   - id: golem-add-webhook
     targetSkill: golem-add-webhook-effect
     verifyScenarios:
@@ -387,6 +488,7 @@ units:
       - golem-add-http-endpoint
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T16:08:12.070Z
@@ -405,12 +507,21 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-webhook/attempt-2/add-webhook/amp-effect-add-webhook.json
+      - number: 3
+        startedAt: 2026-07-20T16:40:45.951Z
+        finishedAt: 2026-07-20T16:44:16.158Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/add-webhook/codex-effect-add-webhook.json
+          - golem-skills/tests/harness/results/p5.3/add-webhook/summary.json
     evidence:
-      verifiedAt: 2026-07-18T17:00:44.780Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7613-5759-7692-b59f-465cbc411253
+      verifiedAt: 2026-07-20T16:44:16.158Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-webhook/attempt-2/add-webhook/amp-effect-add-webhook.json
+        - golem-skills/tests/harness/results/p5.3/add-webhook/codex-effect-add-webhook.json
+        - golem-skills/tests/harness/results/p5.3/add-webhook/summary.json
   - id: golem-annotate-agent
     targetSkill: golem-annotate-agent-effect
     verifyScenarios:
@@ -420,6 +531,7 @@ units:
       - golem-add-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T17:00:45.943Z
@@ -444,6 +556,7 @@ units:
     strategy: adapted
     notes: Map atomic regions to the Effect SDK Durability API.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T17:14:54.620Z
@@ -531,12 +644,21 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-6/atomic-block/amp-effect-atomic-block.json
+      - number: 7
+        startedAt: 2026-07-20T17:15:33.365Z
+        finishedAt: 2026-07-20T17:18:47.957Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/atomic-block-http/codex-effect-atomic-block.json
+          - golem-skills/tests/harness/results/p5.3/atomic-block-http/summary.json
     evidence:
-      verifiedAt: 2026-07-18T20:32:15.739Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f76ac-b920-71ff-b85b-78e9b91eec7f
+      verifiedAt: 2026-07-20T17:18:47.957Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-atomic-block/attempt-6/atomic-block/amp-effect-atomic-block.json
+        - golem-skills/tests/harness/results/p5.3/atomic-block-http/codex-effect-atomic-block.json
+        - golem-skills/tests/harness/results/p5.3/atomic-block-http/summary.json
   - id: golem-call-another-agent
     targetSkill: golem-call-another-agent-effect
     verifyScenarios:
@@ -546,6 +668,7 @@ units:
       - golem-add-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-18T21:23:09.278Z
@@ -588,7 +711,7 @@ units:
 
 
 
-          Summary\ 
+          Summary\
 
           \  Failed to prepare deployment [ERROR]
 
@@ -624,6 +747,7 @@ units:
     strategy: adapted
     notes: Generated bridge clients and CLI values use TypeScript syntax for Effect components.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T07:17:24.587Z
@@ -648,6 +772,7 @@ units:
     strategy: adapted
     notes: Map durability modes to the Effect SDK Durability API.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T07:42:55.465Z
@@ -672,6 +797,7 @@ units:
     strategy: direct
     notes: CLI-facing operation; Effect constructor values use TypeScript syntax.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T08:06:01.087Z
@@ -718,6 +844,7 @@ units:
     strategy: adapted
     notes: Use Snapshot.define and schema evolution rather than custom JSON serialization.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T08:40:59.769Z
@@ -745,6 +872,7 @@ units:
     strategy: adapted
     notes: Use Effect logging and spans while preserving OTLP plugin setup.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T09:06:15.418Z
@@ -769,6 +897,7 @@ units:
     strategy: adapted
     notes: QuickJS has no unrestricted Node filesystem; use supported WASI/runtime APIs only.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T09:21:57.340Z
@@ -816,6 +945,7 @@ units:
       - golem-call-another-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T10:02:40.760Z
@@ -839,6 +969,7 @@ units:
       - golem-add-http-endpoint
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T10:17:34.255Z
@@ -847,12 +978,47 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-http-params/attempt-1/http-endpoint-parameters/amp-effect-http-endpoint-parameters.json
+      - number: 2
+        startedAt: 2026-07-20T18:12:08.971Z
+        finishedAt: 2026-07-20T18:17:58.479Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/repeated-parameter-collections-attempt-2/codex-effect-http-endpoint-parameters.json
+          - golem-skills/tests/harness/results/p5.3/repeated-parameter-collections-attempt-2/summary.json
+        error: The generated agent mutated product state in a post-deployment smoke test before the harness assertions, causing the existing update-product assertion to receive 404.
+      - number: 3
+        startedAt: 2026-07-20T18:19:22.887Z
+        finishedAt: 2026-07-20T18:23:34.412Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: failed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/repeated-parameter-collections-attempt-3/codex-effect-http-endpoint-parameters.json
+          - golem-skills/tests/harness/results/p5.3/repeated-parameter-collections-attempt-3/summary.json
+        error: Runtime collection binding passed, but the assertion compared literal JSON text and rejected semantically identical host field ordering and integral f64 rendering.
+      - number: 4
+        startedAt: 2026-07-20T18:25:12.786Z
+        finishedAt: 2026-07-20T18:29:15.488Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/repeated-parameter-collections-attempt-4/codex-effect-http-endpoint-parameters.json
+          - golem-skills/tests/harness/results/p5.3/repeated-parameter-collections-attempt-4/summary.json
+      - number: 5
+        startedAt: 2026-07-20T18:38:14.107Z
+        finishedAt: 2026-07-20T18:42:59.113Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/malformed-input-400/codex-effect-http-endpoint-parameters.json
+          - golem-skills/tests/harness/results/p5.3/malformed-input-400/summary.json
     evidence:
-      verifiedAt: 2026-07-19T10:45:12.148Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f79e1-a725-7705-ac1f-e3f413b3b7f8
+      verifiedAt: 2026-07-20T18:42:59.113Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-http-params/attempt-1/http-endpoint-parameters/amp-effect-http-endpoint-parameters.json
+        - golem-skills/tests/harness/results/p5.3/malformed-input-400/codex-effect-http-endpoint-parameters.json
+        - golem-skills/tests/harness/results/p5.3/malformed-input-400/summary.json
   - id: golem-interactive-repl
     targetSkill: golem-interactive-repl-effect
     verifyScenarios:
@@ -863,6 +1029,7 @@ units:
     strategy: direct
     notes: Effect components intentionally use the TypeScript REPL binding and value syntax.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T10:45:13.416Z
@@ -887,6 +1054,7 @@ units:
     strategy: direct
     notes: Effect components intentionally use TypeScript CLI value syntax.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T11:01:40.106Z
@@ -911,6 +1079,7 @@ units:
     strategy: adapted
     notes: Use Effect logging and spans, not console-only TypeScript guidance.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T11:13:24.293Z
@@ -936,6 +1105,7 @@ units:
     strategy: adapted
     notes: Use the supported Effect/WASI HTTP client rather than Node networking libraries.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T11:32:38.204Z
@@ -978,12 +1148,21 @@ units:
         outcome: passed
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-make-http-request/attempt-5/make-http-request/amp-effect-make-http-request.json
+      - number: 6
+        startedAt: 2026-07-20T16:02:55.986Z
+        finishedAt: 2026-07-20T16:07:42.315Z
+        thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
+        outcome: passed
+        reports:
+          - golem-skills/tests/harness/results/p5.3/make-http-request/codex-effect-make-http-request.json
+          - golem-skills/tests/harness/results/p5.3/make-http-request/summary.json
     evidence:
-      verifiedAt: 2026-07-19T13:24:20.058Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7a26-5ee2-741d-afa6-36ce20d4c0ee
+      verifiedAt: 2026-07-20T16:07:42.315Z
+      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-make-http-request/attempt-5/make-http-request/amp-effect-make-http-request.json
+        - golem-skills/tests/harness/results/p5.3/make-http-request/codex-effect-make-http-request.json
+        - golem-skills/tests/harness/results/p5.3/make-http-request/summary.json
   - id: golem-multi-instance-agent
     targetSkill: golem-multi-instance-agent-effect
     verifyScenarios:
@@ -993,6 +1172,7 @@ units:
       - golem-call-another-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T13:44:52.460Z
@@ -1017,6 +1197,7 @@ units:
     strategy: adapted
     notes: Preserve durable concurrency semantics using Effect combinators supported by the SDK.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T14:04:17.183Z
@@ -1040,6 +1221,7 @@ units:
       - golem-add-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T14:27:36.890Z
@@ -1064,6 +1246,7 @@ units:
       - golem-add-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T14:45:13.534Z
@@ -1101,6 +1284,7 @@ units:
     strategy: adapted
     notes: Separate Effect failure typing from Golem host-operation retry policy.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T15:22:34.061Z
@@ -1127,6 +1311,7 @@ units:
     strategy: direct
     notes: CLI-facing operation; Effect constructor and method values use TypeScript syntax.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T15:48:56.750Z
@@ -1160,6 +1345,7 @@ units:
       - golem-call-another-agent
     strategy: adapted
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T16:14:44.112Z
@@ -1298,6 +1484,7 @@ units:
     strategy: adapted
     notes: Omit Snapshot state while retaining Effect-based handlers and registration.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T16:44:15.279Z
@@ -1322,6 +1509,7 @@ units:
     strategy: direct
     notes: CLI-facing operation; Effect constructor and method values use TypeScript syntax.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T16:59:19.331Z
@@ -1346,6 +1534,7 @@ units:
     strategy: adapted
     notes: Use durable Effect suspension primitives exposed by the Effect SDK.
     state: passed
+    semanticStatus: passed
     attempts:
       - number: 1
         startedAt: 2026-07-19T17:12:09.140Z

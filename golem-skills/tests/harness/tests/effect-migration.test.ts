@@ -7,12 +7,18 @@ import { describe, test } from "node:test";
 import { promisify } from "node:util";
 import {
   ampWorkerArgs,
+  attemptLimitFor,
+  buildWorkerPrompt,
   buildPreviousFailureSection,
   findMissingEffectBranches,
   loadManifest,
+  prerequisitesAreComplete,
   reportFailure,
+  recordSuccessfulVerification,
   selectNextUnit,
+  semanticRemediationFailure,
   validateManifestFiles,
+  validateSemanticRemediation,
   validateUnitStatic,
 } from "../src/migrate-effect-skills.js";
 
@@ -24,6 +30,7 @@ const execFileAsync = promisify(execFile);
 function resetMigrationProgress(manifest: Awaited<ReturnType<typeof loadManifest>>): void {
   for (const unit of manifest.units) {
     unit.state = unit.id === "golem-add-agent" ? "passed" : "pending";
+    unit.semanticStatus = unit.id === "golem-add-agent" ? "passed" : "pending";
     unit.attempts = [];
     unit.evidence = null;
   }
@@ -71,6 +78,78 @@ describe("Effect migration manifest", () => {
     assert.equal(selectNextUnit(manifest)?.id, "golem-add-npm-package");
   });
 
+  test("selects an execution-passed unit that still has a workaround", async () => {
+    const manifest = await loadManifest(manifestPath);
+    for (const unit of manifest.units) {
+      unit.state = "passed";
+      unit.semanticStatus = "passed";
+    }
+    const workaround = manifest.units.find(({ id }) => id === "golem-make-http-request");
+    assert.ok(workaround);
+    workaround.semanticStatus = "passed-with-workaround";
+    assert.equal(selectNextUnit(manifest)?.id, workaround.id);
+  });
+
+  test("gives workaround remediation one bounded budget and does not reselect it when blocked", async () => {
+    const manifest = await loadManifest(manifestPath);
+    for (const unit of manifest.units) {
+      unit.state = "passed";
+      unit.semanticStatus = "passed";
+    }
+    const workaround = manifest.units.find(({ id }) => id === "golem-make-http-request");
+    assert.ok(workaround);
+    workaround.semanticStatus = "passed-with-workaround";
+    const originalAttempts = workaround.attempts.length;
+    const attemptLimit = attemptLimitFor(workaround, manifest.policy.maxAttempts);
+    assert.equal(attemptLimit, originalAttempts + manifest.policy.maxAttempts);
+
+    workaround.state = "blocked";
+    workaround.attempts.push(
+      ...Array.from({ length: manifest.policy.maxAttempts }, (_, index) => ({
+        number: originalAttempts + index + 1,
+        startedAt: new Date(0).toISOString(),
+        finishedAt: new Date(1).toISOString(),
+        outcome: "blocked" as const,
+        reports: [],
+        error: "semantic verification failed",
+      })),
+    );
+    assert.equal(attemptLimitFor(workaround, manifest.policy.maxAttempts), attemptLimit);
+    assert.equal(selectNextUnit(manifest), undefined);
+  });
+
+  test("requires both execution and semantic prerequisite completion", async () => {
+    const manifest = await loadManifest(manifestPath);
+    resetMigrationProgress(manifest);
+    const canary = manifest.units.find(({ id }) => id === "golem-add-agent");
+    const config = manifest.units.find(({ id }) => id === "golem-add-config");
+    assert.ok(canary);
+    assert.ok(config);
+    canary.semanticStatus = "passed-with-workaround";
+    assert.equal(prerequisitesAreComplete(manifest, config), false);
+    canary.semanticStatus = "passed";
+    assert.equal(prerequisitesAreComplete(manifest, config), true);
+  });
+
+  test("successful remediation updates semantics without discarding history", async () => {
+    const manifest = await loadManifest(manifestPath);
+    const unit = manifest.units.find(({ id }) => id === "golem-make-http-request");
+    assert.ok(unit);
+    const priorAttempts = unit.attempts.length;
+    const attempt = {
+      number: priorAttempts + 1,
+      startedAt: new Date(0).toISOString(),
+      outcome: "editing" as const,
+      reports: ["new-report.json"],
+    };
+    unit.attempts.push(attempt);
+    recordSuccessfulVerification(manifest, unit, attempt);
+    assert.equal(unit.state, "passed");
+    assert.equal(unit.semanticStatus, "passed");
+    assert.equal(unit.attempts.length, priorAttempts + 1);
+    assert.deepEqual(unit.evidence?.reports, ["new-report.json"]);
+  });
+
   test("does not select an active unit whose attempt budget is exhausted", async () => {
     const manifest = await loadManifest(manifestPath);
     resetMigrationProgress(manifest);
@@ -95,9 +174,71 @@ describe("Effect migration manifest", () => {
     assert.ok(canary);
     await validateUnitStatic(repoRoot, canary);
   });
+
+  test("rejects weakening of protected scenario semantic requirements", async () => {
+    const temporaryRepo = await fs.mkdtemp(path.join(os.tmpdir(), "effect-semantic-validation-"));
+    try {
+      const manifest = await loadManifest(manifestPath);
+      const unit = manifest.units.find(({ id }) => id === "golem-add-llm");
+      assert.ok(unit);
+      const skillDir = path.join(
+        temporaryRepo,
+        "golem-skills",
+        "skills",
+        "effect",
+        unit.targetSkill,
+      );
+      const scenarioDir = path.join(temporaryRepo, "golem-skills", "tests", "harness", "scenarios");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.mkdir(scenarioDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${unit.targetSkill}\ndescription: test skill\n---\n`,
+      );
+      await fs.writeFile(
+        path.join(scenarioDir, "add-llm.yaml"),
+        `name: add-llm\nsemanticRequirements:\n  effect:\n    - Calling any service is sufficient.\nsteps:\n  - prompt: implement it\n    expectedSkills:\n      effect: [${unit.targetSkill}]\n`,
+      );
+      await assert.rejects(validateUnitStatic(temporaryRepo, unit), /semanticRequirements/);
+    } finally {
+      await fs.rm(temporaryRepo, { recursive: true, force: true });
+    }
+  });
+
+  test("allows promotion after a scenario removes its workaround", async () => {
+    const manifest = await loadManifest(manifestPath);
+    const unit = manifest.units.find(({ id }) => id === "golem-make-http-request");
+    assert.ok(unit);
+    await validateSemanticRemediation(repoRoot, unit);
+  });
+
+  test("requires the restored atomic Effect assertion to match existing behavior", () => {
+    const document = {
+      steps: [
+        {
+          id: "verify-event-sequence",
+          expect: {
+            ts: { body_json: [{ path: "$", equals: ["a", "b", "a", "b", "c", "d"] }] },
+            effect: { body_json: [{ path: "$", equals: ["a", "b", "c", "d"] }] },
+          },
+        },
+      ],
+    };
+    assert.match(semanticRemediationFailure("atomic-block", document) ?? "", /same event sequence/);
+  });
 });
 
 describe("Effect migration verification", () => {
+  test("includes first-class scenario semantic requirements in the worker prompt", async () => {
+    const manifest = await loadManifest(manifestPath);
+    const unit = manifest.units.find(({ id }) => id === "golem-add-llm");
+    assert.ok(unit);
+    const prompt = await buildWorkerPrompt(repoRoot, manifest, unit);
+    assert.match(prompt, /acceptance criteria and may not be weakened/);
+    assert.match(prompt, /Effect AI LanguageModel/);
+    assert.match(prompt, /direct fetch and stubbed responses are not substitutes/);
+  });
+
   test("continues the migration thread with live verification evidence", () => {
     const thread = "https://ampcode.com/threads/T-00000000-0000-0000-0000-000000000001";
     const args = ampWorkerArgs("high", "repair the failed scenario", thread);

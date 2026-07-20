@@ -165,17 +165,56 @@ segment.
 
 The Golem HTTP host maps Effect method result schemas as follows:
 
-| Method success schema  | Handler success value | HTTP response   |
-| ---------------------- | --------------------- | --------------- |
-| `Schema.Void`          | `Effect.void`         | 204, empty body |
-| `T`                    | `Effect<T>`           | 200, JSON `T`   |
-| `Schema.NullOr(T)`     | `T`                   | 200, JSON `T`   |
-| `Schema.NullOr(T)`     | `null`                | 404, empty body |
-| method with `error: E` | `Effect.fail(E)`      | 500, JSON `E`   |
+| Method success schema     | Handler success value   | HTTP response   |
+| ------------------------- | ----------------------- | --------------- |
+| `Schema.Void`             | `Effect.void`           | 204, empty body |
+| `T`                       | `Effect<T>`             | 200, JSON `T`   |
+| `UnstructuredText(...)`   | inline text reference   | 200, plain text |
+| `UnstructuredBinary(...)` | inline binary reference | 200, raw bytes  |
+| `Schema.NullOr(T)`        | `T`                     | 200, JSON `T`   |
+| `Schema.NullOr(T)`        | `null`                  | 404, empty body |
+| method with `error: E`    | `Effect.fail(E)`        | 500, JSON `E`   |
 
 `Schema.NullOr(T)` is lowered by the Effect SDK to WIT `option<T>`, which is what enables the
 host's 200/404 mapping. Use a declared `error` schema and `Effect.fail(...)` for expected typed
 failures; do not use defects for normal not-found behavior.
+
+Use an unstructured success value when the response itself must be plain text or binary rather
+than JSON:
+
+```typescript
+import { Unstructured } from "@golemcloud/effect-golem";
+
+const textSuccess = Unstructured.UnstructuredText({
+  restrictions: [{ languageCode: "en" }],
+});
+const binarySuccess = Unstructured.UnstructuredBinary({
+  restrictions: [{ mimeType: "application/octet-stream" }],
+});
+
+const textValue = {
+  _tag: "inline" as const,
+  val: {
+    data: "hello from Effect",
+    textType: { languageCode: "en" },
+  },
+} satisfies Unstructured.TextReferenceValue;
+
+const binaryValue = {
+  _tag: "inline" as const,
+  val: {
+    data: new Uint8Array([0, 127, 255]),
+    binaryType: { mimeType: "application/octet-stream" },
+  },
+} satisfies Unstructured.BinaryReferenceValue;
+```
+
+Put `textSuccess` or `binarySuccess` in the method's `success` field and return
+`Effect.succeed(textValue)` or `Effect.succeed(binaryValue)` from its handler. Inline text maps to a
+`text/plain` body and uses `textType.languageCode` as `Content-Language`; inline binary maps to the
+declared `binaryType.mimeType`. Unstructured successes cannot also declare a typed method `error`.
+Use `Schema.Struct(...)`, arrays, and other ordinary schemas for JSON responses, and `Schema.Void`
+for a 204 empty response. These are fixed host mappings, not an arbitrary response builder.
 
 ## Complete Durable Example
 

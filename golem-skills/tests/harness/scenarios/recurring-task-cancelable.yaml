@@ -1,4 +1,7 @@
 name: "recurring-task-cancelable"
+semanticRequirements:
+  effect:
+    - Cancellation covers only the live ScheduledInvocation handle returned and canceled during the current agent lifetime; reconstructing a handle after recovery is not required.
 steps:
   - id: "create-project"
     create_project:

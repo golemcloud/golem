@@ -1,4 +1,7 @@
 name: "add-mysql-rdbms"
+semanticRequirements:
+  effect:
+    - The Effect implementation must resolve SqlClient.SqlClient from effect/unstable/sql and provide it with MySqlClient.layer; MySqlClient.make and adapter-specific service access are not substitutes.
 prerequisites:
   services:
     - mysql
@@ -47,8 +50,11 @@ steps:
         agent key in `golem.yaml` so it can be invoked as `CounterAgent("db-test")` below. Declare
         `checkMysql` in the methods map with `success: Schema.String`. Implement its handler as an
         Effect using `MySqlClient` from `@golemcloud/effect-golem/mysql`, not a native Node driver.
-        Hardcode `{{mysql_url}}`, create and reuse the client in the outer agent implementation
-        Effect, run `SELECT 'mysql-ok'`, use the statement's `.values` Effect to read row 0, column
+        Import `SqlClient` from `effect/unstable/sql`, hardcode `{{mysql_url}}` in a
+        `MySqlClient.layer`, resolve `SqlClient.SqlClient` in the outer agent implementation Effect,
+        and provide the adapter layer around that outer Effect so every handler closes over and
+        reuses the canonical client. Do not call `MySqlClient.make` or resolve the adapter-specific
+        service. Run `SELECT 'mysql-ok'`, use the statement's `.values` Effect to read row 0, column
         0, verify that cell is a string, and explicitly return that string. Keep the existing
         `increment` method unchanged and make sure the project builds and deploys successfully.
     expectedSkills:

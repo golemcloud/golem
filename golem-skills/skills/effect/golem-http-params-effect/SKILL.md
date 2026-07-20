@@ -129,9 +129,35 @@ const SortOrder = Schema.Union([
 ```
 
 Wrap a scalar with `Schema.NullOr(...)` only for an optional query or header. Structs, tuples,
-arrays, records, unstructured values, and multimodal values are not route-bindable. In particular,
-`Schema.Array(T)` cannot collect repeated query parameters or comma-separated headers in this SDK;
-model the value as a JSON body field or define separate scalar parameters instead.
+records, unstructured values, multimodal values, nested collections, and non-empty arrays are not
+route-bindable.
+
+Query and header bindings additionally accept `Schema.Array(T)` when `T` is one of the supported
+primitive, literal/string-enum, template-literal, refinement, brand, or transformation schemas
+listed above. The host collects repeated query instances and repeated raw header fields in arrival
+order:
+
+```typescript
+collectionBindings: method({
+  params: {
+    tags: Schema.Array(Schema.String),
+    scores: Schema.Array(Schema.Number),
+  },
+  success: Schema.Struct({
+    tags: Schema.Array(Schema.String),
+    scores: Schema.Array(Schema.Number),
+  }),
+  http: [
+    Http.get("/bindings/collections?tag={tags}", {
+      headers: { "X-Score": "scores" } as const,
+    }),
+  ],
+}),
+```
+
+For example, `?tag=a&tag=b` binds `tags` as `["a", "b"]`; three raw `X-Score` fields bind three
+numbers. A single comma-separated header line is one value and is not split into collection items.
+Path variables remain scalar-only.
 
 ## JSON Body Mapping
 
@@ -190,13 +216,15 @@ serializable through their encoded schemas.
 
 Declare the HTTP outcome through the method's `success` and optional `error` schemas:
 
-| Method contract and handler result           | HTTP response   |
-| -------------------------------------------- | --------------- |
-| `success: Schema.Void`, return `Effect.void` | 204, empty body |
-| `success: T`, return `Effect<T>`             | 200, JSON `T`   |
-| `success: Schema.NullOr(T)`, return `T`      | 200, JSON `T`   |
-| `success: Schema.NullOr(T)`, return `null`   | 404, empty body |
-| declare `error: E`, return `Effect.fail(E)`  | 500, JSON `E`   |
+| Method contract and handler result                      | HTTP response   |
+| ------------------------------------------------------- | --------------- |
+| `success: Schema.Void`, return `Effect.void`            | 204, empty body |
+| `success: T`, return `Effect<T>`                        | 200, JSON `T`   |
+| `success: UnstructuredText(...)`, return inline text    | 200, plain text |
+| `success: UnstructuredBinary(...)`, return inline bytes | 200, raw bytes  |
+| `success: Schema.NullOr(T)`, return `T`                 | 200, JSON `T`   |
+| `success: Schema.NullOr(T)`, return `null`              | 404, empty body |
+| declare `error: E`, return `Effect.fail(E)`             | 500, JSON `E`   |
 
 Use `Schema.NullOr(T)` for ordinary not-found behavior. Use a declared error schema and
 `Effect.fail(...)` for expected typed failures. Defects such as `Effect.die(...)` are unexpected
@@ -204,6 +232,33 @@ invocation failures and may be retried; do not use them to select an HTTP status
 
 The SDK does not expose a raw response builder or per-error status mapping. Do not return an
 Effect Platform `HttpServerResponse` or invent response-header/status helpers.
+
+For plain text or binary output, set method `success` to
+`Unstructured.UnstructuredText(...)` or `Unstructured.UnstructuredBinary(...)` and return an
+inline `TextReferenceValue` or `BinaryReferenceValue`. Inline text uses `text/plain` plus its
+optional language metadata; inline binary uses the value's declared MIME type. Unstructured
+success values cannot be combined with a typed method `error`. Load
+`golem-add-http-endpoint-effect` for complete value examples.
+
+## Malformed Bound Input
+
+The host rejects malformed route-bound input before invoking the handler. The response is `400 Bad
+Request`, has a JSON content type, and has this stable shape:
+
+```json
+{ "code": "REQUEST_VALUE_PARSING_FAILED", "errors": ["descriptive message"] }
+```
+
+The stable codes distinguish common cases:
+
+| Case                                           | Code                           |
+| ---------------------------------------------- | ------------------------------ |
+| Missing required query or header value         | `REQUEST_MISSING_VALUE`        |
+| Malformed scalar or unparsable collection item | `REQUEST_VALUE_PARSING_FAILED` |
+| More than one value for a scalar binding       | `REQUEST_TOO_MANY_VALUES`      |
+
+Do not duplicate this parsing in the handler or replace these host responses with custom response
+construction.
 
 ## Unstructured Request Bodies
 
@@ -237,10 +292,9 @@ Use `Unstructured.UnstructuredText({ restrictions: [{ languageCode: "en" }] })` 
 text input, or omit `restrictions` to accept any declared text language or binary MIME type. An
 unstructured value cannot bind to path, query, or headers; keep it as the only body parameter.
 
-At the pinned SDK version, `method.success` accepts Effect Schema rather than an unstructured
-element specification. There is therefore no top-level raw binary or raw text HTTP response API;
-do not mechanically translate another SDK's `UnstructuredBinary` or `UnstructuredText` return
-type.
+`method.success` accepts either an ordinary Effect Schema or one top-level
+`UnstructuredBinary(...)` / `UnstructuredText(...)` element specification. Unstructured values
+cannot be nested inside `Schema.Struct` or combined into a multimodal success value.
 
 ## Authenticated Principal
 
