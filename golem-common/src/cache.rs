@@ -67,6 +67,15 @@ pub trait SimpleCache<K, V, E> {
     fn get_or_insert_simple<F>(&self, key: &K, f: F) -> impl Future<Output = Result<V, E>>
     where
         F: AsyncFnOnce() -> Result<V, E>;
+
+    fn get_or_insert_simple_spawned<F, Fut>(
+        &self,
+        key: &K,
+        f: F,
+    ) -> impl Future<Output = Result<V, E>>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<V, E>> + Send + 'static;
 }
 
 struct CacheState<K, PV, V, E> {
@@ -88,6 +97,15 @@ impl<
         F: AsyncFnOnce() -> Result<V, E>,
     {
         self.get_or_insert(key, || (), async |_| f().await).await
+    }
+
+    async fn get_or_insert_simple_spawned<F, Fut>(&self, key: &K, f: F) -> Result<V, E>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<V, E>> + Send + 'static,
+    {
+        self.get_or_insert_spawned(key, || (), move |_| Box::pin(f()))
+            .await
     }
 }
 
