@@ -269,19 +269,25 @@ impl Outcome {
             config.payload_size as u64,
         );
         recorder.count(
-            &ResultKey::primary("max-promise-completion-rate-per-sec"),
+            &ResultKey::primary("max-offered-promise-completion-rate-per-sec"),
             self.max_rate as u64,
         );
         for (rate, period) in self.periods {
             recorder.count(
-                &ResultKey::primary(format!("promise-completions-at-{rate}-per-sec")),
+                &ResultKey::primary(format!("promise-completions-at-offered-{rate}-per-sec")),
                 period.completed,
             );
-            recorder.duration(
+            recorder.count(
                 &ResultKey::primary(format!(
-                    "promise-completion-period-latency-at-{rate}-per-sec"
+                    "promise-completion-period-duration-ms-at-offered-{rate}-per-sec"
                 )),
-                period.elapsed,
+                period.elapsed.as_millis() as u64,
+            );
+            recorder.count(
+                &ResultKey::primary(format!(
+                    "achieved-promise-completion-rate-at-offered-{rate}-per-sec"
+                )),
+                (period.completed as f64 / period.elapsed.as_secs_f64()).round() as u64,
             );
             for latency in period.completion_latencies {
                 recorder.duration(&ResultKey::primary("promise-completion-latency"), latency);
