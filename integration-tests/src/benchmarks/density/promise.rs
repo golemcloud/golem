@@ -7,11 +7,12 @@
 
 use super::prep::PrepManifest;
 use super::{PromiseFanIn, PromiseTopology, PromiseWaiterPresence};
-use golem_common::base_model::{AgentId, PromiseId};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use golem_common::base_model::agent::ParsedAgentId;
-use golem_common::{agent_id, data_value};
+use golem_common::base_model::{AgentId, PromiseId};
 use golem_common::model::AgentStatus;
 use golem_common::model::component::ComponentDto;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
 };
@@ -19,7 +20,6 @@ use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::FromValue;
-use futures::stream::{self, StreamExt, TryStreamExt};
 use std::time::{Duration, Instant};
 
 pub const PROMISE_PAYLOAD_TINY: usize = 256;
@@ -75,11 +75,20 @@ pub async fn run_cell(
 
     for &rate in rates {
         let count = rate as usize * DEFAULT_RATE_PERIOD.as_secs() as usize;
-        println!("Promise-density [{}]: preparing {count} promises for {rate}/s", config.cell_name());
+        println!(
+            "Promise-density [{}]: preparing {count} promises for {rate}/s",
+            config.cell_name()
+        );
         let work = create_work(&user, &component, config, count).await?;
-        println!("Promise-density [{}]: preparing waiters", config.cell_name());
+        println!(
+            "Promise-density [{}]: preparing waiters",
+            config.cell_name()
+        );
         prepare_waiters(&user, &component, &work).await?;
-        println!("Promise-density [{}]: completing at {rate}/s", config.cell_name());
+        println!(
+            "Promise-density [{}]: completing at {rate}/s",
+            config.cell_name()
+        );
         let period = complete_at_rate(&user, work, payload.clone(), rate).await?;
         outcome.record(rate, period);
     }
@@ -112,26 +121,28 @@ async fn create_work(
             let user = user.clone();
             let component = component.clone();
             async move {
-        let name = match config.fan_in {
-            PromiseFanIn::OnePerAgent => format!("{}-{index}", config.cell_name()),
-            PromiseFanIn::FanIn => format!("{}-fan-in", config.cell_name()),
-        };
-        let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
-        let agent = user.start_agent(&component.id, parsed_agent.clone()).await?;
-        let result = user
-            .invoke_and_await_agent(&component, &parsed_agent, "getPromise", data_value!())
-            .await?;
-        let promise_value = result
-            .into_return_value_and_type()
-            .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
-        let promise = PromiseId::from_value(promise_value.value)
-            .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
-        Ok(PromiseWork {
-            agent,
-            parsed_agent,
-            promise,
-            wait: should_wait(config.waiter_presence, index),
-        })
+                let name = match config.fan_in {
+                    PromiseFanIn::OnePerAgent => format!("{}-{index}", config.cell_name()),
+                    PromiseFanIn::FanIn => format!("{}-fan-in", config.cell_name()),
+                };
+                let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
+                let agent = user
+                    .start_agent(&component.id, parsed_agent.clone())
+                    .await?;
+                let result = user
+                    .invoke_and_await_agent(&component, &parsed_agent, "getPromise", data_value!())
+                    .await?;
+                let promise_value = result
+                    .into_return_value_and_type()
+                    .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
+                let promise = PromiseId::from_value(promise_value.value)
+                    .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
+                Ok(PromiseWork {
+                    agent,
+                    parsed_agent,
+                    promise,
+                    wait: should_wait(config.waiter_presence, index),
+                })
             }
         })
         .buffer_unordered(SETUP_CONCURRENCY)
@@ -191,7 +202,8 @@ async fn complete_at_rate(
         )
         .await;
         let completion_started = Instant::now();
-        user.complete_promise(&item.promise, payload.clone()).await?;
+        user.complete_promise(&item.promise, payload.clone())
+            .await?;
         completion_latencies.push(completion_started.elapsed());
     }
     Ok(Period {
@@ -271,7 +283,9 @@ impl Outcome {
                 period.completed,
             );
             recorder.duration(
-                &ResultKey::primary(format!("promise-completion-period-latency-at-{rate}-per-sec")),
+                &ResultKey::primary(format!(
+                    "promise-completion-period-latency-at-{rate}-per-sec"
+                )),
                 period.elapsed,
             );
             for latency in period.completion_latencies {

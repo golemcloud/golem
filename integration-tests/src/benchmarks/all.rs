@@ -21,8 +21,8 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityScenarioArg,
-    DensityPromiseFanInArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
+    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseFanInArg,
+    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
     DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
     DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
@@ -607,9 +607,7 @@ fn map_schedule_target_pattern(
     }
 }
 
-fn map_promise_waiter_presence(
-    arg: DensityPromiseWaiterPresenceArg,
-) -> PromiseWaiterPresence {
+fn map_promise_waiter_presence(arg: DensityPromiseWaiterPresenceArg) -> PromiseWaiterPresence {
     match arg {
         DensityPromiseWaiterPresenceArg::Cold => PromiseWaiterPresence::Cold,
         DensityPromiseWaiterPresenceArg::Warm => PromiseWaiterPresence::Warm,
