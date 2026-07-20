@@ -1137,7 +1137,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_generation_emits_native_api_and_compiles() {
+    fn tool_generation_emits_native_api() {
         let dir = tempfile::TempDir::new().unwrap();
         let target = Utf8Path::from_path(dir.path()).unwrap();
         let mut generator = MoonBitToolBridgeGenerator::new(test_tool(), target, true).unwrap();
@@ -1157,8 +1157,6 @@ mod tests {
         ] {
             assert!(source.contains(expected), "missing {expected}:\n{source}");
         }
-
-        moon_check(target);
     }
 
     #[test]
@@ -1172,7 +1170,6 @@ mod tests {
 
         let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
         assert!(source.contains("pub(all) enum CodecError2"), "{source}");
-        moon_check(target);
     }
 
     #[test]
@@ -1203,8 +1200,6 @@ mod tests {
         generator
             .generate()
             .expect("valid multimodal tool result should generate");
-
-        moon_check(target);
     }
 
     #[test]
@@ -1233,8 +1228,6 @@ mod tests {
         generator
             .generate()
             .expect("valid multimodal tool error payload should generate");
-
-        moon_check(target);
     }
 
     #[test]
@@ -1333,24 +1326,5 @@ mod tests {
         generator
             .generate()
             .expect("valid transitive type aliases should generate");
-
-        moon_check(target);
-    }
-
-    fn moon_check(target: &Utf8Path) {
-        let output = std::process::Command::new("moon")
-            .arg("-C")
-            .arg(target)
-            .arg("check")
-            .arg("--target")
-            .arg("wasm")
-            .output()
-            .expect("failed to run moon; is it installed?");
-        assert!(
-            output.status.success(),
-            "moon check failed in {target}:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
     }
 }

@@ -219,11 +219,18 @@ fn tool_node(name: &str) -> CommandNode {
 
 fn phase_eight_tool() -> Tool {
     let recursive_id = TypeId::new("phase-eight.Recursive");
+    let outer_alias_id = TypeId::new("phase-eight.OuterAlias");
+    let inner_alias_id = TypeId::new("phase-eight.InnerAlias");
     let tuple_8 = SchemaType::tuple(vec![SchemaType::string(); 8]);
     let tuple_9 = SchemaType::tuple(vec![SchemaType::string(); 9]);
 
     let mut root = tool_node("new");
-    root.subcommands = vec![CommandIndex(1), CommandIndex(2), CommandIndex(3)];
+    root.subcommands = vec![
+        CommandIndex(1),
+        CommandIndex(2),
+        CommandIndex(3),
+        CommandIndex(4),
+    ];
     root.body = Some(CommandBody {
         positionals: Positionals {
             fixed: vec![
@@ -259,6 +266,7 @@ fn phase_eight_tool() -> Tool {
                 tool_positional("datetime", SchemaType::datetime()),
                 tool_positional("duration", SchemaType::duration()),
                 tool_positional("recursive", SchemaType::ref_to(recursive_id.clone())),
+                tool_positional("aliased", SchemaType::ref_to(outer_alias_id.clone())),
             ],
             tail: None,
         },
@@ -339,20 +347,56 @@ fn phase_eight_tool() -> Tool {
         ..empty_tool_body()
     });
 
+    let mut multimodal_output = tool_node("render");
+    multimodal_output.body = Some(CommandBody {
+        result: Some(ToolResultSpec {
+            type_: multimodal(vec![("text", SchemaType::string())]),
+            doc: tool_doc("rendered modalities"),
+            formatters: vec![],
+            default_formatter: String::new(),
+        }),
+        errors: vec![ErrorCase {
+            name: "render-failed".into(),
+            doc: tool_doc("render failed"),
+            kind: ErrorKind::RuntimeError,
+            exit_code: 1,
+            payload: Some(multimodal(vec![("text", SchemaType::string())])),
+        }],
+        ..empty_tool_body()
+    });
+
     Tool {
         version: "1".into(),
         commands: CommandTree {
-            nodes: vec![root, required_streams, result_only, optional_stdout],
+            nodes: vec![
+                root,
+                required_streams,
+                result_only,
+                optional_stdout,
+                multimodal_output,
+            ],
         },
         schema: SchemaGraph {
-            defs: vec![SchemaTypeDef {
-                id: recursive_id.clone(),
-                name: Some("Recursive".into()),
-                body: SchemaType::record(vec![named_field(
-                    "next",
-                    SchemaType::option(SchemaType::ref_to(recursive_id)),
-                )]),
-            }],
+            defs: vec![
+                SchemaTypeDef {
+                    id: recursive_id.clone(),
+                    name: Some("Recursive".into()),
+                    body: SchemaType::record(vec![named_field(
+                        "next",
+                        SchemaType::option(SchemaType::ref_to(recursive_id)),
+                    )]),
+                },
+                SchemaTypeDef {
+                    id: outer_alias_id,
+                    name: Some("OuterAlias".into()),
+                    body: SchemaType::ref_to(inner_alias_id.clone()),
+                },
+                SchemaTypeDef {
+                    id: inner_alias_id,
+                    name: Some("InnerAlias".into()),
+                    body: SchemaType::string(),
+                },
+            ],
             root: SchemaType::record(vec![]),
         },
     }
@@ -473,6 +517,20 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
 }
 
 #[test]
+fn guest_tool_mode_moon_checks_fixed_codec_type_name_collision() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut tool = phase_eight_tool();
+    tool.commands.nodes[0].name = "codec".into();
+    let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+    assert!(source.contains("pub(all) enum CodecError2"), "{source}");
+    moon_check_wasm(dir.path());
+}
+
+#[test]
 fn guest_mode_reserves_unstructured_support_type_names() {
     let user_type = def(
         "UnstructuredText",
@@ -574,12 +632,15 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     assert!(source.contains("pub fn ConfiguredCounterClient::get_agent_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::phantom_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::drop("));
-    assert!(source.contains("self.client.invoke_and_await(\"read\", input)"));
-    assert!(source.contains("self.client.invoke(\"read\", input)"));
-    assert!(source.contains("self.client.schedule_invocation(scheduled_at, \"read\", input)"));
+    assert!(source.contains("self.client.invoke_and_await(\"read\", input).value"));
+    assert!(source.contains("let _ = self.client.invoke(\"read\", input)"));
     assert!(
-        source
-            .contains("self.client.schedule_cancelable_invocation(scheduled_at, \"read\", input)")
+        source.contains("let _ = self.client.schedule_invocation(scheduled_at, \"read\", input)")
+    );
+    assert!(
+        source.contains(
+            "self.client.schedule_cancelable_invocation(scheduled_at, \"read\", input).cancellation_token"
+        )
     );
     assert!(source.contains("@types.Signed(1L)"));
     assert!(source.contains("@types.Signed(9L)"));

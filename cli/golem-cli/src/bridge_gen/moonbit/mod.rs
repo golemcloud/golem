@@ -1412,7 +1412,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             )),
             Some(decode) => {
                 writer.line(format!(
-                    "match self.client.invoke_and_await({method_name}, input) {{"
+                    "match self.client.invoke_and_await({method_name}, input).value {{"
                 ));
                 writer.indent();
                 writer.line("Some(tree) => {");
@@ -1452,7 +1452,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        writer.line(format!("self.client.invoke({method_name}, input)"));
+        writer.line(format!("let _ = self.client.invoke({method_name}, input)"));
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1465,7 +1465,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
         writer.line(format!(
-            "self.client.schedule_invocation(scheduled_at, {method_name}, input)"
+            "let _ = self.client.schedule_invocation(scheduled_at, {method_name}, input)"
         ));
         writer.dedent();
         writer.line("}");
@@ -1477,7 +1477,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
         writer.line(format!(
-            "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input)"
+            "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input).cancellation_token"
         ));
         writer.dedent();
         writer.line("}");
