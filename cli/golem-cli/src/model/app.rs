@@ -1739,6 +1739,7 @@ impl<'a> Component<'a> {
                     "ts" => Some(GuestLanguage::TypeScript),
                     "rust" => Some(GuestLanguage::Rust),
                     "scala" => Some(GuestLanguage::Scala),
+                    "kotlin" => Some(GuestLanguage::Kotlin),
                     "moonbit" => Some(GuestLanguage::MoonBit),
                     _ => None,
                 })

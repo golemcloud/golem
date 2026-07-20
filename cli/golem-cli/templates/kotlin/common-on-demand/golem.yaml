@@ -1,0 +1,18 @@
+# golem-app-manifest-header
+
+componentTemplates:
+  kotlin:
+    presets:
+      default:
+        default: true
+        build:
+        - command: gradle nativeComponent
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ appRootDir }}/build.gradle.kts"
+          - "{{ appRootDir }}/settings.gradle.kts"
+          targets:
+          - "{{ appRootDir }}/build/golem/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ appRootDir }}/build/golem/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

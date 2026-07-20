@@ -412,6 +412,7 @@ fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
         SourceLanguage::Rust => name.to_snake_case(),
         SourceLanguage::TypeScript
         | SourceLanguage::Scala
+        | SourceLanguage::Kotlin
         | SourceLanguage::MoonBit
         | SourceLanguage::Other(_) => name.to_lower_camel_case(),
     }

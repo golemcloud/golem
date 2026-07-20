@@ -1,0 +1,4 @@
+{
+  "type": "agent",
+  "description": "A counter agent with typed state snapshotting via Snapshotted<S>"
+}

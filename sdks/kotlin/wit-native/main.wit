@@ -1,0 +1,86 @@
+package kotlin:agent-native@0.1.0;
+
+world kotlin-agent {
+  include golem:agent/agent-guest@2.0.0;
+  include golem:tool/tool-guest@0.1.0;
+
+  // Not pulled in transitively by agent-guest or tool-guest (verified: golem-host.wit only
+  // *imports* these interfaces into its world -- the component guest must export them so the
+  // host can call back into the component during a manual snapshot-based update).
+  // Needed for SnapshotApi's save/load hooks (Task 7).
+  export golem:api/save-snapshot@1.5.0;
+  export golem:api/load-snapshot@1.5.0;
+
+  // Not pulled in transitively by agent-guest (which only imports golem:api/host@1.5.0 and
+  // `common` -- verified in wit/deps/golem-agent/guest.wit). Needed for parse-agent-id
+  // (Task N4C.2 increment 3).
+  import golem:agent/host@2.0.0;
+
+  // Not pulled in transitively by anything else in this world (verified: no reference to
+  // "durability" anywhere under wit/deps/golem-agent or wit/deps/golem-tool). Needed for
+  // DurabilityApi's core oplog/durable-function primitives (Task N4C.3 increment 1).
+  import golem:durability/durability@1.5.0;
+
+  // Not pulled in transitively (verified: no reference to golem:api/retry anywhere already
+  // imported). Needed for RetryApi's retry-policy/retry-predicate tree marshalling (Task N4C.3).
+  import golem:api/retry@1.5.0;
+
+  // Not pulled in transitively: DurabilityApi's `import golem:durability` only makes a type-only
+  // `use` of golem:api/oplog's {oplog-index, wrapped-function-type}, which does NOT bring the
+  // oplog interface's own functions/resources. Needed for OplogApi's get-oplog/search-oplog
+  // resources (Task N4C.3).
+  import golem:api/oplog@1.5.0;
+
+  // Not pulled in transitively (verified: no real "context" import anywhere under
+  // wit/deps/golem-agent, wit/deps/golem-tool, or wit/deps/golem-durability -- only an
+  // unrelated doc-comment match). Needed for ContextApi's span/invocation-context resources
+  // (Task N4C.3).
+  import golem:api/context@1.5.0;
+
+  // Not pulled in transitively (golem:core/types declares the `secret` resource but not the
+  // capability-gated `reveal` interface). Needed for SecretApi.reveal.
+  import golem:secrets/reveal@0.1.0;
+
+  // Not pulled in transitively (verified: no reference to "wasi:cli/environment" or
+  // "wasi:logging" anywhere under wit/deps/golem-agent, wit/deps/golem-tool,
+  // wit/deps/golem-durability, or wit/deps/golem-1.x). Needed for Environment.kt/Logging.kt
+  // (Task N4C.4).
+  import wasi:cli/environment@0.2.3;
+  import wasi:logging/logging;
+
+  // Not pulled in transitively (same check as above). Needed for Config.kt (Task N4C.4).
+  import wasi:config/store@0.2.0-draft;
+
+  // Not pulled in transitively (same check as above). Needed for KeyValue.kt (Task N4C.4):
+  // the types/eventual/eventual-batch interfaces it wraps, plus wasi-keyvalue-error (its own
+  // `error` resource, whose [method]/[resource-drop] we call directly, not just a type-only
+  // reference).
+  import wasi:keyvalue/types@0.1.0;
+  import wasi:keyvalue/eventual@0.1.0;
+  import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
+
+  // Not pulled in transitively (same check as above). Needed for Blobstore.kt (Task N4C.4).
+  // Unversioned package, like wasi:logging. wasi:io/streams@0.2.3 and wasi:io/error@0.2.3
+  // (also used by Blobstore.kt, for the output-stream write path) are NOT added here -- they
+  // were already part of this world's import surface before this SDK added any custom host
+  // API.
+  import wasi:blobstore/types;
+  import wasi:blobstore/container;
+  import wasi:blobstore/blobstore;
+
+  // Not pulled in transitively (same check as above). Needed for QuotaApi.kt (Task N4C.4).
+  import golem:quota/types@1.5.0;
+
+  // Not pulled in transitively (same check as above). Needed for Rdbms.kt's Postgres port
+  // (Task N4C.4).
+  import golem:rdbms/postgres@1.5.0;
+
+  // Not pulled in transitively (same check as above). Needed for Rdbms.kt's MySQL port
+  // (Task N4C.4).
+  import golem:rdbms/mysql@1.5.0;
+
+  // Not pulled in transitively (same check as above). Needed for Rdbms.kt's Ignite port
+  // (Task N4C.4) -- the last of the three RDBMS backends.
+  import golem:rdbms/ignite2@1.5.0;
+}

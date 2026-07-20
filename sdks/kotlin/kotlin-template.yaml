@@ -1,0 +1,20 @@
+# Component build template for native Kotlin/Wasm agents (mirrors rust-template.yaml's single-
+# command-per-preset shape; unlike the superseded Kotlin/JS path, there is no separate inject/
+# preinit step -- `gradle nativeComponent` alone produces a validated, deployable component).
+#
+# `golem build` runs `gradle nativeComponent` (the cloud.golem.wasm-component Gradle plugin
+# task): Kotlin/Wasm compile -> wasm-tools component embed -> wasm-tools component new --adapt
+# (WASI p1->p2) -> wasm-tools validate. No JS, no QuickJS, no bundling.
+manifestVersion: 1.6.0
+componentTemplates:
+  kotlin:
+    build:
+    - command: gradle nativeComponent
+      sources:
+      - src
+      - build.gradle.kts
+      - settings.gradle.kts
+      targets:
+      - build/golem/counter-agent.wasm
+    componentWasm: build/golem/counter-agent.wasm
+    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

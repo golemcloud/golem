@@ -1,0 +1,29 @@
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+# ktlint ruleset: ALL standard style rules enabled EXCEPT identifier naming.
+# Every enabled rule is behavior-preserving (no change to compiled output).
+# Only naming rules are disabled: renaming classes/functions/properties/
+# packages/files changes identifiers baked into the bytecode and public ABI
+# (e.g. top-level declarations in Foo.kt compile to class FooKt, so a file
+# rename changes the ABI) and can desync generated code.
+ktlint_code_style = intellij_idea
+
+# Line-width enforcement is off: ktlint cannot auto-break string literals, so a
+# long string would become a forced manual edit. We do not want ktlint dictating
+# line length; developers keep their own line breaks.
+max_line_length = off
+ktlint_standard_max-line-length = disabled
+
+ktlint_standard_class-naming = disabled
+ktlint_standard_function-naming = disabled
+ktlint_standard_property-naming = disabled
+ktlint_standard_backing-property-naming = disabled
+ktlint_standard_enum-entry-name-case = disabled
+ktlint_standard_package-name = disabled
+ktlint_standard_filename = disabled

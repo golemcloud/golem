@@ -49,6 +49,7 @@ fn round_trip_all(value: SchemaValue, ty: SchemaType) {
     round_trip(value.clone(), ty.clone(), SourceLanguage::Rust);
     round_trip(value.clone(), ty.clone(), SourceLanguage::TypeScript);
     round_trip(value.clone(), ty.clone(), SourceLanguage::Scala);
+    round_trip(value.clone(), ty.clone(), SourceLanguage::Kotlin);
     round_trip(value, ty, SourceLanguage::MoonBit);
 }
 
@@ -76,6 +77,11 @@ fn round_trip_primitives() {
         SchemaValue::Char('a'),
         SchemaType::char(),
         SourceLanguage::Scala,
+    );
+    round_trip(
+        SchemaValue::Char('a'),
+        SchemaType::char(),
+        SourceLanguage::Kotlin,
     );
     round_trip(
         SchemaValue::Char('a'),
@@ -748,6 +754,193 @@ fn moonbit_native_datetime_rejects_out_of_range_nanos() {
     );
 }
 
+// ── Kotlin-specific rendering + round-trip coverage ─────────────────────────
+
+fn kotlin_render(value: SchemaValue, ty: SchemaType) -> String {
+    let graph = SchemaGraph::anonymous(ty.clone());
+    render_schema_value(&graph, &ty, &value, &SourceLanguage::Kotlin)
+}
+
+fn kotlin_round_trip(value: SchemaValue, ty: SchemaType) {
+    round_trip(value, ty, SourceLanguage::Kotlin);
+}
+
+#[test]
+fn kotlin_scalars_and_string_round_trip() {
+    kotlin_round_trip(SchemaValue::Bool(true), SchemaType::bool());
+    kotlin_round_trip(SchemaValue::U32(42), SchemaType::u32());
+    kotlin_round_trip(SchemaValue::S32(-7), SchemaType::s32());
+    kotlin_round_trip(SchemaValue::F64(2.71), SchemaType::f64());
+    kotlin_round_trip(SchemaValue::Char('a'), SchemaType::char());
+    kotlin_round_trip(
+        SchemaValue::String("hello world".into()),
+        SchemaType::string(),
+    );
+    // Unsigned integers render as plain numbers (no `u` suffix).
+    assert_eq!(kotlin_render(SchemaValue::U8(7), SchemaType::u8()), "7");
+}
+
+#[test]
+fn kotlin_list_uses_list_of() {
+    let ty = SchemaType::list(SchemaType::u32());
+    let value = SchemaValue::List {
+        elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)],
+    };
+    assert_eq!(kotlin_render(value.clone(), ty.clone()), "listOf(1, 2)");
+    kotlin_round_trip(value, ty);
+}
+
+#[test]
+fn kotlin_option_is_nullable() {
+    let ty = SchemaType::option(SchemaType::u32());
+    let some = SchemaValue::Option {
+        inner: Some(Box::new(SchemaValue::U32(42))),
+    };
+    assert_eq!(kotlin_render(some.clone(), ty.clone()), "42");
+    kotlin_round_trip(some, ty.clone());
+
+    let none = SchemaValue::Option { inner: None };
+    assert_eq!(kotlin_render(none.clone(), ty.clone()), "null");
+    kotlin_round_trip(none, ty);
+}
+
+#[test]
+fn kotlin_map_uses_arrow_entries() {
+    let ty = SchemaType::map(SchemaType::string(), SchemaType::u32());
+    let value = SchemaValue::Map {
+        entries: vec![(SchemaValue::String("a".into()), SchemaValue::U32(1))],
+    };
+    assert_eq!(kotlin_render(value.clone(), ty.clone()), "{ \"a\" => 1 }");
+    kotlin_round_trip(value, ty);
+}
+
+#[test]
+fn kotlin_named_record_uses_named_args() {
+    let record_ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "field-one".into(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "field-two".into(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+    ]);
+    use golem_common::schema::graph::SchemaTypeDef;
+    use golem_common::schema::metadata::TypeId;
+    let id = TypeId("widget".to_string());
+    let named_ty = SchemaType::ref_to(id.clone());
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id,
+            name: Some("Widget".to_string()),
+            body: record_ty,
+        }],
+        root: named_ty.clone(),
+    };
+    let value = SchemaValue::Record {
+        fields: vec![SchemaValue::U32(42), SchemaValue::String("hi".into())],
+    };
+    let rendered = render_schema_value(&graph, &named_ty, &value, &SourceLanguage::Kotlin);
+    assert_eq!(rendered, "Widget(fieldOne = 42, fieldTwo = \"hi\")");
+    let input_schema = single_param_input_schema(named_ty);
+    let parsed =
+        parse_agent_id_params(&rendered, &graph, &input_schema, &SourceLanguage::Kotlin).unwrap();
+    match parsed {
+        SchemaValue::Record { fields } => assert_eq!(fields[0], value),
+        other => panic!("expected Record, got {other:?}"),
+    }
+}
+
+#[test]
+fn kotlin_enum_and_variant_round_trip() {
+    kotlin_round_trip(
+        SchemaValue::Enum { case: 1 },
+        SchemaType::r#enum(vec!["red".into(), "green".into(), "blue".into()]),
+    );
+    let variant_ty = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "case-a".into(),
+            payload: Some(SchemaType::u32()),
+            metadata: Default::default(),
+        },
+        VariantCaseType {
+            name: "case-b".into(),
+            payload: None,
+            metadata: Default::default(),
+        },
+    ]);
+    kotlin_round_trip(
+        SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: Some(Box::new(SchemaValue::U32(99))),
+        }),
+        variant_ty.clone(),
+    );
+    kotlin_round_trip(
+        SchemaValue::Variant(VariantValuePayload {
+            case: 1,
+            payload: None,
+        }),
+        variant_ty,
+    );
+}
+
+#[test]
+fn kotlin_tuple_pair_and_triple() {
+    let pair_ty = SchemaType::tuple(vec![SchemaType::u32(), SchemaType::string()]);
+    let pair = SchemaValue::Tuple {
+        elements: vec![SchemaValue::U32(1), SchemaValue::String("x".into())],
+    };
+    assert_eq!(
+        kotlin_render(pair.clone(), pair_ty.clone()),
+        "Pair(1, \"x\")"
+    );
+    kotlin_round_trip(pair, pair_ty);
+
+    let triple_ty = SchemaType::tuple(vec![
+        SchemaType::u32(),
+        SchemaType::u32(),
+        SchemaType::u32(),
+    ]);
+    let triple = SchemaValue::Tuple {
+        elements: vec![
+            SchemaValue::U32(1),
+            SchemaValue::U32(2),
+            SchemaValue::U32(3),
+        ],
+    };
+    assert_eq!(
+        kotlin_render(triple.clone(), triple_ty.clone()),
+        "Triple(1, 2, 3)"
+    );
+    kotlin_round_trip(triple, triple_ty);
+}
+
+#[test]
+fn kotlin_result_uses_either() {
+    let ty = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::u32())),
+        err: Some(Box::new(SchemaType::string())),
+    });
+    let ok = SchemaValue::Result(ResultValuePayload::Ok {
+        value: Some(Box::new(SchemaValue::U32(42))),
+    });
+    assert_eq!(kotlin_render(ok.clone(), ty.clone()), "Either.Right(42)");
+    kotlin_round_trip(ok, ty.clone());
+
+    let err = SchemaValue::Result(ResultValuePayload::Err {
+        value: Some(Box::new(SchemaValue::String("oops".into()))),
+    });
+    assert_eq!(
+        kotlin_render(err.clone(), ty.clone()),
+        "Either.Left(\"oops\")"
+    );
+    kotlin_round_trip(err, ty);
+}
+
 #[test]
 fn capability_values_render_as_redacted_in_every_language() {
     use golem_common::schema::schema_type::{QuotaTokenSpec, SecretSpec};
@@ -757,6 +950,7 @@ fn capability_values_render_as_redacted_in_every_language() {
         SourceLanguage::Rust,
         SourceLanguage::TypeScript,
         SourceLanguage::Scala,
+        SourceLanguage::Kotlin,
         SourceLanguage::MoonBit,
     ];
 
