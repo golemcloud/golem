@@ -19,6 +19,7 @@ use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::FromValue;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use std::time::{Duration, Instant};
 
 pub const PROMISE_PAYLOAD_TINY: usize = 256;
@@ -30,6 +31,7 @@ const PROMISE_AGENT_TYPE: &str = "PromiseAgent";
 const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
+const SETUP_CONCURRENCY: usize = 100;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CellConfig {
@@ -73,8 +75,11 @@ pub async fn run_cell(
 
     for &rate in rates {
         let count = rate as usize * DEFAULT_RATE_PERIOD.as_secs() as usize;
+        println!("Promise-density [{}]: preparing {count} promises for {rate}/s", config.cell_name());
         let work = create_work(&user, &component, config, count).await?;
+        println!("Promise-density [{}]: preparing waiters", config.cell_name());
         prepare_waiters(&user, &component, &work).await?;
+        println!("Promise-density [{}]: completing at {rate}/s", config.cell_name());
         let period = complete_at_rate(&user, work, payload.clone(), rate).await?;
         outcome.record(rate, period);
     }
@@ -102,8 +107,11 @@ async fn create_work(
     config: &CellConfig,
     count: usize,
 ) -> anyhow::Result<Vec<PromiseWork>> {
-    let mut work = Vec::with_capacity(count);
-    for index in 0..count {
+    stream::iter(0..count)
+        .map(|index| {
+            let user = user.clone();
+            let component = component.clone();
+            async move {
         let name = match config.fan_in {
             PromiseFanIn::OnePerAgent => format!("{}-{index}", config.cell_name()),
             PromiseFanIn::FanIn => format!("{}-fan-in", config.cell_name()),
@@ -111,21 +119,24 @@ async fn create_work(
         let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
         let agent = user.start_agent(&component.id, parsed_agent.clone()).await?;
         let result = user
-            .invoke_and_await_agent(component, &parsed_agent, "getPromise", data_value!())
+            .invoke_and_await_agent(&component, &parsed_agent, "getPromise", data_value!())
             .await?;
         let promise_value = result
             .into_return_value_and_type()
             .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
         let promise = PromiseId::from_value(promise_value.value)
             .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
-        work.push(PromiseWork {
+        Ok(PromiseWork {
             agent,
             parsed_agent,
             promise,
             wait: should_wait(config.waiter_presence, index),
-        });
-    }
-    Ok(work)
+        })
+            }
+        })
+        .buffer_unordered(SETUP_CONCURRENCY)
+        .try_collect()
+        .await
 }
 
 async fn prepare_waiters(
@@ -133,15 +144,25 @@ async fn prepare_waiters(
     component: &ComponentDto,
     work: &[PromiseWork],
 ) -> anyhow::Result<()> {
-    for item in work.iter().filter(|item| item.wait) {
-        user.invoke_agent(
-            component,
-            &item.parsed_agent,
-            "awaitPromise",
-            data_value!(item.promise.clone()),
-        )
-            .await?;
-    }
+    stream::iter(work.iter().filter(|item| item.wait))
+        .map(|item| {
+            let user = user.clone();
+            let component = component.clone();
+            let parsed_agent = item.parsed_agent.clone();
+            let promise = item.promise.clone();
+            async move {
+                user.invoke_agent(
+                    &component,
+                    &parsed_agent,
+                    "awaitPromise",
+                    data_value!(promise),
+                )
+                .await
+            }
+        })
+        .buffer_unordered(SETUP_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
 
     // Completion must observe a registered PromiseHandle for warm/mixed cells.
     // A shared fan-in agent can be suspended once while many queued awaiters exist.
