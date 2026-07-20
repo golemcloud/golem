@@ -31,7 +31,10 @@ const PROMISE_AGENT_TYPE: &str = "PromiseAgent";
 const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const SETUP_CONCURRENCY: usize = 100;
+// Creating agents/promises traverses cold worker activation and must not flood
+// the gateway. Completion requests are the measured load and use their own cap.
+const SETUP_CONCURRENCY: usize = 16;
+const COMPLETION_CONCURRENCY: usize = 100;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CellConfig {
@@ -206,7 +209,7 @@ async fn complete_at_rate(
                 Ok::<_, anyhow::Error>(completion_started.elapsed())
             }
         })
-        .buffer_unordered(SETUP_CONCURRENCY)
+        .buffer_unordered(COMPLETION_CONCURRENCY)
         .try_collect::<Vec<_>>()
         .await?;
     Ok(Period {
