@@ -612,6 +612,7 @@ impl From<PersistenceLevel> for crate::preview2::golem_api_1_x::host::Persistenc
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum LookupResult {
     New,
     Pending,

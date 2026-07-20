@@ -30,7 +30,17 @@ import scala.concurrent.Future
 private[rpc] trait RpcInvoker {
   def invokeAndAwait(functionName: String, input: JsSchemaValueTree): Either[String, Option[JsSchemaValueTree]]
 
+  def invokeAndAwaitWithMetadata(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
+
   def asyncInvokeAndAwait(functionName: String, input: JsSchemaValueTree): Future[Option[JsSchemaValueTree]]
+
+  def asyncInvokeAndAwaitWithMetadata(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
 
   def cancelableAsyncInvokeAndAwait(
     functionName: String,
@@ -39,11 +49,26 @@ private[rpc] trait RpcInvoker {
 
   def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit]
 
+  def invokeWithMetadata(functionName: String, input: JsSchemaValueTree): Either[String, InvocationMetadata] =
+    Left("invocation metadata is not supported")
+
   def scheduleInvocation(datetime: Datetime, functionName: String, input: JsSchemaValueTree): Either[String, Unit]
+
+  def scheduleInvocationWithMetadata(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, InvocationReceipt] = Left("invocation metadata is not supported")
 
   def scheduleCancelableInvocation(
     datetime: Datetime,
     functionName: String,
     input: JsSchemaValueTree
   ): Either[String, CancellationToken]
+
+  def scheduleCancelableInvocationWithMetadata(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, CancelableInvocationReceipt] = Left("invocation metadata is not supported")
 }

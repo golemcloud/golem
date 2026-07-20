@@ -129,7 +129,12 @@ pub(all) struct CancelledParameters {
 
 pub(all) struct CardEventQueuedParameters {
   timestamp : @wallClock.Datetime
-  event : PublicQueuedCardEvent
+  event : QueuedCardEvent
+} derive(Eq, Show)
+
+pub(all) struct CardExpiredParameters {
+  timestamp : @wallClock.Datetime
+  card_id : @types.CardId
 } derive(Eq, Show)
 
 pub(all) struct CardInstallFailedParameters {
@@ -366,10 +371,11 @@ pub(all) enum OplogEntry {
   OplogProcessorCheckpoint(RawOplogProcessorCheckpointParameters)
   SetRetryPolicy(SetRetryPolicyParameters)
   RemoveRetryPolicy(RemoveRetryPolicyParameters)
-  CardEventQueued(RawCardEventQueuedParameters)
+  CardEventQueued(CardEventQueuedParameters)
   CardInstalled(RawCardInstalledParameters)
   CardInstallFailed(CardInstallFailedParameters)
   CardRevoked(CardRevokedParameters)
+  CardExpired(CardExpiredParameters)
 } derive(Eq, Show)
 
 pub(all) struct OplogExternalPayload {
@@ -470,25 +476,20 @@ pub(all) enum PublicOplogEntry {
   CardInstalled(CardInstalledParameters)
   CardInstallFailed(CardInstallFailedParameters)
   CardRevoked(CardRevokedParameters)
-} derive(Eq, Show)
-
-pub(all) enum PublicQueuedCardEvent {
-  Install(PublicQueuedCardEventCard)
-  Revoke(PublicQueuedCardEventCard)
-} derive(Eq, Show)
-
-pub(all) struct PublicQueuedCardEventCard {
-  card_id : @types.CardId
+  CardExpired(CardExpiredParameters)
 } derive(Eq, Show)
 
 pub(all) enum QueuedCardEvent {
-  Install(QueuedCardEventCard)
-  Revoke(QueuedCardEventCard)
+  Install(QueuedCardEventInstall)
+  Revoke(QueuedCardEventRevoke)
 } derive(Eq, Show)
 
-pub(all) struct QueuedCardEventCard {
+pub(all) struct QueuedCardEventInstall {
   card_id : @types.CardId
-  card : FixedArray[Byte]?
+} derive(Eq, Show)
+
+pub(all) struct QueuedCardEventRevoke {
+  card_id : @types.CardId
 } derive(Eq, Show)
 
 pub(all) struct RawActivatePluginParameters {
@@ -523,11 +524,6 @@ pub(all) struct RawCancelledParameters {
   timestamp : @wallClock.Datetime
   start_index : UInt64
   partial : OplogPayload?
-} derive(Eq, Show)
-
-pub(all) struct RawCardEventQueuedParameters {
-  timestamp : @wallClock.Datetime
-  event : QueuedCardEvent
 } derive(Eq, Show)
 
 pub(all) struct RawCardInstalledParameters {

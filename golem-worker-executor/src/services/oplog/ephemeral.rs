@@ -304,27 +304,39 @@ impl EphemeralOplog {
         account_id: golem_common::model::account::AccountId,
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
+        fresh: bool,
     ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
+            let raw = if fresh {
+                layer.open_fresh(owned_agent_id, agent_mode).await
+            } else {
+                layer.open(owned_agent_id, agent_mode).await
+            };
             if i != (lower_services.len().get() - 1) {
-                let raw = layer.open(owned_agent_id, agent_mode).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
                     owned_agent_id.environment_id(),
                 ));
-                lower.push(Arc::new(
+                let wrapped = if fresh {
+                    WrappedOplogArchive::new_fresh(
+                        i,
+                        instrumented,
+                        transfer_tx.clone(),
+                        entry_count_limit,
+                    )
+                } else {
                     WrappedOplogArchive::new(
                         i,
                         instrumented,
                         transfer_tx.clone(),
                         entry_count_limit,
                     )
-                    .await,
-                ));
+                    .await
+                };
+                lower.push(Arc::new(wrapped));
             } else {
-                let raw = layer.open(owned_agent_id, agent_mode).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,

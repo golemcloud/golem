@@ -51,4 +51,22 @@ abstract class AbstractRemoteMethod[Trait, In, Out] protected (
 
   protected final def scheduleCancelableWith(input: In, when: Datetime): Future[CancellationToken] =
     resolved.scheduleCancelable(method, when, input)
+
+  protected final def awaitWithMetadata(input: In): Future[InvocationResult[Out]] =
+    resolved.awaitWithMetadata(method, input)
+
+  protected final def cancelableAwaitWithMetadata(input: In): Either[String, CancelableAsyncInvocation[Out]] =
+    resolved.cancelableAwaitWithMetadata(method, input)
+
+  protected final def triggerWithMetadata(input: In): Future[InvocationReceipt] =
+    resolved.triggerWithMetadata(method, input)
+
+  protected final def scheduleWithMetadata(input: In, when: Datetime): Future[InvocationReceipt] =
+    resolved.scheduleWithMetadata(method, when, input)
+
+  protected final def scheduleCancelableWithMetadata(
+    input: In,
+    when: Datetime
+  ): Future[CancelableInvocationReceipt] =
+    resolved.scheduleCancelableWithMetadata(method, when, input)
 }

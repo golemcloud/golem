@@ -55,6 +55,13 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> Arc<dyn OplogArchive + Send + Sync>;
 
+    /// Opens a new, known-empty archive without probing persistent storage.
+    async fn open_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync>;
+
     /// Deletes the oplog archive for a worker completely
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
 
@@ -289,6 +296,7 @@ struct CreateOplogConstructor {
     primary: Arc<dyn OplogService>,
     service: MultiLayerOplogService,
     last_oplog_index: Option<OplogIndex>,
+    fresh: bool,
     initial_worker_metadata: AgentMetadata,
     last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
@@ -303,6 +311,7 @@ impl CreateOplogConstructor {
         primary: Arc<dyn OplogService>,
         service: MultiLayerOplogService,
         last_oplog_index: Option<OplogIndex>,
+        fresh: bool,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
@@ -314,6 +323,7 @@ impl CreateOplogConstructor {
             primary,
             service,
             last_oplog_index,
+            fresh,
             initial_worker_metadata,
             last_known_status,
             execution_status,
@@ -381,6 +391,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     account_id,
                     self.service.entry_count_limit,
                     &tx,
+                    self.fresh,
                 )
                 .await;
 
@@ -437,6 +448,35 @@ impl OplogService for MultiLayerOplogService {
                     self.primary.clone(),
                     self.clone(),
                     Some(OplogIndex::INITIAL),
+                    false,
+                    initial_worker_metadata,
+                    last_known_status,
+                    execution_status,
+                ),
+            )
+            .await
+    }
+
+    async fn create_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    ) -> Arc<dyn Oplog> {
+        self.oplogs
+            .get_or_open(
+                &owned_agent_id.agent_id,
+                CreateOplogConstructor::new(
+                    owned_agent_id.clone(),
+                    agent_mode,
+                    Some(initial_entry),
+                    self.primary.clone(),
+                    self.clone(),
+                    Some(OplogIndex::INITIAL),
+                    true,
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
@@ -464,6 +504,7 @@ impl OplogService for MultiLayerOplogService {
                     self.primary.clone(),
                     self.clone(),
                     last_oplog_index,
+                    false,
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
@@ -560,6 +601,9 @@ impl OplogService for MultiLayerOplogService {
         }
 
         for layer in &self.lower {
+            if agent_mode == AgentMode::Ephemeral {
+                crate::metrics::ephemeral::record_lower_oplog_existence_read();
+            }
             if layer.exists(owned_agent_id, agent_mode).await {
                 return true;
             }
@@ -1136,6 +1180,21 @@ impl WrappedOplogArchive {
             layer,
             archive,
             entry_count: AtomicU64::new(initial_entry_count),
+            transfer,
+            entry_count_limit,
+        }
+    }
+
+    pub fn new_fresh(
+        layer: usize,
+        archive: Arc<dyn OplogArchive + Send + Sync>,
+        transfer: UnboundedSender<BackgroundTransferMessage>,
+        entry_count_limit: u64,
+    ) -> Self {
+        Self {
+            layer,
+            archive,
+            entry_count: AtomicU64::new(0),
             transfer,
             entry_count_limit,
         }

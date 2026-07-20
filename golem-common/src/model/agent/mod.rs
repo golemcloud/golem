@@ -23,6 +23,7 @@ pub mod schema_evolution;
 pub mod structural_format;
 pub mod text_utils;
 
+use crate::base_model::IdempotencyKey;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::schema::AgentTypeSchema;
 use crate::schema::graph::TypedSchemaValue;
@@ -39,6 +40,23 @@ use uuid::Uuid;
 pub use crate::base_model::agent::*;
 use crate::model::AgentId;
 pub use crate::schema::agent::ParsedAgentId;
+
+const EPHEMERAL_INVOCATION_PHANTOM_NAMESPACE_V1: Uuid =
+    uuid::uuid!("b6414d8d-acfb-4f13-9c5d-64a79af394e5");
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InvocationFreshnessDisposition {
+    #[default]
+    MayExist,
+    KnownFresh,
+}
+
+pub fn ephemeral_invocation_phantom_id(idempotency_key: &IdempotencyKey) -> Uuid {
+    Uuid::new_v5(
+        &EPHEMERAL_INVOCATION_PHANTOM_NAMESPACE_V1,
+        idempotency_key.value.as_bytes(),
+    )
+}
 
 impl TryFrom<i32> for AgentMode {
     type Error = String;
@@ -232,6 +250,17 @@ impl ParsedAgentId {
 
     pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Result<Self, String> {
         Self::try_new(self.agent_type.clone(), self.parameters.clone(), phantom_id)
+    }
+
+    pub fn with_ephemeral_invocation_phantom(
+        &self,
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<Self, String> {
+        if self.phantom_id.is_some() {
+            return Err("Cannot derive an ephemeral invocation identity from an agent ID that already has a phantom ID".to_string());
+        }
+
+        self.with_phantom_id(Some(ephemeral_invocation_phantom_id(idempotency_key)))
     }
 }
 

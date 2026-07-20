@@ -574,7 +574,7 @@ impl CancelTester for CancelTesterImpl {
         let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
 
         let input = encode_single_parameter(1u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", input);
+        let future = wasm_rpc.async_invoke_and_await("inc_by", input).future;
 
         // Cancel immediately before polling/awaiting
         future.cancel();
@@ -588,7 +588,7 @@ impl CancelTester for CancelTesterImpl {
 
         // First, call inc_by to increment the counter
         let input = encode_single_parameter(5u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", input);
+        let future = wasm_rpc.async_invoke_and_await("inc_by", input).future;
 
         // Wait for completion
         loop {

@@ -478,6 +478,13 @@ message InvokeAgentRequest {
   golem.auth.AuthCtx auth_ctx = 12;
   optional golem.worker.InvocationContext context = 13;
   golem.component.Principal principal = 14;
+  InvocationFreshnessDisposition freshness_disposition = 15;
+  repeated golem.worker.AgentConfigEntryDto config = 16;
+}
+
+enum InvocationFreshnessDisposition {
+  INVOCATION_FRESHNESS_DISPOSITION_MAY_EXIST = 0;
+  INVOCATION_FRESHNESS_DISPOSITION_KNOWN_FRESH = 1;
 }
 
 message InvokeAgentResponse {
@@ -497,6 +504,12 @@ message InvokeAgentSuccess {
   // Per-instance agent fingerprint (UUID) of the agent that produced this
   // invocation result.
   optional golem.common.UUID agent_fingerprint = 6;
+  // Final invocation target. For ephemeral agents this contains the generated
+  // one-shot phantom ID and can be used by observation and control APIs.
+  optional golem.worker.AgentId agent_id = 7;
+  // Final invocation key. Together with agent_id this identifies the logical
+  // invocation across retries and asynchronous result lookup.
+  optional golem.worker.IdempotencyKey idempotency_key = 8;
 }
 
 message ProcessOplogEntriesRequest {

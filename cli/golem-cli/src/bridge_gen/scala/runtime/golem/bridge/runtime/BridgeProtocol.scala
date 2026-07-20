@@ -41,6 +41,7 @@ final case class AgentInvocationRequest(
   agentTypeName: String,
   parameters: SchemaValue,
   phantomId: Option[String],
+  config: List[AgentConfigEntry],
   methodName: String,
   methodParameters: SchemaValue,
   mode: String,
@@ -51,6 +52,7 @@ final case class AgentInvocationRequest(
 /** Response of a `POST /v1/agents/invoke-agent` request. */
 final case class AgentInvocationResult(
   agentId: AgentId,
+  idempotencyKey: String,
   result: Option[SchemaValue],
   componentRevision: Option[BigInt]
 )
@@ -66,8 +68,12 @@ final case class ResolvedAgent(
   agentTypeName: String,
   parameters: SchemaValue,
   phantomId: Option[String],
-  agentId: AgentId
+  config: List[AgentConfigEntry],
+  agentId: Option[AgentId]
 )
+
+final case class InvocationResult[+A](agentId: AgentId, idempotencyKey: String, value: A)
+final case class InvocationReceipt(agentId: AgentId, idempotencyKey: String)
 
 /**
  * JSON (de)serialization of the bridge REST protocol. The wire shapes mirror
@@ -98,6 +104,7 @@ object BridgeProtocol {
       "envName"          -> Json.string(request.envName),
       "agentTypeName"    -> Json.string(request.agentTypeName),
       "parameters"       -> SchemaValueCodec.toJson(request.parameters),
+      "config"           -> Json.arr(request.config.map(encodeConfigEntry).toVector),
       "methodName"       -> Json.string(request.methodName),
       "methodParameters" -> SchemaValueCodec.toJson(request.methodParameters),
       "mode"             -> Json.string(request.mode)
@@ -125,9 +132,11 @@ object BridgeProtocol {
     for {
       agentIdJson <- Json.requireField(json, "agentId")
       agentId     <- AgentId.fromJson(agentIdJson)
+      keyJson     <- Json.requireField(json, "idempotencyKey")
+      key         <- Json.asString(keyJson)
       result      <- decodeResultValue(json)
       revision    <- optionalBigInt(json, "componentRevision")
-    } yield AgentInvocationResult(agentId, result, revision)
+    } yield AgentInvocationResult(agentId, key, result, revision)
 
   /**
    * Extract and decode the `result.value` `SchemaValue` of a

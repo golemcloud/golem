@@ -38,7 +38,7 @@ pub fn get_remote_client(
     let RemoteAgentMethodsInfo {
         methods_impl,
         mut method_names,
-    } = get_remote_agent_methods_info(item_trait, agent_type_parameter_names);
+    } = get_remote_agent_methods_info(item_trait, agent_type_parameter_names, agent_is_durable);
 
     let get_method_ident = agent_is_durable.then(|| {
         if method_names.contains("get") {
@@ -48,16 +48,20 @@ pub fn get_remote_client(
         }
     });
     let new_phantom_method_ident = method_names.fresh_ident("new_phantom");
-    let get_phantom_method_ident = method_names.fresh_ident("get_phantom");
+    let get_phantom_method_ident =
+        agent_is_durable.then(|| method_names.fresh_ident("get_phantom"));
     let get_with_config_method_ident = (agent_is_durable
         && !constructor_agent_config_param_defs.is_empty())
     .then(|| method_names.fresh_ident("get_with_config"));
     let new_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
         .then(|| method_names.fresh_ident("new_phantom_with_config"));
-    let get_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
-        .then(|| method_names.fresh_ident("get_phantom_with_config"));
-    let phantom_id_accessor_ident = method_names.fresh_ident("phantom_id");
-    let get_agent_id_accessor_ident = method_names.fresh_ident("get_agent_id");
+    let get_phantom_with_config_method_ident = (agent_is_durable
+        && !constructor_agent_config_param_defs.is_empty())
+    .then(|| method_names.fresh_ident("get_phantom_with_config"));
+    let phantom_id_accessor_ident =
+        agent_is_durable.then(|| method_names.fresh_ident("phantom_id"));
+    let get_agent_id_accessor_ident =
+        agent_is_durable.then(|| method_names.fresh_ident("get_agent_id"));
     let constructor_param_idents = constructor_data_value_param_idents
         .iter()
         .chain(constructor_agent_config_param_idents)
@@ -160,12 +164,22 @@ pub fn get_remote_client(
         let new_phantom_with_config_method_ident = new_phantom_with_config_method_ident
             .as_ref()
             .expect("agents with config allocate new_phantom_with_config");
-        let body = build_constructor_body(
-            quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
-            quote! { Some(#phantom_uuid_ident.into()) },
-            quote! { Some(#phantom_uuid_ident) },
-            agent_config_params_as_rpc_param.clone(),
-        );
+        let body = if agent_is_durable {
+            build_constructor_body(
+                quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
+                quote! { Some(#phantom_uuid_ident.into()) },
+                quote! { Some(#phantom_uuid_ident) },
+                agent_config_params_as_rpc_param.clone(),
+            )
+        } else {
+            build_ephemeral_constructor_body(
+                &remote_client_type_name,
+                &type_name,
+                &encode_constructor,
+                &constructor_value_ident,
+                agent_config_params_as_rpc_param.clone(),
+            )
+        };
         quote! {
             pub fn #new_phantom_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
                 #body
@@ -175,7 +189,9 @@ pub fn get_remote_client(
         quote! {}
     };
 
-    let optional_get_phantom_with_config_impl = if !constructor_agent_config_param_defs.is_empty() {
+    let optional_get_phantom_with_config_impl = if agent_is_durable
+        && !constructor_agent_config_param_defs.is_empty()
+    {
         let get_phantom_with_config_method_ident = get_phantom_with_config_method_ident
             .as_ref()
             .expect("agents with config allocate get_phantom_with_config");
@@ -213,12 +229,22 @@ pub fn get_remote_client(
         quote! {}
     };
 
-    let new_phantom_body = build_constructor_body(
-        quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
-        quote! { Some(#phantom_uuid_ident.into()) },
-        quote! { Some(#phantom_uuid_ident) },
-        quote! { Vec::new() },
-    );
+    let new_phantom_body = if agent_is_durable {
+        build_constructor_body(
+            quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
+            quote! { Some(#phantom_uuid_ident.into()) },
+            quote! { Some(#phantom_uuid_ident) },
+            quote! { Vec::new() },
+        )
+    } else {
+        build_ephemeral_constructor_body(
+            &remote_client_type_name,
+            &type_name,
+            &encode_constructor,
+            &constructor_value_ident,
+            quote! { Vec::new() },
+        )
+    };
 
     let get_phantom_body = build_constructor_body(
         quote! {},
@@ -227,11 +253,25 @@ pub fn get_remote_client(
         quote! { Vec::new() },
     );
 
-    quote! {
-        pub struct #remote_client_type_name {
+    let durable_fields = agent_is_durable.then(|| {
+        quote! {
             agent_id: String,
             phantom_id: Option<golem_rust::Uuid>,
             component_id: golem_rust::schema::wit::wire::ComponentId,
+        }
+    });
+    let get_phantom_impl = agent_is_durable.then(|| quote! {
+        pub fn #get_phantom_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #remote_client_type_name { #get_phantom_body }
+    });
+    let accessors = agent_is_durable.then(|| {
+        quote! {
+            pub fn #phantom_id_accessor_ident(&self) -> Option<golem_rust::Uuid> { self.phantom_id }
+            pub fn #get_agent_id_accessor_ident(&self) -> String { self.agent_id.clone() }
+        }
+    });
+    quote! {
+        pub struct #remote_client_type_name {
+            #durable_fields
             wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
         }
 
@@ -246,22 +286,34 @@ pub fn get_remote_client(
 
             #optional_new_phantom_with_config_impl
 
-            pub fn #get_phantom_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #remote_client_type_name {
-                #get_phantom_body
-            }
+            #get_phantom_impl
 
             #optional_get_phantom_with_config_impl
 
-            pub fn #phantom_id_accessor_ident(&self) -> Option<golem_rust::Uuid> {
-                self.phantom_id
-            }
-
-            pub fn #get_agent_id_accessor_ident(&self) -> String {
-                self.agent_id.clone()
-            }
+            #accessors
 
             #methods_impl
         }
+    }
+}
+
+fn build_ephemeral_constructor_body(
+    client: &syn::Ident,
+    type_name: &str,
+    encode_constructor: &proc_macro2::TokenStream,
+    constructor_value: &syn::Ident,
+    config: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    quote! {
+        #encode_constructor
+        let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+            #type_name,
+            golem_rust::encode_schema_value(&#constructor_value)
+                .expect("Failed to encode constructor parameters"),
+            None,
+            #config,
+        );
+        #client { wasm_rpc }
     }
 }
 
@@ -306,8 +358,35 @@ mod tests {
         assert!(!rendered.contains("pub fn get ("));
         assert!(!rendered.contains("get_with_config"));
         assert!(rendered.contains("new_phantom"));
-        assert!(rendered.contains("get_phantom"));
-        assert!(rendered.contains("get_phantom_with_config"));
+        assert!(!rendered.contains("get_phantom"));
+        assert!(!rendered.contains("get_phantom_with_config"));
+        assert!(!rendered.contains("Uuid :: new_v4"));
+        assert!(!rendered.contains("make_agent_id"));
+        assert!(rendered.contains("async_invoke_and_await"));
+        assert!(rendered.contains("wasm_rpc . invoke"));
+        assert!(rendered.contains("schedule_invocation"));
+        assert!(!rendered.contains("_with_metadata"));
+        assert!(!rendered.contains("fn phantom_id ("));
+        assert!(!rendered.contains("fn get_agent_id ("));
+    }
+
+    #[test]
+    fn ephemeral_clients_use_shared_non_colliding_result_type() {
+        let first = render_client(false);
+        let second_trait = parse_quote! {
+            trait OtherAgent {
+                fn new() -> Self;
+                fn ping(&self) -> String;
+            }
+        };
+        let second = get_remote_client(&second_trait, &[], &[], &[], &[], &[], false).to_string();
+        let rendered = format!("{first} {second}");
+
+        assert_eq!(rendered.matches("EphemeralInvocationResult").count(), 4);
+        assert!(!rendered.contains("struct ExampleAgentInvocationResult"));
+        assert!(!rendered.contains("struct OtherAgentInvocationResult"));
+        assert!(!rendered.contains("struct Invocation <"));
+        assert!(!rendered.contains("struct CancelableInvocationReceipt"));
     }
 
     #[test]
@@ -722,6 +801,7 @@ fn generate_constructor_data_value_params_encoding(
 fn get_remote_agent_methods_info(
     tr: &ItemTrait,
     type_parameter_names: &[String],
+    agent_is_durable: bool,
 ) -> RemoteAgentMethodsInfo {
     let user_method_names = tr
         .items
@@ -778,6 +858,7 @@ fn get_remote_agent_methods_info(
                 &input_defs,
                 &input_idents,
                 &method.sig,
+                agent_is_durable,
             ))
         })
         .collect::<Vec<_>>();
@@ -802,6 +883,7 @@ fn generate_method_code(
     input_defs: &[&syn::FnArg],
     input_idents: &[syn::Ident],
     sig: &syn::Signature,
+    agent_is_durable: bool,
 ) -> proc_macro2::TokenStream {
     let remote_method_name = method_name.to_string();
     let remote_token = quote! { #remote_method_name };
@@ -822,15 +904,15 @@ fn generate_method_code(
     let encoded_input = encode_value_only_carrier(input_record);
     let encode_input = quote! { let input = #encoded_input; };
     let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
-
-    quote! {
+    if agent_is_durable {
+        return quote! {
         pub async fn #method_name(#(#input_defs),*) -> #return_type {
             #encode_input
 
             let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                 #remote_token,
                 input
-            );
+            ).future;
 
             let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
                 golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await;
@@ -845,7 +927,7 @@ fn generate_method_code(
             #encode_input
 
             let rpc_result: Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                self.wasm_rpc.invoke(#remote_token, input);
+                self.wasm_rpc.invoke(#remote_token, input).map(|_| ());
 
             rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
         }
@@ -867,7 +949,38 @@ fn generate_method_code(
                 #scheduled_time_param,
                 #remote_token,
                 input
-            )
+            ).cancellation_token
+        }
+        };
+    }
+
+    quote! {
+        pub async fn #method_name(#(#input_defs),*) -> golem_rust::agentic::EphemeralInvocationResult<#return_type> {
+            #encode_input
+            let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input);
+            let metadata = invocation.metadata;
+            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
+                golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await;
+            let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
+            let value = { #process_invoke_result };
+            golem_rust::agentic::EphemeralInvocationResult { metadata, value }
+        }
+
+        pub fn #trigger_name(#(#input_defs),*) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
+            #encode_input
+            self.wasm_rpc.invoke(#remote_token, input)
+                .unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e))
+        }
+
+        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
+            #encode_input
+            self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input).metadata
+        }
+
+        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt {
+            #encode_input
+            let receipt = self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input);
+            receipt
         }
     }
 }

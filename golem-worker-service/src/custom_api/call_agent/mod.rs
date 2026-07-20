@@ -31,7 +31,7 @@ use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig};
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
 use golem_service_base::custom_api::{
@@ -113,8 +113,11 @@ impl CallAgentHandler {
                 Some(proto_method_parameters),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                Some(IdempotencyKey::fresh()),
+                None,
                 invocation_context,
+                behaviour.phantom,
+                golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+                Vec::new(),
                 AuthCtx::System,
                 proto_principal,
                 Some(resolved_route.route.environment_id),

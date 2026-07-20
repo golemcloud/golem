@@ -505,6 +505,8 @@ impl WorkerClient for RecordingWorkerClient {
         _: Option<::prost_types::Timestamp>,
         _: Option<IdempotencyKey>,
         _: Option<InvocationContext>,
+        _: golem_common::model::agent::InvocationFreshnessDisposition,
+        _: Vec<golem_common::model::worker::AgentConfigEntryDto>,
         _: EnvironmentId,
         _: AccountId,
         _: AuthCtx,
@@ -544,6 +546,13 @@ pub(crate) struct InvocationHarness {
 
 impl InvocationHarness {
     pub(crate) fn new(invocation_output: AgentInvocationOutput) -> Self {
+        Self::new_with_agent_mode(invocation_output, AgentMode::Durable)
+    }
+
+    pub(crate) fn new_with_agent_mode(
+        invocation_output: AgentInvocationOutput,
+        agent_mode: AgentMode,
+    ) -> Self {
         let component_id = ComponentId(Uuid::new_v4());
         let environment_id = EnvironmentId(Uuid::new_v4());
         let account_id = AccountId(Uuid::new_v4());
@@ -578,7 +587,7 @@ impl InvocationHarness {
                     },
                     methods: vec![],
                     dependencies: vec![],
-                    mode: AgentMode::Durable,
+                    mode: agent_mode,
                     http_mount: None,
                     snapshotting: Snapshotting::Disabled(golem_common::model::Empty {}),
                     config: vec![],

@@ -22,7 +22,7 @@
 pub(all) struct AgentConfigEntry {
   path : Array[String]
   value : SchemaValue
-}
+} derive(Debug)
 
 ///|
 /// Response of a `POST /v1/agents/create-agent` request.
@@ -35,7 +35,25 @@ pub(all) struct CreateAgentResponse {
 /// Response of a `POST /v1/agents/invoke-agent` request.
 pub(all) struct AgentInvocationResult {
   agent_id : AgentId
+  idempotency_key : String
   result : SchemaValue?
+  component_revision : UInt64?
+}
+
+///|
+/// A decoded invocation value together with the final one-shot agent identity.
+pub(all) struct InvocationResponse[T] {
+  agent_id : AgentId
+  idempotency_key : String
+  value : T
+  component_revision : UInt64?
+}
+
+///|
+/// Metadata returned for a triggered or scheduled one-shot invocation.
+pub(all) struct InvocationReceipt {
+  agent_id : AgentId
+  idempotency_key : String
   component_revision : UInt64?
 }
 
@@ -49,7 +67,8 @@ pub(all) struct ResolvedAgent {
   agent_type_name : String
   parameters : SchemaValue
   phantom_id : String?
-  agent_id : AgentId
+  config : Array[AgentConfigEntry]
+  agent_id : AgentId?
 } derive(Debug)
 
 ///|
@@ -88,6 +107,7 @@ fn encode_agent_invocation_request(
   agent_type_name : String,
   parameters : SchemaValue,
   phantom_id : String?,
+  config : Array[AgentConfigEntry],
   method_name : String,
   method_parameters : SchemaValue,
   mode : String,
@@ -99,6 +119,7 @@ fn encode_agent_invocation_request(
     ("envName", Json::string(env_name)),
     ("agentTypeName", Json::string(agent_type_name)),
     ("parameters", schema_value_to_json(parameters)),
+    ("config", Json::array(config.map(encode_config_entry))),
     ("methodName", Json::string(method_name)),
     ("methodParameters", schema_value_to_json(method_parameters)),
     ("mode", Json::string(mode)),
@@ -150,6 +171,7 @@ fn decode_agent_invocation_result(json : Json) -> AgentInvocationResult raise {
   }
   {
     agent_id: AgentId::from_json(get_field(m, "agentId")),
+    idempotency_key: expect_string(get_field(m, "idempotencyKey")),
     result,
     component_revision: optional_u64(m, "componentRevision"),
   }

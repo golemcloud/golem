@@ -744,7 +744,7 @@ fn calculate_pending_invocations(
     result
 }
 
-fn calculate_pending_card_events(
+pub(crate) fn calculate_pending_card_events(
     initial: Vec<PendingCardEventRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<PendingCardEventRef> {
@@ -2501,6 +2501,18 @@ mod test {
     #[async_trait]
     impl OplogService for TestCase {
         async fn create(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _initial_entry: OplogEntry,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn Oplog + 'static> {
+            unreachable!()
+        }
+
+        async fn create_fresh(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,

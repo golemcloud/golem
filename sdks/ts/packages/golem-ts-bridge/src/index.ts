@@ -113,6 +113,7 @@ export interface AgentInvocationRequest {
   agentTypeName: AgentTypeName;
   parameters: SchemaValue;
   phantomId?: PhantomId;
+  config?: AgentConfigEntry[];
   methodName: string;
   methodParameters: SchemaValue;
   mode: AgentInvocationMode;
@@ -122,8 +123,23 @@ export interface AgentInvocationRequest {
 
 export interface AgentInvocationResult {
   agentId: AgentId;
+  idempotencyKey: IdempotencyKey;
   result?: TypedSchemaValue;
   componentRevision?: number;
+}
+
+export interface InvocationMetadata {
+  agentId: AgentId;
+  idempotencyKey: IdempotencyKey;
+}
+
+export interface InvocationResult<T> {
+  metadata: InvocationMetadata;
+  value: T;
+}
+
+export interface InvocationReceipt {
+  metadata: InvocationMetadata;
 }
 
 export interface AgentConfigEntry {
@@ -484,6 +500,13 @@ export type RemoteMethod<Args extends any[], R> = {
   schedule: (scheduleAt: string, ...args: Args) => void;
 };
 
+export type EphemeralRemoteMethod<Args extends any[], R> = {
+  (...args: Args): Promise<InvocationResult<R>>;
+  abortable: (signal: AbortSignal, ...args: Args) => Promise<InvocationResult<R>>;
+  trigger: (...args: Args) => Promise<InvocationReceipt>;
+  schedule: (scheduleAt: string, ...args: Args) => Promise<InvocationReceipt>;
+};
+
 export function createRemoteMethod<Args extends any[], R>(
   getServer: () => GolemServer,
   aroundInvokeHook: () => AroundInvokeHook | undefined,
@@ -535,6 +558,59 @@ export function createRemoteMethod<Args extends any[], R>(
       signal,
     );
     return decode(invokeResult);
+  };
+  return result;
+}
+
+export function createEphemeralRemoteMethod<Args extends any[], R>(
+  getServer: () => GolemServer,
+  aroundInvokeHook: () => AroundInvokeHook | undefined,
+  getRequest: () => AgentInvocationRequest,
+  encode: (args: Args) => SchemaValue,
+  decode: (result: AgentInvocationResult) => R,
+): EphemeralRemoteMethod<Args, R> {
+  const invoke = async (
+    args: Args,
+    mode: AgentInvocationMode,
+    scheduleAt: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<AgentInvocationResult> =>
+    invokeAgent(
+      getServer(),
+      {
+        ...getRequest(),
+        methodParameters: encode(args),
+        mode,
+        scheduleAt,
+      },
+      aroundInvokeHook(),
+      signal,
+    );
+
+  const metadata = (response: AgentInvocationResult): InvocationMetadata => ({
+    agentId: response.agentId,
+    idempotencyKey: response.idempotencyKey,
+  });
+
+  const result = async function (...args: Args): Promise<InvocationResult<R>> {
+    const response = await invoke(args, 'await', undefined);
+    return { metadata: metadata(response), value: decode(response) };
+  };
+  result.abortable = async function (
+    signal: AbortSignal,
+    ...args: Args
+  ): Promise<InvocationResult<R>> {
+    throwIfAborted(signal);
+    const response = await invoke(args, 'await', undefined, signal);
+    return { metadata: metadata(response), value: decode(response) };
+  };
+  result.trigger = async function (...args: Args): Promise<InvocationReceipt> {
+    const response = await invoke(args, 'schedule', undefined);
+    return { metadata: metadata(response) };
+  };
+  result.schedule = async function (scheduleAt: string, ...args: Args): Promise<InvocationReceipt> {
+    const response = await invoke(args, 'schedule', scheduleAt);
+    return { metadata: metadata(response) };
   };
   return result;
 }
