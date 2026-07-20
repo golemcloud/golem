@@ -40,10 +40,10 @@ runs:
       run: |
         rustup toolchain install "${{ inputs.rust-toolchain }}" --profile minimal --no-self-update
         rustup default "${{ inputs.rust-toolchain }}"
-        rustup component add rustfmt clippy
-        rustup target add wasm32-wasip2
+        rustup component add --toolchain "${{ inputs.rust-toolchain }}" rustfmt clippy
+        rustup target add --toolchain "${{ inputs.rust-toolchain }}" wasm32-wasip2
         for target in ${{ inputs.rust-targets }}; do
-          rustup target add "$target"
+          rustup target add --toolchain "${{ inputs.rust-toolchain }}" "$target"
         done
     - name: Setup Rust cache
       if: inputs.use-cache == 'true'
