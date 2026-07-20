@@ -19,7 +19,7 @@ use golem_test_framework::benchmark::{
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::FromValue;
+use golem_wasm::{FromValue, ValueAndType};
 use std::time::{Duration, Instant};
 
 pub const PROMISE_PAYLOAD_TINY: usize = 256;
@@ -55,6 +55,7 @@ struct PromiseWork {
     agent: AgentId,
     parsed_agent: ParsedAgentId,
     promise: PromiseId,
+    promise_value: ValueAndType,
     wait: bool,
 }
 
@@ -130,12 +131,13 @@ async fn create_work(
                 let promise_value = result
                     .into_return_value_and_type()
                     .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
-                let promise = PromiseId::from_value(promise_value.value)
+                let promise = PromiseId::from_value(promise_value.value.clone())
                     .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
                 Ok(PromiseWork {
                     agent,
                     parsed_agent,
                     promise,
+                    promise_value,
                     wait: should_wait(config.waiter_presence, index),
                 })
             }
@@ -155,13 +157,13 @@ async fn prepare_waiters(
             let user = user.clone();
             let component = component.clone();
             let parsed_agent = item.parsed_agent.clone();
-            let promise = item.promise.clone();
+            let promise_value = item.promise_value.clone();
             async move {
                 user.invoke_agent(
                     &component,
                     &parsed_agent,
                     "awaitPromise",
-                    data_value!(promise),
+                    data_value!(promise_value),
                 )
                 .await
             }
@@ -297,6 +299,12 @@ impl Outcome {
             );
             for latency in period.completion_latencies {
                 recorder.duration(&ResultKey::primary("promise-completion-latency"), latency);
+                recorder.duration(
+                    &ResultKey::primary(format!(
+                        "promise-completion-latency-at-offered-{rate}-per-sec"
+                    )),
+                    latency,
+                );
             }
         }
         let run_config = RunConfig {
