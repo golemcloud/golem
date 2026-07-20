@@ -313,14 +313,14 @@ function encodeToolValue(codec: FluentCodec, value: unknown, position: string): 
   try {
     const encoded = codec.toValue(value);
     if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {
-      throw new Error(`${position} does not match its declared schema`);
+      throw new Error('does not match its declared schema');
     }
     if (!deepEqual(codec.fromValue(encoded), value)) {
-      throw new Error(`${position} is not canonical for its declared schema`);
+      throw new Error('is not canonical for its declared schema');
     }
     return typedSchemaValueToWit({ graph: codec.graph, value: encoded });
   } catch (error) {
-    throw invalidToolResult(errorMessage(error));
+    throw invalidToolResult(`${position}: ${errorMessage(error)}`);
   }
 }
 

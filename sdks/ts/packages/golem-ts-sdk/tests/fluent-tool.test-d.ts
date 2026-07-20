@@ -280,6 +280,48 @@ const payloadlessUndefinedErrorImplementation: ToolImplementation<typeof payload
 };
 void payloadlessUndefinedErrorImplementation;
 
+const projectedResultDef = toolDefinition('projected-result').body((body) =>
+  body
+    .returns(z.string())
+    .error('plain-error', { kind: 'runtime', exitCode: 1 })
+    .error('detailed-error', {
+      kind: 'usage',
+      exitCode: 2,
+      payload: z.object({ reason: z.string() }),
+    }),
+);
+
+const wrongSuccessImplementation: ToolImplementation<typeof projectedResultDef> = {
+  // @ts-expect-error projected-result must return ok(string)
+  'projected-result': async () => ok(42),
+};
+void wrongSuccessImplementation;
+
+const undeclaredErrorImplementation: ToolImplementation<typeof projectedResultDef> = {
+  // @ts-expect-error handlers can only return errors declared by their body
+  'projected-result': async () => err('undeclared-error'),
+};
+void undeclaredErrorImplementation;
+
+const missingErrorPayloadImplementation: ToolImplementation<typeof projectedResultDef> = {
+  // @ts-expect-error detailed-error requires its declared payload
+  'projected-result': async () => err('detailed-error'),
+};
+void missingErrorPayloadImplementation;
+
+const wrongErrorPayloadImplementation: ToolImplementation<typeof projectedResultDef> = {
+  // @ts-expect-error detailed-error payload must match the schema output type
+  'projected-result': async () => err('detailed-error', { reason: 42 }),
+};
+void wrongErrorPayloadImplementation;
+
+const unitResultDef = toolDefinition('unit-result').body((body) => body.returns(z.void()));
+const wrongUnitResultImplementation: ToolImplementation<typeof unitResultDef> = {
+  // @ts-expect-error unit results must be returned as ok(undefined)
+  'unit-result': async () => ok('unexpected'),
+};
+void wrongUnitResultImplementation;
+
 const optionalStreamDef = toolDefinition('optional-stream').body((body) =>
   body.stdin({ required: false }).returns(z.void()),
 );

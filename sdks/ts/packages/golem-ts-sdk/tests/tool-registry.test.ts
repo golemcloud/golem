@@ -20,7 +20,7 @@ import { command, err, ok, toolDefinition, type ToolImplementation } from '../sr
 import { compileSchema } from '../src/fluent/schema/adapter';
 import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
-import { typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import { t, typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
 import { tool } from '../src';
 
 beforeEach(() => {
@@ -572,7 +572,7 @@ describe('tool guest exports', () => {
     ).rejects.toMatchObject({ tag: 'invalid-input' });
   });
 
-  it('encodes declared custom errors and rejects invalid handler results', async () => {
+  it('encodes declared custom errors with and without payloads', async () => {
     toolDefinition('fallible')
       .body((body) =>
         body.returns(z.string()).error('failed', {
@@ -605,9 +605,136 @@ describe('tool guest exports', () => {
       reason: 'nope',
     });
 
-    toolDefinition('invalid-result')
+    toolDefinition('payloadless')
+      .body((body) => body.returns(z.void()).error('not-found', { kind: 'runtime', exitCode: 1 }))
+      .implement({ payloadless: async () => err('not-found') });
+    const payloadless = ToolRegistry.get('payloadless');
+    const payloadlessCommand = payloadless?.extended.commandByPath([]);
+    if (!payloadless || !payloadlessCommand) {
+      throw new Error('payloadless tool was not registered');
+    }
+    const payloadlessInput = typedSchemaValueToWit(
+      payloadless.extended.canonicalInputModel(payloadlessCommand).encodeTyped({}),
+    );
+
+    const payloadlessError = await tool
+      .invoke('payloadless', [], payloadlessInput, undefined, { tag: 'anonymous' })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(payloadlessError).toMatchObject({ tag: 'custom-error' });
+    const unitPayload = typedSchemaValueFromWit(
+      (payloadlessError as { val: Parameters<typeof typedSchemaValueFromWit>[0] }).val,
+    );
+    expect(unitPayload).toEqual({
+      graph: { defs: new Map(), root: t.tuple([]) },
+      value: v.tuple([]),
+    });
+  });
+
+  it('maps invalid success and declared-error outcomes to invalid-result', async () => {
+    toolDefinition('invalid-success-type')
       .body((body) => body.returns(z.string()))
-      .implement({ 'invalid-result': async () => ok(42 as never) });
+      .implement({ 'invalid-success-type': async () => ok(42 as never) });
+    toolDefinition('invalid-unit-success')
+      .body((body) => body.returns(z.void()))
+      .implement({ 'invalid-unit-success': async () => ok('unexpected' as never) });
+    toolDefinition('missing-success-value')
+      .body((body) => body.returns(z.string()))
+      .implement({
+        'missing-success-value': async () => ({ tag: 'ok' }) as never,
+      });
+    toolDefinition('undeclared-error')
+      .body((body) => body.returns(z.void()).error('declared', { kind: 'runtime', exitCode: 1 }))
+      .implement({
+        'undeclared-error': async () => ({ tag: 'err', name: 'other', hasPayload: false }) as never,
+      });
+    toolDefinition('missing-error-payload')
+      .body((body) =>
+        body.returns(z.void()).error('failed', {
+          kind: 'runtime',
+          exitCode: 1,
+          payload: z.object({ reason: z.string() }),
+        }),
+      )
+      .implement({
+        'missing-error-payload': async () =>
+          ({ tag: 'err', name: 'failed', hasPayload: false }) as never,
+      });
+    toolDefinition('invalid-error-payload')
+      .body((body) =>
+        body.returns(z.void()).error('failed', {
+          kind: 'runtime',
+          exitCode: 1,
+          payload: z.object({ reason: z.string() }),
+        }),
+      )
+      .implement({
+        'invalid-error-payload': async () => err('failed', { reason: 42 as never }),
+      });
+    toolDefinition('unexpected-error-payload')
+      .body((body) => body.returns(z.void()).error('failed', { kind: 'runtime', exitCode: 1 }))
+      .implement({
+        'unexpected-error-payload': async () => err('failed', undefined) as never,
+      });
+    toolDefinition('unknown-outcome')
+      .body((body) => body.returns(z.void()))
+      .implement({
+        'unknown-outcome': async () => ({ tag: 'unknown' }) as never,
+      });
+
+    const invoke = async (name: string): Promise<unknown> => {
+      const registered = ToolRegistry.get(name);
+      const commandNode = registered?.extended.commandByPath([]);
+      if (!registered || !commandNode) throw new Error(`${name} tool was not registered`);
+      const input = typedSchemaValueToWit(
+        registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+      );
+      return await tool.invoke(name, [], input, undefined, { tag: 'anonymous' });
+    };
+
+    await expect(invoke('invalid-success-type')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool result: does not match its declared schema',
+    });
+    await expect(invoke('invalid-unit-success')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'unit tool handler returned a structured result',
+    });
+    await expect(invoke('missing-success-value')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool handler success is missing its value',
+    });
+    await expect(invoke('undeclared-error')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool handler returned undeclared error "other"',
+    });
+    await expect(invoke('missing-error-payload')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool error "failed" requires a payload',
+    });
+    await expect(invoke('invalid-error-payload')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool error "failed" payload: does not match its declared schema',
+    });
+    await expect(invoke('unexpected-error-payload')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool error "failed" does not declare a payload',
+    });
+    await expect(invoke('unknown-outcome')).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool handler returned unknown outcome tag "unknown"',
+    });
+  });
+
+  it('rejects non-canonical handler results', async () => {
+    toolDefinition('invalid-result')
+      .body((body) => body.returns(z.object({ value: z.string() })))
+      .implement({
+        'invalid-result': async () => ok({ value: 'valid', extra: true } as never),
+      });
+
     const invalid = ToolRegistry.get('invalid-result');
     const invalidCommand = invalid?.extended.commandByPath([]);
     if (!invalid || !invalidCommand) throw new Error('invalid-result tool was not registered');
@@ -617,7 +744,10 @@ describe('tool guest exports', () => {
 
     await expect(
       tool.invoke('invalid-result', [], invalidInput, undefined, { tag: 'anonymous' }),
-    ).rejects.toMatchObject({ tag: 'invalid-result' });
+    ).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool result: is not canonical for its declared schema',
+    });
   });
 
   it('encodes transformed handler outputs without applying the transform again', async () => {
