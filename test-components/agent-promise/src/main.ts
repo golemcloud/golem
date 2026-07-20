@@ -38,5 +38,6 @@ class PromiseAgent extends BaseAgent {
           completePromise(promiseId, new TextEncoder().encode("Hello from forked agent!"));
           return "forked result";
       }
+      throw new Error(`unexpected fork result: ${forkResult}`)
     }
 }
