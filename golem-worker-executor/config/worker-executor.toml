@@ -3,6 +3,7 @@ http_address = "0.0.0.0"
 http_port = 8082
 max_in_function_retry_delay = "20s"
 max_websocket_connections = 100
+runtime_metrics_sampling_interval = "5s"
 tracing_file_name_with_port = true
 
 [active_workers]
@@ -32,6 +33,7 @@ type = "Enabled"
 
 [component_cache]
 max_capacity = 32
+max_concurrent_compilations = 16
 max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
@@ -125,6 +127,8 @@ max_oplog_query_pages_size = 100
 
 [memory]
 acquire_retry_delay = "500ms"
+component_size_coefficient = 2.0
+enable_measured_admission = true
 worker_estimate_coefficient = 1.1
 worker_memory_ratio = 0.8
 
@@ -235,6 +239,7 @@ multiplier = 3.0
 claim_batch_size = 100
 lease_ttl = "30s"
 max_batches_per_tick = 10
+max_concurrent_action_processing = 64
 refresh_interval = "2s"
 
 [scheduler_storage]
@@ -331,6 +336,7 @@ without_time = false
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
+# runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -374,6 +380,7 @@ without_time = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
@@ -456,6 +463,8 @@ without_time = false
 # 
 # [memory]
 # acquire_retry_delay = "500ms"
+# component_size_coefficient = 2.0
+# enable_measured_admission = true
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 
@@ -566,6 +575,7 @@ without_time = false
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
+# max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 # 
 # [scheduler_storage]
@@ -661,6 +671,7 @@ without_time = false
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
+# runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -689,6 +700,7 @@ without_time = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
@@ -757,6 +769,8 @@ without_time = false
 # 
 # [memory]
 # acquire_retry_delay = "500ms"
+# component_size_coefficient = 2.0
+# enable_measured_admission = true
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 
@@ -867,6 +881,7 @@ without_time = false
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
+# max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 # 
 # [scheduler_storage]

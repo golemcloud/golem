@@ -16,15 +16,21 @@ use crate::benchmark::BenchmarkConfig;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use crate::components::component_compilation_service::unavailable::UnavailableComponentCompilationService;
+use crate::components::rdb::PostgresInfo;
+use crate::components::rdb::Rdb;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
-use crate::components::rdb::{PostgresInfo, Rdb};
+use crate::components::rdb::unavailable::UnavailableRdb;
 use crate::components::redis::Redis;
 use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
+use crate::components::redis::unavailable::UnavailableRedis;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
+use crate::components::redis_monitor::unavailable::UnavailableRedisMonitor;
 use crate::components::registry_service::RegistryService;
+use crate::components::registry_service::cloud::CloudRegistryService;
 use crate::components::registry_service::provided::ProvidedRegistryService;
 use crate::components::registry_service::spawned::SpawnedRegistryService;
 use crate::components::service::Service;
@@ -32,10 +38,13 @@ use crate::components::service::spawned::SpawnedService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::shard_manager::provided::ProvidedShardManager;
 use crate::components::shard_manager::spawned::SpawnedShardManager;
+use crate::components::shard_manager::unavailable::UnavailableShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_executor_cluster::provided::ProvidedWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
+use crate::components::worker_executor_cluster::unavailable::UnavailableWorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use crate::components::worker_service::cloud::CloudWorkerService;
 use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::config::TestDependencies;
@@ -51,10 +60,23 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tempfile::TempDir;
 use tracing::Level;
+use url::Url;
 use uuid::Uuid;
+
+/// Process-level UUID generated on the first cloud-mode benchmark context
+/// creation. All cloud contexts within the same binary invocation share this
+/// run-id, which is used to prefix account/app/env names
+/// (`bench-{run_id}-…`) and written into result JSON metadata.
+static CLOUD_BENCH_RUN_ID: OnceLock<Uuid> = OnceLock::new();
+
+/// Returns the suite-level run-id if any cloud benchmark context has been
+/// created in this process, `None` otherwise.
+pub fn cloud_bench_run_id() -> Option<Uuid> {
+    CLOUD_BENCH_RUN_ID.get().copied()
+}
 
 /// Test dependencies created from command line arguments
 ///
@@ -75,6 +97,12 @@ pub struct BenchmarkTestDependencies {
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
     registry_service: Arc<dyn RegistryService>,
+    /// Set to `Some` in cloud mode. Used to prefix account/app/env names with
+    /// `bench-{run_id}-` so that orphaned state is traceable.
+    run_id: Option<Uuid>,
+    /// The apps base domain for cloud mode (e.g. `apps.golem.cloud`). Used to
+    /// construct HTTP API deployment domains as `{env_id}.{apps_base_domain}`.
+    apps_base_domain: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -219,6 +247,58 @@ pub enum TestMode {
         environment_state_cache_capacity: Option<usize>,
         #[arg(long, default_value = "false")]
         mute_child: bool,
+        #[arg(long, default_value = "test-components")]
+        component_directory: String,
+    },
+    /// Cloud mode: run benchmarks against a deployed Golem environment via
+    /// Gateway-API hostnames. No local service processes are spawned.
+    ///
+    /// All management API calls (registry-service, worker-service, agents) go
+    /// through a single Gateway hostname (`--api-url`). HTTP API deployment
+    /// access (code-first HTTP APIs) goes through `{env_id}.{apps_base_domain}`.
+    ///
+    /// For `golem-dev`:
+    ///   `--api-url https://release.dev-api.golem.cloud`
+    ///   `--apps-base-domain apps.dev.golem.cloud`
+    #[command()]
+    Cloud {
+        /// Base URL of the deployed Golem API Gateway. Both registry-service
+        /// and worker-service paths are routed internally by the Gateway.
+        ///
+        /// For the `golem-dev` environment this is
+        /// `https://release.dev-api.golem.cloud`.
+        #[arg(long)]
+        api_url: Url,
+        /// Wildcard base domain used to build per-environment HTTP API
+        /// deployment hostnames: `{env_id}.{apps_base_domain}`.
+        ///
+        /// For the `golem-dev` environment this is `apps.dev.golem.cloud`.
+        #[arg(long)]
+        apps_base_domain: String,
+        /// Bearer token for the admin account. Used to create a fresh user
+        /// account for each benchmark run, which then owns all benchmark state.
+        #[arg(long)]
+        admin_account_token: String,
+        /// UUID of the builtin-plugin-owner account.
+        /// Only needed for environment-plugin-grant tests; benchmarks do not
+        /// use it so the default (nil UUID) is fine for benchmark runs.
+        #[arg(long, default_value_t = Uuid::nil())]
+        builtin_plugin_owner_account_id: Uuid,
+        /// UUID of the default plan on the target cluster.
+        /// Only needed for environment-plugin-grant tests; benchmarks do not
+        /// use it so the default (nil UUID) is fine for benchmark runs.
+        #[arg(long, default_value_t = Uuid::nil())]
+        default_plan_id: Uuid,
+        /// Optional shard-manager gRPC hostname for a kubectl port-forward
+        /// (e.g. `localhost`). When set together with
+        /// `--shard-manager-grpc-port`, the throughput benchmark fetches the
+        /// routing table and labels RPC pairs as local/remote.
+        #[arg(long)]
+        shard_manager_grpc_host: Option<String>,
+        /// Optional shard-manager gRPC port (e.g. `9090`).
+        #[arg(long)]
+        shard_manager_grpc_port: Option<u16>,
+        /// Directory containing test WASM component files.
         #[arg(long, default_value = "test-components")]
         component_directory: String,
     },
@@ -419,6 +499,8 @@ impl BenchmarkTestDependencies {
             initial_agent_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
             registry_service,
+            run_id: None,
+            apps_base_domain: None,
         }
     }
 
@@ -542,6 +624,8 @@ impl BenchmarkTestDependencies {
                     initial_agent_files_service,
                     component_temp_directory: Arc::new(TempDir::new().unwrap()),
                     registry_service,
+                    run_id: None,
+                    apps_base_domain: None,
                 }
             }
             TestMode::Spawned {
@@ -590,16 +674,92 @@ impl BenchmarkTestDependencies {
                 )
                 .await
             }
+            TestMode::Cloud {
+                api_url,
+                apps_base_domain,
+                admin_account_token,
+                builtin_plugin_owner_account_id,
+                default_plan_id,
+                shard_manager_grpc_host,
+                shard_manager_grpc_port,
+                component_directory,
+            } => {
+                let blob_storage = Arc::new(
+                    FileSystemBlobStorage::new(
+                        &std::env::temp_dir().join("golem-bench-blob-storage"),
+                    )
+                    .await
+                    .unwrap(),
+                );
+                let initial_agent_files_service =
+                    Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
+
+                // Use the process-level run_id (shared across all cloud contexts in
+                // this process so all benchmarks in a suite carry the same run ID).
+                let run_id = *CLOUD_BENCH_RUN_ID.get_or_init(Uuid::new_v4);
+                tracing::info!("Cloud benchmark run_id: {run_id}");
+
+                // Both registry-service and worker-service are reachable via the
+                // same Gateway hostname; routing is path-based.
+                let registry_service: Arc<dyn RegistryService> =
+                    Arc::new(CloudRegistryService::new(
+                        api_url.clone(),
+                        TokenSecret::trusted(admin_account_token.clone()),
+                        AccountId(*builtin_plugin_owner_account_id),
+                        PlanId(*default_plan_id),
+                    ));
+
+                let shard_manager: Arc<dyn ShardManager> =
+                    match (shard_manager_grpc_host, shard_manager_grpc_port) {
+                        (Some(host), Some(port)) => {
+                            Arc::new(ProvidedShardManager::new(host.clone(), 0, *port))
+                        }
+                        _ => Arc::new(UnavailableShardManager),
+                    };
+
+                let worker_service: Arc<dyn WorkerService> =
+                    Arc::new(CloudWorkerService::new(api_url.clone()));
+
+                Self {
+                    rdb: Arc::new(UnavailableRdb),
+                    redis: Arc::new(UnavailableRedis),
+                    redis_monitor: Arc::new(UnavailableRedisMonitor),
+                    shard_manager,
+                    component_compilation_service: Arc::new(UnavailableComponentCompilationService),
+                    worker_service,
+                    worker_executor_cluster: Arc::new(UnavailableWorkerExecutorCluster),
+                    component_directory: Path::new(component_directory).to_path_buf(),
+                    blob_storage,
+                    initial_agent_files_service,
+                    component_temp_directory: Arc::new(TempDir::new().unwrap()),
+                    registry_service,
+                    run_id: Some(run_id),
+                    apps_base_domain: Some(apps_base_domain.clone()),
+                }
+            }
         }
     }
 
-    /// Checks if all the spawned dependencies are still running, and if not, panicks
+    /// Checks if all the spawned dependencies are still running, and if not, panics.
     ///
     /// This can be used as a checkpoint in benchmarks to avoid infinite retries.
+    /// In cloud mode this is a no-op — the cloud cluster is assumed to be
+    /// managed externally.
     pub async fn ensure_all_deps_running(&self) {
         if !self.worker_executor_cluster.is_running().await {
             panic!("Worker executor process(es) stopped");
         }
+    }
+
+    /// Returns the run-id for this benchmark context, if running in cloud mode.
+    /// Used to prefix accounts/apps/envs with `bench-{run_id}-`.
+    pub fn run_id(&self) -> Option<Uuid> {
+        self.run_id
+    }
+
+    /// Returns the apps base domain for cloud mode (e.g. `apps.golem.cloud`).
+    pub fn apps_base_domain(&self) -> Option<&str> {
+        self.apps_base_domain.as_deref()
     }
 }
 
@@ -651,6 +811,10 @@ impl TestDependencies for BenchmarkTestDependencies {
 
     fn registry_service(&self) -> Arc<dyn RegistryService> {
         self.registry_service.clone()
+    }
+
+    fn bench_name_prefix(&self) -> Option<String> {
+        self.run_id.map(|id| format!("bench-{id}-"))
     }
 }
 

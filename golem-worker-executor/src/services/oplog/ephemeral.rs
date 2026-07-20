@@ -14,7 +14,8 @@
 
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
-    BackgroundTransferMessage, InstrumentedOplogArchive, OplogArchive, WrappedOplogArchive,
+    BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
+    TransferFiber, WrappedOplogArchive,
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogService, downcast_oplog};
 use async_lock::Mutex;
@@ -28,7 +29,7 @@ use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -41,7 +42,8 @@ pub struct EphemeralOplog {
     state: Arc<Mutex<EphemeralOplogState>>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
-    transfer_fiber: Arc<StdMutex<Option<tokio::task::JoinHandle<()>>>>,
+    transfer_fiber: TransferFiber,
+    multi_layer_oplog_service: MultiLayerOplogService,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
@@ -69,7 +71,7 @@ impl EphemeralOplogState {
     }
 
     async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
-        let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
+        let entries = std::mem::take(&mut self.buffer);
 
         let mut result = BTreeMap::new();
         let mut pairs = Vec::new();
@@ -87,7 +89,7 @@ impl EphemeralOplogState {
 
 impl EphemeralOplog {
     #[allow(clippy::too_many_arguments)]
-    pub async fn new(
+    pub(crate) async fn new(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_idx: OplogIndex,
@@ -95,7 +97,8 @@ impl EphemeralOplog {
         primary_service: Arc<dyn OplogService>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
-        transfer_fiber: tokio::task::JoinHandle<()>,
+        transfer_fiber: TransferFiber,
+        multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let target = lower.first().clone();
@@ -113,22 +116,28 @@ impl EphemeralOplog {
             })),
             lower,
             transfer,
-            transfer_fiber: Arc::new(StdMutex::new(Some(transfer_fiber))),
+            transfer_fiber,
+            multi_layer_oplog_service,
             close_fn: Some(close),
         }
     }
 
     pub async fn try_archive(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(false).await)
+        Some(this.archive(false, false).await)
     }
 
     pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(true).await)
+        Some(this.archive(true, false).await)
     }
 
-    async fn archive(self: &Arc<Self>, blocking: bool) -> bool {
+    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> Option<bool> {
+        let this = downcast_oplog::<EphemeralOplog>(this)?;
+        Some(this.archive(false, true).await)
+    }
+
+    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> bool {
         // With only one lower layer there is nowhere to transfer to.
         if self.lower.len().get() <= 1 {
             return false;
@@ -163,6 +172,8 @@ impl EphemeralOplog {
                     last_transferred_idx: last_idx,
                     keep_alive: Some(keep_alive),
                     done: done_tx,
+                    drain,
+                    transfer_span: Span::current(),
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
             // Return true if there are more movable layers that could still hold data
@@ -187,14 +198,13 @@ impl EphemeralOplog {
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         rx: UnboundedReceiver<BackgroundTransferMessage>,
+        start: tokio::sync::oneshot::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(
-            Self::background_transfer(owned_agent_id, lower, rx).instrument(
-                span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
-                    .follows_from(Span::current())
-                    .clone(),
-            ),
-        )
+        tokio::spawn(async move {
+            if start.await.is_ok() {
+                Self::background_transfer(owned_agent_id, lower, rx).await;
+            }
+        })
     }
 
     async fn background_transfer(
@@ -209,62 +219,85 @@ impl EphemeralOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
+                    drain,
+                    transfer_span,
                 } => {
-                    if source + 1 >= lower.len().get() {
+                    async {
+                        if source + 1 >= lower.len().get() {
+                            warn!(
+                                "Invalid TransferFromLower source layer {source} — no target layer exists"
+                            );
+                            let _ = keep_alive.take();
+                            if let Some(done) = done {
+                                let _ = done.send(());
+                            }
+                            return;
+                        }
+
+                        info!(
+                            "Transferring oplog entries up to index {last_transferred_idx} of ephemeral oplog layer {source} to the next layer"
+                        );
+                        debug!("Reading entries from ephemeral oplog layer {source}");
+
+                        let source_layer = lower[source].clone();
+                        let target_layer = lower[source + 1].clone();
+
+                        let entries: Vec<_> = source_layer
+                            .read_prefix(last_transferred_idx)
+                            .await
+                            .into_iter()
+                            .collect();
+
+                        match entries.last() {
+                            Some(last_entry) => {
+                                let last_dropped_id = last_entry.0;
+                                let _ = target_layer.append(entries).await;
+                                source_layer.drop_prefix(last_dropped_id).await;
+                            }
+                            None => {
+                                warn!("No entries to transfer from ephemeral oplog layer {source}");
+                            }
+                        }
+
+                        if drain && let Some(oplog) = keep_alive.as_ref() {
+                            let _ = EphemeralOplog::try_archive_background(oplog).await;
+                        }
+
+                        let _ = keep_alive.take();
+                        if let Some(done) = done {
+                            let _ = done.send(());
+                        }
+                    }
+                    .instrument(
+                        span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
+                            .follows_from(transfer_span)
+                            .clone(),
+                    )
+                    .await;
+                }
+                BackgroundTransferMessage::TransferFromPrimary {
+                    mut keep_alive,
+                    done,
+                    transfer_span,
+                    ..
+                } => {
+                    async {
+                        // Ephemeral oplogs do not use primary storage — ignore.
                         warn!(
-                            "Invalid TransferFromLower source layer {source} — no target layer exists"
+                            "Unexpected TransferFromPrimary message in ephemeral oplog for {}",
+                            owned_agent_id
                         );
                         let _ = keep_alive.take();
                         if let Some(done) = done {
                             let _ = done.send(());
                         }
-                        continue;
                     }
-
-                    info!(
-                        "Transferring oplog entries up to index {last_transferred_idx} of ephemeral oplog layer {source} to the next layer"
-                    );
-                    debug!("Reading entries from ephemeral oplog layer {source}");
-
-                    let source_layer = lower[source].clone();
-                    let target_layer = lower[source + 1].clone();
-
-                    let entries: Vec<_> = source_layer
-                        .read_prefix(last_transferred_idx)
-                        .await
-                        .into_iter()
-                        .collect();
-
-                    match entries.last() {
-                        Some(last_entry) => {
-                            let last_dropped_id = last_entry.0;
-                            let _ = target_layer.append(entries).await;
-                            source_layer.drop_prefix(last_dropped_id).await;
-                        }
-                        None => {
-                            warn!("No entries to transfer from ephemeral oplog layer {source}");
-                        }
-                    }
-
-                    let _ = keep_alive.take();
-                    if let Some(done) = done {
-                        let _ = done.send(());
-                    }
-                }
-                BackgroundTransferMessage::TransferFromPrimary {
-                    mut keep_alive,
-                    done,
-                    ..
-                } => {
-                    // Ephemeral oplogs do not use primary storage — ignore.
-                    warn!(
-                        "Unexpected TransferFromPrimary message in ephemeral oplog for {}",
-                        owned_agent_id
-                    );
-                    let _ = keep_alive.take();
-                    if let Some(done) = done {
-                        let _ = done.send(());
-                    }
+                    .instrument(
+                        span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
+                            .follows_from(transfer_span)
+                            .clone(),
+                    )
+                    .await;
                 }
             }
         }
@@ -314,12 +347,13 @@ impl EphemeralOplog {
 
 impl Drop for EphemeralOplog {
     fn drop(&mut self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        if let Some(fiber) = self.transfer_fiber.lock().unwrap().take() {
-            fiber.abort();
-        }
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
     }
 }
 

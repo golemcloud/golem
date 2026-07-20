@@ -254,7 +254,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
         self.observe_function_call("golem::api", "get_oplog_index");
-        if self.state.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            Ok(self.state.current_oplog_index().await.into())
+        } else if self.state.is_live() {
             self.state.oplog.add(OplogEntry::no_op()).await;
             Ok(self.state.current_oplog_index().await.into())
         } else {
@@ -271,7 +273,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
         let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
         let original_target = OplogIndex::from_u64(oplog_idx); // the actual oplog entry the user wants to jump to
-        if jump_target > jump_source {
+        if self.state.snapshotting_mode.is_some() {
+            Ok(())
+        } else if jump_target > jump_source {
             Err(anyhow!(
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
             ))
@@ -331,7 +335,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn mark_begin_operation(&mut self) -> anyhow::Result<golem_api_1_x::host::OplogIndex> {
         self.observe_function_call("golem::api", "mark_begin_operation");
 
-        if self.state.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            Ok(self.state.current_oplog_index().await.into())
+        } else if self.state.is_live() {
             let next_idempotency_key_oplog_index = self
                 .state
                 .current_atomic_region_idempotency_key_oplog_index();
@@ -405,7 +411,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         begin: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "mark_end_operation");
-        if self.state.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        } else if self.state.is_live() {
             self.state
                 .oplog
                 .add(OplogEntry::end_atomic_region(OplogIndex::from_u64(begin)))
@@ -440,6 +448,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "set_oplog_persistence_level");
 
         let new_persistence_level = new_persistence_level.into();
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        }
         if self.state.persistence_level != new_persistence_level {
             // commit all pending entries and change persistence level
             if self.state.is_live() {

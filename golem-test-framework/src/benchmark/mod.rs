@@ -15,8 +15,14 @@
 mod config;
 mod results;
 
-pub use config::{BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, RunConfig};
-pub use results::{BenchmarkResult, BenchmarkRunResult, BenchmarkSuiteResult, ResultKey};
+pub use config::{
+    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, DensityAction, DensityAgentModeArg,
+    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunConfig,
+};
+pub use results::{
+    BenchmarkResult, BenchmarkRunResult, BenchmarkSuiteResult, ResultKey, RunMetadata,
+};
 
 use crate::config::benchmark::TestMode;
 use async_trait::async_trait;
@@ -301,6 +307,7 @@ impl<B: Benchmark> BenchmarkApi for B {
             description: B::description().to_string(),
             runs,
             results,
+            run_id: None,
         }
     }
 }

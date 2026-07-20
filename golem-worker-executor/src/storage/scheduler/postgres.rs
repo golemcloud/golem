@@ -174,6 +174,34 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .collect()
     }
 
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, String> {
+        if assignment.shard_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let shard_ids: Vec<i64> = assignment
+            .shard_ids
+            .iter()
+            .map(|shard| shard.value())
+            .collect();
+        let query = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM scheduled_actions WHERE shard_id = ANY($1) AND due_at_ms <= $2;",
+        )
+        .bind(shard_ids)
+        .bind(datetime_to_millis(now));
+
+        self.pool
+            .with_ro("scheduler_storage", "count_due")
+            .fetch_one_as(query)
+            .await
+            .map(|(count,)| count as u64)
+            .map_err(|err| err.to_safe_string())
+    }
+
     async fn extend_lease(
         &self,
         schedule_id: &ScheduleId,

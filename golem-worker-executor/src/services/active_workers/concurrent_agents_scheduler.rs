@@ -48,39 +48,88 @@ struct AccountSchedulerState {
 
 struct QueuedAgent {
     agent_id: AgentId,
-    waker: tokio::sync::oneshot::Sender<OwnedSemaphorePermit>,
+    waker: tokio::sync::oneshot::Sender<GrantedSlot>,
 }
 
-/// RAII permit returned by [`ConcurrentAgentsScheduler::acquire`].
+/// A slot granted from the scheduler: owns the underlying semaphore permit and
+/// the responsibility to decrement the account's `running_count` and wake the
+/// next queued agent when it is released.
 ///
-/// On drop, decrements the account's running count and wakes the next queued
-/// agent (if any). The drop handler is fully synchronous.
-pub struct ConcurrentAgentPermit {
+/// The `running_count` is incremented together with acquiring the raw permit,
+/// and the matching decrement lives only here in `Drop`. This binds the count
+/// strictly to the lifetime of the granted permit, regardless of how the slot
+/// is disposed of:
+///
+/// * it is moved into a [`ConcurrentAgentPermit`] and dropped when the agent
+///   releases the slot (the normal case), or
+/// * it is sent into a queued waiter's oneshot and that waiter is cancelled
+///   before receiving it — the slot is then dropped inside the channel.
+///
+/// Both paths run this same `Drop`, so a slot granted to a waiter that is
+/// cancelled after the grant succeeded cannot leak the count.
+struct GrantedSlot {
     raw: Option<OwnedSemaphorePermit>,
-    account: Option<Arc<AccountScheduler>>,
+    account: Arc<AccountScheduler>,
     account_id: AccountId,
 }
 
-impl Drop for ConcurrentAgentPermit {
+impl Drop for GrantedSlot {
     fn drop(&mut self) {
         if let Some(raw) = self.raw.take() {
             // Return the raw permit to the semaphore first so it is available
             // for the next queued agent's synchronous try-acquire.
             drop(raw);
-
-            if let Some(ref account) = self.account {
-                try_grant_next_sync(account, &self.account_id);
-            }
+            try_grant_next_sync(&self.account, &self.account_id);
         }
     }
 }
 
-impl ConcurrentAgentPermit {
-    /// Consumes the permit without triggering the drop notification.
-    #[allow(dead_code)]
-    pub fn into_inner(mut self) -> Option<OwnedSemaphorePermit> {
-        self.account = None;
+impl GrantedSlot {
+    /// Take the raw permit out, suppressing this slot's `Drop` bookkeeping.
+    ///
+    /// Used only from `drain_ready_queue` when a `send` to a cancelled waiter
+    /// fails: the slot is returned in the `Err`, but we are still holding the
+    /// account state lock, so letting its `Drop` run would re-enter
+    /// `try_grant_next_sync` and deadlock on the same non-reentrant mutex. The
+    /// caller takes the permit back and performs the accounting inline instead.
+    fn defuse(mut self) -> Option<OwnedSemaphorePermit> {
         self.raw.take()
+    }
+}
+
+/// RAII permit returned by [`ConcurrentAgentsScheduler::acquire`].
+///
+/// On drop, decrements the account's running count and wakes the next queued
+/// agent (if any) via the held [`GrantedSlot`]. Unlimited accounts hold a bare
+/// permit with no slot, so dropping them touches no scheduler accounting. The
+/// drop handler is fully synchronous.
+pub struct ConcurrentAgentPermit {
+    /// `Some` for limited accounts (carries the scheduler accounting); `None`
+    /// for unlimited accounts, where `_raw` holds the bare bypass permit. Held
+    /// purely for its `Drop`, which returns the permit and wakes the next
+    /// queued agent.
+    _slot: Option<GrantedSlot>,
+    /// Bare permit for the unlimited-account bypass path. Unused for limited
+    /// accounts (the permit lives inside `_slot`).
+    _raw: Option<OwnedSemaphorePermit>,
+}
+
+impl ConcurrentAgentPermit {
+    /// A permit for a limited account, carrying the scheduler accounting.
+    fn from_slot(slot: GrantedSlot) -> Self {
+        Self {
+            _slot: Some(slot),
+            _raw: None,
+        }
+    }
+
+    /// A permit for an unlimited account: a bare bypass permit with no
+    /// scheduler accounting.
+    fn unlimited(raw: OwnedSemaphorePermit) -> Self {
+        Self {
+            _slot: None,
+            _raw: Some(raw),
+        }
     }
 }
 
@@ -156,11 +205,7 @@ impl ConcurrentAgentsScheduler {
         // Unlimited accounts bypass the queue entirely.
         if is_unlimited(limit) {
             let raw = self.permits.acquire(account_id, || async { false }).await;
-            return ConcurrentAgentPermit {
-                raw: Some(raw),
-                account: None,
-                account_id,
-            };
+            return ConcurrentAgentPermit::unlimited(raw);
         }
 
         // Sync the underlying semaphore pool size with the current plan limit
@@ -175,16 +220,12 @@ impl ConcurrentAgentsScheduler {
         let limit = account.resource_entry.max_concurrent_agents_per_executor();
         if is_unlimited(limit) {
             let raw = self.permits.acquire(account_id, || async { false }).await;
-            return ConcurrentAgentPermit {
-                raw: Some(raw),
-                account: None,
-                account_id,
-            };
+            return ConcurrentAgentPermit::unlimited(raw);
         }
 
         enum AcquireDecision {
             FastPath(OwnedSemaphorePermit),
-            Queued(tokio::sync::oneshot::Receiver<OwnedSemaphorePermit>),
+            Queued(tokio::sync::oneshot::Receiver<GrantedSlot>),
         }
 
         let decision = {
@@ -197,7 +238,7 @@ impl ConcurrentAgentsScheduler {
             // After a plan upgrade, newly added semaphore permits may allow
             // queued agents to proceed. Drain what we can before deciding
             // about the current agent.
-            drain_ready_queue(&mut state, &account.raw_semaphore, limit, &account_id);
+            drain_ready_queue(&mut state, &account, limit, &account_id);
 
             // Fast path: capacity available, no older waiters, and the raw
             // semaphore actually has a permit. We try-acquire the semaphore
@@ -239,26 +280,22 @@ impl ConcurrentAgentsScheduler {
                     "ConcurrentAgentsScheduler: fast-path permit for {agent_id} in account {account_id}"
                 );
 
-                ConcurrentAgentPermit {
+                ConcurrentAgentPermit::from_slot(GrantedSlot {
                     raw: Some(raw),
-                    account: Some(account),
+                    account,
                     account_id,
-                }
+                })
             }
             AcquireDecision::Queued(rx) => {
                 debug!(
                     "ConcurrentAgentsScheduler: {agent_id} queued in account {account_id}, waiting for permit"
                 );
 
-                let raw = rx.await.expect(
+                let slot = rx.await.expect(
                     "ConcurrentAgentsScheduler: oneshot sender dropped without sending — scheduler bug",
                 );
 
-                ConcurrentAgentPermit {
-                    raw: Some(raw),
-                    account: Some(account),
-                    account_id,
-                }
+                ConcurrentAgentPermit::from_slot(slot)
             }
         }
     }
@@ -299,7 +336,7 @@ impl ConcurrentAgentsScheduler {
 /// be fully synchronous. Uses `tokio::sync::Semaphore::try_acquire_owned`
 /// (which is synchronous despite being on a tokio type) to acquire permits
 /// for queued agents.
-fn try_grant_next_sync(account: &AccountScheduler, account_id: &AccountId) {
+fn try_grant_next_sync(account: &Arc<AccountScheduler>, account_id: &AccountId) {
     let limit = account.resource_entry.max_concurrent_agents_per_executor();
     if is_unlimited(limit) {
         return;
@@ -308,7 +345,7 @@ fn try_grant_next_sync(account: &AccountScheduler, account_id: &AccountId) {
     let mut state = account.state.lock().unwrap();
     state.running_count = state.running_count.saturating_sub(1);
 
-    drain_ready_queue(&mut state, &account.raw_semaphore, limit, account_id);
+    drain_ready_queue(&mut state, account, limit, account_id);
 }
 
 /// Try to grant permits to queued agents from the front of the ready queue.
@@ -316,9 +353,15 @@ fn try_grant_next_sync(account: &AccountScheduler, account_id: &AccountId) {
 /// Called both from `try_grant_next_sync` (Drop path) and from `acquire`
 /// (after a plan-upgrade sync adds new permits). Fully synchronous — only
 /// uses `try_acquire_owned` which does not block.
+///
+/// Each granted permit is wrapped in a [`GrantedSlot`] carrying the
+/// `running_count` decrement, so a waiter cancelled after a successful send
+/// still releases its slot (via the slot's `Drop` when the oneshot channel is
+/// dropped) rather than leaking the count. The increment here is matched
+/// one-for-one by that slot's `Drop`.
 fn drain_ready_queue(
     state: &mut AccountSchedulerState,
-    raw_semaphore: &Arc<tokio::sync::Semaphore>,
+    account: &Arc<AccountScheduler>,
     limit: u64,
     account_id: &AccountId,
 ) {
@@ -326,13 +369,24 @@ fn drain_ready_queue(
         let queued = state.ready_queue.pop_front().unwrap();
 
         // tokio::sync::Semaphore::try_acquire_owned is synchronous.
-        match raw_semaphore.clone().try_acquire_owned() {
+        match account.raw_semaphore.clone().try_acquire_owned() {
             Ok(raw) => {
                 state.running_count += 1;
-                if queued.waker.send(raw).is_err() {
-                    // Waiter was cancelled; the permit inside the oneshot
-                    // is dropped, returning it to the semaphore. Decrement
-                    // and try next.
+                let slot = GrantedSlot {
+                    raw: Some(raw),
+                    account: account.clone(),
+                    account_id: *account_id,
+                };
+                if let Err(slot) = queued.waker.send(slot) {
+                    // Waiter was cancelled before we could hand it the slot.
+                    // We are still holding the state lock, so we must not let
+                    // the returned slot's `Drop` run (it would re-enter this
+                    // path via `try_grant_next_sync` and deadlock). Defuse it,
+                    // return its permit to the semaphore, and account for it
+                    // inline, then try the next queued agent.
+                    if let Some(raw) = slot.defuse() {
+                        drop(raw);
+                    }
                     state.running_count -= 1;
                     debug!(
                         "ConcurrentAgentsScheduler: waiter {} cancelled in account {account_id}, trying next",

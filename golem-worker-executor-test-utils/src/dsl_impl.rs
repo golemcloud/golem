@@ -632,6 +632,35 @@ impl TestDsl for TestWorkerExecutor {
         Ok(result)
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
+    async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
+        let latest_version = self
+            .get_latest_component_revision(&agent_id.component_id)
+            .await?;
+
+        let response = self
+            .client
+            .clone()
+            .get_oplog(workerexecutor::v1::GetOplogRequest {
+                agent_id: Some(agent_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                from_oplog_index: OplogIndex::INITIAL.into(),
+                cursor: None,
+                count: 1,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(get_oplog_response::Result::Success(chunk)) => Ok(chunk.last_index),
+            Some(get_oplog_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to get oplog last index: {error:?}"))
+            }
+            None => Err(anyhow!("Failed to get oplog last index: empty response")),
+        }
+    }
+
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
     async fn search_oplog(
         &self,
