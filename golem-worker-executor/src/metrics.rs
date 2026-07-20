@@ -210,7 +210,6 @@ pub mod runtime {
 /// it could return, inflating the gate's measured usage. Comparing committed vs
 /// resident distinguishes allocator retention/fragmentation (commit >> rss)
 /// from genuinely live memory (commit ~= rss).
-#[cfg(feature = "mimalloc")]
 pub mod mimalloc {
     use lazy_static::lazy_static;
     use prometheus::*;
@@ -300,11 +299,6 @@ pub mod mimalloc {
             .with_label_values(&[id])
             .set(peak_commit as f64);
     }
-}
-
-#[cfg(not(feature = "mimalloc"))]
-pub mod mimalloc {
-    pub fn sample() {}
 }
 
 pub mod events {
