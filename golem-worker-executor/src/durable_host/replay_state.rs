@@ -277,10 +277,10 @@ impl ReplayState {
     }
 
     fn rewind_replay_buffer(&mut self, idx: OplogIndex, entry: OplogEntry) {
-        if !self
+        if self
             .replay_buffer
             .front()
-            .is_some_and(|(front_idx, _)| *front_idx == idx)
+            .is_none_or(|(front_idx, _)| *front_idx != idx)
         {
             self.replay_buffer.push_front((idx, entry));
         }
@@ -400,10 +400,10 @@ impl ReplayState {
                 .collect();
 
             // Snapshot/cache churn can make a cross-layer batch start after the requested index.
-            if !self
+            if self
                 .replay_buffer
                 .front()
-                .is_some_and(|(idx, _)| *idx == read_idx)
+                .is_none_or(|(idx, _)| *idx != read_idx)
             {
                 self.replay_buffer = self.read_oplog(read_idx, 1).await.into_iter().collect();
             }
