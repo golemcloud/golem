@@ -224,6 +224,314 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
 }
 
 #[test]
+async fn moonbit_component_build_waits_for_independently_buildable_agent_provider(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let producer_wasm = placeholder_component_wasm(&ctx);
+    let producer_wasm = producer_wasm.to_str().unwrap();
+    let producer_final_wasm = ctx.cwd_path_join("producer/producer-final.wasm");
+    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+    let guest_bridge_manifest = ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/moonbit/internal/bar-agent-guest-client/moon.mod.json",
+    );
+    let guest_bridge_dir = guest_bridge_manifest.parent().unwrap();
+
+    let producer_final_wasm_hash =
+        extracted_component_metadata_path_hash(&ctx, "app:producer", &producer_final_wasm);
+    let producer_extracted_component_metadata =
+        format!("app:producer-{producer_final_wasm_hash}.json");
+    fs::write_str(
+        ctx.cwd_path_join("producer-agent-types.json"),
+        fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let consumer_final_wasm_hash =
+        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
+    let consumer_extracted_component_metadata =
+        format!("app:consumer-{consumer_final_wasm_hash}.json");
+    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("golem-temp/extracted-component-metadata")).unwrap();
+    for component_name in ["app:producer", "app:consumer"] {
+        seed_extraction_marker(&ctx, component_name);
+    }
+
+    fs::create_dir_all(ctx.cwd_path_join("producer")).unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("moon.mod.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "moonbit-guest-bridge-order",
+            "version": "0.0.1",
+            "deps": {
+                "bar-agent-guest-client": {
+                    "path": guest_bridge_dir,
+                },
+            },
+            "preferred-target": "wasm",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("producer/moon.mod.json"),
+        indoc! {r#"
+            {
+              "name": "moonbit-guest-bridge-provider",
+              "version": "0.0.1",
+              "preferred-target": "wasm"
+            }
+        "#},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("producer/moon.pkg"),
+        "options(\"is-main\": true)\n",
+    )
+    .unwrap();
+    fs::write_str(ctx.cwd_path_join("producer/main.mbt"), "fn main {}\n").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("consumer/moon.pkg"),
+        "options(\"is-main\": true)\n",
+    )
+    .unwrap();
+    fs::write_str(ctx.cwd_path_join("consumer/main.mbt"), "fn main {}\n").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: moonbit-agent-guest-bridge-order
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                templates: moonbit
+                dir: producer
+                buildMergeMode: replace
+                componentWasm: producer.wasm
+                outputWasm: producer-final.wasm
+                build:
+                  - command: moon build --target wasm
+                  - command: cp -p {producer_wasm} producer.wasm
+                  - command: cp -p {producer_wasm} producer-final.wasm
+                  - command: cp ../producer-agent-types.json ../golem-temp/extracted-component-metadata/{producer_extracted_component_metadata}
+
+              app:consumer:
+                templates: moonbit
+                dir: consumer
+                dependencies:
+                  agents:
+                    - app:producer/BarAgent
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: moon build --target wasm
+                  - command: cp -p {producer_wasm} consumer.wasm
+                  - command: cp -p {producer_wasm} consumer-final.wasm
+                  - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    assert!(!guest_bridge_manifest.exists());
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(guest_bridge_manifest.exists());
+}
+
+#[cfg(unix)]
+#[test]
+async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracing) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut ctx = TestContext::new();
+    let fake_bin = ctx.cwd_path_join("fake-bin");
+    let fake_moon = fake_bin.join("moon");
+    fs::create_dir_all(&fake_bin).unwrap();
+    fs::write_str(
+        &fake_moon,
+        indoc! {r#"
+            #!/bin/sh
+            set -eu
+            case "${1:-}" in
+              update)
+                ;;
+              install)
+                mkdir -p .mooncakes
+                : > .mooncakes/prepared
+                ;;
+              build)
+                test -f .mooncakes/prepared
+                ;;
+              *)
+                exit 2
+                ;;
+            esac
+        "#},
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.add_env_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+
+    let moon_mod_json = indoc! {r#"
+        {
+          "name": "identical-module",
+          "version": "0.0.1",
+          "preferred-target": "wasm"
+        }
+    "#};
+    for module in ["a", "b"] {
+        fs::create_dir_all(ctx.cwd_path_join(module)).unwrap();
+        fs::write_str(
+            ctx.cwd_path_join(format!("{module}/moon.mod.json")),
+            moon_mod_json,
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(ctx.cwd_path_join("b/.mooncakes")).unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: moon-dependency-preparation-cache
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:a:
+                dir: a
+                componentWasm: component.wasm
+                customCommands:
+                  verify-module-preparation:
+                    - command: moon build
+
+              app:b:
+                dir: b
+                componentWasm: component.wasm
+                customCommands:
+                  verify-module-preparation:
+                    - command: moon build
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(ctx.cwd_path_join("a/.mooncakes/prepared").exists());
+    assert!(ctx.cwd_path_join("b/.mooncakes/prepared").exists());
+}
+
+#[cfg(unix)]
+#[test]
+async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_tracing: &Tracing) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut ctx = TestContext::new();
+    let fake_bin = ctx.cwd_path_join("fake-bin");
+    let fake_moon = fake_bin.join("moon");
+    fs::create_dir_all(&fake_bin).unwrap();
+    fs::write_str(
+        &fake_moon,
+        indoc! {r#"
+            #!/bin/sh
+            set -eu
+            case "${1:-}" in
+              update)
+                ;;
+              install)
+                mkdir -p .mooncakes
+                : > .mooncakes/prepared
+                ;;
+              build)
+                test -f ../.mooncakes/prepared
+                ;;
+              *)
+                exit 2
+                ;;
+            esac
+        "#},
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.add_env_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+
+    let moon_mod_json = indoc! {r#"
+        {
+          "name": "module",
+          "version": "0.0.1",
+          "preferred-target": "wasm"
+        }
+    "#};
+    fs::write_str(ctx.cwd_path_join("moon.mod.json"), moon_mod_json).unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("component/nested")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("component/nested/moon.mod.json"),
+        moon_mod_json,
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: moon-dependency-preparation-parent-dir
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:component:
+                dir: component
+                componentWasm: component.wasm
+                customCommands:
+                  verify-module-preparation:
+                    - command: moon build
+                      dir: nested/..
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(ctx.cwd_path_join(".mooncakes/prepared").exists());
+    assert!(
+        !ctx.cwd_path_join("component/nested/.mooncakes/prepared")
+            .exists()
+    );
+}
+
+#[test]
 async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks(
     _tracing: &Tracing,
 ) {
