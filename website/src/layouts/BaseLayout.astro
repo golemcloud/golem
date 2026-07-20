@@ -40,6 +40,29 @@ const ogImage = new URL("/og-image.jpg", Astro.site).href;
     <meta name="twitter:image" content={ogImage} />
 
     <title>{pageTitle}</title>
+
+    <!-- Google tag (gtag.js) -->
+    <script
+      is:inline
+      async
+      src="https://www.googletagmanager.com/gtag/js?id=AW-18172281472"
+    ></script>
+    <script is:inline>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        dataLayer.push(arguments);
+      }
+      gtag("js", new Date());
+
+      gtag("config", "AW-18172281472");
+    </script>
+
+    <!-- Contentsquare tag -->
+    <script
+      is:inline
+      async
+      src="https://t.contentsquare.net/uxa/ed8fdf824ed4d.js"
+    ></script>
   </head>
   <body>
     <slot />
