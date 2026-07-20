@@ -32,7 +32,10 @@ Terms:
 - Focus: the active panel or control that receives keyboard input.
 - Job: a running or completed command, server process, REPL, stream, or
   inspection with output history and launch context.
-- Context: the global selected target used by future actions.
+- Context: the global selected target used by future actions. A context is not
+  just an environment name; it is a resolved app/environment scope plus a
+  server target, with enough selector provenance to explain why it is
+  available.
 
 ## Global Shell
 
@@ -61,8 +64,7 @@ The palette must not become the only way to use important workflows. Common
 workflows still need visible workspace affordances and contextual help.
 
 Unavailable actions should stay visible where the user expects them, but they
-must be disabled and explain the reason. For example, local server actions are
-available only for contexts that use a local server.
+must be disabled and explain the reason.
 
 Confirmations must use a consistent inline modal. Confirmation modals must
 state the action, the affected jobs or resources, and the confirm/cancel keys.
@@ -84,8 +86,8 @@ Dev is the integrated workbench for building, running, testing, and inspecting
 an application. Dev owns:
 
 - build, deploy, and clean commands;
-- local server controls and server logs when the selected context supports a
-  local server;
+- local server controls and server logs as one view onto the global local
+  server service;
 - REPL;
 - command output;
 - app-local agents and components;
@@ -95,6 +97,17 @@ Dev must use preset layouts first. Arbitrary user-created splits are out of
 scope until the preset model is proven. Presets should make the common loops
 fast: command output beside logs, REPL beside server state, and app entities
 beside details or streams.
+
+The first Dev layout presets are right, left, top, and bottom. These presets
+are session state only. Pointer resizing may adjust split ratios for the
+current TUI run, but it must not write configuration or create a persistence
+migration.
+
+The global local server is not a top-level workspace. Its v1 primary full
+surface is a toggleable right-side drawer available from Home, Dev, and Ops.
+Dev may keep a compact Server panel when the drawer is closed, but when the
+drawer is open the drawer is the primary server surface and Dev should avoid a
+second large server log panel.
 
 Ops is the operations and resource workspace. Ops opens on curated dashboard
 tabs, not on a raw entity list. Dashboard tabs should be grouped by lifecycle
@@ -158,7 +171,10 @@ Focus movement must be keyboard-first. The UI should provide:
 - direct focus shortcuts for important panels;
 - contextual help that names the focused panel and reachable focus targets.
 
-Mouse interaction may exist, but it must not be required for primary workflows.
+Pointer interaction should become native to the layout model, while remaining
+optional for primary workflows. Scrolling must affect the panel under the
+pointer, clicks should focus tabs, splits, buttons, and selectable rows, and
+split handles should be resizable by pointer once split geometry is stable.
 
 Breadcrumbs should be used inside Ops drilldowns and other nested resource
 views. Breadcrumbs are for orientation and jumping back up the current resource
@@ -278,13 +294,91 @@ Local and production targets use the same workspace model for now. The selected
 context controls action availability and resource data. Future customization may
 adjust layout or actions by target type, but the base model must stay shared.
 
-The TUI must distinguish these target shapes when context switching is added:
+The TUI context model has two axes:
 
-- manifest environment;
-- explicit local mode;
-- explicit cloud mode;
-- custom named environment or profile;
-- non-manifest or config-only mode.
+- app/environment scope: the application and environment that operations are
+  scoped to when one is selected;
+- server target: the Golem server/client/auth source used to query or mutate
+  resources.
+
+A manifested app context is selected when the current workspace has an
+application manifest and the selected environment is one of the environments
+defined by that manifest. This enables both Dev and Ops, because build, deploy,
+clean, REPL, local-server control, and app-local resource shortcuts have a
+manifest-backed application model.
+
+A server target is selected from the union of:
+
+- servers referenced by manifest environments, including omitted servers that
+  imply the built-in local server;
+- built-in local and cloud servers;
+- servers from configured profiles;
+- the server/profile/environment selectors implied by launch flags and their
+  environment-variable overrides.
+
+Server targets may overlap by endpoint. The TUI must not silently collapse
+overlapping sources, because source and auth semantics matter. The picker may
+group duplicates visually, but it must preserve selectable source variants such
+as manifest server, built-in server, profile, and launch selector.
+
+After selecting a server target, the user may select an application environment
+known to that server. This server app-environment context is Ops-only by
+default. It enables Dev only when it matches the current manifest application
+and environment. Matching means the selected server app/environment identifies
+the same application and environment as the manifest context, not merely a
+similar display name.
+
+Dev eligibility is therefore:
+
+- enabled for manifested app contexts;
+- enabled for server app-environment contexts only when they match the current
+  manifest app/environment;
+- disabled for server-only, profile-only, and unrelated app-environment
+  contexts.
+
+Ops eligibility is broader. Ops may run against any selected server target or
+server app-environment context that has enough information for the requested
+operation.
+
+Local server is a global TUI-managed service, not a selected-context job. It
+may be shown inside Dev and later as a global side panel, but changing the
+selected context or leaving Dev must not stop it. Server launch uses launch
+scope, not the currently selected Ops context. Selecting a built-in local server
+target may query the running local server; if no local server is reachable, the
+picker should report that as a loading error and must not auto-start it.
+
+The selected-context model must account for all global selector inputs that can
+change available options or context semantics:
+
+- `--environment`, including `<env>`, `<app>/<env>`, and
+  `<account>/<app>/<env>` forms;
+- `--local` and `--cloud`;
+- `--profile`;
+- `--app-manifest-path` and `--disable-app-manifest-discovery`;
+- `--preset`;
+- `--config-dir`;
+- `--dev-mode`;
+- `--yes`, `--show-secrets`, auth token overrides, HTTP batch/parallelism
+  tuning, server no-limit changes, offline/wasmtime cache flags, and other
+  non-target flags when they affect generated actions, direct clients, or
+  explanations;
+- environment overrides such as `GOLEM_ENVIRONMENT`, `GOLEM_PROFILE`,
+  `GOLEM_APP_MANIFEST_PATH`, `GOLEM_DISABLE_APP_MANIFEST_DISCOVERY`,
+  `GOLEM_PRESET`, `GOLEM_AUTH_TOKEN`, and HTTP/server tuning variables after
+  CLI resolution has applied them.
+
+The TUI should keep a launch selector snapshot that records the resolved global
+flags and the user-visible source of each selected axis. It should use that
+snapshot to explain why candidates exist and to materialize future contexts or
+direct clients.
+
+`GolemCliGlobalFlags` is not a sufficient long-term internal representation for
+every selected TUI target. In particular, "use this manifest-defined custom
+server, then select this remote app environment" is a valid TUI target but does
+not map cleanly to today's global flags unless the server is also available as
+a profile or selected manifest environment. Future implementation should add a
+TUI target descriptor that can materialize either an `Arc<Context>` or direct
+clients without forcing every target through nested CLI flags.
 
 The selected context applies to future actions only. Existing jobs keep their
 launch context unless the user confirms a stop or restart.
@@ -348,8 +442,8 @@ interaction, REPL, and REPL leader. These are input/focus states, not
 workspaces.
 
 Current registered actions cover build, deploy, clean, server control, agent
-refresh/settings, view navigation, REPL control, palette, help, and quit. Action
-availability reasons are still missing.
+refresh/settings, view navigation, REPL control, context switching, palette,
+help, and quit.
 
 Current global bare run keys such as `b`, `d`, `c`, `s`, and `r` are scaffolding
 and should not be treated as final design. Current `tab` behavior cycles views,
@@ -402,10 +496,11 @@ and jobs. Agents should move into the new workspace model while preserving the
 existing list, filter, details, refresh, and inspect behavior during the
 transition. This milestone may reuse the initial TUI context.
 
-Milestone 3: introduce global selected-context UX. Add the context picker,
-visible launch-context identity, and confirmation for context switches that
-affect running jobs. Add local-server action availability rules for non-local
-contexts.
+Milestone 3: harden global selected-context UX. Replace the current flat
+context picker with a scoped target model that separates server targets from
+app/environment scopes, derives options from all resolved global selectors, and
+gates Dev/Ops availability by the rules in this document. Add confirmation for
+context switches that affect running jobs.
 
 Milestone 4: migrate remaining Ops refresh and inspect paths to direct typed or
 streaming providers. Agent oplog/stream is the first known streaming debt.

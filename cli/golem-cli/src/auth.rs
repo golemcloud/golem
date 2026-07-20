@@ -34,8 +34,45 @@ use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::login::OAuth2WebflowStateId;
 use indoc::formatdoc;
+use std::future::Future;
 use std::path::Path;
+use std::sync::Arc;
 use tracing::info;
+
+tokio::task_local! {
+    static ACTIVE_AUTH_PRESENTER: Arc<dyn AuthPresenter>;
+}
+
+#[async_trait::async_trait]
+pub trait AuthPresenter: Send + Sync {
+    async fn oauth2_started(&self, data: &OAuth2WebflowData);
+
+    async fn oauth2_finished(&self);
+}
+
+struct CliAuthPresenter;
+
+#[async_trait::async_trait]
+impl AuthPresenter for CliAuthPresenter {
+    async fn oauth2_started(&self, data: &OAuth2WebflowData) {
+        inform_user(data);
+    }
+
+    async fn oauth2_finished(&self) {}
+}
+
+pub async fn with_auth_presenter<T>(
+    presenter: Arc<dyn AuthPresenter>,
+    future: impl Future<Output = T>,
+) -> T {
+    ACTIVE_AUTH_PRESENTER.scope(presenter, future).await
+}
+
+fn active_auth_presenter() -> Arc<dyn AuthPresenter> {
+    ACTIVE_AUTH_PRESENTER
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| Arc::new(CliAuthPresenter))
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Authentication(pub TokenWithSecret);
@@ -168,8 +205,11 @@ impl Auth {
         config_dir: &Path,
     ) -> anyhow::Result<Authentication> {
         let data = self.start_oauth2().await?;
-        inform_user(&data);
-        let token = self.complete_oauth2(data.state).await?;
+        let presenter = active_auth_presenter();
+        presenter.oauth2_started(&data).await;
+        let token = self.complete_oauth2(data.state).await;
+        presenter.oauth2_finished().await;
+        let token = token?;
         self.save_auth(token.clone(), auth_source, config_dir)?;
         Ok(Authentication(token))
     }

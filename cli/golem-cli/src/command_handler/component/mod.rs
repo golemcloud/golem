@@ -452,7 +452,7 @@ impl ComponentCommandHandler {
         &self,
         component_name: Option<&ComponentName>,
     ) -> anyhow::Result<SelectedComponents> {
-        self.select_components_by_app_dir_or_name_internal(component_name, true)
+        self.select_components_by_app_dir_or_name_internal(component_name, None, true)
             .await
     }
 
@@ -460,13 +460,27 @@ impl ComponentCommandHandler {
         &self,
         component_name: Option<&ComponentName>,
     ) -> anyhow::Result<SelectedComponents> {
-        self.select_components_by_app_dir_or_name_internal(component_name, false)
+        self.select_components_by_app_dir_or_name_internal(component_name, None, false)
             .await
+    }
+
+    pub async fn must_select_components_by_app_dir_or_name_for_environment(
+        &self,
+        component_name: Option<&ComponentName>,
+        environment_reference: Option<&EnvironmentReference>,
+    ) -> anyhow::Result<SelectedComponents> {
+        self.select_components_by_app_dir_or_name_internal(
+            component_name,
+            environment_reference,
+            false,
+        )
+        .await
     }
 
     async fn select_components_by_app_dir_or_name_internal(
         &self,
         component_name: Option<&ComponentName>,
+        environment_reference_override: Option<&EnvironmentReference>,
         allow_no_matches: bool,
     ) -> anyhow::Result<SelectedComponents> {
         fn non_empty<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
@@ -606,13 +620,12 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
+        let environment_reference =
+            environment_reference_override.or(environment_reference.as_ref());
         let environment = self
             .ctx
             .environment_handler()
-            .resolve_opt_environment_reference(
-                EnvironmentResolveMode::Any,
-                environment_reference.as_ref(),
-            )
+            .resolve_opt_environment_reference(EnvironmentResolveMode::Any, environment_reference)
             .await?;
 
         Ok(SelectedComponents {

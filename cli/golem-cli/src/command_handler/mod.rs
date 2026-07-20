@@ -308,7 +308,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::Tui => {
-                    TuiCommandHandler::new(ctx.get_or_init().await?)
+                    TuiCommandHandler::new(ctx.get_or_init().await?, ctx.global_flags.clone())
                         .cmd_tui()
                         .await
                 }

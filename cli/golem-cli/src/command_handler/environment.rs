@@ -82,15 +82,7 @@ impl EnvironmentCommandHandler {
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
-        let env_summaries = self
-            .ctx
-            .golem_clients()
-            .await?
-            .me
-            .list_visible_environments(None, None, None)
-            .await
-            .map_service_error()?
-            .values;
+        let env_summaries = self.list_visible_environment_details().await?;
 
         if env_summaries.is_empty() && !self.ctx.format().is_structured() {
             logln(format!(
@@ -105,6 +97,20 @@ impl EnvironmentCommandHandler {
         })?;
 
         Ok(())
+    }
+
+    pub async fn list_visible_environment_details(
+        &self,
+    ) -> anyhow::Result<Vec<golem_client::model::EnvironmentWithDetails>> {
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
+            .me
+            .list_visible_environments(None, None, None)
+            .await
+            .map_service_error()?
+            .values)
     }
 
     pub async fn resolve_environment(

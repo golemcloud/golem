@@ -82,10 +82,33 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 
 ### Milestone 3: Selected Context UX
 
-- [ ] Add global selected-context display and picker.
-- [ ] Add immutable launch-context display for jobs and provider requests.
-- [ ] Add confirmation for context switches that affect running context-bound jobs.
-- [ ] Hide or disable local-server actions with reasons when the selected context does not use a local server.
+- [x] Add first global selected-context display and picker foundation.
+- [x] Add immutable launch-context display for jobs and provider requests.
+- [x] Treat local server as a global TUI-managed service, visible from Dev but not owned by the selected context.
+- [x] First selected-context switching policy: block switches with a reason while context-bound jobs are active and leave global services running.
+- [x] Replace the flat `TuiContextCandidate` model with a scoped target model that separates server target, app/environment scope, and launch selector provenance.
+- [x] Derive available server targets from the resolved launch selector inputs carried by `GolemCliGlobalFlags`: `--environment`, `--local`, `--cloud`, `--profile`, manifest path/discovery flags, config dir, presets, dev mode, and other retained global selector fields.
+- [x] Build server target options from the union of manifest environment servers, built-in local/cloud servers, configured profiles, and launch-selector-implied targets.
+- [x] Preserve overlapping server endpoints as selectable source/auth variants rather than collapsing them silently.
+- [x] Add server-first Ops selection: choose a server target, list app environments visible on that server with direct typed calls, then select an app/environment for Ops.
+- [x] Enable Dev only for manifested app contexts, or for server app-environment contexts that match the current manifest app/environment.
+- [x] Add confirmation for context switches that affect running context-bound jobs.
+- [x] Keep local server running across context switches and use launch-scoped args for server start/restart.
+- [ ] Replace `GolemCliGlobalFlags` as the long-term selected-context representation with a TUI target descriptor that can materialize either an `Arc<Context>` or direct clients.
+
+### Milestone 3b: Pointer-Native Layout Hardening
+
+- [x] Add a dedicated TUI layout module that computes named regions and hit-test snapshots for header tabs, footer, workspace body, Dev panels, Ops panes, modal actions, split handles, and the global server drawer.
+- [x] Store the latest rendered layout snapshot on `TuiApp` and route pointer events through region IDs rather than current keyboard focus.
+- [x] Make mouse wheel routing position-aware so scrolling targets Output, Server, server drawer, or inspect pane under the pointer.
+- [x] Let pointer clicks activate workspace tabs, Dev panels, Ops agent rows, inspect panes, context picker rows, and context confirmation/cancel regions.
+- [x] Add mouse-resizable split boundaries for Dev primary/secondary splits and the server drawer.
+- [x] Add four session-only Dev layout presets: right, left, top, and bottom.
+- [x] Add `ctrl+x l` and palette action support for cycling Dev layout presets.
+- [x] Choose the global local server v1 surface: a toggleable right-side drawer available from Home, Dev, and Ops, not a top-level Server workspace.
+- [x] Add `ctrl+x v` and palette action support for toggling the global server drawer.
+- [x] Keep resize ratios session-only and clamp split sizes so panels cannot collapse below usable dimensions.
+- [x] Avoid duplicate large server logs by skipping the Dev Server panel while the global drawer is open.
 
 ### Milestone 4: Direct Streaming Ops Providers
 

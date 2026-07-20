@@ -124,6 +124,7 @@ impl Default for AgentListMode {
 
 #[derive(Clone, Debug, Default)]
 pub struct AgentListRequest {
+    pub environment_reference: Option<EnvironmentReference>,
     pub agent_type_name: Option<AgentTypeName>,
     pub component_name: Option<ComponentName>,
     pub filters: Vec<String>,

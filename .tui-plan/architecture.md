@@ -114,5 +114,30 @@ Do not start with a broad rewrite. Extract stable seams as they become useful:
 - `context` for selected/launch context;
 - `jobs` for nested lifecycle state;
 - `context_executor` or similarly named module for scoped context/logging/background execution;
+- `layout` for named region computation, hit testing, split geometry, session-only layout ratios, and drawer geometry;
 - `help` for derived context help;
 - view modules after behavior is rule-driven enough to move safely.
+
+## Layout And Pointer Routing
+
+Rendering computes a `LayoutSnapshot` from the terminal area, active workspace,
+mode, agents state, and session layout state. The snapshot owns named regions
+for workspace tabs, workspace body, Dev panels, Ops list/details/inspect panes,
+modal rows/actions, split handles, and the global local-server drawer.
+
+Mouse handling must route through these region IDs. Wheel events scroll the
+region under the pointer. Clicks focus or select the clicked region. Dragging a
+split handle updates only in-memory ratios on `TuiApp`; no resize state is
+persisted to config.
+
+The first Dev layout presets are:
+
+- right: REPL primary left, side panels right;
+- left: side panels left, REPL primary right;
+- top: side panels top, REPL primary bottom;
+- bottom: REPL primary top, side panels bottom.
+
+The global local server service is exposed as a right-side drawer across Home,
+Dev, and Ops. The drawer is closed by default, toggled by action/shortcut, and
+resizable for the current TUI session. It is the v1 primary full server surface;
+when open, Dev should avoid rendering a second large Server log panel.

@@ -1,5 +1,63 @@
 # Progress
 
+## 2026-07-02
+
+TUI visual preview workflow:
+
+- Added a dependency-free static HTML preview gallery under `.tui-plan/design-previews/`.
+- The gallery compares four visual-language directions for headers, split affordances, color weight, density, server drawer treatment, palette styling, and Ops contrast.
+- The preview is explicitly non-authoritative; accepted directions must be copied into `.tui-plan/ui-system.md`, then implemented in Ratatui and validated with render tests.
+
+## 2026-07-01
+
+Pointer-native layout and global server drawer:
+
+- Added `tui::layout` as the first dedicated layout/hit-test module.
+- Render now computes a named `LayoutSnapshot` and stores it on `TuiApp` for mouse handling.
+- Mouse wheel routing now targets the panel under the pointer rather than the keyboard-focused panel.
+- Pointer clicks now switch workspace tabs, focus Dev panels, select Ops agent rows, focus inspect panes, and activate context picker/confirmation regions.
+- Added session-only split dragging for Dev primary/secondary splits and the global server drawer, with ratio clamps for constrained terminals.
+- Added Dev layout presets for right, left, top, and bottom panel placement.
+- Added `ctrl+x l` / palette action for cycling Dev layout presets.
+- Added a global local-server drawer, closed by default and available from Home, Dev, and Ops.
+- Added `ctrl+x v` / palette action for toggling the server drawer.
+- When the drawer is open, Dev skips the large Server panel so server logs have one primary surface.
+- Added focused layout and pointer behavior tests for preset geometry, drawer splitting, hit testing, region scrolling, clicks, modal actions, and split dragging.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli --lib -- tui:: --report-time`
+
+Selected Context UX foundation:
+
+- Added a global context picker opened with `ctrl+x e` and through the palette.
+- Context candidates are built from the launch context, manifest environments, explicit local/cloud selections, and configured profiles.
+- Switching builds a new immutable `Context` snapshot from cloned CLI flags and installs it into the TUI context executor with a new generation id.
+- Context switching is blocked while context-bound work is active; confirmation/stop-and-restart flows are deferred.
+- Nested dev/interactive commands inherit the selected context arguments, while direct Agents refresh uses the selected executor context.
+- Command, server, REPL, agent inspect, and agent refresh status surfaces show their launch context.
+- Local-server actions are disabled, and direct shortcuts are guarded, when the selected context is not local-server backed.
+
+Selected Context UX scoped selector:
+
+- Replaced the flat context candidate list with scoped context targets: manifest app contexts, server targets, and server app-environment targets.
+- The context picker now uses a two-step flow. Manifest app contexts switch directly. Server targets first list visible app environments through a direct typed environment handler call, then the selected app/environment becomes the Ops scope.
+- Server target discovery now includes manifest environment servers, built-in local/cloud servers, configured profiles, and launch-selector-implied targets while preserving source/auth variants as separate rows.
+- Agents refresh carries the selected typed `EnvironmentReference` into the direct worker list request, so server app-environment scopes no longer rely on nested CLI parsing.
+- Dev actions are enabled for manifest app contexts and disabled for Ops-only server app-environment contexts. Local server actions still additionally require a local-server-backed context.
+- Agent inspect oplog/stream remain nested CLI transitional Ops debt until the direct streaming provider milestone.
+
+Selected Context UX architecture correction:
+
+- The first picker foundation is intentionally not the final context model.
+- The design now separates manifest app contexts, server targets, and server app-environment contexts.
+- Manifest app contexts enable Dev + Ops. Server app-environment contexts are Ops-only unless they match the current manifest app/environment.
+- Server targets must be derived from manifest environment servers, built-in local/cloud servers, configured profiles, and all launch selector inputs, not only `--local` and `--cloud`.
+- Overlapping server endpoints must preserve source/auth variants instead of being silently collapsed.
+- The current `GolemCliGlobalFlags`-based candidate representation is documented as a temporary implementation gap; future work needs a TUI target descriptor that can materialize contexts or direct clients.
+
 ## 2026-06-08
 
 Initial planning context captured.
@@ -441,3 +499,26 @@ Validation:
 - `cargo fmt --package golem-cli`
 - `cargo test -p golem-cli --lib -- tui::`
 - `cargo check -p golem-cli`
+
+Global local server service foundation implemented.
+
+Current status:
+
+- Reclassified local server as a launch-scoped TUI service instead of a
+  selected-context dev job.
+- Kept server controls and logs visible through Dev while allowing the service
+  to survive workspace and selected-context changes.
+- Removed local server from context-switch blockers and dev-stop confirmation.
+- Kept build/deploy/clean and REPL as context-bound jobs that still require
+  confirmation before a selected-context switch can stop them.
+- Made server start/restart use launch-scoped CLI args rather than the current
+  selected Ops context args.
+- Added a follow-up pointer-native layout milestone for mouse-position-aware
+  scrolling, clickable focus/selection, split resizing, layout presets, and
+  server side-panel decisions.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli --lib -- tui:: --report-time`

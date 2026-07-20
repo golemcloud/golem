@@ -867,7 +867,7 @@ impl WorkerCommandHandler {
         };
         let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
-            .resolve_list_components(agent_type_name, component_name, filters)
+            .resolve_list_components(None, agent_type_name, component_name, filters)
             .await?;
 
         if let Some(interval_ms) = refresh {
@@ -890,8 +890,8 @@ impl WorkerCommandHandler {
                     scan_cursor.as_ref(),
                     max_count,
                     precise,
-                    stable_sort: false,
-                })
+                    false,
+                )
                 .await?;
             self.ctx.log_handler().log_output(view)?;
             Ok(())
@@ -910,7 +910,12 @@ impl WorkerCommandHandler {
             };
         let filters = apply_list_mode_filter(request.filters, request.mode);
         let (components, filters) = self
-            .resolve_list_components(request.agent_type_name, request.component_name, filters)
+            .resolve_list_components(
+                request.environment_reference.as_ref(),
+                request.agent_type_name,
+                request.component_name,
+                filters,
+            )
             .await?;
 
         self.list_agents(
@@ -980,6 +985,7 @@ impl WorkerCommandHandler {
 
     async fn resolve_list_components(
         &self,
+        environment_reference: Option<&EnvironmentReference>,
         agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
@@ -992,7 +998,10 @@ impl WorkerCommandHandler {
                 let environment = self
                     .ctx
                     .environment_handler()
-                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .resolve_opt_environment_reference(
+                        EnvironmentResolveMode::Any,
+                        environment_reference,
+                    )
                     .await?;
                 debug!("Finding agent type {}", agent_type_name.0);
                 let Some(agent_type) = self
@@ -1033,7 +1042,10 @@ impl WorkerCommandHandler {
                 let selected_components = self
                     .ctx
                     .component_handler()
-                    .must_select_components_by_app_dir_or_name(component_name.as_ref())
+                    .must_select_components_by_app_dir_or_name_for_environment(
+                        component_name.as_ref(),
+                        environment_reference,
+                    )
                     .await?;
 
                 let environment = &selected_components.environment;

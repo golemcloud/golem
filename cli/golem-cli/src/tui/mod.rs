@@ -15,14 +15,20 @@
 mod app;
 mod context_executor;
 mod input;
+mod layout;
 mod nested_cli;
 mod terminal;
 pub(crate) mod terminal_screen;
 
+use crate::context::Context;
+use crate::model::environment::EnvironmentReference;
 use crate::model::worker::AgentsMetadataResponseView;
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
+use golem_client::model::EnvironmentWithDetails;
 use nested_cli::CommandExit;
+use std::sync::Arc;
+use tokio::sync::oneshot;
 
 pub use app::run;
 
@@ -50,4 +56,21 @@ enum TuiEvent {
         generation: u64,
         result: TuiContextTaskResult<AgentsMetadataResponseView>,
     },
+    ContextSwitchFinished {
+        generation: u64,
+        result: TuiContextTaskResult<(Arc<Context>, Option<EnvironmentReference>)>,
+    },
+    ContextEnvironmentListFinished {
+        generation: u64,
+        server_key: String,
+        result: TuiContextTaskResult<Vec<EnvironmentWithDetails>>,
+    },
+    ContextEnvironmentListTick {
+        generation: u64,
+    },
+    AuthPromptStarted {
+        url: String,
+        ready: oneshot::Sender<()>,
+    },
+    AuthPromptFinished,
 }

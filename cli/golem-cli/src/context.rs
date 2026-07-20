@@ -405,8 +405,16 @@ impl Context {
         self.environment_reference.as_ref()
     }
 
+    pub fn selected_environment_reference(&self) -> Option<&EnvironmentReference> {
+        self.environment_reference.as_ref()
+    }
+
     pub fn manifest_environment(&self) -> Option<&SelectedManifestEnvironment> {
         self.log_context_selection_once();
+        self.manifest_environment.as_ref()
+    }
+
+    pub fn selected_manifest_environment(&self) -> Option<&SelectedManifestEnvironment> {
         self.manifest_environment.as_ref()
     }
 
@@ -417,6 +425,20 @@ impl Context {
 
     pub fn manifest_local_server(&self) -> Option<&ResolvedLocalServer> {
         self.manifest_local_server.as_ref()
+    }
+
+    pub fn uses_local_server(&self) -> bool {
+        self.manifest_environment
+            .as_ref()
+            .map(|environment| {
+                environment
+                    .environment
+                    .server
+                    .as_ref()
+                    .map(|server| matches!(server, Server::Builtin(BuiltinServer::Local)))
+                    .unwrap_or(true)
+            })
+            .unwrap_or_else(|| self.profile.name.is_builtin_local())
     }
 
     pub fn caches(&self) -> &Caches {

@@ -12,15 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::ApplicationContext;
+use crate::auth::AuthPresenter;
+use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::Handlers;
+use crate::config::Config;
 use crate::context::Context;
+use crate::log::Output;
+use crate::model::app::ApplicationSourceMode;
 use crate::model::app_raw::{BuiltinServer, Server};
+use crate::model::environment::EnvironmentReference;
 use crate::model::worker::{
     AgentListMode, AgentListRequest, AgentMetadataView, AgentsMetadataResponseView,
 };
 use crate::tui::TuiEvent;
 use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextTaskResult};
 use crate::tui::input::encode_key_for_pty;
+use crate::tui::layout::{
+    self, DragTarget, LayoutInput, LayoutSnapshot, RegionKind, TuiLayoutState,
+};
 use crate::tui::nested_cli::{
     CommandExit, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
@@ -28,11 +38,13 @@ use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
 use ansi_to_tui::IntoText;
 use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use futures_util::StreamExt;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use golem_client::model::{EnvironmentWithDetails, OAuth2WebflowData};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -41,21 +53,27 @@ use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::io::{Write, stdout};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::{
+    mpsc::{self, Sender},
+    oneshot,
+};
 use tokio::time::{Duration, sleep};
 
 const TUI_EVENT_CHANNEL_CAPACITY: usize = 1024;
+const CONTEXT_PICKER_RIGHT_PADDING: usize = 4;
 
 type TuiEventSender = Sender<TuiEvent>;
 
-pub async fn run(ctx: Arc<Context>) -> anyhow::Result<()> {
+pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow::Result<()> {
     let context_executor = Arc::new(TuiContextExecutor::new(ctx.clone()));
-    let mut app = TuiApp::from_context(ctx.as_ref());
+    let mut app = TuiApp::from_launch(TuiLaunchConfig::new(ctx.clone(), global_flags));
     app.context_executor = Some(context_executor);
     let mut terminal = TerminalGuard::enter()?;
     let (event_tx, mut event_rx) = mpsc::channel::<TuiEvent>(TUI_EVENT_CHANNEL_CAPACITY);
@@ -67,12 +85,60 @@ pub async fn run(ctx: Arc<Context>) -> anyhow::Result<()> {
         let Some(event) = event_rx.recv().await else {
             break;
         };
-        app.handle_event(event, &event_tx);
-        terminal.draw(|frame| render(frame, &app))?;
+        match event {
+            TuiEvent::AuthPromptStarted { url, ready } => {
+                terminal.suspend()?;
+                print_tui_auth_prompt(&url)?;
+                app.handle_event(
+                    TuiEvent::AuthPromptStarted {
+                        url,
+                        ready: dropped_auth_prompt_ready(),
+                    },
+                    &event_tx,
+                );
+                let _ = ready.send(());
+            }
+            TuiEvent::AuthPromptFinished => {
+                app.handle_event(TuiEvent::AuthPromptFinished, &event_tx);
+                if let Err(error) = terminal
+                    .resume()
+                    .and_then(|_| terminal.draw(|frame| render(frame, &app)))
+                {
+                    terminal.restore_for_exit();
+                    return Err(error);
+                }
+            }
+            TuiEvent::Terminal(_)
+                if app
+                    .auth_prompt
+                    .as_ref()
+                    .is_some_and(|prompt| !prompt.url.is_empty()) => {}
+            event => {
+                app.handle_event(event, &event_tx);
+                if app.auth_prompt.is_none() {
+                    terminal.draw(|frame| render(frame, &app))?;
+                }
+            }
+        }
     }
 
     app.cleanup_running_command();
     Ok(())
+}
+
+#[derive(Clone)]
+pub(crate) struct TuiLaunchConfig {
+    initial_context: Arc<Context>,
+    base_flags: GolemCliGlobalFlags,
+}
+
+impl TuiLaunchConfig {
+    fn new(initial_context: Arc<Context>, base_flags: GolemCliGlobalFlags) -> Self {
+        Self {
+            initial_context,
+            base_flags,
+        }
+    }
 }
 
 fn spawn_terminal_event_reader(event_tx: TuiEventSender) {
@@ -133,8 +199,78 @@ fn spawn_agent_auto_refresh(event_tx: TuiEventSender, stop: Arc<AtomicBool>) {
     });
 }
 
+fn spawn_context_environment_list_spinner(
+    generation: u64,
+    event_tx: TuiEventSender,
+    stop: Arc<AtomicBool>,
+) {
+    tokio::spawn(async move {
+        while !stop.load(Ordering::Relaxed) {
+            sleep(Duration::from_millis(120)).await;
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            if event_channel_closed(
+                event_tx.try_send(TuiEvent::ContextEnvironmentListTick { generation }),
+            ) {
+                return;
+            }
+        }
+    });
+}
+
 fn event_channel_closed(result: Result<(), TrySendError<TuiEvent>>) -> bool {
     matches!(result, Err(TrySendError::Closed(_)))
+}
+
+fn tui_auth_prompt_text(url: &str) -> String {
+    format!(
+        "\nAuthenticate with GitHub\n\nOpen this URL in a browser:\n{url}\n\nWaiting for authentication...\n"
+    )
+}
+
+fn print_tui_auth_prompt(url: &str) -> anyhow::Result<()> {
+    let mut stdout = stdout();
+    stdout.write_all(tui_auth_prompt_text(url).as_bytes())?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn dropped_auth_prompt_ready() -> oneshot::Sender<()> {
+    let (ready, _rx) = oneshot::channel();
+    ready
+}
+
+struct TuiAuthPresenter {
+    event_tx: TuiEventSender,
+}
+
+#[async_trait::async_trait]
+impl AuthPresenter for TuiAuthPresenter {
+    async fn oauth2_started(&self, data: &OAuth2WebflowData) {
+        let (ready_tx, ready_rx) = oneshot::channel();
+        if self
+            .event_tx
+            .send(TuiEvent::AuthPromptStarted {
+                url: data.url.to_string(),
+                ready: ready_tx,
+            })
+            .await
+            .is_ok()
+        {
+            let _ = ready_rx.await;
+        }
+    }
+
+    async fn oauth2_finished(&self) {
+        let _ = self.event_tx.send(TuiEvent::AuthPromptFinished).await;
+    }
+}
+
+fn tui_auth_presenter(event_tx: &TuiEventSender) -> Arc<dyn AuthPresenter> {
+    Arc::new(TuiAuthPresenter {
+        event_tx: event_tx.clone(),
+    })
 }
 
 struct TuiApp {
@@ -145,16 +281,30 @@ struct TuiApp {
     palette: CommandPalette,
     command_options: CommandOptions,
     command_run: Option<CommandRun>,
-    server: ServerState,
+    server: LocalServerService,
     repl: ReplState,
     agents: AgentsState,
     next_command_id: u64,
     context: TuiContextInfo,
+    context_switcher: ContextSwitcherState,
+    context_cli_args: Vec<String>,
+    selected_environment_reference: Option<EnvironmentReference>,
     context_executor: Option<Arc<TuiContextExecutor>>,
+    auth_prompt: Option<AuthPromptState>,
+    layout: TuiLayoutState,
+    layout_snapshot: RefCell<Option<LayoutSnapshot>>,
 }
 
 impl TuiApp {
-    fn from_context(ctx: &Context) -> Self {
+    fn from_launch(launch: TuiLaunchConfig) -> Self {
+        let context = TuiContextInfo::from_context(launch.initial_context.as_ref());
+        let context_cli_args = context_args_from_flags(&launch.base_flags);
+        let server = LocalServerService::from_launch(&launch);
+        let targets = context_targets_from_launch(&launch).unwrap_or_else(|error| {
+            vec![TuiContextTarget::error(format!(
+                "failed to load context targets: {error:#}"
+            ))]
+        });
         Self {
             should_quit: false,
             active_workspace: TuiWorkspace::Home,
@@ -163,12 +313,18 @@ impl TuiApp {
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
             command_run: None,
-            server: ServerState::default(),
+            server,
             repl: ReplState::default(),
             agents: AgentsState::default(),
             next_command_id: 1,
-            context: TuiContextInfo::from_context(ctx),
+            context,
+            context_switcher: ContextSwitcherState::new(targets),
+            context_cli_args,
+            selected_environment_reference: None,
             context_executor: None,
+            auth_prompt: None,
+            layout: TuiLayoutState::default(),
+            layout_snapshot: RefCell::new(None),
         }
     }
 
@@ -180,7 +336,7 @@ impl TuiApp {
             TuiEvent::Terminal(Event::Resize(cols, rows)) => {
                 self.resize_running_command(cols, rows)
             }
-            TuiEvent::Terminal(Event::Mouse(mouse)) => self.handle_mouse(mouse),
+            TuiEvent::Terminal(Event::Mouse(mouse)) => self.handle_mouse(mouse, Some(event_tx)),
             TuiEvent::Terminal(_) => {}
             TuiEvent::CommandOutput(bytes) => self.append_command_output(&bytes),
             TuiEvent::CommandOutputClosed(error) => {
@@ -188,7 +344,7 @@ impl TuiApp {
                     self.append_local_command_line(format!("output closed: {error}"));
                 }
             }
-            TuiEvent::CommandExited(exit) => self.finish_command(exit),
+            TuiEvent::CommandExited(exit) => self.finish_command(exit, event_tx),
             TuiEvent::SpinnerTick(command_id) => self.handle_spinner_tick(command_id),
             TuiEvent::ServerOutput(bytes) => self.server.run.output.append(&bytes),
             TuiEvent::ServerOutputClosed(error) => {
@@ -203,7 +359,7 @@ impl TuiApp {
             TuiEvent::ServerSpinnerTick(server_id) => self.handle_server_spinner_tick(server_id),
             TuiEvent::ReplOutput(bytes) => self.append_repl_output(&bytes),
             TuiEvent::ReplOutputClosed(error) => self.handle_repl_output_closed(error),
-            TuiEvent::ReplExited(exit) => self.finish_repl(exit),
+            TuiEvent::ReplExited(exit) => self.finish_repl(exit, event_tx),
             TuiEvent::AgentOplogOutput(bytes) => self.agents.inspect.oplog.output.append(&bytes),
             TuiEvent::AgentOplogOutputClosed(error) => {
                 if let Some(error) = error {
@@ -234,6 +390,23 @@ impl TuiApp {
             TuiEvent::AgentRefreshFinished { generation, result } => {
                 self.finish_agent_refresh(generation, result)
             }
+            TuiEvent::ContextSwitchFinished { generation, result } => {
+                self.finish_context_switch(generation, result, event_tx)
+            }
+            TuiEvent::ContextEnvironmentListFinished {
+                generation,
+                server_key,
+                result,
+            } => self.finish_context_environment_list(generation, server_key, result),
+            TuiEvent::ContextEnvironmentListTick { generation } => {
+                self.handle_context_environment_list_tick(generation);
+            }
+            TuiEvent::AuthPromptStarted { url, .. } => {
+                self.auth_prompt = Some(AuthPromptState { url });
+            }
+            TuiEvent::AuthPromptFinished => {
+                self.auth_prompt = None;
+            }
         }
     }
 
@@ -247,6 +420,8 @@ impl TuiApp {
             TuiMode::Normal => self.handle_global_key(key, event_tx),
             TuiMode::LeaderNormal => self.handle_leader_key(key, event_tx, TuiMode::Normal),
             TuiMode::Palette => self.handle_palette_key(key, event_tx),
+            TuiMode::ContextPicker => self.handle_context_picker_key(key, event_tx),
+            TuiMode::ContextSwitchConfirm => self.handle_context_switch_confirm_key(key, event_tx),
             TuiMode::Help => self.handle_help_key(key),
             TuiMode::AgentFilter => self.handle_agent_filter_key(key, event_tx),
             TuiMode::CommandInteraction => self.handle_command_interaction_key(key),
@@ -285,6 +460,9 @@ impl TuiApp {
             KeyCode::Enter if self.agents_focused() => self.open_agent_inspect(event_tx),
             KeyCode::Char('/') if self.agents_focused() => self.mode = TuiMode::AgentFilter,
             KeyCode::Char('s') => self.open_and_toggle_server(event_tx),
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.layout.server_drawer_open = !self.layout.server_drawer_open;
+            }
             KeyCode::Enter if self.dev_panel_focused(DevPanel::Server) => {
                 self.toggle_server(event_tx)
             }
@@ -367,6 +545,51 @@ impl TuiApp {
         }
     }
 
+    fn handle_context_picker_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if self.context_switcher.environment_list_running {
+            match key.code {
+                KeyCode::Esc => self.cancel_context_environment_list(),
+                KeyCode::Char('q') => self.should_quit = true,
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.should_quit = true;
+                }
+                _ => {}
+            }
+            return;
+        }
+        match key.code {
+            KeyCode::Esc if self.context_switcher.mode == ContextPickerStep::AppEnvironments => {
+                self.context_switcher.show_targets();
+            }
+            KeyCode::Esc => self.mode = self.default_mode(),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.mode = self.default_mode();
+            }
+            KeyCode::Down | KeyCode::Tab => self.context_switcher.next(),
+            KeyCode::Up | KeyCode::BackTab => self.context_switcher.previous(),
+            KeyCode::Enter => self.select_context_picker_row(event_tx),
+            _ => {}
+        }
+    }
+
+    fn handle_context_switch_confirm_key(
+        &mut self,
+        key: KeyEvent,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                self.confirm_context_switch(event_tx);
+            }
+            KeyCode::Esc | KeyCode::Char('n') => {
+                self.context_switcher.pending_action = None;
+                self.context_switcher.waiting_for_dev_stop = false;
+                self.mode = TuiMode::ContextPicker;
+            }
+            _ => {}
+        }
+    }
+
     fn handle_help_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('?') => self.mode = TuiMode::Normal,
@@ -416,6 +639,9 @@ impl TuiApp {
             KeyCode::Esc => self.mode = return_mode,
             KeyCode::Char('?') => self.mode = TuiMode::Help,
             KeyCode::Char('p') => self.open_palette(),
+            KeyCode::Char('e') => {
+                self.open_context_picker();
+            }
             KeyCode::Char('y') => {
                 self.command_options.yes = !self.command_options.yes;
                 self.mode = return_mode;
@@ -425,7 +651,17 @@ impl TuiApp {
                 self.mode = return_mode;
             }
             KeyCode::Char('s') => {
-                self.server.clean = !self.server.clean;
+                if self.server.available {
+                    self.server.clean = !self.server.clean;
+                }
+                self.mode = return_mode;
+            }
+            KeyCode::Char('l') => {
+                self.layout.dev_preset = self.layout.dev_preset.next();
+                self.mode = return_mode;
+            }
+            KeyCode::Char('v') => {
+                self.layout.server_drawer_open = !self.layout.server_drawer_open;
                 self.mode = return_mode;
             }
             KeyCode::Char('a') if self.agents_focused() => {
@@ -461,34 +697,193 @@ impl TuiApp {
         }
     }
 
-    fn handle_mouse(&mut self, mouse: MouseEvent) {
+    fn handle_mouse(&mut self, mouse: MouseEvent, event_tx: Option<&TuiEventSender>) {
         match mouse.kind {
-            MouseEventKind::ScrollUp if self.dev_panel_focused(DevPanel::Output) => {
-                self.scroll_output_up_by(3)
+            MouseEventKind::ScrollUp => {
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true)
             }
-            MouseEventKind::ScrollDown if self.dev_panel_focused(DevPanel::Output) => {
-                self.scroll_output_down_by(3)
+            MouseEventKind::ScrollDown => {
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false)
             }
-            MouseEventKind::ScrollUp if self.dev_panel_focused(DevPanel::Server) => {
-                self.scroll_server_up_by(3)
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.layout.dragging = self.drag_target_at(mouse.column, mouse.row);
+                self.click_region(mouse.column, mouse.row, event_tx);
             }
-            MouseEventKind::ScrollDown if self.dev_panel_focused(DevPanel::Server) => {
-                self.scroll_server_down_by(3)
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.drag_layout(mouse.column, mouse.row);
             }
-            MouseEventKind::ScrollUp
-                if self.ops_agents_focused()
-                    && self.agents.view_mode == AgentsViewMode::Inspect =>
-            {
-                self.scroll_agent_inspect_up_by(3)
-            }
-            MouseEventKind::ScrollDown
-                if self.ops_agents_focused()
-                    && self.agents.view_mode == AgentsViewMode::Inspect =>
-            {
-                self.scroll_agent_inspect_down_by(3)
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.drag_layout(mouse.column, mouse.row);
+                self.layout.dragging = None;
             }
             _ => {}
         }
+    }
+
+    fn scroll_region_under_pointer(&mut self, x: u16, y: u16, amount: usize, up: bool) {
+        let region = self
+            .layout_snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.hit_test(x, y));
+        if region.is_none() {
+            self.scroll_focused_region(amount, up);
+            return;
+        }
+        match region {
+            Some(RegionKind::DevPanelBody(DevPanel::Output)) => {
+                if up {
+                    self.scroll_output_up_by(amount);
+                } else {
+                    self.scroll_output_down_by(amount);
+                }
+            }
+            Some(RegionKind::DevPanelBody(DevPanel::Server)) | Some(RegionKind::ServerDrawer) => {
+                if up {
+                    self.scroll_server_up_by(amount);
+                } else {
+                    self.scroll_server_down_by(amount);
+                }
+            }
+            Some(RegionKind::OpsInspectPane(pane)) => {
+                self.agents.inspect.focus = pane;
+                if up {
+                    self.scroll_agent_inspect_up_by(amount);
+                } else {
+                    self.scroll_agent_inspect_down_by(amount);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn scroll_focused_region(&mut self, amount: usize, up: bool) {
+        if self.dev_panel_focused(DevPanel::Output) {
+            if up {
+                self.scroll_output_up_by(amount);
+            } else {
+                self.scroll_output_down_by(amount);
+            }
+        } else if self.dev_panel_focused(DevPanel::Server) {
+            if up {
+                self.scroll_server_up_by(amount);
+            } else {
+                self.scroll_server_down_by(amount);
+            }
+        } else if self.ops_agents_focused() && self.agents.view_mode == AgentsViewMode::Inspect {
+            if up {
+                self.scroll_agent_inspect_up_by(amount);
+            } else {
+                self.scroll_agent_inspect_down_by(amount);
+            }
+        }
+    }
+
+    fn click_region(&mut self, x: u16, y: u16, event_tx: Option<&TuiEventSender>) {
+        let hit = self
+            .layout_snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.hit_test(x, y));
+        match hit {
+            Some(RegionKind::HeaderTab(TuiWorkspace::Ops)) => self.open_ops_workspace(event_tx),
+            Some(RegionKind::HeaderTab(workspace)) => self.active_workspace = workspace,
+            Some(RegionKind::DevPanelTitle(panel)) | Some(RegionKind::DevPanelBody(panel)) => {
+                self.active_workspace = TuiWorkspace::Dev;
+                self.dev_focus = panel;
+            }
+            Some(RegionKind::ServerDrawer) => {
+                self.layout.server_drawer_open = true;
+            }
+            Some(RegionKind::OpsList) => self.select_agent_at_row(y),
+            Some(RegionKind::OpsInspectPane(pane)) => self.agents.inspect.focus = pane,
+            Some(RegionKind::ContextPickerRow(index)) => {
+                self.context_switcher.selected = index;
+                self.select_context_picker_row(event_tx);
+            }
+            Some(RegionKind::ContextConfirm) => self.confirm_context_switch(event_tx),
+            Some(RegionKind::ContextCancel) => {
+                self.context_switcher.pending_action = None;
+                self.context_switcher.waiting_for_dev_stop = false;
+                self.mode = TuiMode::ContextPicker;
+            }
+            _ => {}
+        }
+    }
+
+    fn drag_target_at(&self, x: u16, y: u16) -> Option<DragTarget> {
+        self.layout_snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| match snapshot.hit_test(x, y) {
+                Some(RegionKind::DevPrimarySplit) => Some(DragTarget::DevPrimary),
+                Some(RegionKind::DevSecondarySplit) => Some(DragTarget::DevSecondary),
+                Some(RegionKind::ServerDrawerSplit) => Some(DragTarget::ServerDrawer),
+                _ => None,
+            })
+    }
+
+    fn drag_layout(&mut self, x: u16, y: u16) {
+        let Some(target) = self.layout.dragging else {
+            return;
+        };
+        let Some(snapshot) = self.layout_snapshot.borrow().clone() else {
+            return;
+        };
+        match target {
+            DragTarget::DevPrimary => {
+                let ratio = layout::ratio_from_pointer(
+                    snapshot.workspace_body,
+                    self.layout.dev_preset,
+                    x,
+                    y,
+                );
+                self.layout.dev_primary_ratio = layout::clamp_dev_primary_ratio(
+                    snapshot.workspace_body,
+                    self.layout.dev_preset,
+                    ratio,
+                );
+            }
+            DragTarget::DevSecondary => {
+                let ratio = layout::secondary_ratio_from_pointer(
+                    snapshot.workspace_body,
+                    self.layout.dev_preset,
+                    x,
+                    y,
+                );
+                self.layout.dev_secondary_ratio = layout::clamp_dev_secondary_ratio(
+                    snapshot.workspace_body,
+                    self.layout.dev_preset,
+                    ratio,
+                );
+            }
+            DragTarget::ServerDrawer => {
+                let ratio = layout::drawer_ratio_from_pointer(snapshot.body, x);
+                self.layout.server_drawer_ratio = layout::clamp_drawer_ratio(snapshot.body, ratio);
+            }
+        }
+    }
+
+    fn select_agent_at_row(&mut self, y: u16) {
+        let Some(list_area) = self
+            .layout_snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.region(RegionKind::OpsList))
+        else {
+            return;
+        };
+        if y < list_area.y {
+            return;
+        }
+        let visible_index = y.saturating_sub(list_area.y) as usize;
+        let filtered = self.filtered_agents();
+        if filtered.is_empty() {
+            return;
+        }
+        let selected = self.agents.selected.min(filtered.len().saturating_sub(1));
+        let start = selected.saturating_sub((list_area.height as usize).saturating_sub(1));
+        self.agents.selected = (start + visible_index).min(filtered.len().saturating_sub(1));
     }
 
     fn execute_action(&mut self, action: TuiActionKind, event_tx: Option<&TuiEventSender>) {
@@ -533,12 +928,26 @@ impl TuiApp {
                 self.restart_server(ServerStartMode::Clean, event_tx);
             }
             TuiActionKind::ToggleServerClean => {
-                self.server.clean = !self.server.clean;
+                if self.server.available {
+                    self.server.clean = !self.server.clean;
+                }
+                self.close_palette();
+            }
+            TuiActionKind::CycleDevLayoutPreset => {
+                self.layout.dev_preset = self.layout.dev_preset.next();
+                self.close_palette();
+            }
+            TuiActionKind::ToggleServerDrawer => {
+                self.layout.server_drawer_open = !self.layout.server_drawer_open;
                 self.close_palette();
             }
             TuiActionKind::RefreshAgents => {
                 self.close_palette();
                 self.refresh_agents(event_tx);
+            }
+            TuiActionKind::OpenContextPicker => {
+                self.palette.reset();
+                self.open_context_picker();
             }
             TuiActionKind::ToggleAgentAutoRefresh => {
                 self.toggle_agent_auto_refresh(event_tx);
@@ -600,6 +1009,15 @@ impl TuiApp {
 
     fn action_availability(&self, action: &TuiAction) -> TuiActionAvailability {
         match action.id {
+            TuiActionId::Build
+            | TuiActionId::Deploy
+            | TuiActionId::Clean
+            | TuiActionId::StartOrFocusRepl
+            | TuiActionId::RestartRepl
+                if !self.context.dev_eligible =>
+            {
+                TuiActionAvailability::Unavailable("selected context is ops-only")
+            }
             TuiActionId::Build | TuiActionId::Deploy | TuiActionId::Clean
                 if self.command_is_running() =>
             {
@@ -611,6 +1029,17 @@ impl TuiApp {
             TuiActionId::RefreshAgents if self.context_executor.is_none() => {
                 TuiActionAvailability::Unavailable("context executor unavailable")
             }
+            TuiActionId::OpenContextPicker if self.context_switch_busy() => {
+                TuiActionAvailability::Unavailable("context switch already running")
+            }
+            TuiActionId::ToggleServer
+            | TuiActionId::RestartServer
+            | TuiActionId::CleanRestartServer
+            | TuiActionId::ToggleServerClean
+                if !self.server.available =>
+            {
+                TuiActionAvailability::Unavailable("local server is unavailable")
+            }
             _ => TuiActionAvailability::Available,
         }
     }
@@ -618,6 +1047,12 @@ impl TuiApp {
     fn open_palette(&mut self) {
         self.palette.reset();
         self.mode = TuiMode::Palette;
+    }
+
+    fn open_context_picker(&mut self) {
+        self.context_switcher.last_error = None;
+        self.context_switcher.clamp_selection();
+        self.mode = TuiMode::ContextPicker;
     }
 
     fn close_palette(&mut self) {
@@ -678,6 +1113,415 @@ impl TuiApp {
         self.ops_agents_focused() || self.dev_panel_focused(DevPanel::Agents)
     }
 
+    fn context_switch_dev_blockers(&self) -> Vec<&'static str> {
+        let mut blockers = Vec::new();
+        if self.command_is_running() {
+            blockers.push("command");
+        }
+        if self.repl.is_running() {
+            blockers.push("repl");
+        }
+        blockers
+    }
+
+    fn context_switch_dev_blocker_message(&self) -> Option<String> {
+        let blockers = self.context_switch_dev_blockers();
+        if blockers.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "Switching context will stop running dev jobs: {}",
+                blockers.join(", ")
+            ))
+        }
+    }
+
+    fn context_switch_busy(&self) -> bool {
+        self.context_switcher.switch_running || self.context_switcher.environment_list_running
+    }
+
+    fn context_switch_pending(&self) -> bool {
+        self.context_switcher.pending_action.is_some()
+            || self.context_switcher.waiting_for_dev_stop
+            || self.context_switch_busy()
+    }
+
+    fn select_context_picker_row(&mut self, event_tx: Option<&TuiEventSender>) {
+        match self.context_switcher.mode {
+            ContextPickerStep::Targets => self.select_context_target(event_tx),
+            ContextPickerStep::AppEnvironments => self.select_context_app_environment(event_tx),
+        }
+    }
+
+    fn select_context_target(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.context_switch_busy() {
+            return;
+        }
+
+        let Some(target) = self.context_switcher.selected_target().cloned() else {
+            return;
+        };
+        if let Some(error) = &target.error {
+            self.context_switcher.last_error = Some(error.clone());
+            return;
+        }
+        if target.is_current {
+            self.context_switcher.last_error = None;
+            return;
+        }
+        match &target.kind {
+            TuiContextTargetKind::ManifestAppContext { .. } => {
+                self.request_context_switch_action(
+                    PendingContextSwitchAction::Switch {
+                        global_flags: target.global_flags.clone(),
+                        environment_reference: None,
+                    },
+                    event_tx,
+                );
+            }
+            TuiContextTargetKind::ServerTarget { .. } => {
+                self.request_context_switch_action(
+                    PendingContextSwitchAction::LoadEnvironments { target },
+                    event_tx,
+                );
+            }
+            TuiContextTargetKind::Error => {}
+        }
+    }
+
+    fn select_context_app_environment(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.context_switch_busy() {
+            return;
+        }
+
+        let Some(target) = self.context_switcher.selected_app_environment().cloned() else {
+            return;
+        };
+        if let Some(error) = &target.error {
+            self.context_switcher.last_error = Some(error.clone());
+            return;
+        }
+
+        self.request_context_switch_action(
+            PendingContextSwitchAction::Switch {
+                global_flags: target.server_flags.clone(),
+                environment_reference: target.environment_reference.clone(),
+            },
+            event_tx,
+        );
+    }
+
+    fn request_context_switch_action(
+        &mut self,
+        action: PendingContextSwitchAction,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        self.close_ops_for_context_switch();
+        self.context_switcher.last_error = None;
+        if self.context_switch_dev_blockers().is_empty() {
+            self.start_context_switch_action(action, event_tx);
+        } else {
+            self.context_switcher.pending_action = Some(action);
+            self.context_switcher.waiting_for_dev_stop = false;
+            self.mode = TuiMode::ContextSwitchConfirm;
+        }
+    }
+
+    fn confirm_context_switch(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.context_switcher.pending_action.is_none() {
+            self.mode = TuiMode::ContextPicker;
+            return;
+        }
+        self.close_ops_for_context_switch();
+        self.request_dev_stop_for_context_switch();
+        self.context_switcher.waiting_for_dev_stop = true;
+        self.resume_pending_context_switch_if_ready(event_tx);
+    }
+
+    fn start_context_switch_action(
+        &mut self,
+        action: PendingContextSwitchAction,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        match action {
+            PendingContextSwitchAction::Switch {
+                global_flags,
+                environment_reference,
+            } => self.start_context_switch(global_flags, environment_reference, event_tx),
+            PendingContextSwitchAction::LoadEnvironments { target } => {
+                self.start_context_environment_list(target, event_tx)
+            }
+        }
+    }
+
+    fn resume_pending_context_switch_if_ready(&mut self, event_tx: Option<&TuiEventSender>) {
+        if !self.context_switcher.waiting_for_dev_stop
+            || !self.context_switch_dev_blockers().is_empty()
+        {
+            return;
+        }
+        self.context_switcher.waiting_for_dev_stop = false;
+        if let Some(action) = self.context_switcher.pending_action.take() {
+            self.mode = TuiMode::ContextPicker;
+            self.start_context_switch_action(action, event_tx);
+        } else {
+            self.mode = TuiMode::ContextPicker;
+        }
+    }
+
+    fn close_ops_for_context_switch(&mut self) {
+        self.close_agent_inspect_jobs();
+        self.agents.refresh_running = false;
+        self.agents.refresh_context_id = None;
+        self.agents.refresh_generation += 1;
+    }
+
+    fn request_dev_stop_for_context_switch(&mut self) {
+        if self.command_is_running() {
+            self.cancel_or_force_kill_command();
+        }
+        if self.repl.is_running() {
+            self.stop_repl();
+        }
+    }
+
+    fn cancel_context_environment_list(&mut self) {
+        self.context_switcher.environment_list_running = false;
+        self.context_switcher.stop_environment_list_spinner();
+        self.context_switcher.generation += 1;
+        self.context_switcher.pending_key = None;
+        self.context_switcher.last_error = None;
+        self.context_switcher.show_targets();
+    }
+
+    fn handle_context_environment_list_tick(&mut self, generation: u64) {
+        if generation == self.context_switcher.generation
+            && self.context_switcher.environment_list_running
+        {
+            self.context_switcher.environment_list_spinner_frame = self
+                .context_switcher
+                .environment_list_spinner_frame
+                .wrapping_add(1);
+        }
+    }
+
+    fn start_context_switch(
+        &mut self,
+        global_flags: GolemCliGlobalFlags,
+        environment_reference: Option<EnvironmentReference>,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        let Some(event_tx) = event_tx.cloned() else {
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.context_switcher.last_error =
+                Some("TUI context executor is not available".to_string());
+            return;
+        };
+
+        self.context_switcher.generation += 1;
+        self.context_switcher.switch_running = true;
+        self.context_switcher.pending_key = environment_reference
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| Some("context".to_string()));
+        self.context_switcher.last_error = None;
+        let generation = self.context_switcher.generation;
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        context_executor.spawn(
+            event_tx,
+            auth_presenter,
+            move |_launch_context| async move {
+                Context::new(global_flags.clone(), Some(Output::Captured))
+                    .await
+                    .map(|context| (Arc::new(context), environment_reference))
+            },
+            move |result| TuiEvent::ContextSwitchFinished { generation, result },
+        );
+    }
+
+    fn start_context_environment_list(
+        &mut self,
+        target: TuiContextTarget,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        let Some(event_tx) = event_tx.cloned() else {
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.context_switcher.last_error =
+                Some("TUI context executor is not available".to_string());
+            return;
+        };
+
+        self.context_switcher.generation += 1;
+        self.context_switcher.environment_list_running = true;
+        self.context_switcher.environment_list_spinner_frame = 0;
+        self.context_switcher.pending_key = Some(target.key.clone());
+        self.context_switcher.last_error = None;
+        let generation = self.context_switcher.generation;
+        let server_key = target.key.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_context_environment_list_spinner(generation, event_tx.clone(), stop.clone());
+        self.context_switcher.environment_list_spinner_stop = Some(stop);
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        context_executor.spawn(
+            event_tx,
+            auth_presenter,
+            move |_launch_context| async move {
+                let context = Arc::new(
+                    Context::new(target.global_flags.clone(), Some(Output::Captured)).await?,
+                );
+                let environments = context
+                    .environment_handler()
+                    .list_visible_environment_details()
+                    .await?;
+                Ok(environments)
+            },
+            move |result| TuiEvent::ContextEnvironmentListFinished {
+                generation,
+                server_key,
+                result,
+            },
+        );
+    }
+
+    fn finish_context_switch(
+        &mut self,
+        generation: u64,
+        result: TuiContextTaskResult<(Arc<Context>, Option<EnvironmentReference>)>,
+        event_tx: &TuiEventSender,
+    ) {
+        if generation != self.context_switcher.generation {
+            return;
+        }
+        self.context_switcher.switch_running = false;
+        let (_, result, logs) = result.into_parts();
+        match result {
+            Ok((context, environment_reference)) => {
+                let Some(context_executor) = self.context_executor.as_ref() else {
+                    self.context_switcher.last_error =
+                        Some("TUI context executor is not available".to_string());
+                    return;
+                };
+                context_executor.select_context(context.clone());
+                let dev_eligible = self.selected_switch_dev_eligible(&environment_reference);
+                self.context = TuiContextInfo::from_selected(
+                    context.as_ref(),
+                    environment_reference.as_ref(),
+                    dev_eligible,
+                );
+                self.context_cli_args = self.selected_switch_context_args();
+                self.selected_environment_reference = environment_reference;
+                self.reset_agents_for_context_switch();
+                self.context_switcher.last_error = None;
+                self.mode = self.default_mode();
+                if self.agents_focused() {
+                    self.refresh_agents(Some(event_tx));
+                }
+            }
+            Err(error) => {
+                self.context_switcher.last_error = Some(agent_refresh_error(error, logs));
+            }
+        }
+    }
+
+    fn finish_context_environment_list(
+        &mut self,
+        generation: u64,
+        server_key: String,
+        result: TuiContextTaskResult<Vec<EnvironmentWithDetails>>,
+    ) {
+        if generation != self.context_switcher.generation {
+            return;
+        }
+        self.context_switcher.environment_list_running = false;
+        self.context_switcher.stop_environment_list_spinner();
+        let (_, result, logs) = result.into_parts();
+        match result {
+            Ok(environments) => {
+                let Some(server_target) = self
+                    .context_switcher
+                    .targets
+                    .iter()
+                    .find(|target| target.key == server_key)
+                    .cloned()
+                else {
+                    self.context_switcher.last_error =
+                        Some("selected server target no longer exists".to_string());
+                    return;
+                };
+                let app_environments = app_environment_targets_from_details(
+                    &server_target,
+                    environments,
+                    &self.context,
+                );
+                self.context_switcher
+                    .show_app_environments(server_key, app_environments);
+                self.context_switcher.last_error = None;
+            }
+            Err(error) => {
+                self.context_switcher.last_error = Some(agent_refresh_error(error, logs));
+            }
+        }
+    }
+
+    fn selected_switch_dev_eligible(
+        &self,
+        environment_reference: &Option<EnvironmentReference>,
+    ) -> bool {
+        match self.context_switcher.mode {
+            ContextPickerStep::Targets => {
+                self.context_switcher
+                    .selected_target()
+                    .is_some_and(|target| {
+                        matches!(target.kind, TuiContextTargetKind::ManifestAppContext { .. })
+                    })
+            }
+            ContextPickerStep::AppEnvironments => {
+                self.context_switcher
+                    .selected_app_environment()
+                    .is_some_and(|target| target.dev_eligible)
+                    || environment_reference.is_none()
+            }
+        }
+    }
+
+    fn selected_switch_context_args(&self) -> Vec<String> {
+        match self.context_switcher.mode {
+            ContextPickerStep::Targets => self
+                .context_switcher
+                .selected_target()
+                .map(|target| context_args_from_flags(&target.global_flags))
+                .unwrap_or_default(),
+            ContextPickerStep::AppEnvironments => self
+                .context_switcher
+                .selected_app_environment()
+                .map(|target| context_args_from_flags(&target.server_flags))
+                .unwrap_or_default(),
+        }
+    }
+
+    fn reset_agents_for_context_switch(&mut self) {
+        self.close_agent_inspect_jobs();
+        self.agents.view_mode = AgentsViewMode::List;
+        self.agents.selected = 0;
+        self.agents.last_error = None;
+        self.agents.agents.clear();
+        self.agents.refresh_running = false;
+        self.agents.refresh_context_id = None;
+        self.agents.refresh_generation += 1;
+    }
+
+    fn local_server_unavailable(&self) -> bool {
+        !self.server.available
+    }
+
+    fn dev_context_unavailable(&self) -> bool {
+        !self.context.dev_eligible
+    }
+
     fn select_next_agent(&mut self) {
         let count = self.filtered_agents().len();
         if count > 0 {
@@ -694,6 +1538,9 @@ impl TuiApp {
     }
 
     fn refresh_agents(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.context_switch_pending() {
+            return;
+        }
         if self.agents.refresh_running {
             return;
         }
@@ -711,13 +1558,18 @@ impl TuiApp {
         self.agents.refresh_running = true;
         self.agents.last_error = None;
         self.agents.refresh_context_id = Some(context_executor.current_context_id());
+        self.agents.refresh_context_label = Some(self.context.short_label());
         let mode = self.agents.mode;
+        let environment_reference = self.selected_environment_reference.clone();
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
             event_tx,
+            auth_presenter,
             move |launch_context| async move {
                 let request = AgentListRequest {
                     mode: mode.agent_list_mode(),
                     stable_sort: true,
+                    environment_reference,
                     ..AgentListRequest::default()
                 };
                 launch_context
@@ -808,12 +1660,14 @@ impl TuiApp {
         self.agents.inspect = AgentInspectState {
             agent_name: Some(agent_name.clone()),
             focus: AgentInspectPane::Oplog,
-            oplog: InspectJob::start(vec![
-                "agent".to_string(),
-                "oplog".to_string(),
-                agent_name.clone(),
-            ]),
-            stream: InspectJob::start(vec!["agent".to_string(), "stream".to_string(), agent_name]),
+            oplog: InspectJob::start(
+                vec!["agent".to_string(), "oplog".to_string(), agent_name.clone()],
+                self.context.short_label(),
+            ),
+            stream: InspectJob::start(
+                vec!["agent".to_string(), "stream".to_string(), agent_name],
+                self.context.short_label(),
+            ),
         };
 
         self.agents.inspect.oplog.output.append_local_line(format!(
@@ -953,6 +1807,20 @@ impl TuiApp {
     }
 
     fn start_command(&mut self, kind: CommandKind, event_tx: Option<&TuiEventSender>) {
+        if self.dev_context_unavailable() {
+            self.open_dev_workspace(DevPanel::Output);
+            self.command_run = Some(CommandRun::new(
+                self.next_command_id,
+                kind,
+                self.command_args(kind),
+                self.command_options,
+                self.context.short_label(),
+            ));
+            self.next_command_id += 1;
+            self.append_local_command_line("selected context is ops-only");
+            self.set_command_status(CommandStatus::Failed);
+            return;
+        }
         if self.command_is_running() {
             self.append_local_command_line("command already running");
             self.open_dev_workspace(DevPanel::Output);
@@ -969,6 +1837,7 @@ impl TuiApp {
             kind,
             args.clone(),
             self.command_options,
+            self.context.short_label(),
         ));
         self.append_local_command_line(format!("$ {}", command_display(&args)));
 
@@ -1031,20 +1900,7 @@ impl TuiApp {
     }
 
     fn command_spec(&self, args: Vec<String>) -> anyhow::Result<NestedCliSpec> {
-        let mut env = HashMap::new();
-        env.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
-        env.insert("FORCE_COLOR".to_string(), "1".to_string());
-        if std::env::var("TERM").is_err() || std::env::var("TERM").is_ok_and(|term| term == "dumb")
-        {
-            env.insert("TERM".to_string(), "xterm-256color".to_string());
-        }
-
-        Ok(NestedCliSpec {
-            program: PathBuf::from(crate::binary_path_to_string()?),
-            args,
-            cwd: crate::fs::current_dir_lexical()?,
-            env,
-        })
+        self.nested_cli_spec(args)
     }
 
     fn append_command_output(&mut self, bytes: &[u8]) {
@@ -1059,7 +1915,7 @@ impl TuiApp {
         }
     }
 
-    fn finish_command(&mut self, exit: CommandExit) {
+    fn finish_command(&mut self, exit: CommandExit, event_tx: &TuiEventSender) {
         if let Some(run) = self.command_run.as_mut() {
             if run.status != CommandStatus::Killed {
                 run.status = if exit.success {
@@ -1083,6 +1939,7 @@ impl TuiApp {
         if self.mode == TuiMode::CommandInteraction {
             self.mode = TuiMode::Normal;
         }
+        self.resume_pending_context_switch_if_ready(Some(event_tx));
     }
 
     fn cancel_or_force_kill_command(&mut self) {
@@ -1191,6 +2048,14 @@ impl TuiApp {
     }
 
     fn toggle_server(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.local_server_unavailable() {
+            self.server
+                .run
+                .output
+                .append_local_line("local server is unavailable");
+            self.open_dev_workspace(DevPanel::Server);
+            return;
+        }
         if self.server.run.is_running() {
             self.stop_server();
         } else {
@@ -1204,6 +2069,14 @@ impl TuiApp {
     }
 
     fn start_server(&mut self, mode: ServerStartMode, event_tx: Option<&TuiEventSender>) {
+        if self.local_server_unavailable() {
+            self.server
+                .run
+                .output
+                .append_local_line("local server is unavailable");
+            self.open_dev_workspace(DevPanel::Server);
+            return;
+        }
         if self.server.run.is_running() {
             self.server
                 .run
@@ -1219,7 +2092,12 @@ impl TuiApp {
         };
         let args = server_args(clean);
         self.open_dev_workspace(DevPanel::Server);
-        self.server.run = ServerRun::new(self.server.next_id, clean, args.clone());
+        self.server.run = ServerRun::new(
+            self.server.next_id,
+            clean,
+            args.clone(),
+            self.server.launch_label.clone(),
+        );
         self.server.next_id += 1;
         self.server
             .run
@@ -1260,20 +2138,7 @@ impl TuiApp {
     }
 
     fn server_spec(&self, args: Vec<String>) -> anyhow::Result<NestedCliSpec> {
-        let mut env = HashMap::new();
-        env.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
-        env.insert("FORCE_COLOR".to_string(), "1".to_string());
-        if std::env::var("TERM").is_err() || std::env::var("TERM").is_ok_and(|term| term == "dumb")
-        {
-            env.insert("TERM".to_string(), "xterm-256color".to_string());
-        }
-
-        Ok(NestedCliSpec {
-            program: PathBuf::from(crate::binary_path_to_string()?),
-            args,
-            cwd: crate::fs::current_dir_lexical()?,
-            env,
-        })
+        self.nested_cli_spec_with_context_args(args, &self.server.cli_args)
     }
 
     fn stop_server(&mut self) {
@@ -1315,6 +2180,14 @@ impl TuiApp {
     }
 
     fn restart_server(&mut self, mode: ServerStartMode, event_tx: Option<&TuiEventSender>) {
+        if self.local_server_unavailable() {
+            self.server
+                .run
+                .output
+                .append_local_line("local server is unavailable");
+            self.open_dev_workspace(DevPanel::Server);
+            return;
+        }
         if self.server.run.is_running() {
             self.server.run.restart_after_stop = Some(mode);
             self.stop_server();
@@ -1351,6 +2224,7 @@ impl TuiApp {
         if let Some(mode) = pending_restart {
             self.start_server(mode, Some(event_tx));
         }
+        self.resume_pending_context_switch_if_ready(Some(event_tx));
     }
 
     fn handle_server_spinner_tick(&mut self, server_id: u64) {
@@ -1379,6 +2253,11 @@ impl TuiApp {
 
     fn start_or_focus_repl(&mut self, event_tx: Option<&TuiEventSender>) {
         self.open_dev_workspace(DevPanel::Repl);
+        if self.dev_context_unavailable() {
+            self.repl.run.last_error = Some("selected context is ops-only".to_string());
+            self.mode = TuiMode::Normal;
+            return;
+        }
         if self.repl.is_running() {
             self.mode = TuiMode::Repl;
             return;
@@ -1391,7 +2270,12 @@ impl TuiApp {
         let args = vec!["repl".to_string()];
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (screen_rows, screen_cols) = repl_screen_size_for_terminal(cols, rows);
-        self.repl.run = ReplRun::new(args.clone(), screen_rows, screen_cols);
+        self.repl.run = ReplRun::new(
+            args.clone(),
+            screen_rows,
+            screen_cols,
+            self.context.short_label(),
+        );
         self.mode = TuiMode::Repl;
         self.repl
             .run
@@ -1427,6 +2311,18 @@ impl TuiApp {
     }
 
     fn repl_spec(&self, args: Vec<String>) -> anyhow::Result<NestedCliSpec> {
+        self.nested_cli_spec(args)
+    }
+
+    fn nested_cli_spec(&self, args: Vec<String>) -> anyhow::Result<NestedCliSpec> {
+        self.nested_cli_spec_with_context_args(args, &self.context_cli_args)
+    }
+
+    fn nested_cli_spec_with_context_args(
+        &self,
+        args: Vec<String>,
+        context_args: &[String],
+    ) -> anyhow::Result<NestedCliSpec> {
         let mut env = HashMap::new();
         env.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
         env.insert("FORCE_COLOR".to_string(), "1".to_string());
@@ -1435,9 +2331,12 @@ impl TuiApp {
             env.insert("TERM".to_string(), "xterm-256color".to_string());
         }
 
+        let mut full_args = context_args.to_vec();
+        full_args.extend(args);
+
         Ok(NestedCliSpec {
             program: PathBuf::from(crate::binary_path_to_string()?),
-            args,
+            args: full_args,
             cwd: crate::fs::current_dir_lexical()?,
             env,
         })
@@ -1477,7 +2376,7 @@ impl TuiApp {
         }
     }
 
-    fn finish_repl(&mut self, exit: CommandExit) {
+    fn finish_repl(&mut self, exit: CommandExit, event_tx: &TuiEventSender) {
         self.repl.run.runtime = None;
         self.repl.run.exit_code = exit.code;
         self.repl.run.status = if exit.success || self.repl.run.status == ReplStatus::Stopping {
@@ -1499,6 +2398,7 @@ impl TuiApp {
         if matches!(self.mode, TuiMode::Repl | TuiMode::LeaderRepl) {
             self.mode = TuiMode::Normal;
         }
+        self.resume_pending_context_switch_if_ready(Some(event_tx));
     }
 
     fn stop_repl(&mut self) {
@@ -1548,10 +2448,12 @@ impl TuiApp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiMode {
+pub(super) enum TuiMode {
     Normal,
     LeaderNormal,
     Palette,
+    ContextPicker,
+    ContextSwitchConfirm,
     Help,
     AgentFilter,
     CommandInteraction,
@@ -1609,6 +2511,7 @@ struct CommandRun {
     status: CommandStatus,
     options: CommandOptions,
     args: Vec<String>,
+    launch_context: String,
     output: OutputBuffer,
     runtime: Option<NestedCliRuntime>,
     spinner_frame: usize,
@@ -1617,13 +2520,20 @@ struct CommandRun {
 }
 
 impl CommandRun {
-    fn new(id: u64, kind: CommandKind, args: Vec<String>, options: CommandOptions) -> Self {
+    fn new(
+        id: u64,
+        kind: CommandKind,
+        args: Vec<String>,
+        options: CommandOptions,
+        launch_context: String,
+    ) -> Self {
         Self {
             id,
             kind,
             status: CommandStatus::Running,
             options,
             args,
+            launch_context,
             output: OutputBuffer::default(),
             runtime: None,
             spinner_frame: 0,
@@ -1639,7 +2549,10 @@ impl CommandRun {
     }
 }
 
-struct ServerState {
+struct LocalServerService {
+    available: bool,
+    cli_args: Vec<String>,
+    launch_label: String,
     clean: bool,
     next_id: u64,
     run: ServerRun,
@@ -1659,6 +2572,7 @@ struct AgentsState {
     refresh_running: bool,
     refresh_generation: u64,
     refresh_context_id: Option<TuiContextId>,
+    refresh_context_label: Option<String>,
     auto_refresh_stop: Option<Arc<AtomicBool>>,
     last_error: Option<String>,
     agents: Vec<AgentListItem>,
@@ -1677,6 +2591,7 @@ impl Default for AgentsState {
             refresh_running: false,
             refresh_generation: 0,
             refresh_context_id: None,
+            refresh_context_label: None,
             auto_refresh_stop: None,
             last_error: None,
             agents: Vec::new(),
@@ -1721,7 +2636,7 @@ impl AgentsState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentsViewMode {
+pub(super) enum AgentsViewMode {
     List,
     Inspect,
 }
@@ -1745,7 +2660,7 @@ impl Default for AgentInspectState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentInspectPane {
+pub(super) enum AgentInspectPane {
     Oplog,
     Stream,
 }
@@ -1761,6 +2676,7 @@ impl AgentInspectPane {
 
 struct InspectJob {
     args: Vec<String>,
+    launch_context: String,
     status: InspectJobStatus,
     output: OutputBuffer,
     runtime: Option<NestedCliRuntime>,
@@ -1771,6 +2687,7 @@ impl Default for InspectJob {
     fn default() -> Self {
         Self {
             args: Vec::new(),
+            launch_context: String::new(),
             status: InspectJobStatus::Idle,
             output: OutputBuffer::default(),
             runtime: None,
@@ -1780,9 +2697,10 @@ impl Default for InspectJob {
 }
 
 impl InspectJob {
-    fn start(args: Vec<String>) -> Self {
+    fn start(args: Vec<String>, launch_context: String) -> Self {
         Self {
             args,
+            launch_context,
             status: InspectJobStatus::Starting,
             output: OutputBuffer::default(),
             runtime: None,
@@ -1882,9 +2800,22 @@ impl AgentListItem {
     }
 }
 
-impl Default for ServerState {
+impl LocalServerService {
+    fn from_launch(launch: &TuiLaunchConfig) -> Self {
+        Self {
+            cli_args: local_server_args_from_launch_flags(&launch.base_flags),
+            launch_label: "local server".to_string(),
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for LocalServerService {
     fn default() -> Self {
         Self {
+            available: true,
+            cli_args: Vec::new(),
+            launch_label: "local server".to_string(),
             clean: false,
             next_id: 1,
             run: ServerRun::default(),
@@ -1905,6 +2836,7 @@ struct ServerRun {
     status: ServerStatus,
     clean: bool,
     args: Vec<String>,
+    launch_context: String,
     output: OutputBuffer,
     runtime: Option<NestedCliRuntime>,
     spinner_frame: usize,
@@ -1920,6 +2852,7 @@ impl Default for ServerRun {
             status: ServerStatus::Stopped,
             clean: false,
             args: server_args(false),
+            launch_context: String::new(),
             output: OutputBuffer::default(),
             runtime: None,
             spinner_frame: 0,
@@ -1931,12 +2864,13 @@ impl Default for ServerRun {
 }
 
 impl ServerRun {
-    fn new(id: u64, clean: bool, args: Vec<String>) -> Self {
+    fn new(id: u64, clean: bool, args: Vec<String>, launch_context: String) -> Self {
         Self {
             id,
             status: ServerStatus::Starting,
             clean,
             args,
+            launch_context,
             output: OutputBuffer::default(),
             runtime: None,
             spinner_frame: 0,
@@ -1990,6 +2924,7 @@ enum ServerStartMode {
 struct ReplRun {
     status: ReplStatus,
     args: Vec<String>,
+    launch_context: String,
     screen: TerminalScreen,
     runtime: Option<NestedCliRuntime>,
     exit_code: Option<i32>,
@@ -2001,6 +2936,7 @@ impl Default for ReplRun {
         Self {
             status: ReplStatus::Stopped,
             args: vec!["repl".to_string()],
+            launch_context: String::new(),
             screen: TerminalScreen::new(20, 80),
             runtime: None,
             exit_code: None,
@@ -2010,10 +2946,11 @@ impl Default for ReplRun {
 }
 
 impl ReplRun {
-    fn new(args: Vec<String>, rows: u16, cols: u16) -> Self {
+    fn new(args: Vec<String>, rows: u16, cols: u16, launch_context: String) -> Self {
         Self {
             status: ReplStatus::Starting,
             args,
+            launch_context,
             screen: TerminalScreen::new(rows, cols),
             runtime: None,
             exit_code: None,
@@ -2199,16 +3136,16 @@ fn agent_refresh_error(error: String, logs: Vec<String>) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TuiWorkspace {
+pub(super) enum TuiWorkspace {
     Home,
     Dev,
     Ops,
 }
 
 impl TuiWorkspace {
-    const ALL: [Self; 3] = [Self::Home, Self::Dev, Self::Ops];
+    pub(super) const ALL: [Self; 3] = [Self::Home, Self::Dev, Self::Ops];
 
-    fn title(self) -> &'static str {
+    pub(super) fn title(self) -> &'static str {
         match self {
             Self::Home => "Home",
             Self::Dev => "Dev",
@@ -2226,7 +3163,7 @@ impl TuiWorkspace {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DevPanel {
+pub(super) enum DevPanel {
     Repl,
     Output,
     Server,
@@ -2297,22 +3234,266 @@ impl CommandPalette {
 }
 
 #[derive(Debug, Clone)]
+struct ContextSwitcherState {
+    targets: Vec<TuiContextTarget>,
+    app_environments: Vec<TuiAppEnvironmentTarget>,
+    mode: ContextPickerStep,
+    selected: usize,
+    generation: u64,
+    switch_running: bool,
+    environment_list_running: bool,
+    environment_list_spinner_frame: usize,
+    environment_list_spinner_stop: Option<Arc<AtomicBool>>,
+    pending_key: Option<String>,
+    selected_server_key: Option<String>,
+    last_error: Option<String>,
+    pending_action: Option<PendingContextSwitchAction>,
+    waiting_for_dev_stop: bool,
+}
+
+impl ContextSwitcherState {
+    fn new(mut targets: Vec<TuiContextTarget>) -> Self {
+        targets.sort_by_key(|target| context_target_group(target).order());
+        let selected = targets
+            .iter()
+            .position(|target| target.is_current)
+            .unwrap_or(0);
+        Self {
+            targets,
+            app_environments: Vec::new(),
+            mode: ContextPickerStep::Targets,
+            selected,
+            generation: 0,
+            switch_running: false,
+            environment_list_running: false,
+            environment_list_spinner_frame: 0,
+            environment_list_spinner_stop: None,
+            pending_key: None,
+            selected_server_key: None,
+            last_error: None,
+            pending_action: None,
+            waiting_for_dev_stop: false,
+        }
+    }
+
+    fn selected_target(&self) -> Option<&TuiContextTarget> {
+        self.targets.get(self.selected)
+    }
+
+    fn selected_app_environment(&self) -> Option<&TuiAppEnvironmentTarget> {
+        self.app_environments.get(self.selected)
+    }
+
+    fn row_count(&self) -> usize {
+        match self.mode {
+            ContextPickerStep::Targets => self.targets.len(),
+            ContextPickerStep::AppEnvironments => self.app_environments.len(),
+        }
+    }
+
+    fn clamp_selection(&mut self) {
+        self.selected = self.selected.min(self.row_count().saturating_sub(1));
+    }
+
+    fn next(&mut self) {
+        let count = self.row_count();
+        if count > 0 {
+            self.selected = (self.selected + 1) % count;
+        }
+    }
+
+    fn previous(&mut self) {
+        let count = self.row_count();
+        if count > 0 {
+            self.selected = (self.selected + count - 1) % count;
+        }
+    }
+
+    fn show_targets(&mut self) {
+        self.mode = ContextPickerStep::Targets;
+        self.selected = self
+            .targets
+            .iter()
+            .position(|target| target.is_current)
+            .unwrap_or(0);
+        self.app_environments.clear();
+        self.selected_server_key = None;
+    }
+
+    fn stop_environment_list_spinner(&mut self) {
+        if let Some(stop) = self.environment_list_spinner_stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn show_app_environments(
+        &mut self,
+        server_key: String,
+        app_environments: Vec<TuiAppEnvironmentTarget>,
+    ) {
+        self.mode = ContextPickerStep::AppEnvironments;
+        self.selected_server_key = Some(server_key);
+        self.app_environments = app_environments;
+        self.selected = 0;
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PendingContextSwitchAction {
+    Switch {
+        global_flags: GolemCliGlobalFlags,
+        environment_reference: Option<EnvironmentReference>,
+    },
+    LoadEnvironments {
+        target: TuiContextTarget,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct AuthPromptState {
+    url: String,
+}
+
+#[derive(Debug, Clone)]
+struct TuiContextTarget {
+    key: String,
+    label: String,
+    detail: String,
+    kind: TuiContextTargetKind,
+    global_flags: GolemCliGlobalFlags,
+    error: Option<String>,
+    is_current: bool,
+}
+
+impl TuiContextTarget {
+    fn error(error: String) -> Self {
+        Self {
+            key: "error".to_string(),
+            label: "Context discovery error".to_string(),
+            detail: String::new(),
+            kind: TuiContextTargetKind::Error,
+            global_flags: GolemCliGlobalFlags::default(),
+            error: Some(error),
+            is_current: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ContextPickerStep {
+    Targets,
+    AppEnvironments,
+}
+
+#[derive(Debug, Clone)]
+enum TuiContextTargetKind {
+    ManifestAppContext { app: String, environment: String },
+    ServerTarget { source: TuiServerTargetSource },
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TuiServerTargetSource {
+    ManifestEnvironment,
+    Builtin,
+    Profile,
+    LaunchSelector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiContextTargetGroup {
+    ManifestEnvironments,
+    Servers,
+    Other,
+}
+
+impl TuiContextTargetGroup {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ManifestEnvironments => "Manifest Environments",
+            Self::Servers => "Servers",
+            Self::Other => "Other",
+        }
+    }
+
+    fn order(self) -> usize {
+        match self {
+            Self::ManifestEnvironments => 0,
+            Self::Servers => 1,
+            Self::Other => 2,
+        }
+    }
+}
+
+fn context_target_group(target: &TuiContextTarget) -> TuiContextTargetGroup {
+    match target.kind {
+        TuiContextTargetKind::ManifestAppContext { .. } => {
+            TuiContextTargetGroup::ManifestEnvironments
+        }
+        TuiContextTargetKind::ServerTarget { .. } => TuiContextTargetGroup::Servers,
+        TuiContextTargetKind::Error => TuiContextTargetGroup::Other,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TuiAppEnvironmentTarget {
+    label: String,
+    detail: String,
+    server_label: String,
+    server_flags: GolemCliGlobalFlags,
+    environment_reference: Option<EnvironmentReference>,
+    app: Option<String>,
+    environment: Option<String>,
+    dev_eligible: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct TuiContextInfo {
     application: String,
     environment: String,
     server: String,
     config_dir: String,
+    uses_local_server: bool,
+    dev_eligible: bool,
 }
 
 impl TuiContextInfo {
     fn from_context(ctx: &Context) -> Self {
-        let manifest_environment = ctx.manifest_environment();
-        let application = manifest_environment
-            .map(|environment| environment.application_name.0.clone())
-            .unwrap_or_else(|| "no application manifest".to_string());
-        let environment = manifest_environment
-            .map(|environment| environment.environment_name.0.clone())
-            .unwrap_or_else(|| "profile/default".to_string());
+        Self::from_selected(ctx, None, true)
+    }
+
+    fn from_selected(
+        ctx: &Context,
+        environment_reference: Option<&EnvironmentReference>,
+        dev_eligible: bool,
+    ) -> Self {
+        let manifest_environment = ctx.selected_manifest_environment();
+        let (application, environment) = match environment_reference {
+            Some(EnvironmentReference::ApplicationEnvironment {
+                application_name,
+                environment_name,
+            })
+            | Some(EnvironmentReference::AccountApplicationEnvironment {
+                application_name,
+                environment_name,
+                ..
+            }) => (application_name.0.clone(), environment_name.0.clone()),
+            Some(EnvironmentReference::Environment { environment_name }) => (
+                manifest_environment
+                    .map(|environment| environment.application_name.0.clone())
+                    .unwrap_or_else(|| "manifest application".to_string()),
+                environment_name.0.clone(),
+            ),
+            None => (
+                manifest_environment
+                    .map(|environment| environment.application_name.0.clone())
+                    .unwrap_or_else(|| "no application manifest".to_string()),
+                manifest_environment
+                    .map(|environment| environment.environment_name.0.clone())
+                    .unwrap_or_else(|| "profile/default".to_string()),
+            ),
+        };
         let server = manifest_environment
             .map(|environment| {
                 environment
@@ -2329,7 +3510,52 @@ impl TuiContextInfo {
             environment,
             server,
             config_dir: ctx.config_dir().display().to_string(),
+            uses_local_server: ctx.uses_local_server(),
+            dev_eligible,
         }
+    }
+
+    fn short_label(&self) -> String {
+        if self.application == "no application manifest" {
+            format!("profile:{}", self.environment)
+        } else {
+            format!("{}:{}", self.application, self.environment)
+        }
+    }
+}
+
+fn context_target_marker(target: &TuiContextTarget) -> Option<String> {
+    if target.is_current {
+        return Some("current".to_string());
+    }
+    match &target.kind {
+        TuiContextTargetKind::ManifestAppContext { app, environment } => {
+            let scope = format!("{app}/{environment}");
+            if target.label.contains(&scope) || target.detail.contains(&scope) {
+                None
+            } else {
+                Some(scope)
+            }
+        }
+        TuiContextTargetKind::ServerTarget { source } => match source {
+            TuiServerTargetSource::ManifestEnvironment => Some("manifest server".to_string()),
+            TuiServerTargetSource::Builtin => Some("built-in".to_string()),
+            TuiServerTargetSource::Profile => Some("profile".to_string()),
+            TuiServerTargetSource::LaunchSelector => Some("launch".to_string()),
+        },
+        TuiContextTargetKind::Error => Some("error".to_string()),
+    }
+}
+
+fn app_environment_marker(target: &TuiAppEnvironmentTarget) -> Option<String> {
+    if target.error.is_some() {
+        Some("error".to_string())
+    } else if !target.dev_eligible {
+        Some("ops-only".to_string())
+    } else if target.app.is_none() || target.environment.is_none() {
+        Some("server only".to_string())
+    } else {
+        None
     }
 }
 
@@ -2339,6 +3565,350 @@ fn format_server(server: &Server) -> String {
         Server::Builtin(BuiltinServer::Cloud) => "cloud".to_string(),
         Server::Custom(custom) => custom.url.to_string(),
     }
+}
+
+fn context_targets_from_launch(launch: &TuiLaunchConfig) -> anyhow::Result<Vec<TuiContextTarget>> {
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+    let current_context = TuiContextInfo::from_context(launch.initial_context.as_ref());
+
+    let app_source_mode = app_source_mode_from_global_flags(&launch.base_flags);
+    let preload =
+        ApplicationContext::preload_application(app_source_mode, launch.base_flags.dev_mode)?;
+    if let Some(application) = preload.application_preload {
+        let application_name = application.application_name.value.0.clone();
+        for (environment_name, environment) in application.environments {
+            let mut flags = context_flags_base(&launch.base_flags);
+            flags.environment = Some(EnvironmentReference::Environment {
+                environment_name: environment_name.clone(),
+            });
+            push_context_target(
+                &mut targets,
+                &mut seen,
+                mark_current_context_target(
+                    TuiContextTarget {
+                        key: format!("manifest:{}", environment_name.0),
+                        label: format!("{}/{}", application_name, environment_name.0),
+                        detail: format!(
+                            "server: {}",
+                            environment
+                                .server
+                                .as_ref()
+                                .map(format_server)
+                                .unwrap_or_else(|| "local".to_string())
+                        ),
+                        kind: TuiContextTargetKind::ManifestAppContext {
+                            app: application_name.clone(),
+                            environment: environment_name.0.clone(),
+                        },
+                        global_flags: flags,
+                        error: None,
+                        is_current: false,
+                    },
+                    &current_context,
+                ),
+            );
+
+            if matches!(environment.server, Some(Server::Custom(_))) {
+                let mut server_flags = context_flags_base(&launch.base_flags);
+                server_flags.environment = Some(EnvironmentReference::Environment {
+                    environment_name: environment_name.clone(),
+                });
+                let server_detail = environment
+                    .server
+                    .as_ref()
+                    .map(format_server)
+                    .unwrap_or_else(|| "local".to_string());
+                push_context_target(
+                    &mut targets,
+                    &mut seen,
+                    mark_current_context_target(
+                        TuiContextTarget {
+                            key: format!(
+                                "server:manifest:{}:{}",
+                                environment_name.0, server_detail
+                            ),
+                            label: format!("Manifest {} server", environment_name.0),
+                            detail: server_detail,
+                            kind: TuiContextTargetKind::ServerTarget {
+                                source: TuiServerTargetSource::ManifestEnvironment,
+                            },
+                            global_flags: server_flags,
+                            error: None,
+                            is_current: false,
+                        },
+                        &current_context,
+                    ),
+                );
+            }
+        }
+    }
+
+    let mut local_flags = context_flags_base(&launch.base_flags);
+    local_flags.local = true;
+    push_context_target(
+        &mut targets,
+        &mut seen,
+        mark_current_context_target(
+            TuiContextTarget {
+                key: "server:builtin:local".to_string(),
+                label: "Built-in local".to_string(),
+                detail: "server".to_string(),
+                kind: TuiContextTargetKind::ServerTarget {
+                    source: TuiServerTargetSource::Builtin,
+                },
+                global_flags: local_flags,
+                error: None,
+                is_current: false,
+            },
+            &current_context,
+        ),
+    );
+
+    let mut cloud_flags = context_flags_base(&launch.base_flags);
+    cloud_flags.cloud = true;
+    push_context_target(
+        &mut targets,
+        &mut seen,
+        mark_current_context_target(
+            TuiContextTarget {
+                key: "server:builtin:cloud".to_string(),
+                label: "Built-in cloud".to_string(),
+                detail: "server".to_string(),
+                kind: TuiContextTargetKind::ServerTarget {
+                    source: TuiServerTargetSource::Builtin,
+                },
+                global_flags: cloud_flags,
+                error: None,
+                is_current: false,
+            },
+            &current_context,
+        ),
+    );
+
+    let config = Config::from_dir(&launch.base_flags.config_dir())?;
+    let mut profile_names = config.profiles.keys().cloned().collect::<Vec<_>>();
+    profile_names.sort();
+    for profile_name in profile_names {
+        if profile_name.is_builtin() {
+            continue;
+        }
+        let mut flags = context_flags_base(&launch.base_flags);
+        flags.profile = Some(profile_name.clone());
+        push_context_target(
+            &mut targets,
+            &mut seen,
+            mark_current_context_target(
+                TuiContextTarget {
+                    key: format!("server:profile:{}", profile_name.0),
+                    label: format!("Profile {}", profile_name.0),
+                    detail: "configured".to_string(),
+                    kind: TuiContextTargetKind::ServerTarget {
+                        source: TuiServerTargetSource::Profile,
+                    },
+                    global_flags: flags,
+                    error: None,
+                    is_current: false,
+                },
+                &current_context,
+            ),
+        );
+    }
+
+    if launch.base_flags.environment.is_some()
+        || launch.base_flags.local
+        || launch.base_flags.cloud
+        || launch.base_flags.profile.is_some()
+    {
+        push_context_target(
+            &mut targets,
+            &mut seen,
+            mark_current_context_target(
+                TuiContextTarget {
+                    key: "server:launch".to_string(),
+                    label: "Launch selector server".to_string(),
+                    detail: "resolved launch flags and environment overrides".to_string(),
+                    kind: TuiContextTargetKind::ServerTarget {
+                        source: TuiServerTargetSource::LaunchSelector,
+                    },
+                    global_flags: launch.base_flags.clone(),
+                    error: None,
+                    is_current: false,
+                },
+                &current_context,
+            ),
+        );
+    }
+
+    Ok(targets)
+}
+
+fn mark_current_context_target(
+    mut target: TuiContextTarget,
+    current_context: &TuiContextInfo,
+) -> TuiContextTarget {
+    target.is_current = target_matches_current_context(&target, current_context);
+    target
+}
+
+fn target_matches_current_context(
+    target: &TuiContextTarget,
+    current_context: &TuiContextInfo,
+) -> bool {
+    match &target.kind {
+        TuiContextTargetKind::ManifestAppContext { app, environment } => {
+            current_context.application == *app && current_context.environment == *environment
+        }
+        TuiContextTargetKind::ServerTarget { source } => {
+            current_context.application == "no application manifest"
+                && match source {
+                    TuiServerTargetSource::Builtin => {
+                        target.key.ends_with(":local") && current_context.uses_local_server
+                            || target.key.ends_with(":cloud")
+                                && current_context.server.contains("golem.cloud")
+                    }
+                    TuiServerTargetSource::Profile => {
+                        target.key.ends_with(":local") && current_context.uses_local_server
+                            || target.key.ends_with(":cloud")
+                                && current_context.server.contains("golem.cloud")
+                    }
+                    TuiServerTargetSource::LaunchSelector => true,
+                    TuiServerTargetSource::ManifestEnvironment => false,
+                }
+        }
+        TuiContextTargetKind::Error => false,
+    }
+}
+
+fn push_context_target(
+    targets: &mut Vec<TuiContextTarget>,
+    seen: &mut HashSet<String>,
+    target: TuiContextTarget,
+) {
+    if seen.insert(target.key.clone()) {
+        targets.push(target);
+    }
+}
+
+fn app_environment_targets_from_details(
+    server_target: &TuiContextTarget,
+    environments: Vec<EnvironmentWithDetails>,
+    current_context: &TuiContextInfo,
+) -> Vec<TuiAppEnvironmentTarget> {
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+    for environment in environments {
+        let application_name = environment.application.name;
+        let environment_name = environment.environment.name;
+        let key = format!(
+            "{}:app-env:{}:{}",
+            server_target.key, application_name.0, environment_name.0
+        );
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let dev_eligible = current_context.dev_eligible
+            && current_context.application == application_name.0
+            && current_context.environment == environment_name.0;
+        let deployment = environment
+            .environment
+            .current_deployment
+            .as_ref()
+            .map(|deployment| {
+                format!(
+                    "deployment r{} v{}",
+                    deployment.deployment_revision.get(),
+                    deployment.deployment_version.0
+                )
+            })
+            .unwrap_or_else(|| "no current deployment".to_string());
+        targets.push(TuiAppEnvironmentTarget {
+            label: format!("{}/{}", application_name.0, environment_name.0),
+            detail: format!("{} via {}", deployment, server_target.label),
+            server_label: server_target.label.clone(),
+            server_flags: server_target.global_flags.clone(),
+            environment_reference: Some(EnvironmentReference::ApplicationEnvironment {
+                application_name: application_name.clone(),
+                environment_name: environment_name.clone(),
+            }),
+            app: Some(application_name.0),
+            environment: Some(environment_name.0),
+            dev_eligible,
+            error: None,
+        });
+    }
+    if targets.is_empty() {
+        targets.push(TuiAppEnvironmentTarget {
+            label: "No visible app environments".to_string(),
+            detail: "This server returned no environments for the active credentials".to_string(),
+            server_label: server_target.label.clone(),
+            server_flags: server_target.global_flags.clone(),
+            environment_reference: None,
+            app: None,
+            environment: None,
+            dev_eligible: false,
+            error: Some("no visible app environments".to_string()),
+        });
+    }
+    targets
+}
+
+fn context_flags_base(base_flags: &GolemCliGlobalFlags) -> GolemCliGlobalFlags {
+    let mut flags = base_flags.clone();
+    flags.environment = None;
+    flags.local = false;
+    flags.cloud = false;
+    flags.profile = None;
+    flags
+}
+
+fn local_server_args_from_launch_flags(base_flags: &GolemCliGlobalFlags) -> Vec<String> {
+    context_args_from_flags(&context_flags_base(base_flags))
+}
+
+fn app_source_mode_from_global_flags(global_flags: &GolemCliGlobalFlags) -> ApplicationSourceMode {
+    if global_flags.disable_app_manifest_discovery {
+        ApplicationSourceMode::None
+    } else {
+        global_flags
+            .app_manifest_path
+            .clone()
+            .map(ApplicationSourceMode::ByRootManifest)
+            .unwrap_or(ApplicationSourceMode::Automatic)
+    }
+}
+
+fn context_args_from_flags(flags: &GolemCliGlobalFlags) -> Vec<String> {
+    let mut args = vec![
+        "--config-dir".to_string(),
+        flags.config_dir().display().to_string(),
+    ];
+
+    if let Some(environment) = &flags.environment {
+        args.push("--environment".to_string());
+        args.push(environment.to_string());
+    }
+    if flags.local {
+        args.push("--local".to_string());
+    }
+    if flags.cloud {
+        args.push("--cloud".to_string());
+    }
+    if let Some(profile) = &flags.profile {
+        args.push("--profile".to_string());
+        args.push(profile.to_string());
+    }
+    if let Some(app_manifest_path) = &flags.app_manifest_path {
+        args.push("--app-manifest-path".to_string());
+        args.push(app_manifest_path.display().to_string());
+    }
+    if flags.disable_app_manifest_discovery {
+        args.push("--disable-app-manifest-discovery".to_string());
+    }
+    if flags.dev_mode {
+        args.push("--dev-mode".to_string());
+    }
+    args
 }
 
 #[derive(Clone, Copy)]
@@ -2387,37 +3957,50 @@ fn theme() -> TuiTheme {
 }
 
 fn render(frame: &mut Frame<'_>, app: &TuiApp) {
-    let [header, tabs, separator, body, footer_area] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .areas(frame.area());
+    let snapshot = layout::compute(LayoutInput {
+        area: frame.area(),
+        active_workspace: app.active_workspace,
+        focused_dev_panel: app.dev_focus,
+        mode: app.mode,
+        context_picker_rows: app.context_switcher.row_count(),
+        context_picker_step: app.context_switcher.mode.clone(),
+        agents_view_mode: app.agents.view_mode,
+        agent_details_visible: app.agents.detail_visible,
+        layout: app.layout.clone(),
+    });
+    app.layout_snapshot.replace(Some(snapshot.clone()));
 
-    render_header(frame, header, app);
+    render_header(frame, snapshot.header, app);
 
-    render_tabs(frame, tabs, app);
-    render_separator(frame, separator);
+    render_tabs(frame, snapshot.tabs, app);
+    render_separator(frame, snapshot.separator);
 
     match app.active_workspace {
-        TuiWorkspace::Home => render_home_workspace(frame, body, app),
-        TuiWorkspace::Dev => render_dev_workspace(frame, body, app),
-        TuiWorkspace::Ops => render_agents_view(frame, body, app),
+        TuiWorkspace::Home => render_home_workspace(frame, snapshot.workspace_body, app),
+        TuiWorkspace::Dev => render_dev_workspace(frame, snapshot.workspace_body, app),
+        TuiWorkspace::Ops => render_agents_view(frame, snapshot.workspace_body, app),
+    }
+    if let Some(drawer_area) = snapshot.server_drawer {
+        render_split_handle(
+            frame,
+            snapshot
+                .region(RegionKind::ServerDrawerSplit)
+                .unwrap_or(drawer_area),
+        );
+        render_server_view(frame, drawer_area, app);
     }
 
     let footer = Paragraph::new(footer_line(app))
         .style(footer_style())
         .alignment(Alignment::Center);
-    frame.render_widget(footer, footer_area);
-    render_left_rail(frame, footer_area, footer_rail_style());
+    frame.render_widget(footer, snapshot.footer);
+    render_left_rail(frame, snapshot.footer, footer_rail_style());
 
     match app.mode {
         TuiMode::Normal => {}
         TuiMode::LeaderNormal => render_leader_hint(frame, app, TuiMode::Normal),
+        TuiMode::ContextPicker => render_context_picker(frame, app),
+        TuiMode::ContextSwitchConfirm => render_context_switch_confirm(frame, app),
         TuiMode::AgentFilter => {}
         TuiMode::CommandInteraction => {}
         TuiMode::Repl => {}
@@ -2439,37 +4022,40 @@ fn render_home_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 
 fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_surface(frame, area);
-    if area.width < 90 || area.height < 18 {
-        match app.dev_focus {
-            DevPanel::Repl => render_repl_view(frame, area, app),
-            DevPanel::Output => render_output_view(frame, area, app),
-            DevPanel::Server => render_server_view(frame, area, app),
-            DevPanel::Agents => render_agents_view(frame, area, app),
+    let input = LayoutInput {
+        area,
+        active_workspace: app.active_workspace,
+        focused_dev_panel: app.dev_focus,
+        mode: app.mode,
+        context_picker_rows: app.context_switcher.row_count(),
+        context_picker_step: app.context_switcher.mode.clone(),
+        agents_view_mode: app.agents.view_mode,
+        agent_details_visible: app.agents.detail_visible,
+        layout: app.layout.clone(),
+    };
+
+    for (panel, panel_area) in layout::dev_panel_areas(area, &input) {
+        if panel_area.width == 0 || panel_area.height == 0 {
+            continue;
         }
-        return;
+        render_panel_title(frame, panel_area, panel, app.dev_focus);
+        match panel {
+            DevPanel::Repl => render_repl_view(frame, inset_top(panel_area), app),
+            DevPanel::Output => render_output_view(frame, inset_top(panel_area), app),
+            DevPanel::Server => render_server_view(frame, inset_top(panel_area), app),
+            DevPanel::Agents => render_agents_view(frame, inset_top(panel_area), app),
+        }
     }
+    if let Some((primary, secondary)) = layout::dev_split_regions(area, &input) {
+        render_split_handle(frame, primary);
+        if let Some(secondary) = secondary {
+            render_split_handle(frame, secondary);
+        }
+    }
+}
 
-    let [repl_area, side_area] = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-        .areas(area);
-    let [output_area, server_area, agents_area] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
-        .areas(side_area);
-
-    render_panel_title(frame, repl_area, DevPanel::Repl, app.dev_focus);
-    render_repl_view(frame, inset_top(repl_area), app);
-    render_panel_title(frame, output_area, DevPanel::Output, app.dev_focus);
-    render_output_view(frame, inset_top(output_area), app);
-    render_panel_title(frame, server_area, DevPanel::Server, app.dev_focus);
-    render_server_view(frame, inset_top(server_area), app);
-    render_panel_title(frame, agents_area, DevPanel::Agents, app.dev_focus);
-    render_agents_view(frame, inset_top(agents_area), app);
+fn render_split_handle(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(Paragraph::new("").style(separator_style()), area);
 }
 
 fn render_panel_title(frame: &mut Frame<'_>, area: Rect, panel: DevPanel, focused: DevPanel) {
@@ -2567,15 +4153,20 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .areas(area);
 
     frame.render_widget(
-        Paragraph::new(server_status_line(&app.server)).style(command_status_bg_style()),
+        Paragraph::new(server_status_line(&app.server, app.server.available))
+            .style(command_status_bg_style()),
         summary_area,
     );
     render_left_rail(frame, summary_area, command_rail_style());
 
     let output_lines = if app.server.run.output.total_lines() == 0 {
-        vec![prefixed_line(
-            "Server logs will appear here. Press s to start.",
-        )]
+        if app.server.available {
+            vec![prefixed_line(
+                "Server logs will appear here. Press s to start.",
+            )]
+        } else {
+            vec![prefixed_line("Local server is unavailable.")]
+        }
     } else {
         render_output_lines(&app.server.run.output, output_area.height as usize)
     };
@@ -2724,6 +4315,12 @@ fn agent_inspect_title_line(title: &'static str, job: &InspectJob, focused: bool
         fixed_span(
             "left/right focus  esc back",
             30,
+            Style::default().fg(theme().text_muted),
+        ),
+        Span::raw(" | "),
+        fixed_span(
+            format!("ctx:{}", job.launch_context),
+            24,
             Style::default().fg(theme().text_muted),
         ),
     ])
@@ -2905,11 +4502,14 @@ fn agent_status_line(agents: &AgentsState) -> Line<'static> {
         Span::raw(" | "),
         fixed_span(
             if agents.refresh_running {
-                "refreshing"
+                agents
+                    .refresh_context_label
+                    .as_deref()
+                    .unwrap_or("refreshing")
             } else {
                 "enter inspect"
             },
-            14,
+            24,
             if agents.refresh_running {
                 Style::default().fg(theme().accent)
             } else {
@@ -3088,6 +4688,7 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
         "Global",
         &[
             TuiActionId::OpenPalette,
+            TuiActionId::OpenContextPicker,
             TuiActionId::ShowHelp,
             TuiActionId::Build,
             TuiActionId::Deploy,
@@ -3116,6 +4717,9 @@ fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
             TuiActionId::ToggleYes,
             TuiActionId::ToggleReset,
             TuiActionId::ToggleServerClean,
+            TuiActionId::CycleDevLayoutPreset,
+            TuiActionId::ToggleServerDrawer,
+            TuiActionId::OpenContextPicker,
             TuiActionId::RestartServer,
             TuiActionId::CleanRestartServer,
         ],
@@ -3303,6 +4907,17 @@ fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp, return_mode: TuiMode)
             TuiActionId::ToggleServerClean,
             format!("clean:{}", flag_state(app.server.clean)),
         );
+        push_leader_item(
+            &mut spans,
+            TuiActionId::CycleDevLayoutPreset,
+            format!("layout:{}", app.layout.dev_preset.label()),
+        );
+        push_leader_item(
+            &mut spans,
+            TuiActionId::ToggleServerDrawer,
+            format!("drawer:{}", flag_state(app.layout.server_drawer_open)),
+        );
+        push_leader_item(&mut spans, TuiActionId::OpenContextPicker, "context");
         push_leader_item(&mut spans, TuiActionId::OpenPalette, "palette");
         push_leader_item(&mut spans, TuiActionId::ShowHelp, "help");
         Line::from(spans)
@@ -3642,6 +5257,12 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
         Span::raw(" | "),
         fixed_span(command_display(&run.args), 30, Style::default()),
         Span::raw(" | "),
+        fixed_span(
+            format!("ctx:{}", run.launch_context),
+            24,
+            Style::default().fg(theme().text_muted),
+        ),
+        Span::raw(" | "),
         if matches!(
             run.status,
             CommandStatus::Running | CommandStatus::Cancelling
@@ -3657,7 +5278,7 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
     ])
 }
 
-fn server_status_line(server: &ServerState) -> Line<'static> {
+fn server_status_line(server: &LocalServerService, local_server_available: bool) -> Line<'static> {
     let run = &server.run;
     let clean = if run.is_running() {
         run.clean
@@ -3685,9 +5306,19 @@ fn server_status_line(server: &ServerState) -> Line<'static> {
         fixed_span(command_display(&run.args), 34, Style::default()),
         Span::raw(" | "),
         fixed_span(
-            server_hint(run),
-            21,
+            format!("ctx:{}", run.launch_context),
+            24,
             Style::default().fg(theme().text_muted),
+        ),
+        Span::raw(" | "),
+        fixed_span(
+            server_hint(run, local_server_available),
+            21,
+            if local_server_available {
+                Style::default().fg(theme().text_muted)
+            } else {
+                Style::default().fg(theme().error)
+            },
         ),
     ])
 }
@@ -3707,6 +5338,12 @@ fn repl_status_line(repl: &ReplState, mode: TuiMode) -> Line<'static> {
         fixed_span(run.status.title(), 10, repl_status_style(run.status)),
         Span::raw(" | "),
         fixed_span(command_display(&run.args), 28, Style::default()),
+        Span::raw(" | "),
+        fixed_span(
+            format!("ctx:{}", run.launch_context),
+            24,
+            Style::default().fg(theme().text_muted),
+        ),
         Span::raw(" | "),
         fixed_span(
             repl_mode_hint(run, mode),
@@ -3759,7 +5396,10 @@ fn server_status_style(status: ServerStatus) -> Style {
     .add_modifier(Modifier::BOLD)
 }
 
-fn server_hint(run: &ServerRun) -> &'static str {
+fn server_hint(run: &ServerRun, local_server_available: bool) -> &'static str {
+    if !local_server_available {
+        return "local server unavailable";
+    }
     match run.status {
         ServerStatus::Starting | ServerStatus::Running => "s/ctrl+c stop",
         ServerStatus::Stopping => "s/ctrl+c force kill",
@@ -3906,6 +5546,392 @@ fn output_bytes_to_lines(bytes: Vec<u8>) -> Vec<Line<'static>> {
             let stripped = strip_ansi_escapes::strip(bytes);
             vec![Line::from(String::from_utf8_lossy(&stripped).to_string())]
         }
+    }
+}
+
+fn render_context_picker(frame: &mut Frame<'_>, app: &TuiApp) {
+    let visible_count = app.context_switcher.row_count().min(10);
+    let selected = app
+        .context_switcher
+        .selected
+        .min(app.context_switcher.row_count().saturating_sub(1));
+    let rows = context_picker_rows(&app.context_switcher, visible_count);
+    let area = centered_rect_fixed(
+        context_picker_width(&rows, frame.area().width),
+        context_picker_height(rows.len(), frame.area().height),
+        frame.area(),
+    );
+    let (title, subtitle, footer) = match app.context_switcher.mode {
+        ContextPickerStep::Targets => (
+            "Switch Context",
+            format!("Current: {}", app.context.short_label()),
+            "enter select  up/down move  esc close",
+        ),
+        ContextPickerStep::AppEnvironments => (
+            "Select App Environment",
+            app.context_switcher
+                .selected_server_key
+                .as_ref()
+                .and_then(|server_key| {
+                    app.context_switcher
+                        .targets
+                        .iter()
+                        .find(|target| &target.key == server_key)
+                })
+                .map(|target| format!("Server: {} - {}", target.label, target.detail))
+                .unwrap_or_else(|| "Server app environments".to_string()),
+            "enter switch  up/down move  esc servers",
+        ),
+    };
+    let mut lines = vec![
+        palette_line(vec![Span::styled(
+            title,
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        palette_line(vec![Span::raw(subtitle)]),
+        palette_line(vec![]),
+    ];
+
+    if app.context_switcher.switch_running {
+        lines.push(palette_line(vec![Span::styled(
+            "switching...",
+            Style::default().fg(theme().accent),
+        )]));
+        lines.push(palette_line(vec![]));
+    }
+    if let Some(error) = &app.context_switcher.last_error {
+        lines.push(palette_line(vec![Span::styled(
+            error.clone(),
+            Style::default().fg(theme().error),
+        )]));
+        lines.push(palette_line(vec![]));
+    }
+
+    let label_width = context_picker_label_width(&rows);
+    let content_width = area.width.saturating_sub(2) as usize;
+    lines.extend(
+        rows.iter()
+            .map(|row| context_picker_render_line(row, selected, label_width, content_width)),
+    );
+
+    lines.push(palette_line(vec![]));
+    lines.push(palette_line(vec![Span::styled(
+        footer,
+        Style::default().fg(theme().text_muted),
+    )]));
+
+    frame.render_widget(Clear, area);
+    let content_area = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y,
+        width: area.width.saturating_sub(2),
+        height: area.height,
+    };
+    frame.render_widget(Paragraph::new(lines), content_area);
+    render_left_rail(frame, area, Style::default().fg(theme().accent));
+    if app.context_switcher.environment_list_running {
+        render_context_environment_loading(frame, app);
+    }
+}
+
+fn render_context_switch_confirm(frame: &mut Frame<'_>, app: &TuiApp) {
+    let area = centered_rect_fixed(72, 11, frame.area());
+    let message = app
+        .context_switch_dev_blocker_message()
+        .unwrap_or_else(|| "Switching context will stop running dev jobs.".to_string());
+    let status = if app.context_switcher.waiting_for_dev_stop {
+        "Waiting for dev jobs to stop..."
+    } else {
+        "Press enter to stop them gracefully, or esc to keep the current context."
+    };
+    let lines = vec![
+        palette_line(vec![Span::styled(
+            "Confirm Context Switch",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        palette_line(vec![]),
+        palette_line(vec![Span::styled(
+            message,
+            Style::default().fg(theme().marker),
+        )]),
+        palette_line(vec![]),
+        palette_line(vec![Span::raw(status)]),
+        palette_line(vec![]),
+        palette_line(vec![Span::styled(
+            "enter/y confirm  esc/n cancel",
+            Style::default().fg(theme().text_muted),
+        )]),
+    ];
+    frame.render_widget(Clear, area);
+    let content_area = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        content_area,
+    );
+    render_left_rail(frame, area, Style::default().fg(theme().marker));
+}
+
+fn render_context_environment_loading(frame: &mut Frame<'_>, app: &TuiApp) {
+    let area = centered_rect_fixed(52, 7, frame.area());
+    let spinner = spinner_symbol(app.context_switcher.environment_list_spinner_frame);
+    let lines = vec![
+        palette_line(vec![Span::styled(
+            "Loading",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        palette_line(vec![]),
+        palette_line(vec![Span::styled(
+            format!("{spinner} Loading app environments"),
+            Style::default().fg(theme().accent),
+        )]),
+        palette_line(vec![]),
+        palette_line(vec![Span::styled(
+            "esc cancel  q quit",
+            Style::default().fg(theme().text_muted),
+        )]),
+    ];
+    frame.render_widget(Clear, area);
+    let content_area = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        content_area,
+    );
+    render_left_rail(frame, area, Style::default().fg(theme().accent));
+}
+
+#[derive(Debug, Clone)]
+enum ContextPickerRenderRow {
+    Section(String),
+    Item {
+        selectable_index: usize,
+        label: String,
+        marker: Option<String>,
+        detail: String,
+        unavailable: bool,
+    },
+}
+
+impl ContextPickerRenderRow {
+    fn text_width(&self) -> usize {
+        match self {
+            Self::Section(label) => label.chars().count() + 2,
+            Self::Item {
+                label,
+                marker,
+                detail,
+                ..
+            } => {
+                let marker_width = marker
+                    .as_ref()
+                    .map(|marker| marker.chars().count() + 1)
+                    .unwrap_or_default();
+                4 + label.chars().count()
+                    + 1
+                    + detail.chars().count()
+                    + marker_width
+                    + CONTEXT_PICKER_RIGHT_PADDING
+            }
+        }
+    }
+}
+
+fn context_picker_rows(
+    context_switcher: &ContextSwitcherState,
+    visible_count: usize,
+) -> Vec<ContextPickerRenderRow> {
+    match context_switcher.mode {
+        ContextPickerStep::Targets => {
+            context_switcher
+                .targets
+                .iter()
+                .take(visible_count)
+                .enumerate()
+                .fold(
+                    (Vec::new(), None),
+                    |(mut rows, previous_group), (index, target)| {
+                        let group = context_target_group(target);
+                        if previous_group != Some(group) {
+                            rows.push(ContextPickerRenderRow::Section(group.label().to_string()));
+                        }
+                        rows.push(ContextPickerRenderRow::Item {
+                            selectable_index: index,
+                            label: target.label.clone(),
+                            marker: context_target_marker(target),
+                            detail: target
+                                .error
+                                .as_ref()
+                                .cloned()
+                                .unwrap_or_else(|| target.detail.clone()),
+                            unavailable: target.error.is_some(),
+                        });
+                        (rows, Some(group))
+                    },
+                )
+                .0
+        }
+        ContextPickerStep::AppEnvironments => {
+            context_switcher
+                .app_environments
+                .iter()
+                .take(visible_count)
+                .enumerate()
+                .fold(
+                    (Vec::new(), None::<bool>),
+                    |(mut rows, previous_unavailable), (index, target)| {
+                        let unavailable = target.error.is_some();
+                        if previous_unavailable != Some(unavailable) {
+                            rows.push(ContextPickerRenderRow::Section(
+                                if unavailable {
+                                    "Unavailable"
+                                } else {
+                                    "App Environments"
+                                }
+                                .to_string(),
+                            ));
+                        }
+                        let detail = target.error.as_ref().cloned().unwrap_or_else(|| {
+                            format!("{} - {}", target.detail, target.server_label)
+                        });
+                        rows.push(ContextPickerRenderRow::Item {
+                            selectable_index: index,
+                            label: target.label.clone(),
+                            marker: app_environment_marker(target),
+                            detail,
+                            unavailable,
+                        });
+                        (rows, Some(unavailable))
+                    },
+                )
+                .0
+        }
+    }
+}
+
+fn context_picker_render_line(
+    row: &ContextPickerRenderRow,
+    selected: usize,
+    label_width: usize,
+    content_width: usize,
+) -> Line<'static> {
+    match row {
+        ContextPickerRenderRow::Section(label) => palette_line(vec![Span::styled(
+            format!("  {label}"),
+            Style::default()
+                .fg(theme().text_secondary)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        ContextPickerRenderRow::Item {
+            selectable_index,
+            label,
+            marker,
+            detail,
+            unavailable,
+        } => {
+            let is_selected = *selectable_index == selected;
+            let style = match (is_selected, unavailable) {
+                (true, true) => Style::default()
+                    .fg(theme().text_muted)
+                    .add_modifier(Modifier::REVERSED),
+                (true, false) => Style::default().add_modifier(Modifier::REVERSED),
+                (false, true) => Style::default().fg(theme().text_muted),
+                (false, false) => Style::default(),
+            };
+            let prefix = if is_selected { ">   " } else { "    " };
+            let marker_width = marker
+                .as_ref()
+                .map(|marker| marker.chars().count() + 1)
+                .unwrap_or_default();
+            let fixed_width = prefix.chars().count() + label_width + 1;
+            let detail_width = content_width
+                .saturating_sub(fixed_width + marker_width + CONTEXT_PICKER_RIGHT_PADDING);
+            let detail_text = if marker.is_some() {
+                pad_or_ellipsis(detail, detail_width)
+            } else {
+                ellipsis_text(detail, detail_width)
+            };
+            let mut spans = vec![
+                Span::styled(prefix.to_string(), style),
+                Span::styled(pad_or_ellipsis(label, label_width), style),
+                Span::styled(" ".to_string(), style),
+                Span::styled(detail_text, style),
+            ];
+            if let Some(marker) = marker {
+                spans.push(Span::styled(" ".to_string(), style));
+                spans.push(Span::styled(
+                    marker.clone(),
+                    style.fg(theme().text_secondary),
+                ));
+            }
+            Line::from(spans)
+        }
+    }
+}
+
+fn context_picker_label_width(rows: &[ContextPickerRenderRow]) -> usize {
+    rows.iter()
+        .filter_map(|row| match row {
+            ContextPickerRenderRow::Item { label, .. } => Some(label.chars().count()),
+            ContextPickerRenderRow::Section(_) => None,
+        })
+        .max()
+        .unwrap_or(18)
+        .clamp(18, 36)
+}
+
+fn context_picker_width(rows: &[ContextPickerRenderRow], terminal_width: u16) -> u16 {
+    let preferred_width = rows
+        .iter()
+        .map(ContextPickerRenderRow::text_width)
+        .max()
+        .unwrap_or("Switch Context".len())
+        .max("Select App Environment".len())
+        + 4;
+    let max_width = if terminal_width <= 60 {
+        terminal_width.saturating_sub(2).max(20) as usize
+    } else {
+        (terminal_width.saturating_sub(4) as usize).min(120).max(56)
+    };
+    let min_width = 56.min(max_width);
+    preferred_width.clamp(min_width, max_width) as u16
+}
+
+fn context_picker_height(row_count: usize, terminal_height: u16) -> u16 {
+    let content_height = 6 + row_count.max(1);
+    let max_height = terminal_height.saturating_sub(4).max(8) as usize;
+    (content_height + 2).clamp(8, max_height) as u16
+}
+
+fn ellipsis_text(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let len = text.chars().count();
+    if len <= width {
+        return text.to_string();
+    }
+    if width <= 3 {
+        return text.chars().take(width).collect();
+    }
+    format!("{}...", text.chars().take(width - 3).collect::<String>())
+}
+
+fn pad_or_ellipsis(text: &str, width: usize) -> String {
+    let text = ellipsis_text(text, width);
+    let len = text.chars().count();
+    if len < width {
+        format!("{text}{}", " ".repeat(width - len))
+    } else {
+        text
     }
 }
 
@@ -4083,6 +6109,8 @@ enum TuiActionId {
     RestartServer,
     CleanRestartServer,
     ToggleServerClean,
+    CycleDevLayoutPreset,
+    ToggleServerDrawer,
     RefreshAgents,
     ToggleAgentAutoRefresh,
     CycleAgentMode,
@@ -4096,6 +6124,7 @@ enum TuiActionId {
     StopRepl,
     RestartRepl,
     OpenPalette,
+    OpenContextPicker,
     ShowHelp,
     Quit,
 }
@@ -4202,6 +6231,8 @@ enum TuiActionKind {
     RestartServer,
     CleanRestartServer,
     ToggleServerClean,
+    CycleDevLayoutPreset,
+    ToggleServerDrawer,
     RefreshAgents,
     ToggleAgentAutoRefresh,
     CycleAgentMode,
@@ -4212,11 +6243,12 @@ enum TuiActionKind {
     StopRepl,
     RestartRepl,
     OpenPalette,
+    OpenContextPicker,
     ShowHelp,
     Quit,
 }
 
-const ACTIONS: [TuiAction; 24] = [
+const ACTIONS: [TuiAction; 27] = [
     TuiAction {
         id: TuiActionId::Build,
         label: "Build",
@@ -4315,6 +6347,28 @@ const ACTIONS: [TuiAction; 24] = [
         execution_kind: TuiActionExecutionKind::Internal,
         palette_visible: true,
         kind: TuiActionKind::ToggleServerClean,
+    },
+    TuiAction {
+        id: TuiActionId::CycleDevLayoutPreset,
+        label: "Cycle Dev Layout",
+        description: "Cycle Dev panel layout preset",
+        shortcut: Some("ctrl+x l"),
+        category: TuiActionCategory::Settings,
+        scope: TuiActionScope::Leader,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::CycleDevLayoutPreset,
+    },
+    TuiAction {
+        id: TuiActionId::ToggleServerDrawer,
+        label: "Toggle Server Drawer",
+        description: "Open or close the global local-server drawer",
+        shortcut: Some("ctrl+x v"),
+        category: TuiActionCategory::Dev,
+        scope: TuiActionScope::Leader,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::ToggleServerDrawer,
     },
     TuiAction {
         id: TuiActionId::RefreshAgents,
@@ -4460,6 +6514,17 @@ const ACTIONS: [TuiAction; 24] = [
         kind: TuiActionKind::OpenPalette,
     },
     TuiAction {
+        id: TuiActionId::OpenContextPicker,
+        label: "Switch Context",
+        description: "Switch selected TUI context",
+        shortcut: Some("ctrl+x e"),
+        category: TuiActionCategory::Settings,
+        scope: TuiActionScope::Leader,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::OpenContextPicker,
+    },
+    TuiAction {
         id: TuiActionId::ShowHelp,
         label: "Show Help",
         description: "Show TUI shortcuts",
@@ -4545,11 +6610,19 @@ fn filtered_actions(query: &str) -> Vec<TuiAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::GolemCliCommand;
+    use crate::config::{AuthenticationConfig, Profile, ProfileName};
+    use crate::log::{LogContext, Output, logln};
+    use clap::Parser;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
     use test_r::test;
+    use url::Url;
 
     #[test]
     fn renders_dashboard_frame() {
@@ -4593,6 +6666,7 @@ mod tests {
             CommandKind::Build,
             vec!["build".to_string()],
             CommandOptions::default(),
+            "sample-app:local".to_string(),
         ));
         app.server.run.status = ServerStatus::Running;
         app.repl.run.status = ReplStatus::Running;
@@ -4842,6 +6916,591 @@ mod tests {
         driver.assert_visible(&app, action_shortcut(TuiActionId::LeaveRepl));
         driver.assert_visible(&app, action_shortcut(TuiActionId::StopRepl));
         driver.assert_visible(&app, action_shortcut(TuiActionId::RestartRepl));
+    }
+
+    #[test]
+    fn leader_opens_context_picker() {
+        let mut app = test_app();
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('e')));
+
+        assert_eq!(app.mode, TuiMode::ContextPicker);
+        let frame = render_app_text(&app);
+        assert!(frame.contains("Switch Context"), "{frame}");
+        assert!(frame.contains("sample-app/local"), "{frame}");
+        assert!(frame.contains("current"), "{frame}");
+    }
+
+    #[test]
+    fn context_picker_groups_and_indents_targets() {
+        let mut app = test_app();
+        app.context_switcher = ContextSwitcherState::new(vec![
+            test_server_context_target("server:profile:prod", "Profile prod", "configured profile"),
+            test_manifest_context_target("prod"),
+            test_current_context_target(),
+        ]);
+
+        app.open_context_picker();
+        let frame = render_app_text_at(&app, 140, 32);
+
+        assert!(frame.contains("Manifest Environments"), "{frame}");
+        assert!(frame.contains("Servers"), "{frame}");
+        assert!(!frame.contains("┃   Current"), "{frame}");
+        assert!(frame.contains(">   sample-app/local"), "{frame}");
+        assert!(frame.contains("current"), "{frame}");
+        assert!(!frame.contains("[manifest"), "{frame}");
+        assert!(frame.contains("    sample-app/prod"), "{frame}");
+        assert!(frame.contains("    Profile prod"), "{frame}");
+        assert!(frame.contains("profile"), "{frame}");
+    }
+
+    #[test]
+    fn selecting_current_context_is_noop() {
+        let mut app = test_app();
+        app.context_switcher.last_error = Some("transient".to_string());
+
+        app.open_context_picker();
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.mode, TuiMode::ContextPicker);
+        assert!(app.context_switcher.last_error.is_none());
+        assert!(!app.context_switcher.switch_running);
+        assert!(!app.context_switcher.environment_list_running);
+        assert!(app.context_switcher.pending_action.is_none());
+    }
+
+    #[test]
+    fn context_picker_navigation_ignores_group_headers() {
+        let mut app = test_app();
+        app.context_switcher = ContextSwitcherState::new(vec![
+            test_current_context_target(),
+            test_manifest_context_target("prod"),
+            test_server_context_target("server:builtin:cloud", "Built-in cloud server", "cloud"),
+        ]);
+
+        app.open_context_picker();
+        app.handle_key(key(KeyCode::Down));
+
+        assert_eq!(app.context_switcher.selected, 1);
+        let frame = render_app_text_at(&app, 140, 32);
+        assert!(frame.contains(">   sample-app/prod"), "{frame}");
+    }
+
+    #[test]
+    async fn tui_context_info_does_not_log_selected_context() {
+        let fixture = test_launch_with_manifest().await;
+        let log_context = LogContext::captured();
+
+        log_context
+            .scope(async {
+                let _ = TuiContextInfo::from_context(fixture.launch.initial_context.as_ref());
+            })
+            .await;
+
+        assert!(log_context.take_buffered_lines().is_empty());
+    }
+
+    #[test]
+    async fn tui_context_creation_preserves_captured_log_output() {
+        let fixture = test_launch_with_manifest().await;
+        let global_flags = fixture.launch.base_flags.clone();
+        let log_context = LogContext::captured();
+
+        let context = log_context
+            .scope(async {
+                Context::new(global_flags, Some(Output::Captured))
+                    .await
+                    .expect("context")
+            })
+            .await;
+        log_context
+            .scope(async {
+                let _ = context.manifest_environment();
+                logln("captured marker");
+            })
+            .await;
+
+        let logs = log_context.take_buffered_lines().join("\n");
+        assert!(logs.contains("captured marker"), "{logs}");
+    }
+
+    #[test]
+    async fn context_targets_dedup_builtin_servers_and_keep_custom_sources() {
+        let fixture = test_launch_with_manifest().await;
+
+        let targets = context_targets_from_launch(&fixture.launch).expect("context targets");
+        let keys = targets
+            .iter()
+            .map(|target| target.key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            keys.iter()
+                .filter(|key| **key == "server:builtin:local")
+                .count(),
+            1
+        );
+        assert_eq!(
+            keys.iter()
+                .filter(|key| **key == "server:builtin:cloud")
+                .count(),
+            1
+        );
+        assert!(!keys.contains(&"server:profile:local"));
+        assert!(!keys.contains(&"server:profile:cloud"));
+        assert!(keys.contains(&"server:profile:prod"));
+        assert!(
+            !keys
+                .iter()
+                .any(|key| key.starts_with("server:manifest:local:"))
+        );
+        assert!(
+            !keys
+                .iter()
+                .any(|key| key.starts_with("server:manifest:cloud:"))
+        );
+        assert!(
+            !keys
+                .iter()
+                .any(|key| key.starts_with("server:manifest:implicit:"))
+        );
+        assert!(
+            keys.iter()
+                .any(|key| key.starts_with("server:manifest:custom:http://localhost:9881"))
+        );
+        assert!(keys.contains(&"manifest:local"));
+        assert!(keys.contains(&"manifest:cloud"));
+        assert!(keys.contains(&"manifest:implicit"));
+        assert!(keys.contains(&"manifest:custom"));
+    }
+
+    #[test]
+    fn context_environment_loading_renders_blocking_modal() {
+        let mut app = test_app();
+        app.open_context_picker();
+        app.context_switcher.environment_list_running = true;
+        app.context_switcher.environment_list_spinner_frame = 2;
+
+        let frame = render_app_text_at(&app, 100, 30);
+
+        assert!(frame.contains("Loading app environments"), "{frame}");
+        assert!(frame.contains("esc cancel  q quit"), "{frame}");
+        assert!(frame.contains("| Loading app environments"), "{frame}");
+    }
+
+    #[test]
+    fn context_environment_loading_ignores_selection_input() {
+        let mut app = test_app();
+        app.context_switcher = ContextSwitcherState::new(vec![
+            test_current_context_target(),
+            test_manifest_context_target("prod"),
+        ]);
+        app.open_context_picker();
+        app.context_switcher.environment_list_running = true;
+
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.context_switcher.selected, 0);
+        assert!(app.context_switcher.environment_list_running);
+        assert!(app.context_switcher.pending_action.is_none());
+        assert!(!app.context_switcher.switch_running);
+    }
+
+    #[test]
+    fn context_environment_loading_cancel_ignores_stale_result() {
+        let mut app = test_app();
+        app.open_context_picker();
+        app.context_switcher.environment_list_running = true;
+        app.context_switcher.generation = 7;
+        app.context_switcher.pending_key = Some("server:builtin:cloud".to_string());
+
+        app.handle_key(key(KeyCode::Esc));
+
+        assert!(!app.context_switcher.environment_list_running);
+        assert_eq!(app.context_switcher.generation, 8);
+        assert!(app.context_switcher.pending_key.is_none());
+        assert_eq!(app.context_switcher.mode, ContextPickerStep::Targets);
+
+        app.finish_context_environment_list(
+            7,
+            "server:builtin:cloud".to_string(),
+            TuiContextTaskResult::new(TuiContextId::new(1), Ok(Vec::new()), Vec::new()),
+        );
+
+        assert!(app.context_switcher.app_environments.is_empty());
+        assert_eq!(app.context_switcher.mode, ContextPickerStep::Targets);
+    }
+
+    #[test]
+    fn context_environment_loading_q_quits() {
+        let mut app = test_app();
+        app.open_context_picker();
+        app.context_switcher.environment_list_running = true;
+
+        app.handle_key(key(KeyCode::Char('q')));
+
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn context_picker_width_expands_but_is_bounded() {
+        let mut state = ContextSwitcherState::new(vec![
+            test_current_context_target(),
+            test_server_context_target(
+                "server:profile:prod",
+                "Profile production with long descriptive name",
+                "https://very-long-production-worker-service.internal.example.com:9443",
+            ),
+        ]);
+        let rows = context_picker_rows(&state, state.row_count());
+
+        assert_eq!(context_picker_width(&rows, 200), 120);
+        assert_eq!(context_picker_width(&rows, 50), 48);
+
+        state.show_app_environments(
+            "server:profile:prod".to_string(),
+            vec![TuiAppEnvironmentTarget {
+                label: "large-application/prod".to_string(),
+                detail: "deployment r42 v2026.07.01-production-release".to_string(),
+                server_label: "Profile production with long descriptive name".to_string(),
+                server_flags: GolemCliGlobalFlags::default(),
+                environment_reference: None,
+                app: Some("large-application".to_string()),
+                environment: Some("prod".to_string()),
+                dev_eligible: false,
+                error: None,
+            }],
+        );
+        let rows = context_picker_rows(&state, state.row_count());
+        assert_eq!(context_picker_width(&rows, 200), 120);
+    }
+
+    #[test]
+    fn context_picker_truncates_long_details_on_narrow_terminals() {
+        let mut app = test_app();
+        app.context_switcher = ContextSwitcherState::new(vec![
+            test_current_context_target(),
+            test_server_context_target(
+                "server:profile:prod",
+                "Profile production",
+                "https://very-long-production-worker-service.internal.example.com:9443",
+            ),
+        ]);
+
+        app.open_context_picker();
+        let frame = render_app_text_at(&app, 80, 24);
+
+        assert!(frame.contains("https://very-long"), "{frame}");
+        assert!(frame.contains("..."), "{frame}");
+        assert!(!frame.contains("internal.example.com:9443"), "{frame}");
+    }
+
+    #[test]
+    fn context_picker_selection_confirms_while_command_runs() {
+        let mut app = test_app();
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        let (tx, _rx) = test_event_channel();
+
+        app.open_context_picker();
+        app.context_switcher
+            .targets
+            .push(test_manifest_context_target("prod"));
+        app.context_switcher.show_targets();
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+
+        assert_eq!(app.mode, TuiMode::ContextSwitchConfirm);
+        assert!(app.context_switcher.pending_action.is_some());
+        assert!(app.context_switcher.last_error.is_none());
+        assert!(!app.context_switcher.switch_running);
+
+        let frame = render_app_text(&app);
+        assert_eq!(
+            frame
+                .matches("Switching context will stop running dev jobs")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn context_switch_confirmation_requests_graceful_command_stop() {
+        let mut app = test_app();
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        let (tx, _rx) = test_event_channel();
+
+        app.open_context_picker();
+        app.context_switcher
+            .targets
+            .push(test_manifest_context_target("prod"));
+        app.context_switcher.show_targets();
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+
+        assert_eq!(
+            app.command_run.as_ref().map(|run| run.status),
+            Some(CommandStatus::Cancelling)
+        );
+        assert!(app.context_switcher.waiting_for_dev_stop);
+    }
+
+    #[test]
+    fn context_switch_confirmation_leaves_global_server_running() {
+        let mut app = test_app();
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        app.server.run.status = ServerStatus::Running;
+        let (tx, _rx) = test_event_channel();
+
+        app.open_context_picker();
+        app.context_switcher
+            .targets
+            .push(test_manifest_context_target("prod"));
+        app.context_switcher.show_targets();
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+        app.handle_key_with_events(key(KeyCode::Enter), Some(&tx));
+
+        assert_eq!(
+            app.command_run.as_ref().map(|run| run.status),
+            Some(CommandStatus::Cancelling)
+        );
+        assert_eq!(app.server.run.status, ServerStatus::Running);
+    }
+
+    #[test]
+    fn context_switch_auto_closes_ops_refresh_without_confirmation() {
+        let mut app = test_app();
+        app.context_switcher = ContextSwitcherState::new(vec![
+            test_current_context_target(),
+            test_manifest_context_target("prod"),
+        ]);
+        app.agents.refresh_running = true;
+        app.agents.refresh_generation = 7;
+
+        app.open_context_picker();
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert!(!app.agents.refresh_running);
+        assert_eq!(app.agents.refresh_generation, 8);
+        assert_ne!(app.mode, TuiMode::ContextSwitchConfirm);
+        assert!(app.context_switcher.pending_action.is_none());
+    }
+
+    #[test]
+    fn auth_prompt_events_track_suspended_auth_state() {
+        let mut app = test_app();
+        let (tx, _rx) = test_event_channel();
+        let url = "https://auth.example.test/login".to_string();
+
+        app.handle_event(
+            TuiEvent::AuthPromptStarted {
+                url: url.clone(),
+                ready: dropped_auth_prompt_ready(),
+            },
+            &tx,
+        );
+
+        assert_eq!(
+            app.auth_prompt.as_ref().map(|prompt| prompt.url.as_str()),
+            Some(url.as_str())
+        );
+        let text = tui_auth_prompt_text(&url);
+        assert!(text.contains("Authenticate with GitHub"), "{text}");
+        assert!(text.contains(&url), "{text}");
+
+        app.handle_event(TuiEvent::AuthPromptFinished, &tx);
+
+        assert!(app.auth_prompt.is_none());
+    }
+
+    #[test]
+    fn non_local_context_keeps_global_server_actions_available() {
+        let mut app = test_app();
+        app.context.uses_local_server = false;
+        app.context.dev_eligible = false;
+
+        assert_eq!(
+            app.action_availability(action(TuiActionId::ToggleServer)),
+            TuiActionAvailability::Available
+        );
+
+        app.handle_key(key(KeyCode::Char('s')));
+
+        assert_eq!(app.server.run.status, ServerStatus::Starting);
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Server);
+    }
+
+    #[test]
+    fn context_picker_switch_does_not_stop_global_server() {
+        let mut app = test_app();
+        app.context_switcher = ContextSwitcherState::new(vec![
+            test_current_context_target(),
+            test_manifest_context_target("prod"),
+        ]);
+        app.server.run.status = ServerStatus::Running;
+
+        app.open_context_picker();
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_ne!(app.mode, TuiMode::ContextSwitchConfirm);
+        assert_eq!(app.server.run.status, ServerStatus::Running);
+        assert!(app.context_switcher.pending_action.is_none());
+    }
+
+    #[test]
+    fn app_environment_details_map_to_picker_targets() {
+        let app = test_app();
+        let server_target = TuiContextTarget {
+            key: "server:cloud".to_string(),
+            label: "Built-in cloud server".to_string(),
+            detail: "cloud".to_string(),
+            kind: TuiContextTargetKind::ServerTarget {
+                source: TuiServerTargetSource::Builtin,
+            },
+            global_flags: GolemCliGlobalFlags::default(),
+            error: None,
+            is_current: false,
+        };
+
+        let targets = app_environment_targets_from_details(
+            &server_target,
+            vec![sample_environment_with_details("sample-app", "local")],
+            &app.context,
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].label, "sample-app/local");
+        assert!(targets[0].dev_eligible);
+        assert!(matches!(
+            targets[0].environment_reference,
+            Some(EnvironmentReference::ApplicationEnvironment { .. })
+        ));
+    }
+
+    #[test]
+    fn ops_only_context_disables_dev_actions() {
+        let mut app = test_app();
+        app.context.dev_eligible = false;
+
+        assert_eq!(
+            app.action_availability(action(TuiActionId::Build)),
+            TuiActionAvailability::Unavailable("selected context is ops-only")
+        );
+
+        app.handle_key(key(KeyCode::Char('b')));
+
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.dev_focus, DevPanel::Output);
+        assert_eq!(
+            app.command_run.as_ref().map(|run| run.status),
+            Some(CommandStatus::Failed)
+        );
+    }
+
+    #[test]
+    fn context_picker_escape_returns_from_app_environments_to_targets() {
+        let mut app = test_app();
+        app.open_context_picker();
+        app.context_switcher.show_app_environments(
+            "current".to_string(),
+            vec![TuiAppEnvironmentTarget {
+                label: "sample-app/local".to_string(),
+                detail: "deployment r1 v1".to_string(),
+                server_label: "Current launch context".to_string(),
+                server_flags: GolemCliGlobalFlags::default(),
+                environment_reference: None,
+                app: Some("sample-app".to_string()),
+                environment: Some("local".to_string()),
+                dev_eligible: true,
+                error: None,
+            }],
+        );
+
+        app.handle_key(key(KeyCode::Esc));
+
+        assert_eq!(app.mode, TuiMode::ContextPicker);
+        assert_eq!(app.context_switcher.mode, ContextPickerStep::Targets);
+    }
+
+    #[test]
+    fn selected_context_args_prefix_nested_cli_specs() {
+        let mut app = test_app();
+        app.context_cli_args = vec![
+            "--config-dir".to_string(),
+            "/tmp/golem-config".to_string(),
+            "--local".to_string(),
+        ];
+
+        let spec = app
+            .command_spec(vec!["agent".to_string(), "list".to_string()])
+            .expect("spec");
+
+        assert_eq!(
+            spec.args,
+            vec![
+                "--config-dir",
+                "/tmp/golem-config",
+                "--local",
+                "agent",
+                "list"
+            ]
+        );
+    }
+
+    #[test]
+    fn local_server_spec_uses_launch_scoped_args_not_selected_context_args() {
+        let mut app = test_app();
+        app.context_cli_args = vec![
+            "--config-dir".to_string(),
+            "/tmp/selected-config".to_string(),
+            "--cloud".to_string(),
+        ];
+        app.server.cli_args = vec![
+            "--config-dir".to_string(),
+            "/tmp/launch-config".to_string(),
+            "--app-manifest-path".to_string(),
+            "/tmp/app/golem.yaml".to_string(),
+        ];
+
+        let spec = app
+            .server_spec(vec!["server".to_string(), "run".to_string()])
+            .expect("spec");
+
+        assert_eq!(
+            spec.args,
+            vec![
+                "--config-dir",
+                "/tmp/launch-config",
+                "--app-manifest-path",
+                "/tmp/app/golem.yaml",
+                "server",
+                "run"
+            ]
+        );
     }
 
     #[test]
@@ -5460,6 +8119,7 @@ mod tests {
             CommandKind::Build,
             vec!["build".to_string()],
             CommandOptions::default(),
+            "sample-app:local".to_string(),
         ));
         app.set_command_status(CommandStatus::Succeeded);
         for index in 0..20 {
@@ -5472,23 +8132,29 @@ mod tests {
             Some(1)
         );
 
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 10,
-            row: 10,
-            modifiers: KeyModifiers::empty(),
-        });
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 10,
+                row: 10,
+                modifiers: KeyModifiers::empty(),
+            },
+            None,
+        );
         assert_eq!(
             app.command_run.as_ref().map(|run| run.output.scroll_offset),
             Some(4)
         );
 
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 10,
-            row: 10,
-            modifiers: KeyModifiers::empty(),
-        });
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 10,
+                row: 10,
+                modifiers: KeyModifiers::empty(),
+            },
+            None,
+        );
         assert_eq!(
             app.command_run.as_ref().map(|run| run.output.scroll_offset),
             Some(1)
@@ -5664,14 +8330,274 @@ mod tests {
                 .append(format!("server line {index}\n").as_bytes());
         }
 
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 10,
-            row: 10,
-            modifiers: KeyModifiers::empty(),
-        });
+        app.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 10,
+                row: 10,
+                modifiers: KeyModifiers::empty(),
+            },
+            None,
+        );
 
         assert_eq!(app.server.run.output.scroll_offset, 3);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_panel_under_pointer_independent_of_focus() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Dev;
+        app.dev_focus = DevPanel::Server;
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        app.set_command_status(CommandStatus::Succeeded);
+        for index in 0..20 {
+            app.append_command_output(format!("output line {index}\n").as_bytes());
+            app.server
+                .run
+                .output
+                .append(format!("server line {index}\n").as_bytes());
+        }
+        render_app_text_at(&app, 120, 32);
+        let output = snapshot_region(&app, RegionKind::DevPanelBody(DevPanel::Output));
+
+        app.handle_mouse(
+            mouse(MouseEventKind::ScrollUp, output.x + 2, output.y + 1),
+            None,
+        );
+
+        assert_eq!(
+            app.command_run.as_ref().map(|run| run.output.scroll_offset),
+            Some(3)
+        );
+        assert_eq!(app.server.run.output.scroll_offset, 0);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_server_drawer_from_any_workspace() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Home;
+        app.layout.server_drawer_open = true;
+        for index in 0..20 {
+            app.server
+                .run
+                .output
+                .append(format!("server line {index}\n").as_bytes());
+        }
+        render_app_text_at(&app, 120, 32);
+        let drawer = snapshot_region(&app, RegionKind::ServerDrawer);
+
+        app.handle_mouse(
+            mouse(MouseEventKind::ScrollUp, drawer.x + 2, drawer.y + 2),
+            None,
+        );
+
+        assert_eq!(app.server.run.output.scroll_offset, 3);
+    }
+
+    #[test]
+    fn mouse_click_workspace_tab_switches_workspace() {
+        let mut app = test_app();
+        render_app_text_at(&app, 120, 32);
+        let dev_tab = snapshot_region(&app, RegionKind::HeaderTab(TuiWorkspace::Dev));
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                dev_tab.x + 1,
+                dev_tab.y,
+            ),
+            None,
+        );
+
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+    }
+
+    #[test]
+    fn mouse_click_dev_panel_focuses_panel() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Dev;
+        render_app_text_at(&app, 120, 32);
+        let output = snapshot_region(&app, RegionKind::DevPanelBody(DevPanel::Output));
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                output.x + 2,
+                output.y + 1,
+            ),
+            None,
+        );
+
+        assert_eq!(app.dev_focus, DevPanel::Output);
+    }
+
+    #[test]
+    fn mouse_click_agent_row_selects_agent() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Ops;
+        app.agents.agents = sample_agents();
+        render_app_text_at(&app, 120, 32);
+        let list = snapshot_region(&app, RegionKind::OpsList);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                list.x + 4,
+                list.y + 1,
+            ),
+            None,
+        );
+
+        assert_eq!(app.agents.selected, 1);
+    }
+
+    #[test]
+    fn mouse_click_agent_inspect_pane_changes_focus() {
+        let mut app = inspect_app();
+        render_app_text_at(&app, 120, 32);
+        let stream = snapshot_region(&app, RegionKind::OpsInspectPane(AgentInspectPane::Stream));
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                stream.x + 2,
+                stream.y + 1,
+            ),
+            None,
+        );
+
+        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Stream);
+    }
+
+    #[test]
+    fn mouse_click_context_confirm_and_cancel_regions_match_keyboard_actions() {
+        let mut confirm_app = test_app();
+        confirm_app.mode = TuiMode::ContextSwitchConfirm;
+        confirm_app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        confirm_app.context_switcher.pending_action = Some(PendingContextSwitchAction::Switch {
+            global_flags: GolemCliGlobalFlags::default(),
+            environment_reference: None,
+        });
+        render_app_text_at(&confirm_app, 120, 32);
+        let confirm = snapshot_region(&confirm_app, RegionKind::ContextConfirm);
+
+        confirm_app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                confirm.x + 1,
+                confirm.y,
+            ),
+            None,
+        );
+
+        assert!(confirm_app.context_switcher.waiting_for_dev_stop);
+
+        let mut cancel_app = test_app();
+        cancel_app.mode = TuiMode::ContextSwitchConfirm;
+        cancel_app.context_switcher.pending_action = Some(PendingContextSwitchAction::Switch {
+            global_flags: GolemCliGlobalFlags::default(),
+            environment_reference: None,
+        });
+        render_app_text_at(&cancel_app, 120, 32);
+        let cancel = snapshot_region(&cancel_app, RegionKind::ContextCancel);
+
+        cancel_app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                cancel.x + 1,
+                cancel.y,
+            ),
+            None,
+        );
+
+        assert_eq!(cancel_app.mode, TuiMode::ContextPicker);
+        assert!(cancel_app.context_switcher.pending_action.is_none());
+    }
+
+    #[test]
+    fn mouse_drag_dev_split_changes_session_ratio() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Dev;
+        render_app_text_at(&app, 120, 32);
+        let before = app.layout.dev_primary_ratio;
+        let split = snapshot_region(&app, RegionKind::DevPrimarySplit);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                split.x,
+                split.y + 1,
+            ),
+            None,
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                split.x + 12,
+                split.y + 1,
+            ),
+            None,
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                split.x + 12,
+                split.y + 1,
+            ),
+            None,
+        );
+
+        assert_ne!(app.layout.dev_primary_ratio, before);
+        assert!(app.layout.dragging.is_none());
+    }
+
+    #[test]
+    fn mouse_drag_drawer_split_changes_session_width() {
+        let mut app = test_app();
+        app.layout.server_drawer_open = true;
+        render_app_text_at(&app, 120, 32);
+        let before = app.layout.server_drawer_ratio;
+        let split = snapshot_region(&app, RegionKind::ServerDrawerSplit);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                split.x,
+                split.y + 1,
+            ),
+            None,
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                split.x - 10,
+                split.y + 1,
+            ),
+            None,
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                split.x - 10,
+                split.y + 1,
+            ),
+            None,
+        );
+
+        assert_ne!(app.layout.server_drawer_ratio, before);
+        assert!(app.layout.dragging.is_none());
     }
 
     #[test]
@@ -5745,7 +8671,7 @@ mod tests {
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
             command_run: None,
-            server: ServerState::default(),
+            server: LocalServerService::default(),
             repl: ReplState::default(),
             agents: AgentsState::default(),
             next_command_id: 1,
@@ -5754,8 +8680,151 @@ mod tests {
                 environment: "local".to_string(),
                 server: "local".to_string(),
                 config_dir: "/tmp/golem-config".to_string(),
+                uses_local_server: true,
+                dev_eligible: true,
             },
+            context_switcher: ContextSwitcherState::new(vec![TuiContextTarget {
+                key: "manifest:local".to_string(),
+                label: "sample-app/local".to_string(),
+                detail: "server: local".to_string(),
+                kind: TuiContextTargetKind::ManifestAppContext {
+                    app: "sample-app".to_string(),
+                    environment: "local".to_string(),
+                },
+                global_flags: GolemCliGlobalFlags::default(),
+                error: None,
+                is_current: true,
+            }]),
+            context_cli_args: Vec::new(),
+            selected_environment_reference: None,
             context_executor: None,
+            auth_prompt: None,
+            layout: TuiLayoutState::default(),
+            layout_snapshot: RefCell::new(None),
+        }
+    }
+
+    async fn test_launch_with_manifest() -> TestLaunchFixture {
+        let original_dir =
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let _ = std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"));
+        let app_dir = TempDir::new().expect("app dir");
+        let config_dir = TempDir::new().expect("config dir");
+        let manifest_path = app_dir.path().join("golem.yaml");
+        fs::write(
+            &manifest_path,
+            r#"
+manifestVersion: 1.6.0
+app: picker-app
+
+environments:
+  local:
+    server: local
+  cloud:
+    server: cloud
+  implicit: {}
+  custom:
+    server:
+      url: http://localhost:9881
+      workerUrl: http://localhost:9881
+      allowInsecure: true
+      auth:
+        staticToken: token
+"#,
+        )
+        .expect("write manifest");
+        Config::set_profile(
+            ProfileName("prod".to_string()),
+            Profile {
+                custom_url: Some(Url::parse("http://localhost:9882").expect("profile url")),
+                custom_worker_url: None,
+                allow_insecure: true,
+                config: Default::default(),
+                auth: AuthenticationConfig::static_builtin_local(),
+            },
+            config_dir.path(),
+        )
+        .expect("write profile");
+
+        let command = GolemCliCommand::parse_from([
+            "golem-cli",
+            "--config-dir",
+            config_dir.path().to_str().expect("config path"),
+            "--app-manifest-path",
+            manifest_path.to_str().expect("manifest path"),
+            "--environment",
+            "local",
+            "tui",
+        ]);
+        let context = Arc::new(
+            Context::new(command.global_flags.clone(), Some(Output::None))
+                .await
+                .expect("context"),
+        );
+        TestLaunchFixture {
+            launch: TuiLaunchConfig::new(context, command.global_flags),
+            app_dir,
+            config_dir,
+            original_dir,
+        }
+    }
+
+    struct TestLaunchFixture {
+        launch: TuiLaunchConfig,
+        #[allow(dead_code)]
+        app_dir: TempDir,
+        #[allow(dead_code)]
+        config_dir: TempDir,
+        original_dir: PathBuf,
+    }
+
+    impl Drop for TestLaunchFixture {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original_dir);
+        }
+    }
+
+    fn test_current_context_target() -> TuiContextTarget {
+        TuiContextTarget {
+            key: "manifest:local".to_string(),
+            label: "sample-app/local".to_string(),
+            detail: "server: local".to_string(),
+            kind: TuiContextTargetKind::ManifestAppContext {
+                app: "sample-app".to_string(),
+                environment: "local".to_string(),
+            },
+            global_flags: GolemCliGlobalFlags::default(),
+            error: None,
+            is_current: true,
+        }
+    }
+
+    fn test_manifest_context_target(environment: &str) -> TuiContextTarget {
+        TuiContextTarget {
+            key: format!("manifest:{environment}"),
+            label: format!("sample-app/{environment}"),
+            detail: "server: cloud".to_string(),
+            kind: TuiContextTargetKind::ManifestAppContext {
+                app: "sample-app".to_string(),
+                environment: environment.to_string(),
+            },
+            global_flags: GolemCliGlobalFlags::default(),
+            error: None,
+            is_current: false,
+        }
+    }
+
+    fn test_server_context_target(key: &str, label: &str, detail: &str) -> TuiContextTarget {
+        TuiContextTarget {
+            key: key.to_string(),
+            label: label.to_string(),
+            detail: detail.to_string(),
+            kind: TuiContextTargetKind::ServerTarget {
+                source: TuiServerTargetSource::Profile,
+            },
+            global_flags: GolemCliGlobalFlags::default(),
+            error: None,
+            is_current: false,
         }
     }
 
@@ -5807,6 +8876,39 @@ mod tests {
             exported_resource_instances: BTreeMap::new().into_iter().collect(),
             source_language: crate::agent_id_display::SourceLanguage::default(),
             secret_config_paths: BTreeSet::new(),
+        }
+    }
+
+    fn sample_environment_with_details(
+        application_name: &str,
+        environment_name: &str,
+    ) -> EnvironmentWithDetails {
+        EnvironmentWithDetails {
+            environment: golem_common::model::environment::EnvironmentSummary {
+                id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+                revision: golem_common::model::environment::EnvironmentRevision::new(1).unwrap(),
+                name: golem_common::model::environment::EnvironmentName(
+                    environment_name.to_string(),
+                ),
+                diff_model_version: 0,
+                compatibility_check: true,
+                version_check: true,
+                security_overrides: false,
+                current_deployment: None,
+            },
+            application: golem_common::model::application::ApplicationSummary {
+                id: golem_common::model::application::ApplicationId(uuid::Uuid::nil()),
+                name: golem_common::model::application::ApplicationName(
+                    application_name.to_string(),
+                ),
+            },
+            account: golem_common::model::account::AccountSummary {
+                id: golem_common::model::account::AccountId(uuid::Uuid::nil()),
+                name: "test account".to_string(),
+                email: golem_common::model::account::AccountEmail::new(
+                    "test@example.com".to_string(),
+                ),
+            },
         }
     }
 
@@ -5891,6 +8993,23 @@ mod tests {
         terminal.draw(|frame| render(frame, app)).unwrap();
 
         render_buffer_text(terminal.backend().buffer())
+    }
+
+    fn snapshot_region(app: &TuiApp, kind: RegionKind) -> Rect {
+        app.layout_snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.region(kind))
+            .unwrap_or_else(|| panic!("missing region {kind:?}"))
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
     }
 
     fn key(code: KeyCode) -> KeyEvent {

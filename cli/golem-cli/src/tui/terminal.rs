@@ -24,6 +24,7 @@ use std::io::{Stdout, stdout};
 
 pub struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    suspended: bool,
 }
 
 impl TerminalGuard {
@@ -60,20 +61,71 @@ impl TerminalGuard {
             return Err(error.into());
         }
 
-        Ok(Self { terminal })
+        Ok(Self {
+            terminal,
+            suspended: false,
+        })
     }
 
     pub fn draw<F>(&mut self, render_callback: F) -> anyhow::Result<()>
     where
         F: FnOnce(&mut ratatui::Frame<'_>),
     {
+        if self.suspended {
+            return Ok(());
+        }
         self.terminal.draw(render_callback)?;
         Ok(())
     }
-}
 
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
+    pub fn suspend(&mut self) -> anyhow::Result<()> {
+        if self.suspended {
+            return Ok(());
+        }
+        let raw_mode_error = disable_raw_mode().err();
+        let screen_error = execute!(
+            self.terminal.backend_mut(),
+            Show,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )
+        .err();
+        self.suspended = true;
+        if let Some(error) = raw_mode_error {
+            return Err(error.into());
+        }
+        if let Some(error) = screen_error {
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> anyhow::Result<()> {
+        if !self.suspended {
+            return Ok(());
+        }
+        if let Err(error) = enable_raw_mode() {
+            self.restore_for_exit();
+            return Err(error.into());
+        }
+        if let Err(error) = execute!(
+            self.terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            Hide
+        ) {
+            self.restore_for_exit();
+            return Err(error.into());
+        }
+        if let Err(error) = self.terminal.clear() {
+            self.restore_for_exit();
+            return Err(error.into());
+        }
+        self.suspended = false;
+        Ok(())
+    }
+
+    pub fn restore_for_exit(&mut self) {
         let _ = disable_raw_mode();
         let _ = execute!(
             self.terminal.backend_mut(),
@@ -81,5 +133,12 @@ impl Drop for TerminalGuard {
             DisableMouseCapture,
             LeaveAlternateScreen
         );
+        self.suspended = true;
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        self.restore_for_exit();
     }
 }

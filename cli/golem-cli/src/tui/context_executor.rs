@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::auth::{AuthPresenter, with_auth_presenter};
 use crate::context::Context;
 use crate::log::LogContext;
 use std::future::Future;
@@ -111,10 +112,18 @@ impl TuiContextExecutor {
         self.launch_context().id
     }
 
+    pub(crate) fn select_context(&self, context: Arc<Context>) -> TuiContextId {
+        let mut selected = self.selected.write().unwrap();
+        let id = TuiContextId(selected.id.value().saturating_add(1));
+        *selected = TuiLaunchContext { id, context };
+        id
+    }
+
     #[allow(dead_code)]
     pub(crate) fn spawn<F, Fut, T, E, M>(
         &self,
         event_tx: Sender<E>,
+        auth_presenter: Option<Arc<dyn AuthPresenter>>,
         work: F,
         map_event: M,
     ) -> tokio::task::JoinHandle<()>
@@ -129,13 +138,15 @@ impl TuiContextExecutor {
         self.runtime.spawn(async move {
             let log_context = LogContext::captured();
             let context_id = launch_context.id();
-            let result = log_context
-                .scope(async move {
-                    work(launch_context)
-                        .await
-                        .map_err(|error| format!("{error:#}"))
-                })
-                .await;
+            let work = log_context.scope(async move {
+                work(launch_context)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            });
+            let result = match auth_presenter {
+                Some(auth_presenter) => with_auth_presenter(auth_presenter, work).await,
+                None => work.await,
+            };
             let logs = log_context.take_buffered_lines();
             let _ = event_tx
                 .send(map_event(TuiContextTaskResult {
@@ -200,6 +211,7 @@ mod tests {
 
         let handle = executor.spawn(
             tx,
+            None,
             |launch_context| async move {
                 assert_eq!(launch_context.id().value(), 1);
                 Ok((
@@ -225,6 +237,7 @@ mod tests {
 
         let handle = executor.spawn(
             tx,
+            None,
             |_launch_context| async move {
                 logln("starting");
                 let _indent = LogIndent::prefix("> ");
@@ -248,6 +261,7 @@ mod tests {
 
         let first = executor.spawn(
             tx.clone(),
+            None,
             |_launch_context| async move {
                 logln("first");
                 tokio::task::yield_now().await;
@@ -258,6 +272,7 @@ mod tests {
         );
         let second = executor.spawn(
             tx,
+            None,
             |_launch_context| async move {
                 logln("second");
                 tokio::task::yield_now().await;
@@ -288,6 +303,7 @@ mod tests {
 
         let handle = executor.spawn(
             tx,
+            None,
             |_launch_context| async move {
                 logln("before failure");
                 Err::<(), _>(anyhow!("broken"))
@@ -309,11 +325,13 @@ mod tests {
 
         let first = executor.spawn(
             tx.clone(),
+            None,
             |launch_context| async move { Ok(format!("id:{}", launch_context.id().value())) },
             TestEvent,
         );
         let second = executor.spawn(
             tx,
+            None,
             |launch_context| async move {
                 Ok(format!(
                     "context:{:p}",
@@ -346,5 +364,28 @@ mod tests {
                 .iter()
                 .any(|event| event.0.result == Ok(format!("context:{:p}", Arc::as_ptr(&context))))
         );
+    }
+
+    #[test]
+    async fn selecting_context_increments_context_id_for_future_requests() {
+        let (executor, context, _config_dir) = executor().await;
+
+        assert_eq!(executor.current_context_id(), TuiContextId(1));
+        assert_eq!(executor.select_context(context), TuiContextId(2));
+        assert_eq!(executor.current_context_id(), TuiContextId(2));
+
+        let (tx, mut rx) = mpsc::channel(16);
+        let handle = executor.spawn(
+            tx,
+            None,
+            |launch_context| async move { Ok(launch_context.id().value()) },
+            TestEvent,
+        );
+
+        let event = rx.recv().await.expect("event");
+        handle.abort();
+
+        assert_eq!(event.0.context_id, TuiContextId(2));
+        assert_eq!(event.0.result, Ok(2));
     }
 }

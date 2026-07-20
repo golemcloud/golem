@@ -12,19 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::GolemCliGlobalFlags;
 use crate::context::Context;
 use std::sync::Arc;
 
 pub struct TuiCommandHandler {
     ctx: Arc<Context>,
+    global_flags: GolemCliGlobalFlags,
 }
 
 impl TuiCommandHandler {
-    pub fn new(ctx: Arc<Context>) -> Self {
-        Self { ctx }
+    pub fn new(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> Self {
+        Self { ctx, global_flags }
     }
 
     pub async fn cmd_tui(&self) -> anyhow::Result<()> {
-        crate::tui::run(self.ctx.clone()).await
+        crate::tui::run(self.ctx.clone(), self.global_flags.clone()).await
     }
 }
