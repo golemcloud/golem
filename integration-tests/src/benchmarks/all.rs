@@ -22,6 +22,7 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
     BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityScenarioArg,
+    DensityPromiseFanInArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
     DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
     DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
@@ -32,7 +33,10 @@ use golem_test_framework::config::{
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use integration_tests::benchmarks::density::agent::{CellConfig, ExecutorProbe, Scenario};
 use integration_tests::benchmarks::density::prep::{PrepManifest, run_prep};
-use integration_tests::benchmarks::density::{AgentMode, ComponentSharing, DensitySection};
+use integration_tests::benchmarks::density::{
+    AgentMode, ComponentSharing, DensitySection, PromiseFanIn, PromiseTopology,
+    PromiseWaiterPresence,
+};
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
@@ -308,6 +312,10 @@ async fn main() {
             schedule_context_spans,
             schedule_target_pattern,
             schedule_rate_period_secs,
+            promise_payload_size,
+            promise_waiter_presence,
+            promise_fan_in,
+            promise_topology,
             executor_pod_name,
             executor_namespace,
             save_to_json,
@@ -331,6 +339,10 @@ async fn main() {
                 *schedule_context_spans,
                 schedule_target_pattern.map(map_schedule_target_pattern),
                 *schedule_rate_period_secs,
+                *promise_payload_size,
+                promise_waiter_presence.map(map_promise_waiter_presence),
+                promise_fan_in.map(map_promise_fan_in),
+                promise_topology.map(map_promise_topology),
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
                 save_to_json.clone(),
@@ -595,6 +607,30 @@ fn map_schedule_target_pattern(
     }
 }
 
+fn map_promise_waiter_presence(
+    arg: DensityPromiseWaiterPresenceArg,
+) -> PromiseWaiterPresence {
+    match arg {
+        DensityPromiseWaiterPresenceArg::Cold => PromiseWaiterPresence::Cold,
+        DensityPromiseWaiterPresenceArg::Warm => PromiseWaiterPresence::Warm,
+        DensityPromiseWaiterPresenceArg::Mixed => PromiseWaiterPresence::Mixed,
+    }
+}
+
+fn map_promise_fan_in(arg: DensityPromiseFanInArg) -> PromiseFanIn {
+    match arg {
+        DensityPromiseFanInArg::OnePerAgent => PromiseFanIn::OnePerAgent,
+        DensityPromiseFanInArg::FanIn => PromiseFanIn::FanIn,
+    }
+}
+
+fn map_promise_topology(arg: DensityPromiseTopologyArg) -> PromiseTopology {
+    match arg {
+        DensityPromiseTopologyArg::OnePod => PromiseTopology::OnePod,
+        DensityPromiseTopologyArg::TwoPod => PromiseTopology::TwoPod,
+    }
+}
+
 /// Runs one density action: either the one-time prep (writing the manifest) or
 /// a single cell (using a previously-written manifest).
 #[allow(clippy::too_many_arguments)]
@@ -618,6 +654,10 @@ async fn run_density(
     schedule_context_spans: Option<u32>,
     schedule_target_pattern: Option<integration_tests::benchmarks::density::ScheduleTargetPattern>,
     schedule_rate_period_secs: Option<u64>,
+    promise_payload_size: Option<usize>,
+    promise_waiter_presence: Option<PromiseWaiterPresence>,
+    promise_fan_in: Option<PromiseFanIn>,
+    promise_topology: Option<PromiseTopology>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
@@ -686,7 +726,26 @@ async fn run_density(
                     .await
                     .expect("density schedule cell failed")
                 }
-                DensitySection::Promise => panic!("density promise cells are not implemented"),
+                DensitySection::Promise => {
+                    let config = integration_tests::benchmarks::density::promise::CellConfig {
+                        payload_size: promise_payload_size
+                            .expect("--promise-payload-size required for promise cells"),
+                        waiter_presence: promise_waiter_presence
+                            .expect("--promise-waiter-presence required for promise cells"),
+                        fan_in: promise_fan_in
+                            .expect("--promise-fan-in required for promise cells"),
+                        topology: promise_topology
+                            .expect("--promise-topology required for promise cells"),
+                    };
+                    integration_tests::benchmarks::density::promise::run_cell(
+                        &config,
+                        ramp.as_deref(),
+                        &manifest,
+                        &deps,
+                    )
+                    .await
+                    .expect("density promise cell failed")
+                }
             };
 
             // Emit the cell result as a single-result suite so the JSON shape
