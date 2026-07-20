@@ -190,17 +190,23 @@ async fn complete_at_rate(
     rate: u32,
 ) -> anyhow::Result<Period> {
     let started = Instant::now();
-    let mut completion_latencies = Vec::with_capacity(work.len());
-    for (index, item) in work.into_iter().enumerate() {
-        tokio::time::sleep_until(
-            (started + Duration::from_secs_f64(index as f64 / rate as f64)).into(),
-        )
-        .await;
-        let completion_started = Instant::now();
-        user.complete_promise(&item.promise, payload.clone())
-            .await?;
-        completion_latencies.push(completion_started.elapsed());
-    }
+    let completion_latencies = stream::iter(work.into_iter().enumerate())
+        .map(|(index, item)| {
+            let user = user.clone();
+            let payload = payload.clone();
+            async move {
+                tokio::time::sleep_until(
+                    (started + Duration::from_secs_f64(index as f64 / rate as f64)).into(),
+                )
+                .await;
+                let completion_started = Instant::now();
+                user.complete_promise(&item.promise, payload).await?;
+                Ok::<_, anyhow::Error>(completion_started.elapsed())
+            }
+        })
+        .buffer_unordered(SETUP_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
     Ok(Period {
         completed: completion_latencies.len() as u64,
         elapsed: started.elapsed(),
