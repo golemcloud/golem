@@ -38,6 +38,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
 import type { FluentCodec } from './fluent/schema/codec';
+import { awaitPollable, disposeWitResource, throwIfAborted } from './internal/pollableUtils';
 
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
@@ -184,35 +185,69 @@ async function invokeTool(
   stdin: InputStream | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
-  const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
-
-  let decodedInput;
-  try {
-    decodedInput = typedSchemaValueFromWit(input);
-  } catch (error) {
-    throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
-  }
-
-  const prepared = resolved.prepare(decodedInput);
-  const body = resolved.command.body;
-  if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
-
-  const context: Record<string, unknown> = {
-    principal: sdkPrincipalFromHost(principal),
-  };
-  if (body.stdin) {
-    if (!stdin && body.stdin.required) {
-      throw invalidToolInput('tool invocation did not contain declared stdin stream');
+  let inputAdapter: ToolInputStreamAdapter | undefined;
+  let output: OutputStream | undefined;
+  let outputAdapter: ToolOutputStreamAdapter | undefined;
+  let inputCleanup: Promise<void> | undefined;
+  const disposeInput = async (): Promise<void> => {
+    if (!inputCleanup) {
+      inputCleanup = inputAdapter
+        ? inputAdapter.dispose()
+        : Promise.resolve().then(() => disposeWitResource(stdin));
     }
-    if (stdin) context.stdin = readableStreamFromInput(stdin);
+    await inputCleanup;
+  };
+
+  try {
+    const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
+
+    let decodedInput;
+    try {
+      decodedInput = typedSchemaValueFromWit(input);
+    } catch (error) {
+      throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
+    }
+
+    const prepared = resolved.prepare(decodedInput);
+    const body = resolved.command.body;
+    if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
+
+    const context: Record<string, unknown> = {
+      principal: sdkPrincipalFromHost(principal),
+    };
+    if (body.stdin) {
+      if (!stdin && body.stdin.required) {
+        throw invalidToolInput('tool invocation did not contain declared stdin stream');
+      }
+      if (stdin) {
+        inputAdapter = readableStreamFromInput(stdin);
+        context.stdin = inputAdapter.stream;
+      }
+    }
+
+    output = body.stdout ? getStdout() : undefined;
+    if (output) {
+      outputAdapter = writableStreamFromOutput(output);
+      context.stdout = outputAdapter.stream;
+    }
+
+    const outcome = await prepared.invoke(context);
+    await outputAdapter?.flush();
+    const result = projectToolOutcome(body, outcome, undefined);
+    await disposeInput();
+    disposeWitResource(output);
+    output = undefined;
+    if (body.stdout) result.stdout = getStdout();
+    return result;
+  } catch (error) {
+    await Promise.allSettled([outputAdapter?.abort(error), disposeInput()]);
+    try {
+      disposeWitResource(output);
+    } catch {
+      // Preserve the invocation failure rather than replacing it with cleanup failure.
+    }
+    throw error;
   }
-
-  const stdout = body.stdout ? getStdout() : undefined;
-  if (stdout) context.stdout = writableStreamFromOutput(stdout);
-
-  const outcome = await prepared.invoke(context);
-  stdout?.blockingFlush();
-  return projectToolOutcome(body, outcome, stdout);
 }
 
 function projectToolOutcome(
@@ -289,30 +324,244 @@ function encodeToolValue(codec: FluentCodec, value: unknown, position: string): 
   }
 }
 
-function readableStreamFromInput(input: InputStream): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      try {
-        controller.enqueue(input.blockingRead(64n * 1024n));
-      } catch (error) {
-        if (isClosedStreamError(error)) controller.close();
-        else controller.error(error);
-      }
-    },
-  });
+interface ToolInputStreamAdapter {
+  readonly stream: ReadableStream<Uint8Array>;
+  dispose(reason?: unknown): Promise<void>;
 }
 
-function writableStreamFromOutput(output: OutputStream): WritableStream<Uint8Array> {
-  return new WritableStream<Uint8Array>({
-    write(contents) {
-      for (let offset = 0; offset < contents.length; offset += 4096) {
-        output.blockingWriteAndFlush(contents.subarray(offset, offset + 4096));
-      }
+interface ToolOutputStreamAdapter {
+  readonly stream: WritableStream<Uint8Array>;
+  flush(): Promise<void>;
+  abort(reason?: unknown): Promise<void>;
+}
+
+function readableStreamFromInput(input: InputStream): ToolInputStreamAdapter {
+  const cancellation = new AbortController();
+  let activePull: Promise<void> | undefined;
+  let disposal: Promise<void> | undefined;
+
+  const dispose = async (reason?: unknown): Promise<void> => {
+    if (!disposal) {
+      cancellation.abort(reason);
+      const pull = activePull;
+      disposal = (async () => {
+        if (pull) {
+          try {
+            await pull;
+          } catch {
+            // Cancellation only needs to establish that the child pollable was released.
+          }
+        }
+        disposeWitResource(input);
+      })();
+    }
+    await disposal;
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const operation = pullInput(input, controller, cancellation.signal);
+      const tracked = operation.finally(() => {
+        if (activePull === tracked) activePull = undefined;
+      });
+      activePull = tracked;
+      return tracked;
     },
-    close() {
-      output.blockingFlush();
+    cancel(reason) {
+      return dispose(reason);
     },
   });
+
+  return { stream, dispose };
+}
+
+async function pullInput(
+  input: InputStream,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      const contents = input.read(64n * 1024n);
+      if (contents.length > 0) {
+        controller.enqueue(contents);
+        return;
+      }
+    } catch (error) {
+      if (isClosedStreamError(error)) controller.close();
+      else controller.error(error);
+      return;
+    }
+
+    try {
+      await awaitPollable(input.subscribe(), signal);
+    } catch (error) {
+      if (signal.aborted) {
+        closeReadableStream(controller);
+      } else {
+        controller.error(error);
+      }
+      return;
+    }
+  }
+  closeReadableStream(controller);
+}
+
+function writableStreamFromOutput(output: OutputStream): ToolOutputStreamAdapter {
+  const cancellation = new AbortController();
+  const invocationCompleted = new Error('tool invocation completed');
+  let activeOperation: Promise<void> | undefined;
+  let controller: WritableStreamDefaultController | undefined;
+  let acceptingOperations = true;
+  let lateOperation: { promise: Promise<void>; reject: (reason: unknown) => void } | undefined;
+  let failed = false;
+  let failure: unknown;
+  let dirty = false;
+
+  const recordFailure = (error: unknown): void => {
+    if (failed) return;
+    failed = true;
+    failure = error;
+  };
+
+  const track = (operation: Promise<void>): Promise<void> => {
+    const tracked = operation
+      .catch((error) => {
+        recordFailure(error);
+        throw error;
+      })
+      .finally(() => {
+        if (activeOperation === tracked) activeOperation = undefined;
+      });
+    activeOperation = tracked;
+    return tracked;
+  };
+
+  const settle = async (): Promise<void> => {
+    while (true) {
+      const operation = activeOperation;
+      if (operation) {
+        await operation;
+        continue;
+      }
+
+      // WritableStream starts the next queued sink operation in a promise
+      // reaction after the previous operation settles.
+      await Promise.resolve();
+      if (!activeOperation) return;
+    }
+  };
+
+  const flushDirty = async (): Promise<void> => {
+    if (!dirty) return;
+    throwIfAborted(cancellation.signal);
+    output.flush();
+    do {
+      await awaitPollable(output.subscribe(), cancellation.signal);
+    } while (output.checkWrite() === 0n);
+    dirty = false;
+  };
+
+  const waitForFinalization = (): Promise<void> => {
+    if (!lateOperation) {
+      let reject!: (reason: unknown) => void;
+      const promise = new Promise<void>((_resolve, rejectPromise) => {
+        reject = rejectPromise;
+      });
+      lateOperation = { promise, reject };
+    }
+    return lateOperation.promise;
+  };
+
+  const rejectLateOperation = (reason: unknown): void => {
+    lateOperation?.reject(reason);
+  };
+
+  const abort = async (reason?: unknown): Promise<void> => {
+    const abortReason = reason === undefined ? new Error('tool stdout stream was aborted') : reason;
+    recordFailure(abortReason);
+    acceptingOperations = false;
+    controller?.error(abortReason);
+    rejectLateOperation(abortReason);
+    cancellation.abort(abortReason);
+    try {
+      await settle();
+    } catch {
+      // The invocation path propagates the handler or stream failure that caused the abort.
+    }
+  };
+
+  const stream = new WritableStream<Uint8Array>({
+    start(value) {
+      controller = value;
+    },
+    write(contents) {
+      if (!acceptingOperations) return waitForFinalization();
+      return track(
+        writeOutput(output, contents, cancellation.signal, () => {
+          dirty = true;
+        }),
+      );
+    },
+    close() {
+      if (!acceptingOperations) return waitForFinalization();
+      return track(flushDirty());
+    },
+    abort,
+  });
+
+  return {
+    stream,
+    async flush() {
+      await settle();
+      if (failed) throw failure;
+      acceptingOperations = false;
+      await settle();
+      if (failed) throw failure;
+      try {
+        await flushDirty();
+      } catch (error) {
+        recordFailure(error);
+        controller?.error(error);
+        rejectLateOperation(error);
+        throw error;
+      }
+      controller?.error(invocationCompleted);
+      rejectLateOperation(invocationCompleted);
+    },
+    abort,
+  };
+}
+
+async function writeOutput(
+  output: OutputStream,
+  contents: Uint8Array,
+  signal: AbortSignal,
+  markDirty: () => void,
+): Promise<void> {
+  let offset = 0;
+  while (offset < contents.length) {
+    throwIfAborted(signal);
+    const capacity = output.checkWrite();
+    if (capacity === 0n) {
+      await awaitPollable(output.subscribe(), signal);
+      continue;
+    }
+
+    const remaining = BigInt(contents.length - offset);
+    const length = Number(capacity < remaining ? capacity : remaining);
+    output.write(contents.subarray(offset, offset + length));
+    markDirty();
+    offset += length;
+  }
+}
+
+function closeReadableStream(controller: ReadableStreamDefaultController<Uint8Array>): void {
+  try {
+    controller.close();
+  } catch {
+    // Cancellation may already have closed the web stream.
+  }
 }
 
 function invalidToolName(name: string): ToolError {

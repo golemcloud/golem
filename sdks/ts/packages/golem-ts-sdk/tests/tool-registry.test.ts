@@ -642,22 +642,49 @@ describe('tool guest exports', () => {
     expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe('done!');
   });
 
-  it('adapts declared streams and returns the acquired stdout resource', async () => {
+  it('adapts declared streams and returns a fresh stdout resource', async () => {
     const writes: Uint8Array[] = [];
+    const outputPollables = Array.from({ length: 2 }, () => ({
+      promise: vi.fn().mockResolvedValue(undefined),
+      abortablePromise: vi.fn().mockResolvedValue(undefined),
+      [Symbol.dispose]: vi.fn(),
+    }));
+    const capacities = [0n, 2n, 4n, 1024n];
+    const outputDispose = vi.fn();
     const output = {
-      blockingWriteAndFlush(contents: Uint8Array) {
+      checkWrite: vi.fn(() => capacities.shift() ?? 1024n),
+      write(contents: Uint8Array) {
         writes.push(new Uint8Array(contents));
       },
-      blockingFlush: vi.fn(),
+      flush: vi.fn(),
+      subscribe: vi.fn(() => outputPollables.shift()),
+      [Symbol.dispose]: outputDispose,
     } as unknown as OutputStream;
-    vi.mocked(getStdout).mockReturnValue(output);
+    const returnedOutputDispose = vi.fn();
+    const returnedOutput = {
+      [Symbol.dispose]: returnedOutputDispose,
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValueOnce(output).mockReturnValueOnce(returnedOutput);
 
-    let reads = 0;
+    const inputPollable = {
+      promise: vi.fn().mockResolvedValue(undefined),
+      abortablePromise: vi.fn().mockResolvedValue(undefined),
+      [Symbol.dispose]: vi.fn(),
+    };
+    const inputDispose = vi.fn();
+    const inputChunks: Array<Uint8Array | { tag: 'closed' }> = [
+      new Uint8Array(),
+      new TextEncoder().encode('input'),
+      { tag: 'closed' },
+    ];
     const input = {
-      blockingRead() {
-        if (reads++ === 0) return new TextEncoder().encode('input');
-        throw { tag: 'closed' };
+      read() {
+        const next = inputChunks.shift();
+        if (next instanceof Uint8Array) return next;
+        throw next;
       },
+      subscribe: vi.fn(() => inputPollable),
+      [Symbol.dispose]: inputDispose,
     } as unknown as InputStream;
 
     toolDefinition('streams')
@@ -691,9 +718,819 @@ describe('tool guest exports', () => {
     });
     const result = await tool.invoke('streams', [], invocationInput, input, { tag: 'anonymous' });
 
-    expect(result).toEqual({ result: undefined, stdout: output });
-    expect(writes.map((chunk) => new TextDecoder().decode(chunk))).toEqual(['output']);
-    expect(output.blockingFlush).toHaveBeenCalled();
+    expect(result).toEqual({ result: undefined, stdout: returnedOutput });
+    expect(writes.map((chunk) => new TextDecoder().decode(chunk))).toEqual(['ou', 'tput']);
+    expect(input.subscribe).toHaveBeenCalledOnce();
+    expect(inputPollable.abortablePromise).toHaveBeenCalledOnce();
+    expect(inputPollable[Symbol.dispose]).toHaveBeenCalledOnce();
+    expect(inputDispose).toHaveBeenCalledOnce();
+    expect(output.subscribe).toHaveBeenCalledTimes(2);
+    expect(output.flush).toHaveBeenCalledOnce();
+    expect(outputDispose).toHaveBeenCalledOnce();
+    expect(returnedOutputDispose).not.toHaveBeenCalled();
+    expect(getStdout).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels an in-flight stdin pollable before disposing its parent resource', async () => {
+    const events: string[] = [];
+    let childLive = true;
+    let signalSubscribed: (() => void) | undefined;
+    const subscribed = new Promise<void>((resolve) => {
+      signalSubscribed = resolve;
+    });
+    const releaseChild = () => {
+      if (!childLive) return;
+      childLive = false;
+      events.push('pollable');
+    };
+    const pollable = {
+      abortablePromise(signal: AbortSignal) {
+        signalSubscribed?.();
+        return new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              releaseChild();
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        });
+      },
+      [Symbol.dispose]: releaseChild,
+    };
+    const inputDispose = vi.fn(() => {
+      expect(childLive).toBe(false);
+      events.push('input');
+    });
+    const input = {
+      read: () => new Uint8Array(),
+      subscribe: () => pollable,
+      [Symbol.dispose]: inputDispose,
+    } as unknown as InputStream;
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+
+    toolDefinition('cancel-input')
+      .body((body) => body.stdin({ required: true }).returns(z.void()))
+      .implement({
+        'cancel-input': async (_, context) => {
+          pendingRead = context.stdin.getReader().read();
+          await subscribed;
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('cancel-input');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('cancel-input tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('cancel-input', [], invocationInput, input, { tag: 'anonymous' }),
+    ).resolves.toEqual({ result: undefined, stdout: undefined });
+    await expect(pendingRead).resolves.toMatchObject({ done: true });
+    expect(events).toEqual(['pollable', 'input']);
+    expect(inputDispose).toHaveBeenCalledOnce();
+  });
+
+  it('waits for an in-flight stdout write before returning the resource', async () => {
+    let releaseWrite: (() => void) | undefined;
+    const writeReady = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let subscribedToWrite: (() => void) | undefined;
+    const writeSubscribed = new Promise<void>((resolve) => {
+      subscribedToWrite = resolve;
+    });
+    const outputDispose = vi.fn();
+    const output = {
+      checkWrite: vi.fn().mockReturnValueOnce(0n).mockReturnValue(1024n),
+      write: vi.fn(),
+      flush: vi.fn(),
+      subscribe: vi
+        .fn()
+        .mockImplementationOnce(() => ({
+          abortablePromise: () => {
+            subscribedToWrite?.();
+            return writeReady;
+          },
+          [Symbol.dispose]: vi.fn(),
+        }))
+        .mockImplementation(() => ({
+          abortablePromise: vi.fn().mockResolvedValue(undefined),
+          [Symbol.dispose]: vi.fn(),
+        })),
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    const returnedOutput = {} as OutputStream;
+    vi.mocked(getStdout).mockReturnValueOnce(output).mockReturnValueOnce(returnedOutput);
+
+    toolDefinition('pending-output')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'pending-output': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          void writer.write(new TextEncoder().encode('output'));
+          await writeSubscribed;
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('pending-output');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('pending-output tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    let settled = false;
+    const invocation = tool
+      .invoke('pending-output', [], invocationInput, undefined, { tag: 'anonymous' })
+      .finally(() => {
+        settled = true;
+      });
+    await writeSubscribed;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseWrite?.();
+    await expect(invocation).resolves.toEqual({ result: undefined, stdout: returnedOutput });
+    expect(output.write).toHaveBeenCalledOnce();
+    expect(output.flush).toHaveBeenCalledOnce();
+    expect(outputDispose).toHaveBeenCalledOnce();
+    expect(getStdout).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles every accepted stdout write before flushing and returning the resource', async () => {
+    let releaseFirstWrite: (() => void) | undefined;
+    const firstWriteReady = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let releaseSecondWrite: (() => void) | undefined;
+    const secondWriteReady = new Promise<void>((resolve) => {
+      releaseSecondWrite = resolve;
+    });
+    let notifyFirstSubscribed: (() => void) | undefined;
+    const firstSubscribed = new Promise<void>((resolve) => {
+      notifyFirstSubscribed = resolve;
+    });
+    let notifySecondSubscribed: (() => void) | undefined;
+    const secondSubscribed = new Promise<void>((resolve) => {
+      notifySecondSubscribed = resolve;
+    });
+    const writes: number[] = [];
+    const capacities = [0n, 1n, 0n, 1n];
+    let writeSubscription = 0;
+    let flushing = false;
+    const outputDispose = vi.fn();
+    const output = {
+      checkWrite: vi.fn(() => capacities.shift() ?? 1n),
+      write: vi.fn((contents: Uint8Array) => {
+        writes.push(...contents);
+      }),
+      flush: vi.fn(() => {
+        flushing = true;
+      }),
+      subscribe: vi.fn(() => {
+        if (flushing) {
+          return {
+            abortablePromise: vi.fn().mockResolvedValue(undefined),
+            [Symbol.dispose]: vi.fn(),
+          };
+        }
+
+        const subscription = writeSubscription++;
+        return {
+          abortablePromise: (signal: AbortSignal) => {
+            if (subscription === 0) notifyFirstSubscribed?.();
+            else notifySecondSubscribed?.();
+            const ready = subscription === 0 ? firstWriteReady : secondWriteReady;
+            return Promise.race([
+              ready,
+              new Promise<void>((_resolve, reject) => {
+                signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+              }),
+            ]);
+          },
+          [Symbol.dispose]: vi.fn(),
+        };
+      }),
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    const returnedOutput = {} as OutputStream;
+    vi.mocked(getStdout).mockReturnValueOnce(output).mockReturnValueOnce(returnedOutput);
+
+    let firstWrite: Promise<void> | undefined;
+    let secondWrite: Promise<void> | undefined;
+    toolDefinition('queued-output')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'queued-output': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          firstWrite = writer.write(new Uint8Array([1]));
+          secondWrite = writer.write(new Uint8Array([2]));
+          void firstWrite.catch(() => {});
+          void secondWrite.catch(() => {});
+          await firstSubscribed;
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('queued-output');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('queued-output tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const invocation = tool.invoke('queued-output', [], invocationInput, undefined, {
+      tag: 'anonymous',
+    });
+    await firstSubscribed;
+    releaseFirstWrite?.();
+    await secondSubscribed;
+    releaseSecondWrite?.();
+
+    await expect(invocation).resolves.toEqual({ result: undefined, stdout: returnedOutput });
+    await expect(firstWrite).resolves.toBeUndefined();
+    await expect(secondWrite).resolves.toBeUndefined();
+    expect(writes).toEqual([1, 2]);
+    expect(output.flush).toHaveBeenCalledOnce();
+    expect(outputDispose).toHaveBeenCalledOnce();
+    expect(getStdout).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies web stream abort after an in-flight backpressured write settles', async () => {
+    const abortReason = new Error('stdout aborted');
+    let subscribedSignal: AbortSignal | undefined;
+    let notifySubscribed: (() => void) | undefined;
+    const subscribed = new Promise<void>((resolve) => {
+      notifySubscribed = resolve;
+    });
+    let releasePollable: (() => void) | undefined;
+    const pollableReleased = new Promise<void>((resolve) => {
+      releasePollable = resolve;
+    });
+    const outputDispose = vi.fn();
+    const output = {
+      checkWrite: vi.fn().mockReturnValueOnce(0n).mockReturnValue(1024n),
+      write: vi.fn(),
+      flush: vi.fn(),
+      subscribe: vi.fn(() => ({
+        abortablePromise: (signal: AbortSignal) => {
+          subscribedSignal = signal;
+          notifySubscribed?.();
+          return Promise.race([
+            pollableReleased,
+            new Promise<void>((_resolve, reject) => {
+              signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+            }),
+          ]);
+        },
+        [Symbol.dispose]: vi.fn(),
+      })),
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    let write: Promise<void> | undefined;
+    let streamAbort: Promise<void> | undefined;
+    toolDefinition('abort-pending-output')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'abort-pending-output': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          write = writer.write(new Uint8Array([1]));
+          void write.catch(() => {});
+          await subscribed;
+          streamAbort = writer.abort(abortReason);
+          void streamAbort.catch(() => {});
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('abort-pending-output');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) {
+      throw new Error('abort-pending-output tool was not registered');
+    }
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const invocation = tool.invoke('abort-pending-output', [], invocationInput, undefined, {
+      tag: 'anonymous',
+    });
+    await subscribed;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(subscribedSignal?.aborted ?? false).toBe(false);
+    expect(output.write).not.toHaveBeenCalled();
+
+    releasePollable?.();
+    await expect(invocation).rejects.toBe(abortReason);
+    await expect(write).resolves.toBeUndefined();
+    await expect(streamAbort).resolves.toBeUndefined();
+    expect(subscribedSignal?.aborted ?? false).toBe(true);
+    expect(output.write).toHaveBeenCalledOnce();
+    expect(output.flush).not.toHaveBeenCalled();
+    expect(outputDispose).toHaveBeenCalledOnce();
+    expect(getStdout).toHaveBeenCalledOnce();
+  });
+
+  it('errors retained stdout writers when invocation fails before any write', async () => {
+    const failure = new Error('handler failed');
+    const outputDispose = vi.fn();
+    const output = {
+      checkWrite: vi.fn(() => 1024n),
+      write: vi.fn(),
+      flush: vi.fn(),
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+    toolDefinition('failed-idle-output')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'failed-idle-output': async (_, context) => {
+          writer = context.stdout.getWriter();
+          throw failure;
+        },
+      });
+    const registered = ToolRegistry.get('failed-idle-output');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) {
+      throw new Error('failed-idle-output tool was not registered');
+    }
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('failed-idle-output', [], invocationInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toBe(failure);
+    const lateWriteRejected = await writer!.write(new Uint8Array()).then(
+      () => false,
+      () => true,
+    );
+
+    expect(lateWriteRejected).toBe(true);
+    expect(output.write).not.toHaveBeenCalled();
+    expect(outputDispose).toHaveBeenCalledOnce();
+  });
+
+  it('cancels simultaneous stdin and stdout polls directly on invocation failure', async () => {
+    const failure = new Error('handler failed');
+    let inputSignal: AbortSignal | undefined;
+    let outputSignal: AbortSignal | undefined;
+    let notifyInputSubscribed: (() => void) | undefined;
+    const inputSubscribed = new Promise<void>((resolve) => {
+      notifyInputSubscribed = resolve;
+    });
+    let notifyOutputSubscribed: (() => void) | undefined;
+    const outputSubscribed = new Promise<void>((resolve) => {
+      notifyOutputSubscribed = resolve;
+    });
+    let notifyOutputAborted: (() => void) | undefined;
+    const outputAborted = new Promise<void>((resolve) => {
+      notifyOutputAborted = resolve;
+    });
+    let releaseOutputAbort: (() => void) | undefined;
+    const outputAbortReleased = new Promise<void>((resolve) => {
+      releaseOutputAbort = resolve;
+    });
+
+    const input = {
+      read: () => new Uint8Array(),
+      subscribe: () => ({
+        abortablePromise: (signal: AbortSignal) => {
+          inputSignal = signal;
+          notifyInputSubscribed?.();
+          return new Promise<void>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+        },
+        [Symbol.dispose]: vi.fn(),
+      }),
+      [Symbol.dispose]: vi.fn(),
+    } as unknown as InputStream;
+    const output = {
+      checkWrite: () => 0n,
+      write: vi.fn(),
+      subscribe: () => ({
+        abortablePromise: (signal: AbortSignal) => {
+          outputSignal = signal;
+          notifyOutputSubscribed?.();
+          return new Promise<void>((_resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                notifyOutputAborted?.();
+                void outputAbortReleased.then(() => reject(signal.reason));
+              },
+              { once: true },
+            );
+          });
+        },
+        [Symbol.dispose]: vi.fn(),
+      }),
+      [Symbol.dispose]: vi.fn(),
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    let triggerFailure: (() => void) | undefined;
+    const failureTriggered = new Promise<void>((resolve) => {
+      triggerFailure = resolve;
+    });
+    toolDefinition('failed-active-streams')
+      .body((body) => body.stdin({ required: true }).stdout({ required: true }).returns(z.void()))
+      .implement({
+        'failed-active-streams': async (_, context) => {
+          void context.stdin
+            .getReader()
+            .read()
+            .catch(() => {});
+          void context.stdout
+            .getWriter()
+            .write(new Uint8Array([1]))
+            .catch(() => {});
+          await Promise.all([inputSubscribed, outputSubscribed]);
+          await failureTriggered;
+          throw failure;
+        },
+      });
+    const registered = ToolRegistry.get('failed-active-streams');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) {
+      throw new Error('failed-active-streams tool was not registered');
+    }
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const invocation = tool.invoke('failed-active-streams', [], invocationInput, input, {
+      tag: 'anonymous',
+    });
+    await Promise.all([inputSubscribed, outputSubscribed]);
+    triggerFailure?.();
+    await outputAborted;
+    const inputWasCanceledDirectly = inputSignal?.aborted ?? false;
+    expect(outputSignal?.aborted ?? false).toBe(true);
+    releaseOutputAbort?.();
+    await expect(invocation).rejects.toBe(failure);
+
+    expect(inputWasCanceledDirectly).toBe(true);
+  });
+
+  it('preserves null as the stdout writer abort reason', async () => {
+    const output = {
+      checkWrite: vi.fn(() => 1024n),
+      write: vi.fn(),
+      flush: vi.fn(),
+      [Symbol.dispose]: vi.fn(),
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    toolDefinition('null-output-abort')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'null-output-abort': async (_, context) => {
+          await context.stdout.getWriter().abort(null);
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('null-output-abort');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('null-output-abort tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const rejection = await tool
+      .invoke('null-output-abort', [], invocationInput, undefined, { tag: 'anonymous' })
+      .then(
+        () => Symbol('resolved'),
+        (reason) => reason,
+      );
+
+    expect(rejection).toBeNull();
+  });
+
+  it('rejects a late stdout write admitted during final flush', async () => {
+    let flushCount = 0;
+    const writes: number[] = [];
+    let releaseLateWrite: (() => void) | undefined;
+    const lateWriteGate = new Promise<void>((resolve) => {
+      releaseLateWrite = resolve;
+    });
+    let notifyLateWriteStarted: (() => void) | undefined;
+    const lateWriteStarted = new Promise<void>((resolve) => {
+      notifyLateWriteStarted = resolve;
+    });
+    const outputDispose = vi.fn();
+    const output = {
+      checkWrite: vi.fn(() => 1024n),
+      write: vi.fn((contents: Uint8Array) => {
+        writes.push(contents[0]);
+      }),
+      flush: vi.fn(() => {
+        flushCount += 1;
+      }),
+      subscribe: vi.fn(() => ({
+        abortablePromise: async () => {
+          releaseLateWrite?.();
+          await lateWriteStarted;
+        },
+        [Symbol.dispose]: vi.fn(),
+      })),
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    const returnedOutput = {} as OutputStream;
+    vi.mocked(getStdout).mockReturnValueOnce(output).mockReturnValueOnce(returnedOutput);
+
+    let lateWrite: Promise<void> | undefined;
+    toolDefinition('write-during-flush')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'write-during-flush': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          await writer.write(new Uint8Array([1]));
+          void (async () => {
+            await lateWriteGate;
+            lateWrite = writer.write(new Uint8Array([2]));
+            notifyLateWriteStarted?.();
+            await lateWrite.catch(() => {});
+          })();
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('write-during-flush');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('write-during-flush tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const result = await tool.invoke('write-during-flush', [], invocationInput, undefined, {
+      tag: 'anonymous',
+    });
+    expect(result).toEqual({ result: undefined, stdout: returnedOutput });
+    await expect(lateWrite).rejects.toThrow('tool invocation completed');
+    expect(writes).toEqual([1]);
+    expect(flushCount).toBe(1);
+    expect(outputDispose).toHaveBeenCalledOnce();
+    expect(getStdout).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a late stdout close without starting another flush', async () => {
+    let flushCount = 0;
+    let releaseLateClose: (() => void) | undefined;
+    const lateCloseGate = new Promise<void>((resolve) => {
+      releaseLateClose = resolve;
+    });
+    let notifyLateCloseStarted: (() => void) | undefined;
+    const lateCloseStarted = new Promise<void>((resolve) => {
+      notifyLateCloseStarted = resolve;
+    });
+    const output = {
+      checkWrite: vi.fn(() => 1024n),
+      write: vi.fn(),
+      flush: vi.fn(() => {
+        flushCount += 1;
+      }),
+      subscribe: vi.fn(() => ({
+        abortablePromise: async () => {
+          releaseLateClose?.();
+          await lateCloseStarted;
+          await Promise.resolve();
+        },
+        [Symbol.dispose]: vi.fn(),
+      })),
+      [Symbol.dispose]: vi.fn(),
+    } as unknown as OutputStream;
+    const returnedOutput = {} as OutputStream;
+    vi.mocked(getStdout).mockReturnValueOnce(output).mockReturnValueOnce(returnedOutput);
+
+    let lateClose: Promise<void> | undefined;
+    toolDefinition('close-during-flush')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'close-during-flush': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          await writer.write(new Uint8Array([1]));
+          void (async () => {
+            await lateCloseGate;
+            lateClose = writer.close();
+            notifyLateCloseStarted?.();
+            await lateClose.catch(() => {});
+          })();
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('close-during-flush');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('close-during-flush tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('close-during-flush', [], invocationInput, undefined, { tag: 'anonymous' }),
+    ).resolves.toEqual({ result: undefined, stdout: returnedOutput });
+    await expect(lateClose).rejects.toThrow('tool invocation completed');
+    expect(flushCount).toBe(1);
+    expect(output.subscribe).toHaveBeenCalledOnce();
+  });
+
+  it('propagates stdout write failures and disposes the resource', async () => {
+    const failure = new Error('stdout write failed');
+    const outputDispose = vi.fn();
+    const output = {
+      checkWrite: () => 1024n,
+      write: () => {
+        throw failure;
+      },
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    toolDefinition('write-failure')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'write-failure': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          await writer.write(new Uint8Array([1]));
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('write-failure');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('write-failure tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('write-failure', [], invocationInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toBe(failure);
+    expect(outputDispose).toHaveBeenCalledOnce();
+  });
+
+  it('does not return stdout after its terminal write failure was observed by the handler', async () => {
+    const failure = new Error('stdout write failed');
+    const outputDispose = vi.fn();
+    let failed = false;
+    const output = {
+      checkWrite: () => {
+        if (failed) throw { tag: 'closed' };
+        return 1024n;
+      },
+      write: () => {
+        failed = true;
+        throw failure;
+      },
+      flush: vi.fn(() => {
+        if (failed) throw { tag: 'closed' };
+      }),
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    toolDefinition('observed-write-failure')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'observed-write-failure': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          await expect(writer.write(new Uint8Array([1]))).rejects.toBe(failure);
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('observed-write-failure');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) {
+      throw new Error('observed-write-failure tool was not registered');
+    }
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const rejected = await tool
+      .invoke('observed-write-failure', [], invocationInput, undefined, {
+        tag: 'anonymous',
+      })
+      .then(
+        () => false,
+        () => true,
+      );
+    expect.soft(rejected).toBe(true);
+    expect.soft(outputDispose).toHaveBeenCalledOnce();
+    expect.soft(output.flush).not.toHaveBeenCalled();
+  });
+
+  it('propagates stdout flush failures and disposes the resource', async () => {
+    const failure = new Error('stdout flush failed');
+    const outputDispose = vi.fn();
+    const output = {
+      checkWrite: () => 1024n,
+      write: vi.fn(),
+      flush: () => {
+        throw failure;
+      },
+      [Symbol.dispose]: outputDispose,
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    toolDefinition('flush-failure')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'flush-failure': async (_, context) => {
+          const writer = context.stdout.getWriter();
+          await writer.write(new Uint8Array([1]));
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('flush-failure');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('flush-failure tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('flush-failure', [], invocationInput, undefined, { tag: 'anonymous' }),
+    ).rejects.toBe(failure);
+    expect(outputDispose).toHaveBeenCalledOnce();
+  });
+
+  it('errors retained stdout writers with the final flush failure', async () => {
+    const failure = new Error('stdout flush failed');
+    const output = {
+      checkWrite: () => 1024n,
+      write: vi.fn(),
+      flush: () => {
+        throw failure;
+      },
+      [Symbol.dispose]: vi.fn(),
+    } as unknown as OutputStream;
+    vi.mocked(getStdout).mockReturnValue(output);
+
+    let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+    let writerClosed: Promise<unknown> | undefined;
+    toolDefinition('retained-writer-flush-failure')
+      .body((body) => body.stdout({ required: true }).returns(z.void()))
+      .implement({
+        'retained-writer-flush-failure': async (_, context) => {
+          writer = context.stdout.getWriter();
+          writerClosed = writer.closed.then(
+            () => Symbol('closed'),
+            (reason) => reason,
+          );
+          await writer.write(new Uint8Array([1]));
+          return ok(undefined);
+        },
+      });
+    const registered = ToolRegistry.get('retained-writer-flush-failure');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) {
+      throw new Error('retained-writer-flush-failure tool was not registered');
+    }
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('retained-writer-flush-failure', [], invocationInput, undefined, {
+        tag: 'anonymous',
+      }),
+    ).rejects.toBe(failure);
+    const lateWriteReason = await writer!.write(new Uint8Array()).then(
+      () => Symbol('written'),
+      (reason) => reason,
+    );
+
+    expect(await writerClosed).toBe(failure);
+    expect(lateWriteReason).toBe(failure);
+  });
+
+  it('disposes supplied stdin when the command does not declare it', async () => {
+    const inputDispose = vi.fn();
+    const input = {
+      [Symbol.dispose]: inputDispose,
+    } as unknown as InputStream;
+    toolDefinition('no-streams')
+      .body((body) => body.returns(z.void()))
+      .implement({ 'no-streams': async () => ok(undefined) });
+    const registered = ToolRegistry.get('no-streams');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('no-streams tool was not registered');
+    const invocationInput = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    await expect(
+      tool.invoke('no-streams', [], invocationInput, input, { tag: 'anonymous' }),
+    ).resolves.toEqual({ result: undefined, stdout: undefined });
+    expect(inputDispose).toHaveBeenCalledOnce();
+    expect(getStdout).not.toHaveBeenCalled();
   });
 
   it('does not convert undeclared handler exceptions into tool errors', async () => {

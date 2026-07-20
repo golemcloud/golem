@@ -64,16 +64,21 @@ describe('throwIfAborted', () => {
 });
 
 describe('awaitPollable', () => {
-  it('rejects immediately with pre-aborted signal', async () => {
+  it('rejects immediately with pre-aborted signal and disposes the unconsumed pollable', async () => {
     const signal = AbortSignal.abort('pre-aborted');
+    let disposed = false;
     const fakePollable = {
       promise: () => new Promise<void>(() => {}), // never resolves
       abortablePromise: (_signal: AbortSignal) => new Promise<void>(() => {}),
       ready: () => false,
       block: () => {},
+      [Symbol.dispose]: () => {
+        disposed = true;
+      },
     };
 
     await expect(awaitPollable(fakePollable as any, signal)).rejects.toBe('pre-aborted');
+    expect(disposed).toBe(true);
   });
 
   it('calls promise() when no signal is provided', async () => {
