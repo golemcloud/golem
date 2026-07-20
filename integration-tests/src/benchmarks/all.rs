@@ -21,8 +21,8 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseFanInArg,
-    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
+    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseTopologyArg,
+    DensityPromiseWaiterPresenceArg, DensityScenarioArg,
     DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
     DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
@@ -34,8 +34,7 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use integration_tests::benchmarks::density::agent::{CellConfig, ExecutorProbe, Scenario};
 use integration_tests::benchmarks::density::prep::{PrepManifest, run_prep};
 use integration_tests::benchmarks::density::{
-    AgentMode, ComponentSharing, DensitySection, PromiseFanIn, PromiseTopology,
-    PromiseWaiterPresence,
+    AgentMode, ComponentSharing, DensitySection, PromiseTopology, PromiseWaiterPresence,
 };
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
@@ -314,7 +313,6 @@ async fn main() {
             schedule_rate_period_secs,
             promise_payload_size,
             promise_waiter_presence,
-            promise_fan_in,
             promise_topology,
             executor_pod_name,
             executor_namespace,
@@ -341,7 +339,6 @@ async fn main() {
                 *schedule_rate_period_secs,
                 *promise_payload_size,
                 promise_waiter_presence.map(map_promise_waiter_presence),
-                promise_fan_in.map(map_promise_fan_in),
                 promise_topology.map(map_promise_topology),
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
@@ -615,13 +612,6 @@ fn map_promise_waiter_presence(arg: DensityPromiseWaiterPresenceArg) -> PromiseW
     }
 }
 
-fn map_promise_fan_in(arg: DensityPromiseFanInArg) -> PromiseFanIn {
-    match arg {
-        DensityPromiseFanInArg::OnePerAgent => PromiseFanIn::OnePerAgent,
-        DensityPromiseFanInArg::FanIn => PromiseFanIn::FanIn,
-    }
-}
-
 fn map_promise_topology(arg: DensityPromiseTopologyArg) -> PromiseTopology {
     match arg {
         DensityPromiseTopologyArg::OnePod => PromiseTopology::OnePod,
@@ -654,7 +644,6 @@ async fn run_density(
     schedule_rate_period_secs: Option<u64>,
     promise_payload_size: Option<usize>,
     promise_waiter_presence: Option<PromiseWaiterPresence>,
-    promise_fan_in: Option<PromiseFanIn>,
     promise_topology: Option<PromiseTopology>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
@@ -730,8 +719,6 @@ async fn run_density(
                             .expect("--promise-payload-size required for promise cells"),
                         waiter_presence: promise_waiter_presence
                             .expect("--promise-waiter-presence required for promise cells"),
-                        fan_in: promise_fan_in
-                            .expect("--promise-fan-in required for promise cells"),
                         topology: promise_topology
                             .expect("--promise-topology required for promise cells"),
                     };

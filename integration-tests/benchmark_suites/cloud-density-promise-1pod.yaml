@@ -4,27 +4,15 @@ name: cloud-density-promise-1pod
 section: promise
 defaultRamp: [1, 2, 4, 8, 16, 32, 64, 128, 256]
 cells:
-  - { name: promise-tiny-cold-one-per-agent-1pod, payloadSize: 256, waiterPresence: cold, fanIn: one-per-agent }
-  - { name: promise-tiny-cold-fan-in-1pod, payloadSize: 256, waiterPresence: cold, fanIn: fan-in }
-  - { name: promise-tiny-warm-one-per-agent-1pod, payloadSize: 256, waiterPresence: warm, fanIn: one-per-agent }
-  - { name: promise-tiny-warm-fan-in-1pod, payloadSize: 256, waiterPresence: warm, fanIn: fan-in }
-  - { name: promise-tiny-mixed-one-per-agent-1pod, payloadSize: 256, waiterPresence: mixed, fanIn: one-per-agent }
-  - { name: promise-tiny-mixed-fan-in-1pod, payloadSize: 256, waiterPresence: mixed, fanIn: fan-in }
-  - { name: promise-small-cold-one-per-agent-1pod, payloadSize: 65536, waiterPresence: cold, fanIn: one-per-agent }
-  - { name: promise-small-cold-fan-in-1pod, payloadSize: 65536, waiterPresence: cold, fanIn: fan-in }
-  - { name: promise-small-warm-one-per-agent-1pod, payloadSize: 65536, waiterPresence: warm, fanIn: one-per-agent }
-  - { name: promise-small-warm-fan-in-1pod, payloadSize: 65536, waiterPresence: warm, fanIn: fan-in }
-  - { name: promise-small-mixed-one-per-agent-1pod, payloadSize: 65536, waiterPresence: mixed, fanIn: one-per-agent }
-  - { name: promise-small-mixed-fan-in-1pod, payloadSize: 65536, waiterPresence: mixed, fanIn: fan-in }
-  - { name: promise-medium-cold-one-per-agent-1pod, payloadSize: 16777216, waiterPresence: cold, fanIn: one-per-agent }
-  - { name: promise-medium-cold-fan-in-1pod, payloadSize: 16777216, waiterPresence: cold, fanIn: fan-in }
-  - { name: promise-medium-warm-one-per-agent-1pod, payloadSize: 16777216, waiterPresence: warm, fanIn: one-per-agent }
-  - { name: promise-medium-warm-fan-in-1pod, payloadSize: 16777216, waiterPresence: warm, fanIn: fan-in }
-  - { name: promise-medium-mixed-one-per-agent-1pod, payloadSize: 16777216, waiterPresence: mixed, fanIn: one-per-agent }
-  - { name: promise-medium-mixed-fan-in-1pod, payloadSize: 16777216, waiterPresence: mixed, fanIn: fan-in }
-  - { name: promise-huge-cold-one-per-agent-1pod, payloadSize: 32505856, waiterPresence: cold, fanIn: one-per-agent }
-  - { name: promise-huge-cold-fan-in-1pod, payloadSize: 32505856, waiterPresence: cold, fanIn: fan-in }
-  - { name: promise-huge-warm-one-per-agent-1pod, payloadSize: 32505856, waiterPresence: warm, fanIn: one-per-agent }
-  - { name: promise-huge-warm-fan-in-1pod, payloadSize: 32505856, waiterPresence: warm, fanIn: fan-in }
-  - { name: promise-huge-mixed-one-per-agent-1pod, payloadSize: 32505856, waiterPresence: mixed, fanIn: one-per-agent }
-  - { name: promise-huge-mixed-fan-in-1pod, payloadSize: 32505856, waiterPresence: mixed, fanIn: fan-in }
+  - { name: promise-tiny-cold-1pod, payloadSize: 256, waiterPresence: cold }
+  - { name: promise-tiny-warm-1pod, payloadSize: 256, waiterPresence: warm }
+  - { name: promise-tiny-mixed-1pod, payloadSize: 256, waiterPresence: mixed }
+  - { name: promise-small-cold-1pod, payloadSize: 65536, waiterPresence: cold }
+  - { name: promise-small-warm-1pod, payloadSize: 65536, waiterPresence: warm }
+  - { name: promise-small-mixed-1pod, payloadSize: 65536, waiterPresence: mixed }
+  - { name: promise-medium-cold-1pod, payloadSize: 16777216, waiterPresence: cold }
+  - { name: promise-medium-warm-1pod, payloadSize: 16777216, waiterPresence: warm }
+  - { name: promise-medium-mixed-1pod, payloadSize: 16777216, waiterPresence: mixed }
+  - { name: promise-huge-cold-1pod, payloadSize: 32505856, waiterPresence: cold }
+  - { name: promise-huge-warm-1pod, payloadSize: 32505856, waiterPresence: warm }
+  - { name: promise-huge-mixed-1pod, payloadSize: 32505856, waiterPresence: mixed }

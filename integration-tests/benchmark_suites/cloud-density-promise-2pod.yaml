@@ -4,9 +4,6 @@ name: cloud-density-promise-2pod
 section: promise
 defaultRamp: [1, 2, 4, 8, 16, 32, 64, 128, 256]
 cells:
-  - { name: promise-medium-cold-one-per-agent-2pod, payloadSize: 16777216, waiterPresence: cold, fanIn: one-per-agent }
-  - { name: promise-medium-cold-fan-in-2pod, payloadSize: 16777216, waiterPresence: cold, fanIn: fan-in }
-  - { name: promise-medium-warm-one-per-agent-2pod, payloadSize: 16777216, waiterPresence: warm, fanIn: one-per-agent }
-  - { name: promise-medium-warm-fan-in-2pod, payloadSize: 16777216, waiterPresence: warm, fanIn: fan-in }
-  - { name: promise-medium-mixed-one-per-agent-2pod, payloadSize: 16777216, waiterPresence: mixed, fanIn: one-per-agent }
-  - { name: promise-medium-mixed-fan-in-2pod, payloadSize: 16777216, waiterPresence: mixed, fanIn: fan-in }
+  - { name: promise-medium-cold-2pod, payloadSize: 16777216, waiterPresence: cold }
+  - { name: promise-medium-warm-2pod, payloadSize: 16777216, waiterPresence: warm }
+  - { name: promise-medium-mixed-2pod, payloadSize: 16777216, waiterPresence: mixed }

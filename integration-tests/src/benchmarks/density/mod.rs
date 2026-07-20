@@ -169,21 +169,6 @@ impl Display for PromiseWaiterPresence {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum PromiseFanIn {
-    OnePerAgent,
-    FanIn,
-}
-
-impl Display for PromiseFanIn {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::OnePerAgent => "one-per-agent",
-            Self::FanIn => "fan-in",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PromiseTopology {
     OnePod,
     TwoPod,

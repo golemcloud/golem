@@ -141,10 +141,6 @@ pub enum BenchmarkConfig {
         #[arg(long, value_enum)]
         promise_waiter_presence: Option<DensityPromiseWaiterPresenceArg>,
 
-        /// Promise-density completion distribution across agents.
-        #[arg(long, value_enum)]
-        promise_fan_in: Option<DensityPromiseFanInArg>,
-
         /// Worker-executor topology selected by the workflow for this cell.
         #[arg(long, value_enum)]
         promise_topology: Option<DensityPromiseTopologyArg>,
@@ -232,13 +228,6 @@ pub enum DensityPromiseWaiterPresenceArg {
     Cold,
     Warm,
     Mixed,
-}
-
-/// Distribution of promise completions across target agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum DensityPromiseFanInArg {
-    OnePerAgent,
-    FanIn,
 }
 
 /// Worker-executor topology used by a promise-density cell.

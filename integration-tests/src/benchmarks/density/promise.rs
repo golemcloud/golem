@@ -6,7 +6,7 @@
 //! Promise-completion density benchmark (golemcloud/golem#3525).
 
 use super::prep::PrepManifest;
-use super::{PromiseFanIn, PromiseTopology, PromiseWaiterPresence};
+use super::{PromiseTopology, PromiseWaiterPresence};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::base_model::{AgentId, PromiseId};
@@ -37,17 +37,15 @@ const SETUP_CONCURRENCY: usize = 100;
 pub struct CellConfig {
     pub payload_size: usize,
     pub waiter_presence: PromiseWaiterPresence,
-    pub fan_in: PromiseFanIn,
     pub topology: PromiseTopology,
 }
 
 impl CellConfig {
     pub fn cell_name(&self) -> String {
         format!(
-            "promise-{}-{}-{}-{}",
+            "promise-{}-{}-{}",
             payload_label(self.payload_size),
             self.waiter_presence,
-            self.fan_in,
             self.topology
         )
     }
@@ -121,10 +119,7 @@ async fn create_work(
             let user = user.clone();
             let component = component.clone();
             async move {
-                let name = match config.fan_in {
-                    PromiseFanIn::OnePerAgent => format!("{}-{index}", config.cell_name()),
-                    PromiseFanIn::FanIn => format!("{}-fan-in", config.cell_name()),
-                };
+                let name = format!("{}-{index}", config.cell_name());
                 let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
@@ -303,8 +298,8 @@ impl Outcome {
         BenchmarkResult {
             name: format!("density-{}", config.cell_name()),
             description: format!(
-                "Promise-density cell: payload={} bytes, waiter-presence={}, fan-in={}, topology={}",
-                config.payload_size, config.waiter_presence, config.fan_in, config.topology
+                "Promise-density cell: payload={} bytes, waiter-presence={}, topology={}",
+                config.payload_size, config.waiter_presence, config.topology
             ),
             runs: vec![run_config],
             results: vec![run_result],
