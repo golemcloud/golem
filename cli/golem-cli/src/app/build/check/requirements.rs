@@ -126,6 +126,11 @@ const TYPESCRIPT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[
     },
 ];
 
+const EFFECT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[TsConfigSettingRequirement {
+    path: &["compilerOptions", "moduleResolution"],
+    expected_literal: Some("\"bundler\""),
+}];
+
 const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[ToolRequirement {
     key: "moon",
     name: "moon",
@@ -140,7 +145,7 @@ const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[ToolRequirement {
 pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [ToolRequirement] {
     match language {
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
-        GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
+        GuestLanguage::TypeScript | GuestLanguage::Effect => TYPESCRIPT_TOOL_REQUIREMENTS,
         GuestLanguage::Scala => &[],
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
     }
@@ -148,4 +153,8 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
 
 pub fn typescript_tsconfig_requirements() -> &'static [TsConfigSettingRequirement] {
     TYPESCRIPT_TSCONFIG_REQUIREMENTS
+}
+
+pub fn effect_tsconfig_requirements() -> &'static [TsConfigSettingRequirement] {
+    EFFECT_TSCONFIG_REQUIREMENTS
 }

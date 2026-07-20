@@ -260,7 +260,7 @@ impl SecretCommandHandler {
                 let lang = languages.into_iter().next().unwrap();
                 return match lang {
                     GuestLanguage::Rust => SourceLanguage::Rust,
-                    GuestLanguage::TypeScript => SourceLanguage::TypeScript,
+                    GuestLanguage::TypeScript | GuestLanguage::Effect => SourceLanguage::TypeScript,
                     GuestLanguage::Scala => SourceLanguage::Scala,
                     GuestLanguage::MoonBit => SourceLanguage::MoonBit,
                 };

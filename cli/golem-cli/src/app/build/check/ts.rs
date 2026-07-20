@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::check::requirements::{
-    TsConfigSettingRequirement, typescript_tsconfig_requirements,
+    TsConfigSettingRequirement, effect_tsconfig_requirements, typescript_tsconfig_requirements,
 };
 use crate::app::build::check::{
     DependencyFixStep, DependencyMatcherSemantics, DependencySpecCompliance,
@@ -24,8 +24,10 @@ use crate::app::edit;
 use crate::app::edit::json::collect_object_entries;
 use crate::app::edit::tsconfig_json::RequiredSetting;
 use crate::fs;
+use crate::model::GuestLanguage;
 use crate::sdk_overrides::SdkOverrides;
 use crate::versions;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug)]
 enum PackageJsonSection {
@@ -44,11 +46,12 @@ struct PackageJsonDependencyRequirement {
 pub(super) fn plan_package_json_fix_step(
     ctx: &BuildContext<'_>,
     overrides: &SdkOverrides,
+    selected_languages: &BTreeSet<GuestLanguage>,
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<Option<DependencyFixStep>> {
     let package_json_path = ctx.application().app_root_dir().join("package.json");
     let package_json_str_contents = fs::read_to_string(&package_json_path)?;
-    let requirements = typescript_sdk_requirements(overrides)?;
+    let requirements = selected_sdk_requirements(overrides, selected_languages)?;
     let names = requirements.iter().map(|r| r.name).collect::<Vec<_>>();
 
     let dependencies = collect_object_entries(&package_json_str_contents, "dependencies", &names)?;
@@ -119,23 +122,34 @@ pub(super) fn plan_tsconfig_fix_steps(
     ctx: &BuildContext<'_>,
 ) -> anyhow::Result<Vec<DependencyFixStep>> {
     let mut steps = Vec::new();
-    let requirements = typescript_tsconfig_requirements()
-        .iter()
-        .map(to_tsconfig_required_setting)
-        .collect::<Vec<_>>();
-    let update_source = r#"{
+
+    for component_name in ctx.application_context().selected_component_names() {
+        let component = ctx.application().component(component_name);
+        let (requirements, update_source) = match component.guess_language() {
+            Some(GuestLanguage::TypeScript) => (
+                typescript_tsconfig_requirements(),
+                r#"{
   "compilerOptions": {
     "moduleResolution": "bundler",
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
   }
-}"#;
-
-    for component_name in ctx.application_context().selected_component_names() {
-        let component = ctx.application().component(component_name);
-        if component.guess_language() != Some(crate::model::GuestLanguage::TypeScript) {
-            continue;
-        }
+}"#,
+            ),
+            Some(GuestLanguage::Effect) => (
+                effect_tsconfig_requirements(),
+                r#"{
+  "compilerOptions": {
+    "moduleResolution": "bundler"
+  }
+}"#,
+            ),
+            _ => continue,
+        };
+        let requirements = requirements
+            .iter()
+            .map(to_tsconfig_required_setting)
+            .collect::<Vec<_>>();
 
         let tsconfig_path = component.component_dir().join("tsconfig.json");
         let source = fs::read_to_string(&tsconfig_path)?;
@@ -166,6 +180,26 @@ fn parse_json_string_literal(raw: &str) -> Option<String> {
     serde_json::from_str::<String>(raw).ok()
 }
 
+fn selected_sdk_requirements(
+    overrides: &SdkOverrides,
+    selected_languages: &BTreeSet<GuestLanguage>,
+) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
+    let mut requirements = BTreeMap::<&'static str, PackageJsonDependencyRequirement>::new();
+
+    if selected_languages.contains(&GuestLanguage::TypeScript) {
+        for requirement in typescript_sdk_requirements(overrides)? {
+            requirements.insert(requirement.name, requirement);
+        }
+    }
+    if selected_languages.contains(&GuestLanguage::Effect) {
+        for requirement in effect_sdk_requirements(overrides)? {
+            requirements.insert(requirement.name, requirement);
+        }
+    }
+
+    Ok(requirements.into_values().collect())
+}
+
 fn typescript_sdk_requirements(
     overrides: &SdkOverrides,
 ) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
@@ -182,7 +216,7 @@ fn typescript_sdk_requirements(
         }
     };
 
-    Ok(vec![
+    let mut requirements = vec![
         PackageJsonDependencyRequirement {
             name: "@golemcloud/golem-ts-sdk",
             section: PackageJsonSection::Dependencies,
@@ -204,79 +238,69 @@ fn typescript_sdk_requirements(
             },
             semantics: DependencyMatcherSemantics::TypeScript,
         },
+    ];
+    requirements.extend(common_typescript_toolchain_requirements());
+    Ok(requirements)
+}
+
+fn effect_sdk_requirements(
+    overrides: &SdkOverrides,
+) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
+    let effect_golem_expected = if overrides.effect_golem_path.is_some() {
+        ExpectedDependencyKind::ExactPath(overrides.effect_golem_dep()?)
+    } else {
+        ExpectedDependencyKind::ExactValue(overrides.effect_golem_dep()?)
+    };
+
+    let mut requirements = vec![
         PackageJsonDependencyRequirement {
-            name: "@rollup/plugin-node-resolve",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE),
-                use_version_hint: true,
-            },
+            name: "@golemcloud/effect-golem",
+            section: PackageJsonSection::Dependencies,
+            expected: effect_golem_expected,
             semantics: DependencyMatcherSemantics::TypeScript,
         },
         PackageJsonDependencyRequirement {
-            name: "@rollup/plugin-typescript",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_TYPESCRIPT),
-                use_version_hint: true,
-            },
+            name: "effect",
+            section: PackageJsonSection::Dependencies,
+            expected: ExpectedDependencyKind::ExactValue(versions::effect_dep::EFFECT.to_string()),
             semantics: DependencyMatcherSemantics::TypeScript,
         },
-        PackageJsonDependencyRequirement {
-            name: "@rollup/plugin-commonjs",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_COMMONJS),
-                use_version_hint: true,
-            },
-            semantics: DependencyMatcherSemantics::TypeScript,
+    ];
+    requirements.extend(common_typescript_toolchain_requirements());
+    Ok(requirements)
+}
+
+fn common_typescript_toolchain_requirements() -> Vec<PackageJsonDependencyRequirement> {
+    [
+        (
+            "@rollup/plugin-node-resolve",
+            versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE,
+        ),
+        (
+            "@rollup/plugin-typescript",
+            versions::ts_dep::ROLLUP_PLUGIN_TYPESCRIPT,
+        ),
+        (
+            "@rollup/plugin-commonjs",
+            versions::ts_dep::ROLLUP_PLUGIN_COMMONJS,
+        ),
+        ("@rollup/plugin-json", versions::ts_dep::ROLLUP_PLUGIN_JSON),
+        ("@types/node", versions::ts_dep::TYPES_NODE),
+        ("rollup", versions::ts_dep::ROLLUP),
+        ("tslib", versions::ts_dep::TSLIB),
+        ("typescript", versions::ts_dep::TYPESCRIPT),
+    ]
+    .into_iter()
+    .map(|(name, version)| PackageJsonDependencyRequirement {
+        name,
+        section: PackageJsonSection::DevDependencies,
+        expected: ExpectedDependencyKind::SemanticCompatibleVersion {
+            base_version: dep_base_version(version),
+            use_version_hint: true,
         },
-        PackageJsonDependencyRequirement {
-            name: "@rollup/plugin-json",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_JSON),
-                use_version_hint: true,
-            },
-            semantics: DependencyMatcherSemantics::TypeScript,
-        },
-        PackageJsonDependencyRequirement {
-            name: "@types/node",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::TYPES_NODE),
-                use_version_hint: true,
-            },
-            semantics: DependencyMatcherSemantics::TypeScript,
-        },
-        PackageJsonDependencyRequirement {
-            name: "rollup",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::ROLLUP),
-                use_version_hint: true,
-            },
-            semantics: DependencyMatcherSemantics::TypeScript,
-        },
-        PackageJsonDependencyRequirement {
-            name: "tslib",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::TSLIB),
-                use_version_hint: true,
-            },
-            semantics: DependencyMatcherSemantics::TypeScript,
-        },
-        PackageJsonDependencyRequirement {
-            name: "typescript",
-            section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(versions::ts_dep::TYPESCRIPT),
-                use_version_hint: true,
-            },
-            semantics: DependencyMatcherSemantics::TypeScript,
-        },
-    ])
+        semantics: DependencyMatcherSemantics::TypeScript,
+    })
+    .collect()
 }
 
 fn dep_base_version(spec: &str) -> String {
@@ -285,8 +309,12 @@ fn dep_base_version(spec: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use super::{PackageJsonSection, typescript_sdk_requirements};
+    use super::{
+        PackageJsonDependencyRequirement, PackageJsonSection, effect_sdk_requirements,
+        selected_sdk_requirements, typescript_sdk_requirements,
+    };
     use crate::app::template::TEMPLATES_DIR;
+    use crate::model::GuestLanguage;
     use crate::sdk_overrides::sdk_overrides;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeSet;
@@ -294,8 +322,44 @@ mod test {
 
     #[test]
     fn ts_template_and_check_requirements_match() {
+        let overrides = sdk_overrides().unwrap();
+        assert_template_and_check_requirements_match(
+            "ts/common/package.json",
+            typescript_sdk_requirements(overrides).unwrap(),
+        );
+    }
+
+    #[test]
+    fn effect_template_and_check_requirements_match() {
+        let overrides = sdk_overrides().unwrap();
+        assert_template_and_check_requirements_match(
+            "effect/common/package.json",
+            effect_sdk_requirements(overrides).unwrap(),
+        );
+    }
+
+    #[test]
+    fn mixed_typescript_and_effect_requirements_include_both_sdk_profiles() {
+        let languages = BTreeSet::from([GuestLanguage::TypeScript, GuestLanguage::Effect]);
+        let requirement_names = selected_sdk_requirements(sdk_overrides().unwrap(), &languages)
+            .unwrap()
+            .into_iter()
+            .map(|requirement| requirement.name)
+            .collect::<BTreeSet<_>>();
+
+        assert!(requirement_names.contains("@golemcloud/golem-ts-sdk"));
+        assert!(requirement_names.contains("@golemcloud/golem-ts-typegen"));
+        assert!(requirement_names.contains("@golemcloud/effect-golem"));
+        assert!(requirement_names.contains("effect"));
+        assert_eq!(requirement_names.len(), 13);
+    }
+
+    fn assert_template_and_check_requirements_match(
+        template_path: &str,
+        requirements: Vec<PackageJsonDependencyRequirement>,
+    ) {
         let template_source = TEMPLATES_DIR
-            .get_file("ts/common/package.json")
+            .get_file(template_path)
             .unwrap()
             .contents_utf8()
             .unwrap()
@@ -315,11 +379,10 @@ mod test {
             .cloned()
             .collect::<BTreeSet<_>>();
 
-        let overrides = sdk_overrides().unwrap();
         let mut check_deps = BTreeSet::new();
         let mut check_dev_deps = BTreeSet::new();
 
-        for requirement in typescript_sdk_requirements(overrides).unwrap() {
+        for requirement in requirements {
             match requirement.section {
                 PackageJsonSection::Dependencies => {
                     check_deps.insert(requirement.name.to_string());

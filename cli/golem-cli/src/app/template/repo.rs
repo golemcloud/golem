@@ -349,6 +349,7 @@ mod tests {
 
         for language in [
             GuestLanguage::TypeScript,
+            GuestLanguage::Effect,
             GuestLanguage::Rust,
             GuestLanguage::Scala,
         ] {
