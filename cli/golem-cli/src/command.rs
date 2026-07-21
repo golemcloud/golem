@@ -1307,7 +1307,6 @@ pub mod worker {
             #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
             config: Vec<AgentConfigEntryDto>,
         },
-        // TODO: json args
         /// Invoke (or enqueue invocation for) agent
         #[command(after_help = crate::command_examples::AGENT_INVOKE)]
         Invoke {

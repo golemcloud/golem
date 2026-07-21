@@ -621,7 +621,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
-    // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
+    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
     // run_and_assert(
     //     &ctx,
     //     "fun_multi_modal",
@@ -1707,7 +1707,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""foo""#]).await;
 
-    // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
+    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
     // // Unstructured text type
     // run_and_assert(&ctx, "funUnstructuredText", &["url(\"foo\")"]).await;
     //
