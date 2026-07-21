@@ -35,9 +35,9 @@ const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const POOL_STARVATION_THRESHOLD: Duration = Duration::from_millis(10);
-// At 256 completions/s, a pool of 2,000 absorbs up to roughly eight seconds of
-// create-and-await restaging latency without reducing offered completion rate.
-const PROMISE_POOL_SIZE: usize = 2_000;
+// Keep the pool small enough that benchmark scaffolding does not become an
+// agent-density test; pool starvation reports lifecycle capacity separately.
+const PROMISE_POOL_SIZE: usize = 256;
 const READY_WORK_CAPACITY: usize = PROMISE_POOL_SIZE;
 // Creating agents/promises traverses cold worker activation and must not flood
 // the gateway.
