@@ -471,10 +471,6 @@ fn transform(
                     sdk_overrides.ts_package_dep("golem-ts-sdk")?,
                 );
                 replacements.insert(
-                    "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",
-                    versions::ts_dep::ROLLUP_PLUGIN_ALIAS.to_string(),
-                );
-                replacements.insert(
                     "GOLEM_TS_ROLLUP_PLUGIN_NODE_RESOLVE_VERSION",
                     versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE.to_string(),
                 );
