@@ -187,6 +187,22 @@ async fn cleanup_pool(
         })
         .collect::<Vec<_>>();
     crate::benchmarks::delete_workers(user, &workers).await;
+    stream::iter(workers)
+        .map(|worker| async move {
+            let deleted_started = Instant::now();
+            loop {
+                if user.get_worker_metadata_opt(&worker).await?.is_none() {
+                    return Ok(());
+                }
+                if deleted_started.elapsed() >= WAITER_READY_TIMEOUT {
+                    anyhow::bail!("timed out deleting worker {worker}");
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .buffer_unordered(SETUP_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
     Ok(())
 }
 
