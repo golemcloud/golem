@@ -2923,10 +2923,10 @@ mod tests {
 
     fn arb_agent_new_result() -> OutputDocumentStrategy {
         serialized_output(
-            (arb_small_string(), proptest::option::of(arb_small_string())).prop_map(
+            (arb_small_string(), arb_small_string()).prop_map(
                 |(component_name, agent_name)| crate::model::text::worker::WorkerCreateView {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_name: agent_name.map(crate::model::worker::RawAgentId),
+                    agent_name: crate::model::worker::RawAgentId(agent_name),
                 },
             ),
         )
