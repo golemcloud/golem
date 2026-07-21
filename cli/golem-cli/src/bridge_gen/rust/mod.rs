@@ -16,11 +16,11 @@
 //!
 //! The generator walks the agent's schema-native [`AgentTypeSchema`] and emits
 //! a Rust client crate whose request/response codecs build
-//! [`golem_common::schema::SchemaValue`] trees directly and `serde_json`-encode
-//! them onto the bare `serde_json::Value` request bodies (and decode the
-//! `TypedSchemaValue` responses) — wire-identical to the TypeScript generator
-//! and to the server's own (de)serialization, by construction. There is no
-//! dependency on the legacy `AnalysedType` / `IntoValue` / `FromValue` surface.
+//! [`golem_common::schema::SchemaValue`] request bodies directly (and decode
+//! the `TypedSchemaValue` responses) — wire-identical to the TypeScript
+//! generator and to the server's own (de)serialization, by construction. There
+//! is no dependency on the legacy `AnalysedType` / `IntoValue` / `FromValue`
+//! surface.
 
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::rust::rust::{is_valid_rust_ident, to_rust_ident};
@@ -425,7 +425,7 @@ impl RustBridgeGenerator {
         {
             quote! {
                 pub async fn get_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: serde_json::Value = #constructor_params_value;
+                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
                     Self::__create(constructor_parameters, None, agent_config).await
@@ -438,7 +438,7 @@ impl RustBridgeGenerator {
         let with_config_methods = if !local_configs.is_empty() {
             let get_phantom_with_config = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
                 pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: serde_json::Value = #constructor_params_value;
+                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
                     Self::__create(constructor_parameters, Some(uuid), agent_config).await
@@ -454,7 +454,7 @@ impl RustBridgeGenerator {
                 #get_phantom_with_config
 
                 pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: serde_json::Value = #constructor_params_value;
+                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
                     #(#config_encode_stmts)*
                     Self::__create(constructor_parameters, #new_phantom_id, agent_config).await
@@ -469,7 +469,7 @@ impl RustBridgeGenerator {
         let get_method = if self.agent_type.mode == AgentMode::Durable {
             quote! {
                 pub async fn get(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: serde_json::Value = #constructor_params_value;
+                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     Self::__create(constructor_parameters, None, vec![]).await
                 }
             }
@@ -478,7 +478,7 @@ impl RustBridgeGenerator {
         };
         let get_phantom_method = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
             pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                let constructor_parameters: serde_json::Value = #constructor_params_value;
+                let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                 Self::__create(constructor_parameters, Some(uuid), vec![]).await
             }
         });
@@ -535,7 +535,7 @@ impl RustBridgeGenerator {
 
             #[derive(Debug, Clone)]
             pub struct #client_struct_name {
-                constructor_parameters: serde_json::Value,
+                constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
                 phantom_id: Option<uuid::Uuid>,
                 #agent_config_field
                 #agent_id_field
@@ -547,7 +547,7 @@ impl RustBridgeGenerator {
                 #get_phantom_method
 
                 pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: serde_json::Value = #constructor_params_value;
+                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     Self::__create(constructor_parameters, #new_phantom_id, vec![]).await
                 }
 
@@ -566,7 +566,7 @@ impl RustBridgeGenerator {
                 }
 
                 async fn __create(
-                    constructor_parameters: serde_json::Value,
+                    constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
                     phantom_id: Option<uuid::Uuid>,
                     agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
                 ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
@@ -602,7 +602,7 @@ impl RustBridgeGenerator {
                 async fn invoke(
                     &self,
                     method_name: &str,
-                    method_parameters: serde_json::Value,
+                    method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
                     mode: golem_client::model::AgentInvocationMode,
                     schedule_at: Option<chrono::DateTime<chrono::Utc>>,
                 ) -> Result<golem_client::model::AgentInvocationResult, crate::__golem_bridge_runtime::ClientError> {
@@ -1423,7 +1423,7 @@ impl RustBridgeGenerator {
                 let decode_body = self.output_decode_expr(&method.output_schema)?;
                 Ok(quote! {
                     async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, String, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
-                        let method_parameters: serde_json::Value = #params_value;
+                        let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                         let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                         let agent_id = response.agent_id;
                         let idempotency_key = response.idempotency_key;
@@ -1442,7 +1442,7 @@ impl RustBridgeGenerator {
             }
             None => Ok(quote! {
                 async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, String, Option<()>), crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters: serde_json::Value = #params_value;
+                    let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                     let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                     Ok((response.agent_id, response.idempotency_key, response.result.map(|_| ())))
                 }
@@ -1527,17 +1527,10 @@ impl RustBridgeGenerator {
         Ident::new(name.as_ref(), Span::call_site())
     }
 
-    /// Block expression of type `serde_json::Value` encoding the input
-    /// parameters into a schema-native `record` and serializing it.
+    /// Block expression encoding the input parameters into a schema-native
+    /// `record`.
     fn input_param_value(&mut self, input: &InputSchema) -> anyhow::Result<TokenStream> {
-        let schema_value = self.input_param_schema_value(input)?;
-
-        Ok(quote! {
-            {
-                let __sv: crate::__golem_bridge_runtime::schema::SchemaValue = #schema_value;
-                serde_json::to_value(&__sv).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to serialize parameters: {__e}") })?
-            }
-        })
+        self.input_param_schema_value(input)
     }
 
     /// Block expression of type `SchemaValue` encoding the input parameters
