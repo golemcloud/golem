@@ -75,7 +75,19 @@ wasm-rquickjs generate-dts \
   --target wasi-p3 \
   --output "$dts_dir"
 echo "[agent-guest] TypeScript definitions written to $dts_dir" >&2
-ls -1 "$dts_dir"/*.d.ts 2>/dev/null | while read -r f; do echo "  $(basename "$f")"; done >&2
+shopt -s nullglob
+dts_files=()
+for f in "$dts_dir"/*.d.ts; do
+  if [[ -f "$f" ]]; then
+    dts_files+=("$f")
+  fi
+done
+shopt -u nullglob
+if (( ${#dts_files[@]} == 0 )); then
+  echo "[agent-guest] ERROR: declaration generation produced no .d.ts files" >&2
+  exit 1
+fi
+for f in "${dts_files[@]}"; do echo "  $(basename "$f")"; done >&2
 
 echo "[agent-guest] Generating wrapper crate with wasm-rquickjs..." >&2
 rm -rf "$wrapper_dir"
@@ -88,7 +100,7 @@ wasm-rquickjs generate-wrapper-crate \
 
 echo "[agent-guest] Building guest runtime (cargo build --target wasm32-wasip2 --release)..." >&2
 if [[ -f "$HOME/.cargo/env" ]]; then
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1091
   . "$HOME/.cargo/env"
 fi
 

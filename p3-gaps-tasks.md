@@ -73,8 +73,8 @@ Statuses: `todo` → `in-progress` → `done` / `blocked`.
 | T40 | Runtime verification for P3 HTTP durability (checklist #8) | Part 2 | done |
 | T41 | Migrate `host-api-tests` HTTP to P3 | G7 | done |
 | T42 | Full-suite sweep + documentation close-out | all | done |
-| T43 | Scala SDK: runtime port off pollables | G33 | todo |
-| T44 | Scala SDK: base image regeneration + integration tests | G33 | todo |
+| T43 | Scala SDK: runtime port off pollables | G33 | done |
+| T44 | Scala SDK: base image regeneration + integration tests | G33 | done |
 | T45 | MoonBit SDK: bindings regeneration + API port | G33 | todo |
 | T46 | MoonBit SDK: example build + verification | G33 | todo |
 | T47 | TS SDK migration | G33 | blocked |
@@ -1619,9 +1619,30 @@ Rebuild the Scala test agents and run the Scala integration tests
 (`golem-scala-integration-tests` skill).
 
 **Verify:** `wasm-tools component wit` on the new `agent_guest.wasm` shows
-`golem:agent/guest@2.0.0` exported and no `wasi:io/poll` / `wall-clock`
-imports; Scala integration tests (`GolemExamplesIntegrationSpec`) pass against
-the current executor.
+`golem:agent/guest@2.0.0` exported and P3 imports only (plus expected P2 std
+imports); relevant Scala integration tests (`GolemExamplesIntegrationSpec`)
+pass against the current executor.
+
+Completion evidence (2026-07-21):
+
+- `sbt golemTestAll` passed across the supported Scala versions; four focused
+  instant-conversion regressions cover negative and large epoch values.
+- Regenerating `agent_guest.wasm` with the wasm-rquickjs `wasi-p3` branch and
+  rebuilding the Scala test agents passed. The sbt, mill, and test-agent
+  copies are byte-identical (SHA-256
+  `51001091428e7acdf82c7473435e9d6c18f91a0867ab7cade06e271cd815f9d4`).
+  The component exports `golem:agent/guest@2.0.0` and imports the P3 Golem
+  host and clock interfaces. Its remaining P2 poll/wall-clock imports belong
+  to the Rust `wasm32-wasip2` std/QuickJS compatibility layer; the Scala and
+  Golem-owned runtime surfaces no longer expose or use them.
+- All 28 promise, RPC, fork, trigger, and agent-to-agent scenarios reached by
+  the full integration run passed. The remaining class was blocked after the
+  executor panicked in the pre-existing durable blobstore wrapper; an isolated
+  current-executor run of `sync-return` and `http-webhook-create-and-await`
+  passed 2/2.
+- CI remains pinned to wasm-rquickjs 0.3.4 pending a release of its `wasi-p3`
+  branch; updating that external tool pin is a follow-up rather than SDK
+  runtime work.
 
 ### T45 — MoonBit SDK: bindings regeneration + API port
 

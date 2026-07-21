@@ -60,7 +60,7 @@ object JsRpcError {
     JsShape.tagged[JsRpcError]("remote-agent-error", error)
 }
 
-// --- Datetime (wasi:clocks/wall-clock@0.2.3) ---
+// --- Datetime (wasi:clocks/system-clock@0.3.0) ---
 
 @js.native
 sealed trait JsDatetime extends js.Object {

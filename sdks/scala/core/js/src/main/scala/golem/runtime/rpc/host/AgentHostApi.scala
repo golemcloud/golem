@@ -25,7 +25,7 @@ import scala.annotation.unused
 import scala.scalajs.js
 import scala.scalajs.js.BigInt
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.js.annotation.{JSImport, JSName}
+import scala.scalajs.js.annotation.JSImport
 import scala.scalajs.js.typedarray.Uint8Array
 
 object AgentHostApi {
@@ -67,26 +67,7 @@ object AgentHostApi {
 
   @js.native
   trait GetPromiseResultHandle extends js.Object {
-    def subscribe(): Pollable = js.native
-
-    /**
-     * Returns `Uint8Array` if the promise is completed, or `undefined` if not
-     * yet.
-     */
-    def get(): js.UndefOr[Uint8Array] = js.native
-  }
-
-  @js.native
-  trait Pollable extends js.Object {
-    def ready(): Boolean = js.native
-
-    def block(): Unit = js.native
-
-    /**
-     * Converts this WASI pollable into a JS Promise that resolves when ready.
-     */
-    @JSName("promise")
-    def promise(): js.Promise[Unit] = js.native
+    def get(): js.Promise[Uint8Array] = js.native
   }
 
   final case class AgentIdParts(agentTypeName: String, payload: JsTypedSchemaValue, phantom: Option[Uuid])

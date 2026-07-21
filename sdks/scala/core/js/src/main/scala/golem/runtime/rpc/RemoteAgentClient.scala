@@ -20,11 +20,10 @@ import golem.Datetime
 import golem.Uuid
 import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.FutureInterop
-import golem.host.js.{JsErr, JsOk}
 import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
 import golem.runtime.rpc.host.AgentHostApi.RegisteredAgentType
 import golem.runtime.rpc.host.WasmRpcApi.WasmRpcClient
-import golem.runtime.rpc.host.{AgentHostApi, JsRpcError, WasmRpcApi}
+import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
 
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -103,24 +102,23 @@ object RemoteAgentClient {
       }
 
     /**
-     * Drives a host `future-invoke-result` to completion. The synchronous
-     * `subscribe()`/`promise()` calls are guarded so a host/JS interop failure
-     * surfaces as a failed `Future` rather than an uncaught `TypeError` that
-     * would trap the whole guest invocation; `get()` runs inside the `flatMap`
-     * body and is already captured by `Future` semantics.
+     * Drives a host `future-invoke-result` to completion. Calling `get()` is
+     * guarded so a synchronous host/JS interop failure surfaces as a failed
+     * `Future` rather than trapping the whole guest invocation.
      */
     private def awaitFutureResult(
       futureResult: WasmRpcApi.RawFutureInvokeResult
     ): Future[Option[JsSchemaValueTree]] =
       try {
-        val pollable = futureResult.subscribe()
         FutureInterop
-          .fromPromise(pollable.promise())
-          .flatMap { _ =>
-            readAsyncResult(futureResult.get().toOption)
+          .fromPromise(futureResult.get())
+          .map(_.toOption)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+          .recoverWith { case JavaScriptException(e) =>
+            Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))
           }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
       } catch {
-        case JavaScriptException(e) => Future.failed(JavaScriptException(s"async RPC failed: ${e.toString}"))
+        case JavaScriptException(e) =>
+          Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))
       }
 
     override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
@@ -142,21 +140,6 @@ object RemoteAgentClient {
         client.scheduleCancelableInvocation(datetime, fn, input).left.map(_.toString)
       )
 
-    private def readAsyncResult(
-      result: Option[golem.host.js.JsResult[js.UndefOr[JsSchemaValueTree], JsRpcError]]
-    ): Future[Option[JsSchemaValueTree]] =
-      result match {
-        case Some(res) =>
-          if (res.tag == "ok") {
-            val okValue = res.asInstanceOf[JsOk[js.UndefOr[JsSchemaValueTree]]].value
-            Future.successful(okValue.toOption)
-          } else {
-            val rpcError = res.asInstanceOf[JsErr[JsRpcError]].value
-            Future.failed(JavaScriptException(WasmRpcApi.decodeRpcError(rpcError).toString))
-          }
-        case None =>
-          Future.failed(JavaScriptException("async RPC: pollable ready but no result available"))
-      }
   }
 
   private def invokeWithFallback[A](functionName: String)(call: String => Either[String, A]): Either[String, A] =
