@@ -452,25 +452,56 @@ describe('fluent tool runtime client', () => {
     });
   });
 
-  it('rejects ambiguous or undeclared custom error payloads instead of guessing a name', async () => {
-    const ambiguous = toolDefinition('ambiguous').body((body) =>
+  it('decodes same-shaped custom errors as the first declared case', async () => {
+    const withPayload = toolDefinition('with-payload').body((body) =>
       body
         .returns(z.void())
         .error('first', { kind: 'runtime', exitCode: 1, payload: z.string() })
         .error('second', { kind: 'runtime', exitCode: 2, payload: z.string() }),
     );
-    const transport = new FakeTransport(() => {
-      throw {
-        tag: 'remote-tool-error',
-        val: { tag: 'custom-error', val: wireValue(z.string(), 'failure') },
-      } satisfies RpcError;
-    });
-    const failure = await rejectionOf(client(ambiguous, { transport }).ambiguous({}));
+    const payloadless = toolDefinition('payloadless').body((body) =>
+      body
+        .returns(z.void())
+        .error('first', { kind: 'runtime', exitCode: 1 })
+        .error('second', { kind: 'runtime', exitCode: 2 }),
+    );
+    const payloadFailure = await rejectionOf(
+      client(withPayload, {
+        transport: new FakeTransport(() => {
+          throw {
+            tag: 'remote-tool-error',
+            val: { tag: 'custom-error', val: wireValue(z.string(), 'failure') },
+          } satisfies RpcError;
+        }),
+      })['with-payload']({}),
+    );
+    const payloadlessFailure = await rejectionOf(
+      client(payloadless, {
+        transport: new FakeTransport(() => {
+          throw {
+            tag: 'remote-tool-error',
+            val: {
+              tag: 'custom-error',
+              val: typedSchemaValueToWit({
+                graph: { defs: new Map(), root: t.tuple([]) },
+                value: v.tuple([]),
+              }),
+            },
+          } satisfies RpcError;
+        }),
+      }).payloadless({}),
+    );
 
-    expect(failure).toMatchObject({
+    expect(payloadFailure).toMatchObject({
       cause: {
-        tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('more than one') },
+        tag: 'tool',
+        error: { tag: 'err', name: 'first', hasPayload: true, payload: 'failure' },
+      },
+    });
+    expect(payloadlessFailure).toMatchObject({
+      cause: {
+        tag: 'tool',
+        error: { tag: 'err', name: 'first', hasPayload: false },
       },
     });
   });

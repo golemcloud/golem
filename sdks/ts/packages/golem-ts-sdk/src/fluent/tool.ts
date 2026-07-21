@@ -1288,17 +1288,13 @@ function decodeDeclaredToolError(
 ): ToolErr<string, unknown> | ToolErr<string> {
   const payload = typedSchemaValueFromWit(wirePayload);
   const unitGraph = { defs: new Map(), root: t.tuple([]) };
-  const matches = body.errors.filter((errorCase) =>
+  const errorCase = body.errors.find((errorCase) =>
     deepEqual(payload.graph, errorCase.payloadCodec?.graph ?? unitGraph),
   );
-  if (matches.length === 0) {
+  if (!errorCase) {
     throw new Error('remote custom error does not match any declared error schema');
   }
-  if (matches.length > 1) {
-    throw new Error('remote custom error matches more than one declared error schema');
-  }
 
-  const errorCase = matches[0];
   if (!errorCase.payloadCodec) {
     if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
       throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
