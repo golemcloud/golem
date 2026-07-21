@@ -17,7 +17,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.3.4"
+  WASM_RQUICKJS_VERSION: "d2b7119c8286d6fc8225a2afdb40e896dd3e89df"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 

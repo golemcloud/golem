@@ -75,9 +75,9 @@ Statuses: `todo` → `in-progress` → `done` / `blocked`.
 | T42 | Full-suite sweep + documentation close-out | all | done |
 | T43 | Scala SDK: runtime port off pollables | G33 | done |
 | T44 | Scala SDK: base image regeneration + integration tests | G33 | done |
-| T45 | MoonBit SDK: bindings regeneration + API port | G33 | todo |
-| T46 | MoonBit SDK: example build + verification | G33 | todo |
-| T47 | TS SDK migration | G33 | blocked |
+| T45 | MoonBit SDK: bindings regeneration + API port | G33 | done |
+| T46 | MoonBit SDK: example build + verification | G33 | done |
+| T47 | TS SDK migration | G33 | done |
 
 ---
 
@@ -817,7 +817,7 @@ on replay, matching interrupt semantics. Rust SDK's async `receive()` /
 API changed); WIT sync checks green. `websocket_echo_ts` stays red until T47
 (TS SDK migration) regenerates the TS websocket types/bindings and rebuilds
 `agent-sdk-ts` — its wasm is stale (pre `golem:core@2.0.0`), unrelated to this
-change.
+change. *(Resolved by T47.)*
 
 ---
 
@@ -1697,10 +1697,9 @@ Completion evidence (2026-07-21, Oracle approved):
 - The SDK and example guides document the pinned fork and async API. The
   already-published MoonBit blog post remains unchanged.
 
-### T47 — TS SDK migration (blocked)
+### T47 — TS SDK migration — DONE
 
-Blocked on wasm-rquickjs P3 support (external parallel task). When unblocked:
-regenerate DTS/types from P3 WIT, port runtime off `Pollable`/`subscribe`
+Regenerate DTS/types from P3 WIT, port runtime off `Pollable`/`subscribe`
 (`hostapi.ts`, `clientGeneration.ts`, `pollableUtils.ts`, `baseAgent.ts`
 wall-clock import), rebuild `agent_guest.wasm` with `wasm-rquickjs-cli`, then
 migrate the TS test components (`agent-sdk-ts`, `agent-self-rpc`,
@@ -1709,3 +1708,25 @@ migrate the TS test components (`agent-sdk-ts`, `agent-self-rpc`,
 
 **Verify:** TS SDK builds; TS test components rebuilt; all worker-executor and
 integration tests using TS components pass.
+
+Completion evidence (2026-07-21, Oracle approved):
+
+- The source migration landed in `12aa27d99`: generated/runtime APIs use P3
+  async paths, the template exports `golem:agent/guest@2.0.0`, and the active
+  SDK no longer uses the P2 pollable/subscribe API. Remaining P2 clock/poll
+  imports are confined to the Rust std/QuickJS compatibility layer.
+- wasm-rquickjs P3 support is pinned reproducibly to upstream revision
+  `d2b7119c8286d6fc8225a2afdb40e896dd3e89df` for both the installed CLI and
+  the embedded golem-cli library. The fresh SDK template build and an exact
+  clean `cargo install --locked` from that revision pass.
+- The SDK build, all 303 SDK tests, lint, formatting check, and clean template
+  build pass. The template validates with component-model async enabled.
+- All six named TS components were rebuilt and validate with component-model
+  async enabled. `agent-self-rpc` is now part of the TS component build matrix;
+  every artifact exports `golem:agent/guest@2.0.0`, uses current P3
+  Golem/HTTP/clock interfaces, and has no stale `golem:core/types@1.5.0`
+  import.
+- Runtime verification passed: 27/27 selected worker-executor tests, 96/96
+  integration tests using TS artifacts, 8/8 live agent-config tests, and the
+  deleted-environment promise test. The final Oracle review returned
+  `APPROVE T47 DONE` with no T47 closure blockers.

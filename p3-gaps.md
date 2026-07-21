@@ -9,14 +9,11 @@
 > integration + sharding tests, the CLI integration suite (48 passed, 0
 > failed, 2 ignored in one parallel run, incl. MoonBit/Scala/TS/mixed-language
 > after tracked SDK/template fixes), and the debugging-service suite (18/18).
-> Two items remain open:
-> **G33** (Scala/MoonBit/TS SDK runtime migration — tasks T43–T46 todo, T47
-> blocked on wasm-rquickjs; the wasm-rquickjs `--target wasi-p3` support and
-> the CI `WASM_RQUICKJS_VERSION` pin bump also depend on an upstream release,
-> see T42.5e-19) and **G35** (claim-safe span records for concurrent P3 sends
-> — T48 todo). The body of this document is a historical snapshot of the
-> audits; statements about missing functionality describe the state *at audit
-> time*, not the current code.
+> One item remains open: **G35** (claim-safe span records for concurrent P3
+> sends — T48 todo). G33's Scala, MoonBit, and TypeScript SDK migrations were
+> completed by T43–T47. The body of this document is a historical snapshot of
+> the audits; statements about missing functionality describe the state *at
+> audit time*, not the current code.
 
 Three parts:
 
@@ -694,7 +691,7 @@ host call. Cheap fix; add to every P3 wrapper (or centralize in
 - `host-api-tests`: `raw_http.rs` / `raw_wasi_http.rs` still P2+pollables (G7)
   — blocked on G1–G6 + G14. *(Done: migrated by T41.)*
 - All TS components — blocked on wasm-rquickjs P3 (external parallel task).
-  *(Still blocked: T47.)*
+  *(Done: migrated and verified by T47.)*
 - Six `#[ignore]`d executor tests tagged `TODO(p3)` (see G19).
   *(Done: un-ignored by T25.)*
 - No wasip3 HTTP runtime harness exists — declared blocker for checklist item
@@ -917,10 +914,10 @@ cli/io) served by the executor linker. Follow-ups:
   connect to a P3-shaped socket import. Needs an explicit fixture/policy for
   cross-ABI library plugins.
 
-## G33 — Scala and MoonBit SDKs: WIT synced, runtimes NOT migrated
+## G33 — SDK runtimes not migrated (audit snapshot)
 
-**Still open** — tracked by T43/T44 (Scala), T45/T46 (MoonBit), T47 (TS,
-blocked on wasm-rquickjs).
+**Resolved by T43–T47** (Scala, MoonBit, and TypeScript SDK runtime migrations,
+base images/components, and integration verification).
 
 - **Scala**: `sdks/scala/wit` matches root, but the embedded base image
   `agent_guest.wasm` still imports `wasi:io/poll@0.2.9` /
