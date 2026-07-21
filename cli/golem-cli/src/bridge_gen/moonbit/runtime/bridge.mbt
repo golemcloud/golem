@@ -82,6 +82,7 @@ pub async fn invoke_agent(
     resolved.agent_type_name,
     resolved.parameters,
     resolved.phantom_id,
+    resolved.config,
     method_name,
     method_parameters,
     mode,

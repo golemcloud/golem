@@ -3328,6 +3328,7 @@ mod app_builder {
                                     target_language,
                                     crate::model::GuestLanguage::Rust
                                         | crate::model::GuestLanguage::Scala
+                                        | crate::model::GuestLanguage::MoonBit
                                 )
                                     && sdk_targets.is_some_and(|targets| targets.internal.is_some())
                                 {
@@ -4460,6 +4461,42 @@ mod test {
         let used_modes = app.bridge_sdks().for_all_used_modes();
         assert_eq!(used_modes.len(), 1);
         assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
+        assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn moonbit_bridge_sdk_guest_tools_are_accepted_and_use_tool_bridge_dir() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              moonbit:
+                internal:
+                  tools:
+                    - MyTool
+                  outputDir: bridge-sdk/moonbit-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::MoonBit),
+            app_tmp_dir.path().join("bridge-sdk/moonbit-guest").join(
+                crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
+            )
+        );
+
+        let used_modes = app.bridge_sdks().for_all_used_modes();
+        assert_eq!(used_modes.len(), 1);
+        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::MoonBit);
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 

@@ -79,7 +79,9 @@ use crate::worker::agent_config::{effective_agent_config, validate_agent_config}
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
-use crate::worker::status::calculate_last_known_status_with_checkpoint;
+use crate::worker::status::{
+    calculate_last_known_status_with_checkpoint, calculate_pending_card_events,
+};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
@@ -790,53 +792,50 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn pending_card_events_at_boundary(
-        &self,
+        &mut self,
     ) -> Result<Vec<PendingCardEventRef>, WorkerExecutorError> {
         let status = self
             .public_state
             .worker()
             .get_non_detached_last_known_status()
             .await;
-        let mut pending_events = status.pending_card_events;
-        let last_status_idx = status.oplog_idx;
+        let status_idx = status.oplog_idx;
+        let status_pending = status.pending_card_events;
+
         let oplog = self.public_state.worker().oplog();
         let current_idx = oplog.current_oplog_index().await;
 
-        if current_idx > last_status_idx {
-            let entries = oplog
-                .read_many(
-                    last_status_idx.next(),
-                    current_idx.as_u64() - last_status_idx.as_u64(),
-                )
-                .await;
-
-            for (oplog_index, entry) in entries {
-                match entry {
-                    OplogEntry::CardEventQueued { timestamp, event } => {
-                        pending_events.push(PendingCardEventRef {
-                            timestamp,
-                            oplog_index,
-                            event,
-                        });
-                    }
-                    OplogEntry::CardInstalled {
-                        queued_event_index: Some(queued_event_index),
-                        ..
-                    }
-                    | OplogEntry::CardInstallFailed {
-                        queued_event_index, ..
-                    }
-                    | OplogEntry::CardRevoked {
-                        queued_event_index, ..
-                    } => {
-                        pending_events.retain(|event| event.oplog_index != queued_event_index);
-                    }
-                    _ => {}
-                }
+        match &mut self.state.card_event_boundary_scan {
+            Some(scan) => scan.synchronize(status_idx, &status_pending, current_idx),
+            None => {
+                self.state.card_event_boundary_scan =
+                    Some(CardEventBoundaryScan::new(status_idx, status_pending));
             }
         }
 
-        Ok(pending_events)
+        let unread_range = self
+            .state
+            .card_event_boundary_scan
+            .as_ref()
+            .expect("card event boundary scan must be initialized")
+            .unread_range(current_idx);
+
+        if let Some((start, count)) = unread_range {
+            let entries = oplog.read_many(start, count).await;
+            self.state
+                .card_event_boundary_scan
+                .as_mut()
+                .expect("card event boundary scan must be initialized")
+                .fold_through(current_idx, &entries);
+        }
+
+        Ok(self
+            .state
+            .card_event_boundary_scan
+            .as_ref()
+            .expect("card event boundary scan must be initialized")
+            .pending
+            .clone())
     }
 
     pub(crate) async fn apply_card_install(
@@ -1592,6 +1591,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        if self.state.snapshotting_mode.is_some() {
+            let begin_index = self.state.current_oplog_index().await;
+            self.state.current_retry_point = begin_index;
+            return Ok(begin_index);
+        }
+
         if self.state.opens_durable_scope(function_type) {
             let result = if self.is_live() {
                 // A scope `Start` is top-level with respect to other durable scopes: long-lived
@@ -1750,6 +1755,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        }
+
         if self.state.opens_durable_scope(function_type) {
             if self.is_live() {
                 let entry = OplogEntry::End {
@@ -1850,7 +1859,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     where
         Err: From<WorkerExecutorError>,
     {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            let (_, tx) = handler.create_new().await?;
+            let begin_index = self.state.current_oplog_index().await;
+            Ok((begin_index, tx))
+        } else if self.is_live() {
             let (tx_id, tx) = handler.create_new().await?;
             // A transaction is a durable scope: append the scope `Start` and the
             // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
@@ -2077,7 +2090,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            Ok(())
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
@@ -2104,7 +2119,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            Ok(())
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
@@ -2131,7 +2148,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             // The final marker and the scope `End` are appended as an atomic pair so they can never
@@ -2185,7 +2204,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             // The final marker and the scope `End` are appended as an atomic pair so they can never
@@ -2334,6 +2355,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
+                            .durable_ctx_mut()
                             .begin_call_snapshotting_function();
 
                         let load_result = invoke_observed_and_traced(
@@ -2347,7 +2369,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .end_call_snapshotting_function();
+                            .durable_ctx_mut()
+                            .end_call_snapshotting_function_if_active();
 
                         for span_id in local_span_ids {
                             let _ = store
@@ -2491,9 +2514,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => (payload, mime_type),
             _ => {
-                warn!(
+                let error = format!(
                     "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
                 );
+                warn!("{error}");
+                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
@@ -2520,7 +2545,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             Ok(data) => data,
             Err(err) => {
-                warn!("Failed to download snapshot payload: {err}; falling back to full replay");
+                let error = format!(
+                    "Failed to download snapshot payload: {err}; falling back to full replay"
+                );
+                warn!("{error}");
+                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
@@ -2564,7 +2593,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
-                warn!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
+                let error =
+                    format!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
+                warn!("{error}");
+                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 return SnapshotRecoveryResult::Failed;
             }
         };
@@ -2578,13 +2610,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_invocation_context(invocation_context)
             .await
         {
-            warn!("Snapshot recovery failed to install invocation context: {err}");
+            let error = format!("Snapshot recovery failed to install invocation context: {err}");
+            warn!("{error}");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
             return SnapshotRecoveryResult::Failed;
         }
 
         store
             .as_context_mut()
             .data_mut()
+            .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
         let load_result =
@@ -2593,7 +2628,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         store
             .as_context_mut()
             .data_mut()
-            .end_call_snapshotting_function();
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
 
         for span_id in local_span_ids {
             let _ = store
@@ -2638,11 +2674,37 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         if let Some(error) = failed {
             warn!("{error}; re-creating instance for full replay");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
             SnapshotRecoveryResult::Failed
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
             SnapshotRecoveryResult::Success
         }
+    }
+
+    fn emit_snapshot_recovery_event(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        snapshot_index: OplogIndex,
+        succeeded: bool,
+        error: Option<String>,
+    ) {
+        store
+            .as_context_mut()
+            .data_mut()
+            .get_public_state()
+            .event_service()
+            .emit_event(
+                if succeeded {
+                    InternalWorkerEvent::snapshot_recovery_succeeded(snapshot_index)
+                } else {
+                    InternalWorkerEvent::snapshot_recovery_failed(
+                        snapshot_index,
+                        error.unwrap_or_else(|| "unknown".to_string()),
+                    )
+                },
+                true,
+            );
     }
 }
 
@@ -2653,6 +2715,12 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn end_call_snapshotting_function_if_active(&mut self) {
+        if self.state.snapshotting_mode.is_some() {
+            self.end_call_snapshotting_function();
+        }
+    }
+
     pub(crate) fn register_open_websocket(
         &mut self,
         rep: u32,
@@ -3400,6 +3468,14 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         // While calling a snapshotting function (load/save), we completely turn off persistence
         // In addition to the user-controllable persistence level we also skip writing the
         // oplog entries marking the exported function call.
+        if self.state.snapshotting_mode.is_some() {
+            warn!(
+                "begin_call_snapshotting_function called while snapshotting is already active; \
+                 leaving persistence level unchanged"
+            );
+            return;
+        }
+
         let previous_level = self.state.persistence_level;
         self.state.snapshotting_mode = Some(previous_level);
         self.state.persistence_level = PersistenceLevel::PersistNothing;
@@ -3800,6 +3876,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
+                                    agent_id: None,
+                                    idempotency_key: None,
                                     oplog_index: None,
                                     agent_fingerprint: None,
                                 };
@@ -4124,6 +4202,125 @@ mod tests {
     use super::*;
     use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
     use test_r::test;
+
+    #[test]
+    fn card_event_boundary_scan_reads_each_entry_once() {
+        let initial_idx = OplogIndex::from_u64(10);
+        let mut scan = CardEventBoundaryScan::new(initial_idx, Vec::new());
+        let mut scanned_entries = 0;
+
+        for boundary in 1..=5_000 {
+            let current_idx = OplogIndex::from_u64(initial_idx.as_u64() + boundary * 2);
+            let (start, count) = scan.unread_range(current_idx).unwrap();
+            assert_eq!(start, OplogIndex::from_u64(current_idx.as_u64() - 1));
+            assert_eq!(count, 2);
+
+            let entries = BTreeMap::from([
+                (start, OplogEntry::no_op()),
+                (current_idx, OplogEntry::no_op()),
+            ]);
+            scanned_entries += entries.len();
+            scan.fold_through(current_idx, &entries);
+        }
+
+        assert_eq!(scanned_entries, 10_000);
+        assert_eq!(scan.through, OplogIndex::from_u64(10_010));
+        assert!(scan.unread_range(scan.through).is_none());
+    }
+
+    #[test]
+    fn card_event_boundary_scan_folds_queued_and_terminal_entries_incrementally() {
+        let card_id = CardId::new();
+        let queued_idx = OplogIndex::from_u64(11);
+        let terminal_idx = OplogIndex::from_u64(12);
+        let mut scan = CardEventBoundaryScan::new(OplogIndex::from_u64(10), Vec::new());
+
+        scan.fold_through(
+            queued_idx,
+            &BTreeMap::from([(
+                queued_idx,
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+            )]),
+        );
+
+        assert_eq!(scan.pending.len(), 1);
+        assert_eq!(scan.pending[0].oplog_index, queued_idx);
+
+        scan.fold_through(
+            terminal_idx,
+            &BTreeMap::from([(terminal_idx, OplogEntry::card_revoked(queued_idx, card_id))]),
+        );
+
+        assert!(scan.pending.is_empty());
+        assert_eq!(scan.through, terminal_idx);
+    }
+
+    #[test]
+    fn card_event_boundary_scan_rebases_from_authoritative_status() {
+        let cached_card_id = CardId::new();
+        let status_card_id = CardId::new();
+        let cached_pending = PendingCardEventRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(9),
+            event: QueuedCardEvent::revoke(cached_card_id),
+        };
+        let status_pending = PendingCardEventRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(10),
+            event: QueuedCardEvent::revoke(status_card_id),
+        };
+        let mut scan =
+            CardEventBoundaryScan::new(OplogIndex::from_u64(10), vec![cached_pending.clone()]);
+
+        scan.synchronize(
+            OplogIndex::from_u64(9),
+            std::slice::from_ref(&status_pending),
+            OplogIndex::from_u64(10),
+        );
+        assert_eq!(scan.pending, vec![cached_pending]);
+
+        scan.synchronize(
+            OplogIndex::from_u64(10),
+            std::slice::from_ref(&status_pending),
+            OplogIndex::from_u64(10),
+        );
+        assert_eq!(scan.pending, vec![status_pending.clone()]);
+
+        scan.synchronize(OplogIndex::from_u64(12), &[], OplogIndex::from_u64(12));
+        assert_eq!(scan.through, OplogIndex::from_u64(12));
+        assert!(scan.pending.is_empty());
+    }
+
+    #[test]
+    fn card_event_boundary_scan_discards_cache_after_rewind() {
+        let cached_pending = PendingCardEventRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(20),
+            event: QueuedCardEvent::revoke(CardId::new()),
+        };
+        let status_pending = PendingCardEventRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(5),
+            event: QueuedCardEvent::revoke(CardId::new()),
+        };
+        let mut scan = CardEventBoundaryScan::new(OplogIndex::from_u64(20), vec![cached_pending]);
+
+        scan.synchronize(
+            OplogIndex::from_u64(5),
+            std::slice::from_ref(&status_pending),
+            OplogIndex::from_u64(8),
+        );
+
+        assert_eq!(scan.through, OplogIndex::from_u64(5));
+        assert_eq!(scan.pending, vec![status_pending]);
+        assert_eq!(
+            scan.unread_range(OplogIndex::from_u64(8)),
+            Some((OplogIndex::from_u64(6), 3))
+        );
+
+        let fresh_scan = CardEventBoundaryScan::new(OplogIndex::from_u64(8), Vec::new());
+        assert!(fresh_scan.pending.is_empty());
+    }
 
     #[test]
     fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
@@ -4780,6 +4977,47 @@ pub(crate) struct WebSocketConnectionInfo {
     pub headers: Option<Vec<(String, String)>>,
 }
 
+struct CardEventBoundaryScan {
+    through: OplogIndex,
+    pending: Vec<PendingCardEventRef>,
+}
+
+impl CardEventBoundaryScan {
+    fn new(through: OplogIndex, pending: Vec<PendingCardEventRef>) -> Self {
+        Self { through, pending }
+    }
+
+    fn synchronize(
+        &mut self,
+        status_idx: OplogIndex,
+        status_pending: &[PendingCardEventRef],
+        current_idx: OplogIndex,
+    ) {
+        if status_idx >= self.through || current_idx < self.through {
+            self.through = status_idx;
+            self.pending = status_pending.to_vec();
+        }
+    }
+
+    fn unread_range(&self, current_idx: OplogIndex) -> Option<(OplogIndex, u64)> {
+        (current_idx > self.through).then(|| {
+            (
+                self.through.next(),
+                current_idx.as_u64() - self.through.as_u64(),
+            )
+        })
+    }
+
+    fn fold_through(
+        &mut self,
+        current_idx: OplogIndex,
+        entries: &BTreeMap<OplogIndex, OplogEntry>,
+    ) {
+        self.pending = calculate_pending_card_events(std::mem::take(&mut self.pending), entries);
+        self.through = current_idx;
+    }
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -4855,6 +5093,7 @@ struct PrivateDurableWorkerState {
     component_metadata: Component,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
+    card_event_boundary_scan: Option<CardEventBoundaryScan>,
 
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -5107,6 +5346,7 @@ impl PrivateDurableWorkerState {
             component_metadata,
             agent_effective_surface,
             agent_wallet_cards,
+            card_event_boundary_scan: None,
             total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,

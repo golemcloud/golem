@@ -18,8 +18,10 @@ use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableW
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, Host as AgentHost, HostCancellationToken,
-    HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
+    AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
+    FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
+    HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata, RpcError,
+    ScheduledInvocationReceipt, WasmRpc,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
@@ -619,8 +621,7 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>
-    {
+    ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -631,7 +632,7 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<Result<(), RpcError>> {
+    ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
         self.durable_ctx.invoke(self_, method_name, input).await
     }
 
@@ -640,7 +641,7 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+    ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
             .await
@@ -652,7 +653,7 @@ impl HostWasmRpc for Context {
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
             .await
@@ -664,7 +665,7 @@ impl HostWasmRpc for Context {
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<Resource<CancellationToken>> {
+    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
             .await

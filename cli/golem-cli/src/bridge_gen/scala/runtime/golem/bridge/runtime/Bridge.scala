@@ -74,6 +74,7 @@ object Bridge {
       agentTypeName = resolved.agentTypeName,
       parameters = resolved.parameters,
       phantomId = resolved.phantomId,
+      config = resolved.config,
       methodName = methodName,
       methodParameters = methodParameters,
       mode = mode,

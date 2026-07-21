@@ -1505,7 +1505,8 @@ class CodegenPipelineSpec extends munit.FunSuite {
 
     assert(result.rpc.files.nonEmpty)
     val content = result.rpc.files.head.content
-    assert(content.contains("getPhantom"), s"ephemeral agent should have getPhantom:\n$content")
+    assert(content.contains("newPhantom"), s"ephemeral agent should have newPhantom:\n$content")
+    assert(!content.contains("getPhantom"), s"ephemeral agent should not accept an explicit phantom ID:\n$content")
     assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
   }
 

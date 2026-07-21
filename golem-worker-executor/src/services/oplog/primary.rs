@@ -303,6 +303,26 @@ impl OplogService for PrimaryOplogService {
         .await
     }
 
+    async fn create_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    ) -> Arc<dyn Oplog> {
+        self.create(
+            owned_agent_id,
+            agent_mode,
+            initial_entry,
+            initial_worker_metadata,
+            last_known_status,
+            execution_status,
+        )
+        .await
+    }
+
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -833,14 +853,19 @@ impl PrimaryOplogState {
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("read_many");
 
+        if n == 0 {
+            return BTreeMap::new();
+        }
+
         let last_idx = oplog_index.range_end(n);
-        let mut result: BTreeMap<OplogIndex, OplogEntry> = {
+        let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
+        {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
             let agent_mode = self.agent_mode;
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
-            let end: u64 = last_idx.into();
+            let end: u64 = min(last_idx, self.last_committed_idx).into();
             retry_storage_op(&self.retry_config, "read_many", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
@@ -858,6 +883,8 @@ impl PrimaryOplogState {
             .into_iter()
             .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
             .collect()
+        } else {
+            BTreeMap::new()
         };
 
         if last_idx < self.last_committed_idx {
@@ -865,15 +892,24 @@ impl PrimaryOplogState {
             result
         } else {
             // There can be some uncommitted entries in the buffer
-            let uncommitted_count = last_idx.distance_from(self.last_committed_idx);
-            let buffered_to_take =
-                min(max(0, uncommitted_count), self.buffer.len() as i64) as usize;
+            if !self.buffer.is_empty() {
+                let requested_start: u64 = oplog_index.into();
+                let requested_end: u64 = last_idx.into();
+                let buffer_start: u64 = self.last_committed_idx.next().into();
+                let buffer_end = buffer_start + self.buffer.len() as u64 - 1;
+                let overlap_start = max(requested_start, buffer_start);
+                let overlap_end = min(requested_end, buffer_end);
 
-            let mut current = self.last_committed_idx;
-            for idx in 0..buffered_to_take {
-                current = current.next();
-                let entry = self.buffer[idx].clone();
-                result.insert(current, entry);
+                if overlap_start <= overlap_end {
+                    let offset = (overlap_start - buffer_start) as usize;
+                    let count = (overlap_end - overlap_start + 1) as usize;
+                    for idx in 0..count {
+                        result.insert(
+                            OplogIndex::from_u64(overlap_start + idx as u64),
+                            self.buffer[offset + idx].clone(),
+                        );
+                    }
+                }
             }
 
             result

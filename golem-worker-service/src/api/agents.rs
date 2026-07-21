@@ -124,6 +124,9 @@ pub struct AgentInvocationRequest {
     pub agent_type_name: AgentTypeName,
     pub parameters: JsonValue,
     pub phantom_id: Option<Uuid>,
+    #[oai(default)]
+    #[serde(default)]
+    pub config: Vec<AgentConfigEntryDto>,
     pub method_name: String,
     pub method_parameters: JsonValue,
     pub mode: AgentInvocationMode,
@@ -138,6 +141,7 @@ pub struct AgentInvocationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
     pub agent_id: AgentId,
+    pub idempotency_key: IdempotencyKey,
     pub result: Option<TypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
 }

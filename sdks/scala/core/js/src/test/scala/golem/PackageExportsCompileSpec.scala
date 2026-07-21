@@ -51,6 +51,11 @@ object PackageExportsCompileSpec extends ZIOSpecDefault {
         golem.DurabilityMode.Durable.toString == "durable",
         golem.DurabilityMode.Ephemeral.toString == "ephemeral"
       )
+    },
+    test("InvocationResult exposes its payload as value") {
+      val metadata = golem.runtime.rpc.InvocationMetadata("agent", "idempotency-key")
+      val result   = golem.runtime.rpc.InvocationResult(metadata, 42)
+      assertTrue(result.value == 42)
     }
   )
 }
