@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent_secret::AgentSecretPath;
@@ -130,17 +130,20 @@ fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> a
     Ok(())
 }
 
-// TODO: better error context and messages
 pub fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
     let parts = cursor.split('/').collect::<Vec<_>>();
 
     if parts.len() != 2 {
-        bail!("Invalid cursor format: {}", cursor);
+        bail!("Invalid cursor {cursor:?}, expected the format <layer>/<cursor> (e.g. 0/123)");
     }
 
     Ok(ScanCursor {
-        layer: parts[0].parse()?,
-        cursor: parts[1].parse()?,
+        layer: parts[0].parse().with_context(|| {
+            format!("Invalid scan cursor layer {:?}, expected a non-negative integer", parts[0])
+        })?,
+        cursor: parts[1].parse().with_context(|| {
+            format!("Invalid scan cursor position {:?}, expected a non-negative integer", parts[1])
+        })?,
     })
 }
 
