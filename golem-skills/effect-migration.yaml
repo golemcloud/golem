@@ -1,7 +1,7 @@
 version: 1
 effectGolem:
   repository: https://github.com/golemcloud/effect-golem
-  ref: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
+  ref: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
   localPathEnv: GOLEM_EFFECT_GOLEM_PATH
 policy:
   maxAttempts: 4
@@ -35,11 +35,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-agent/phase-0-sdk-updated/amp-effect-add-simple-agent.json
     evidence:
-      verifiedAt: 2026-07-18T08:30:29.000Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7455-1fb9-70c2-b7b6-0c34ca9901ab
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-agent/phase-0-sdk-updated/amp-effect-add-simple-agent.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-agent/add-simple-agent/codex-effect-add-simple-agent.json
   - id: golem-add-npm-package
     targetSkill: golem-add-npm-package
     references:
@@ -75,11 +75,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-npm-package/attempt-2/add-third-party-dependency/amp-effect-add-third-party-dependency.json
     evidence:
-      verifiedAt: 2026-07-18T10:38:22.803Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f74bb-ab2e-74c0-a0a0-899a6da4de61
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-npm-package/attempt-2/add-third-party-dependency/amp-effect-add-third-party-dependency.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-npm-package/add-third-party-dependency/codex-effect-add-third-party-dependency.json
   - id: golem-add-config
     targetSkill: golem-add-config-effect
     verifyScenarios:
@@ -102,12 +102,12 @@ units:
           - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-cli/amp-effect-add-config-cli.json
           - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-manifest/amp-effect-add-config-manifest.json
     evidence:
-      verifiedAt: 2026-07-18T11:00:02.755Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f74cf-a244-72bb-ab1e-196a255d03bd
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-cli/amp-effect-add-config-cli.json
-        - golem-skills/tests/harness/results/effect-migration/golem-add-config/attempt-1/add-config-manifest/amp-effect-add-config-manifest.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-config/add-config-cli/codex-effect-add-config-cli.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-config/add-config-manifest/codex-effect-add-config-manifest.json
   - id: golem-add-cors
     targetSkill: golem-add-cors-effect
     verifyScenarios:
@@ -135,12 +135,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/codex-effect-add-cors.json
           - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/summary.json
     evidence:
-      verifiedAt: 2026-07-20T18:50:44.152Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/codex-effect-add-cors.json
-        - golem-skills/tests/harness/results/p5.3/origin-pattern-cors/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/add-cors/codex-effect-add-cors.json
   - id: golem-add-http-auth
     targetSkill: golem-add-http-auth-effect
     verifyScenarios:
@@ -160,11 +159,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-add-http-auth/attempt-1/http-endpoint-auth/amp-effect-http-endpoint-auth.json
     evidence:
-      verifiedAt: 2026-07-18T12:11:04.850Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7510-01ee-74ad-a4b6-3102886175c1
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-http-auth/attempt-1/http-endpoint-auth/amp-effect-http-endpoint-auth.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-http-auth/http-endpoint-auth/codex-effect-http-endpoint-auth.json
   - id: golem-add-http-endpoint
     targetSkill: golem-add-http-endpoint-effect
     verifyScenarios:
@@ -198,12 +197,12 @@ units:
           - golem-skills/tests/harness/results/p5.3/http-response-mappings/codex-effect-add-http-endpoint.json
           - golem-skills/tests/harness/results/p5.3/http-response-mappings/summary.json
     evidence:
-      verifiedAt: 2026-07-20T17:52:01.452Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/http-response-mappings/codex-effect-add-http-endpoint.json
-        - golem-skills/tests/harness/results/p5.3/http-response-mappings/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/add-http-endpoint/codex-effect-add-http-endpoint.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-http-endpoint/configure-api-domain/codex-effect-configure-api-domain.json
   - id: golem-add-ignite
     targetSkill: golem-add-ignite-effect
     verifyScenarios:
@@ -242,12 +241,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/codex-effect-add-ignite-rdbms.json
           - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/summary.json
     evidence:
-      verifiedAt: 2026-07-20T17:40:00.251Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/codex-effect-add-ignite-rdbms.json
-        - golem-skills/tests/harness/results/p5.3/canonical-sql-ignite/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/add-ignite-rdbms/codex-effect-add-ignite-rdbms.json
   - id: golem-add-llm
     targetSkill: golem-add-llm-effect
     verifyScenarios:
@@ -294,12 +292,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/codex-effect-add-llm.json
           - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/summary.json
     evidence:
-      verifiedAt: 2026-07-20T16:24:51.522Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/codex-effect-add-llm.json
-        - golem-skills/tests/harness/results/p5.3/add-llm-attempt-2/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/add-llm/codex-effect-add-llm.json
   - id: golem-add-mysql
     targetSkill: golem-add-mysql-effect
     verifyScenarios:
@@ -338,12 +335,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/codex-effect-add-mysql-rdbms.json
           - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/summary.json
     evidence:
-      verifiedAt: 2026-07-20T17:36:03.234Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/codex-effect-add-mysql-rdbms.json
-        - golem-skills/tests/harness/results/p5.3/canonical-sql-mysql/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/add-mysql-rdbms/codex-effect-add-mysql-rdbms.json
   - id: golem-add-postgres
     targetSkill: golem-add-postgres-effect
     verifyScenarios:
@@ -382,12 +378,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/codex-effect-add-postgres-rdbms.json
           - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/summary.json
     evidence:
-      verifiedAt: 2026-07-20T17:31:43.087Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/codex-effect-add-postgres-rdbms.json
-        - golem-skills/tests/harness/results/p5.3/canonical-sql-postgres/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/add-postgres-rdbms/codex-effect-add-postgres-rdbms.json
   - id: golem-add-secret
     targetSkill: golem-add-secret-effect
     verifyScenarios:
@@ -411,12 +406,12 @@ units:
           - golem-skills/tests/harness/results/effect-migration/golem-add-secret/attempt-1/add-secret/amp-effect-add-secret.json
           - golem-skills/tests/harness/results/effect-migration/golem-add-secret/attempt-1/add-secret-runtime/amp-effect-add-secret-runtime.json
     evidence:
-      verifiedAt: 2026-07-18T15:12:18.399Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f75b1-0971-750e-9dca-109adf86691b
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-add-secret/attempt-1/add-secret/amp-effect-add-secret.json
-        - golem-skills/tests/harness/results/effect-migration/golem-add-secret/attempt-1/add-secret-runtime/amp-effect-add-secret-runtime.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-secret/add-secret/codex-effect-add-secret.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-add-secret/add-secret-runtime/codex-effect-add-secret-runtime.json
   - id: golem-add-transactions
     targetSkill: golem-add-transactions-effect
     verifyScenarios:
@@ -473,12 +468,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/codex-effect-transactions-1-fallible-rollback-http-ledger.json
           - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/summary.json
     evidence:
-      verifiedAt: 2026-07-20T17:10:04.493Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/codex-effect-transactions-1-fallible-rollback-http-ledger.json
-        - golem-skills/tests/harness/results/p5.3/transactions-http-ledger-attempt-3/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/transactions-1-fallible-rollback-http-ledger/codex-effect-transactions-1-fallible-rollback-http-ledger.json
   - id: golem-add-webhook
     targetSkill: golem-add-webhook-effect
     verifyScenarios:
@@ -516,12 +510,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/add-webhook/codex-effect-add-webhook.json
           - golem-skills/tests/harness/results/p5.3/add-webhook/summary.json
     evidence:
-      verifiedAt: 2026-07-20T16:44:16.158Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/add-webhook/codex-effect-add-webhook.json
-        - golem-skills/tests/harness/results/p5.3/add-webhook/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/add-webhook/codex-effect-add-webhook.json
   - id: golem-annotate-agent
     targetSkill: golem-annotate-agent-effect
     verifyScenarios:
@@ -541,11 +534,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-annotate-agent/attempt-1/annotate-agent/amp-effect-annotate-agent.json
     evidence:
-      verifiedAt: 2026-07-18T17:14:53.564Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f762c-6c7d-76a7-905a-eeac523afc88
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-annotate-agent/attempt-1/annotate-agent/amp-effect-annotate-agent.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-annotate-agent/annotate-agent/codex-effect-annotate-agent.json
   - id: golem-atomic-block
     targetSkill: golem-atomic-block-effect
     verifyScenarios:
@@ -653,12 +646,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/atomic-block-http/codex-effect-atomic-block.json
           - golem-skills/tests/harness/results/p5.3/atomic-block-http/summary.json
     evidence:
-      verifiedAt: 2026-07-20T17:18:47.957Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/atomic-block-http/codex-effect-atomic-block.json
-        - golem-skills/tests/harness/results/p5.3/atomic-block-http/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/atomic-block/codex-effect-atomic-block.json
   - id: golem-call-another-agent
     targetSkill: golem-call-another-agent-effect
     verifyScenarios:
@@ -732,11 +724,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-call-another-agent/attempt-2/rpc-1-invoke-and-await/amp-effect-rpc-1-invoke-and-await.json
     evidence:
-      verifiedAt: 2026-07-18T21:52:00.763Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f771c-a57c-726f-8684-d0318fef7cbf
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-call-another-agent/attempt-2/rpc-1-invoke-and-await/amp-effect-rpc-1-invoke-and-await.json
+        - golem-skills/tests/harness/results/p5.4/targeted/rpc-1-invoke-and-await/codex-effect-rpc-1-invoke-and-await.json
   - id: golem-call-from-external
     targetSkill: golem-call-from-external-effect
     verifyScenarios:
@@ -757,11 +749,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-call-from-external/attempt-1/call-from-external/amp-effect-call-from-external.json
     evidence:
-      verifiedAt: 2026-07-19T07:42:54.156Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f793c-b579-753d-8a4a-4ef73a740f3b
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-call-from-external/attempt-1/call-from-external/amp-effect-call-from-external.json
+        - golem-skills/tests/harness/results/p5.4/targeted/call-from-external/codex-effect-call-from-external.json
   - id: golem-configure-durability
     targetSkill: golem-configure-durability-effect
     verifyScenarios:
@@ -782,11 +774,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-configure-durability/attempt-1/change-durability-mode/amp-effect-change-durability-mode.json
     evidence:
-      verifiedAt: 2026-07-19T08:05:59.818Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7954-1188-725a-9b22-03c6c3b24336
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-configure-durability/attempt-1/change-durability-mode/amp-effect-change-durability-mode.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-configure-durability/change-durability-mode/codex-effect-change-durability-mode.json
   - id: golem-create-agent-instance
     targetSkill: golem-create-agent-instance-effect
     verifyScenarios:
@@ -828,11 +820,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-create-agent-instance/attempt-3/create-agent-instance/amp-effect-create-agent-instance.json
     evidence:
-      verifiedAt: 2026-07-19T08:40:58.502Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7969-351d-7415-94b7-cffcf249d665
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-create-agent-instance/attempt-3/create-agent-instance/amp-effect-create-agent-instance.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-create-agent-instance/create-agent-instance/codex-effect-create-agent-instance.json
   - id: golem-custom-snapshot
     targetSkill: golem-custom-snapshot-effect
     verifyScenarios:
@@ -855,12 +847,12 @@ units:
           - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/snapshot-recovery/amp-effect-snapshot-recovery.json
           - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/manual-snapshot-update-agent/amp-effect-manual-snapshot-update-agent.json
     evidence:
-      verifiedAt: 2026-07-19T09:06:14.173Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7989-3c8d-72ab-a2aa-ba7b3e45b2ea
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/snapshot-recovery/amp-effect-snapshot-recovery.json
-        - golem-skills/tests/harness/results/effect-migration/golem-custom-snapshot/attempt-1/manual-snapshot-update-agent/amp-effect-manual-snapshot-update-agent.json
+        - golem-skills/tests/harness/results/p5.4/targeted/snapshot-recovery/codex-effect-snapshot-recovery.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-custom-snapshot/manual-snapshot-update-agent/codex-effect-manual-snapshot-update-agent.json
   - id: golem-enable-otlp
     targetSkill: golem-enable-otlp-effect
     verifyScenarios:
@@ -882,11 +874,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-enable-otlp/attempt-1/enable-otlp/amp-effect-enable-otlp.json
     evidence:
-      verifiedAt: 2026-07-19T09:21:56.068Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f79a0-5a8d-717b-b721-c38a4f68fd65
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-enable-otlp/attempt-1/enable-otlp/amp-effect-enable-otlp.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-enable-otlp/enable-otlp/codex-effect-enable-otlp.json
   - id: golem-file-io
     targetSkill: golem-file-io-effect
     verifyScenarios:
@@ -931,11 +923,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-file-io/attempt-4/read-large-provisioned-file/amp-effect-read-large-provisioned-file.json
     evidence:
-      verifiedAt: 2026-07-19T10:02:39.446Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f79ae-bcf8-7662-98b4-19730dcb33a9
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-file-io/attempt-4/read-large-provisioned-file/amp-effect-read-large-provisioned-file.json
+        - golem-skills/tests/harness/results/p5.4/targeted/read-large-provisioned-file/codex-effect-read-large-provisioned-file.json
   - id: golem-fire-and-forget
     targetSkill: golem-fire-and-forget-effect
     verifyScenarios:
@@ -955,11 +947,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-fire-and-forget/attempt-1/rpc-2-trigger/amp-effect-rpc-2-trigger.json
     evidence:
-      verifiedAt: 2026-07-19T10:17:33.097Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f79d4-0203-7608-8478-c89457e05e40
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-fire-and-forget/attempt-1/rpc-2-trigger/amp-effect-rpc-2-trigger.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-fire-and-forget/rpc-2-trigger/codex-effect-rpc-2-trigger.json
   - id: golem-http-params
     targetSkill: golem-http-params-effect
     verifyScenarios:
@@ -1013,12 +1005,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/malformed-input-400/codex-effect-http-endpoint-parameters.json
           - golem-skills/tests/harness/results/p5.3/malformed-input-400/summary.json
     evidence:
-      verifiedAt: 2026-07-20T18:42:59.113Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/malformed-input-400/codex-effect-http-endpoint-parameters.json
-        - golem-skills/tests/harness/results/p5.3/malformed-input-400/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/http-endpoint-parameters/codex-effect-http-endpoint-parameters.json
   - id: golem-interactive-repl
     targetSkill: golem-interactive-repl-effect
     verifyScenarios:
@@ -1039,11 +1030,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-interactive-repl/attempt-1/interactive-repl/amp-effect-interactive-repl.json
     evidence:
-      verifiedAt: 2026-07-19T11:01:38.892Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f79fa-f7c9-7228-9b4f-ae6c303fd7ac
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-interactive-repl/attempt-1/interactive-repl/amp-effect-interactive-repl.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-interactive-repl/interactive-repl/codex-effect-interactive-repl.json
   - id: golem-invoke-agent
     targetSkill: golem-invoke-agent-effect
     verifyScenarios:
@@ -1064,11 +1055,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-invoke-agent/attempt-1/invoke-agent/amp-effect-invoke-agent.json
     evidence:
-      verifiedAt: 2026-07-19T11:13:23.048Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7a0a-0358-728f-9a75-408ad5299ff5
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-invoke-agent/attempt-1/invoke-agent/amp-effect-invoke-agent.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-invoke-agent/invoke-agent/codex-effect-invoke-agent.json
   - id: golem-logging
     targetSkill: golem-logging-effect
     verifyScenarios:
@@ -1089,11 +1080,11 @@ units:
         reports:
           - golem-skills/tests/harness/results/effect-migration/golem-logging/attempt-1/add-logging/amp-effect-add-logging.json
     evidence:
-      verifiedAt: 2026-07-19T11:32:36.975Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7a14-c33b-7400-abb7-faf53e8cddf0
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-logging/attempt-1/add-logging/amp-effect-add-logging.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-logging/add-logging/codex-effect-add-logging.json
   - id: golem-make-http-request
     targetSkill: golem-make-http-request-effect
     verifyScenarios:
@@ -1157,12 +1148,11 @@ units:
           - golem-skills/tests/harness/results/p5.3/make-http-request/codex-effect-make-http-request.json
           - golem-skills/tests/harness/results/p5.3/make-http-request/summary.json
     evidence:
-      verifiedAt: 2026-07-20T16:07:42.315Z
-      effectGolemRef: 1068de113cf0ba9129007aac5f331a1672fd8129 + working tree
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/p5.3/make-http-request/codex-effect-make-http-request.json
-        - golem-skills/tests/harness/results/p5.3/make-http-request/summary.json
+        - golem-skills/tests/harness/results/p5.4/targeted/make-http-request/codex-effect-make-http-request.json
   - id: golem-multi-instance-agent
     targetSkill: golem-multi-instance-agent-effect
     verifyScenarios:
@@ -1182,11 +1172,11 @@ units:
         thread: https://ampcode.com/threads/T-019f7a9f-7124-773f-aca1-5af91b1f7285
         finishedAt: 2026-07-19T14:04:15.861Z
     evidence:
-      verifiedAt: 2026-07-19T14:04:15.861Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7a9f-7124-773f-aca1-5af91b1f7285
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-multi-instance-agent/attempt-1/rpc-4-phantom-agents/amp-effect-rpc-4-phantom-agents.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-multi-instance-agent/rpc-4-phantom-agents/codex-effect-rpc-4-phantom-agents.json
   - id: golem-parallel-workers
     targetSkill: golem-parallel-workers-effect
     verifyScenarios:
@@ -1207,11 +1197,11 @@ units:
         thread: https://ampcode.com/threads/T-019f7ab1-38c3-75de-a49c-9fd5073f52c7
         finishedAt: 2026-07-19T14:27:35.586Z
     evidence:
-      verifiedAt: 2026-07-19T14:27:35.586Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7ab1-38c3-75de-a49c-9fd5073f52c7
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-parallel-workers/attempt-1/parallel-workers/amp-effect-parallel-workers.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-parallel-workers/parallel-workers/codex-effect-parallel-workers.json
   - id: golem-quota
     targetSkill: golem-quota-effect
     verifyScenarios:
@@ -1231,11 +1221,11 @@ units:
         thread: https://ampcode.com/threads/T-019f7ac6-99c5-74c5-bfef-8573cea45f69
         finishedAt: 2026-07-19T14:45:12.285Z
     evidence:
-      verifiedAt: 2026-07-19T14:45:12.285Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7ac6-99c5-74c5-bfef-8573cea45f69
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-quota/attempt-1/add-quota/amp-effect-add-quota.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-quota/add-quota/codex-effect-add-quota.json
   - id: golem-recurring-task
     targetSkill: golem-recurring-task-effect
     verifyScenarios:
@@ -1267,12 +1257,12 @@ units:
         thread: https://ampcode.com/threads/T-019f7ad6-b0e6-71f2-9991-622a910ca023
         finishedAt: 2026-07-19T15:22:32.773Z
     evidence:
-      verifiedAt: 2026-07-19T15:22:32.773Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7ad6-b0e6-71f2-9991-622a910ca023
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-recurring-task/attempt-2/recurring-task-cancelable/amp-effect-recurring-task-cancelable.json
-        - golem-skills/tests/harness/results/effect-migration/golem-recurring-task/attempt-2/recurring-task-self-schedule/amp-effect-recurring-task-self-schedule.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-recurring-task/recurring-task-cancelable/codex-effect-recurring-task-cancelable.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-recurring-task/recurring-task-self-schedule/codex-effect-recurring-task-self-schedule.json
   - id: golem-retry-policies
     targetSkill: golem-retry-policies-effect
     verifyScenarios:
@@ -1295,12 +1285,12 @@ units:
         thread: https://ampcode.com/threads/T-019f7af8-e321-75aa-b29a-6064cd63ae83
         finishedAt: 2026-07-19T15:48:55.506Z
     evidence:
-      verifiedAt: 2026-07-19T15:48:55.506Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7af8-e321-75aa-b29a-6064cd63ae83
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-retry-policies/attempt-1/add-retry-policies/amp-effect-add-retry-policies.json
-        - golem-skills/tests/harness/results/effect-migration/golem-retry-policies/attempt-1/add-retry-policies-manifest/amp-effect-add-retry-policies-manifest.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-retry-policies/add-retry-policies/codex-effect-add-retry-policies.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-retry-policies/add-retry-policies-manifest/codex-effect-add-retry-policies-manifest.json
   - id: golem-schedule-agent
     targetSkill: golem-schedule-agent-effect
     verifyScenarios:
@@ -1331,11 +1321,11 @@ units:
         thread: https://ampcode.com/threads/T-019f7b11-0a16-7399-bc60-63c80f153ea2
         finishedAt: 2026-07-19T16:14:42.877Z
     evidence:
-      verifiedAt: 2026-07-19T16:14:42.877Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7b11-0a16-7399-bc60-63c80f153ea2
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-schedule-agent/attempt-2/schedule-agent/amp-effect-schedule-agent.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-schedule-agent/schedule-agent/codex-effect-schedule-agent.json
   - id: golem-schedule-future-call
     targetSkill: golem-schedule-future-call-effect
     verifyScenarios:
@@ -1469,11 +1459,11 @@ units:
         thread: https://ampcode.com/threads/T-019f7b28-a467-747f-acbf-23ecc25766aa
         finishedAt: 2026-07-19T16:44:14.111Z
     evidence:
-      verifiedAt: 2026-07-19T16:44:14.111Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7b28-a467-747f-acbf-23ecc25766aa
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-schedule-future-call/attempt-2/rpc-3-schedule-future-call/amp-effect-rpc-3-schedule-future-call.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-schedule-future-call/rpc-3-schedule-future-call/codex-effect-rpc-3-schedule-future-call.json
   - id: golem-stateless-agent
     targetSkill: golem-stateless-agent-effect
     verifyScenarios:
@@ -1494,11 +1484,11 @@ units:
         thread: https://ampcode.com/threads/T-019f7b43-abe8-72d5-b1ff-61dfe4fb77b1
         finishedAt: 2026-07-19T16:59:18.138Z
     evidence:
-      verifiedAt: 2026-07-19T16:59:18.138Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7b43-abe8-72d5-b1ff-61dfe4fb77b1
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-stateless-agent/attempt-1/stateless-agent/amp-effect-stateless-agent.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-stateless-agent/stateless-agent/codex-effect-stateless-agent.json
   - id: golem-trigger-agent
     targetSkill: golem-trigger-agent-effect
     verifyScenarios:
@@ -1519,11 +1509,11 @@ units:
         thread: https://ampcode.com/threads/T-019f7b51-7756-7562-baa2-02c3b76fa5bc
         finishedAt: 2026-07-19T17:12:07.911Z
     evidence:
-      verifiedAt: 2026-07-19T17:12:07.911Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7b51-7756-7562-baa2-02c3b76fa5bc
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-trigger-agent/attempt-1/trigger-agent/amp-effect-trigger-agent.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-trigger-agent/trigger-agent/codex-effect-trigger-agent.json
   - id: golem-wait-for-external-input
     targetSkill: golem-wait-for-external-input-effect
     verifyScenarios:
@@ -1544,8 +1534,8 @@ units:
         thread: https://ampcode.com/threads/T-019f7b5d-351e-73d9-8a06-0a81306a11c1
         finishedAt: 2026-07-19T17:32:26.548Z
     evidence:
-      verifiedAt: 2026-07-19T17:32:26.548Z
-      effectGolemRef: 4b75f5e4d3cc306c3df75050db93d93aaa379ec3
-      thread: https://ampcode.com/threads/T-019f7b5d-351e-73d9-8a06-0a81306a11c1
+      verifiedAt: 2026-07-21T12:28:38.823Z
+      effectGolemRef: d1d25a7f2d2066ed1dba35f15e0d409cdf7ecd93
+      thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
-        - golem-skills/tests/harness/results/effect-migration/golem-wait-for-external-input/attempt-1/wait-for-external-input/amp-effect-wait-for-external-input.json
+        - golem-skills/tests/harness/results/p5.4/all-units/golem-wait-for-external-input/wait-for-external-input/codex-effect-wait-for-external-input.json

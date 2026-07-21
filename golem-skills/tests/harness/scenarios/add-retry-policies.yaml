@@ -1,4 +1,7 @@
 name: "add-retry-policies"
+semanticRequirements:
+  effect:
+    - The Effect implementation must execute the GET through Effect HttpClient with FetchHttpClient.layer; direct fetch and Effect.tryPromise are not substitutes.
 steps:
   - id: "create-project"
     create_project:
@@ -182,12 +185,12 @@ steps:
         - `url` (string) — the URL that was fetched
         - `status` (number) — the HTTP status code received
 
-        Wrap the GET `fetch` promise with `Effect.tryPromise` and a tagged typed
-        fetch error. Inside `Retry.withPolicy`, map a successful response to its
-        status code and recover any remaining typed fetch failure to status 0 using
-        Effect failure handling. Keep this typed failure handling separate from the
-        Golem host retry policy; do not substitute `Effect.retry` or a manual loop
-        for the host policy.
+        Execute the GET through `HttpClient` from `effect/unstable/http`, provide
+        `FetchHttpClient.layer`, and apply the HTTP Effect inside `Retry.withPolicy`.
+        Map a successful response to its status code and recover any remaining typed
+        HTTP failure to status 0 using Effect failure handling. Keep this typed failure
+        handling separate from the Golem host retry policy; do not use direct
+        `globalThis.fetch`, `Effect.tryPromise`, `Effect.retry`, or a manual retry loop.
 
         Also expose a method called `listRetryPolicies` that takes no parameters and
         returns an array of objects with `name` (string) and `priority` (number).

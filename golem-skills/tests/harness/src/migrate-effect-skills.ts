@@ -44,6 +44,9 @@ const PROTECTED_EFFECT_SEMANTIC_REQUIREMENTS: Record<string, string[]> = {
   "read-large-provisioned-file": [
     "The Effect implementation must read the provisioned /data/large.bin file through the filesystem; Blobstore, generated data, and hardcoded results are not substitutes.",
   ],
+  "add-retry-policies": [
+    "The Effect implementation must execute the GET through Effect HttpClient with FetchHttpClient.layer; direct fetch and Effect.tryPromise are not substitutes.",
+  ],
   "recurring-task-cancelable": [
     "Cancellation covers only the live ScheduledInvocation handle returned and canceled during the current agent lifetime; reconstructing a handle after recovery is not required.",
   ],

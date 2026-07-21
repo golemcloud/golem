@@ -81,8 +81,8 @@ matched by a status-code policy.
 
 To retry HTTP responses such as 502, 503, and 504, the predicate itself (or a nested
 `filteredOn`) must explicitly reference `status-code`. A catch-all policy does not retry HTTP
-statuses. `fetch()` normally resolves for 4xx and 5xx responses; when an eligible host policy
-matches, Golem transparently re-sends the request and `fetch()` receives the final response.
+statuses. Effect `HttpClient` normally returns 4xx and 5xx responses; when an eligible host policy
+matches, Golem transparently re-sends the request and `HttpClient` receives the final response.
 
 Status retries require live execution, a reconstructible request, and an idempotent operation.
 They are skipped inside an atomic host region. Prefer GET and other naturally idempotent methods
@@ -174,30 +174,27 @@ policy when none existed, on success, typed failure, or interruption. A policy i
 Do not wrap implementation setup itself in `Retry.withPolicy` and expect the policy to remain
 active for later method calls. Use `Retry.setPolicy` for persistent installation.
 
-### Effect-Wrapped `fetch`
+### Effect HttpClient Failures
 
-Promise rejection belongs in the Effect typed error channel. It is separate from the host policy:
+Use the canonical Effect HTTP client so transport failures stay in the Effect typed error channel.
+They remain separate from the host policy:
 
 ```typescript
-class FetchError {
-  readonly _tag = "FetchError";
-  constructor(readonly cause: unknown) {}
-}
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 
 const fetchStatus = (url: string) =>
-  Effect.tryPromise({
-    try: () => fetch(url),
-    catch: (cause) => new FetchError(cause),
-  }).pipe(
+  HttpClient.get(url).pipe(
     Effect.map((response) => response.status),
     Effect.catch(() => Effect.succeed(0)),
+    Effect.provide(FetchHttpClient.layer),
   );
 
 const status = yield* Retry.withPolicy(httpTransient, fetchStatus(url));
 ```
 
 Here Golem decides whether to retry matching host HTTP operations. `Effect.catch` only converts a
-remaining typed `FetchError` to the method's status-0 fallback. It is not the retry mechanism.
+remaining typed HTTP failure to the method's status-0 fallback. It is not the retry mechanism. Do
+not replace `HttpClient` with direct `globalThis.fetch` or `Effect.tryPromise`.
 
 ## Query and Manage Active Host Policies
 

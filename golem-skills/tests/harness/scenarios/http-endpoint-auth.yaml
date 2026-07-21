@@ -64,7 +64,8 @@ steps:
         In `golem.yaml`, configure `VaultAgent` with
         `testSessionHeaderName: X-Test-Auth`. Implement every handler as an Effect, register the
         implementation module from `src/main.ts`, preserve existing manifest entries, and make
-        sure the project builds and deploys successfully.
+        sure the project builds and deploys successfully. Do not invoke the agent or its HTTP
+        routes after deployment; the harness must observe the untouched `"none"` state first.
       scala: *non-effect-add-secure-agent-prompt
       moonbit: *non-effect-add-secure-agent-prompt
     expectedSkills:
