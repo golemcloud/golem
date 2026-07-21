@@ -72,10 +72,13 @@ impl PromiseHandle {
     }
 
     pub async fn await_ready(&self) {
+        let notified = self.inner.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         if self.is_ready().await {
             return;
         }
-        self.inner.notify.notified().await;
+        notified.await;
     }
 
     pub async fn get(&self) -> Option<Vec<u8>> {
@@ -83,10 +86,14 @@ impl PromiseHandle {
         state.clone()
     }
 
-    pub async fn complete(&self, data: Vec<u8>) {
+    pub async fn complete(&self, data: Vec<u8>) -> bool {
         let mut state = self.inner.state.lock().await;
+        if state.is_some() {
+            return false;
+        }
         *state = Some(data);
         self.inner.notify.notify_waiters();
+        true
     }
 }
 
@@ -195,16 +202,8 @@ impl PromiseRegistry {
         })
     }
 
-    async fn complete(&mut self, id: &PromiseId, data: Vec<u8>) {
-        if let Some(weak) = self.handles.get(id)
-            && let Some(inner) = weak.upgrade()
-        {
-            tokio::spawn(async move {
-                let mut state = inner.state.lock().await;
-                *state = Some(data.clone());
-                inner.notify.notify_waiters();
-            });
-        }
+    fn get_handle(&mut self, id: &PromiseId) -> Option<PromiseHandle> {
+        self.get(id)
     }
 
     pub fn cleanup(&mut self) {
@@ -255,6 +254,23 @@ impl DefaultPromiseService {
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to check if promise {promise_id} exists in Redis: {err}")
+            })
+    }
+
+    async fn completed_data(&self, promise_id: &PromiseId) -> Option<Vec<u8>> {
+        self.key_value_storage
+            .with_entity("promise", "get-completed", "promise")
+            .get(
+                KeyValueStorageNamespace::Promise {
+                    agent_id: promise_id.agent_id.clone(),
+                },
+                &get_promise_result_redis_key(promise_id),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from Redis: {err}"))
+            .and_then(|state| match state {
+                RedisPromiseState::Complete(data) => Some(data),
+                RedisPromiseState::Pending => None,
             })
     }
 }
@@ -309,19 +325,8 @@ impl PromiseService for DefaultPromiseService {
         };
 
         // Check if already completed in Redis
-        if let Some(RedisPromiseState::Complete(data)) = self
-            .key_value_storage
-            .with_entity("promise", "poll", "promise")
-            .get(
-                KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
-                },
-                &get_promise_result_redis_key(&promise_id),
-            )
-            .await
-            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from Redis: {err}"))
-        {
-            handle.complete(data).await;
+        if let Some(data) = self.completed_data(&promise_id).await {
+            let _ = handle.complete(data).await;
         }
 
         Ok(handle)
@@ -352,9 +357,19 @@ impl PromiseService for DefaultPromiseService {
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
         // Also wake any in-memory handle, ensuring that still running workers that wait on the pollable can continue
-        {
+        let completed_data = if written {
+            Some(data)
+        } else {
+            // A duplicate must wake waiters with the payload stored by the
+            // original completion, not its own payload.
+            self.completed_data(&promise_id).await
+        };
+        let handle = {
             let mut reg = self.registry.lock().await;
-            reg.complete(&promise_id, data.clone()).await;
+            reg.get_handle(&promise_id)
+        };
+        if let (Some(handle), Some(data)) = (handle, completed_data) {
+            let _ = handle.complete(data).await;
         }
 
         // Decrement the pending count on the first successful completion.
@@ -569,4 +584,44 @@ impl PromiseService for PromiseServiceMock {
     }
 
     async fn cleanup(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::component::ComponentId;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn promise_id() -> PromiseId {
+        PromiseId {
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "promise-test".to_string(),
+            },
+            oplog_idx: OplogIndex::from_u64(1),
+        }
+    }
+
+    #[test]
+    async fn local_completion_updates_handle_before_returning() {
+        let promise_id = promise_id();
+        let mut registry = PromiseRegistry::new();
+        let handle = registry.get_or_insert(&promise_id);
+
+        let completion_handle = registry.get_handle(&promise_id).unwrap();
+        let _ = completion_handle.complete(vec![1]).await;
+
+        assert_eq!(handle.get().await, Some(vec![1]));
+    }
+
+    #[test]
+    async fn promise_handle_keeps_first_completion_payload() {
+        let handle = PromiseHandle::new();
+
+        handle.complete(vec![1]).await;
+        handle.complete(vec![2]).await;
+
+        assert_eq!(handle.get().await, Some(vec![1]));
+    }
 }
