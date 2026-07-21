@@ -57,6 +57,64 @@ describe("parseStep", () => {
     }
   });
 
+  it("preserves language-conditional assertion objects", async () => {
+    const spec = await loadScenarioYaml(`
+name: "language-conditional-expect"
+steps:
+  - invoke_json:
+      agent: 'CounterAgent("test")'
+      method: increment
+    expect:
+      ts:
+        result_json:
+          - path: "$"
+            equals: 1
+      effect:
+        result_json:
+          - path: "$"
+            equals: 2
+`);
+
+    assert.deepEqual(spec.steps[0].expect, {
+      ts: { result_json: [{ path: "$", equals: 1 }] },
+      effect: { result_json: [{ path: "$", equals: 2 }] },
+    });
+  });
+
+  it("preserves plain object-valued assertions", async () => {
+    const spec = await loadScenarioYaml(`
+name: "plain-object-expect"
+steps:
+  - http:
+      url: "http://localhost"
+    expect:
+      header_contains:
+        Access-Control-Allow-Origin: "*"
+`);
+
+    assert.deepEqual(spec.steps[0].expect, {
+      header_contains: { "Access-Control-Allow-Origin": "*" },
+    });
+  });
+
+  it("rejects unknown language-conditional assertion keys", async () => {
+    await assert.rejects(
+      loadScenarioYaml(`
+name: "misspelled-language-expect"
+steps:
+  - invoke_json:
+      agent: 'CounterAgent("test")'
+      method: increment
+    expect:
+      effet:
+        result_json:
+          - path: "$"
+            equals: 1
+`),
+      /language-conditional map keys|Unrecognized key/,
+    );
+  });
+
   it("parses a shell step", () => {
     const result = parseStep({
       shell: { command: "echo", args: ["hi"], cwd: "/tmp" },

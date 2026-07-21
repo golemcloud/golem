@@ -52,6 +52,7 @@ export const ExpectSchema = z
     body_json: z.array(ResultJsonAssertionSchema).optional(),
     result_json: z.array(ResultJsonAssertionSchema).optional(),
   })
+  .strict()
   .superRefine((expect, ctx) => {
     if (expect.stdout_matches !== undefined) {
       validateRegexPattern(expect.stdout_matches, "stdout_matches", ctx);

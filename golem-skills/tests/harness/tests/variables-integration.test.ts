@@ -187,6 +187,54 @@ describe("Variable substitution integration", () => {
     });
   });
 
+  it("resolves effect-specific language maps for prompt and verify fields", async () => {
+    const driver = new StubDriver();
+    const watcher = new SkillWatcher(workspace);
+    const opts: ScenarioExecutorOptions = {
+      agent: "amp",
+      language: "effect",
+    };
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
+
+    let capturedVerify: { build?: boolean; deploy?: boolean; expectedFiles?: string[] } | undefined;
+    (executor as unknown as Record<string, unknown>)["executeVerification"] = async (
+      _stepLabel: string,
+      verify: { build?: boolean; deploy?: boolean; expectedFiles?: string[] },
+    ) => {
+      capturedVerify = verify;
+    };
+
+    const spec: ScenarioSpec = {
+      name: "effect-language-map",
+      settings: { cleanup: false },
+      steps: [
+        {
+          id: "effect-step",
+          tag: "prompt" as const,
+          prompt: {
+            ts: "ts prompt",
+            effect: "effect prompt",
+            rust: "rust prompt",
+          },
+          verify: {
+            expectedFiles: {
+              ts: ["src/main.ts"],
+              effect: ["src/main.ts", "src/agent.ts"],
+              rust: ["src/lib.rs"],
+            },
+          },
+        },
+      ],
+    };
+
+    const result = await executor.execute(spec);
+    assert.equal(result.status, "pass");
+    assert.deepEqual(driver.prompts, ["effect prompt"]);
+    assert.deepEqual(capturedVerify, {
+      expectedFiles: ["src/main.ts", "src/agent.ts"],
+    });
+  });
+
   it("leaves unknown variables as-is in prompts", async () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);

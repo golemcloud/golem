@@ -7,33 +7,57 @@ steps:
       build: true
 
   - id: "add-config-agent"
-    prompt: >
-      In the test-app project, add a new durable agent type called `GreeterAgent`
-      identified by a single constructor parameter for the instance name.
+    prompt:
+      rust: &non-effect-add-config-cli-prompt >
+        In the test-app project, add a new durable agent type called `GreeterAgent`
+        identified by a single constructor parameter for the instance name.
 
-      GreeterAgent must accept typed configuration with the following structure:
-      - `greeting` (string)
-      - `style` — a nested record/object with two fields:
-        - `uppercase` (boolean)
-        - `suffix` (string)
+        GreeterAgent must accept typed configuration with the following structure:
+        - `greeting` (string)
+        - `style` — a nested record/object with two fields:
+          - `uppercase` (boolean)
+          - `suffix` (string)
 
-      Define configuration types/structs for both the top-level config and the
-      nested `style` record, and use the agent config mechanism (Config<T>) to
-      receive them in the constructor.
+        Define configuration types/structs for both the top-level config and the
+        nested `style` record, and use the agent config mechanism (Config<T>) to
+        receive them in the constructor.
 
-      Do NOT set any default values in `golem.yaml` — all config will be provided
-      when creating individual agent instances via the CLI.
+        Do NOT set any default values in `golem.yaml` — all config will be provided
+        when creating individual agent instances via the CLI.
 
-      Expose a method called `greet` that takes a `name` string parameter and returns
-      a string. Build the greeting as `"{greeting}, {name}{suffix}"`. If `uppercase`
-      is true, convert the entire result to uppercase before returning.
+        Expose a method called `greet` that takes a `name` string parameter and returns
+        a string. Build the greeting as `"{greeting}, {name}{suffix}"`. If `uppercase`
+        is true, convert the entire result to uppercase before returning.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-add-config-cli-prompt
+      effect: >
+        In the Effect-based test-app project, add a new durable agent type called
+        `GreeterAgent`, identified by a single `constructorParams` field for the instance name.
+
+        Declare typed configuration with `defineConfig` and Effect Schema. It must contain a
+        `greeting` string and a named nested `style` `Schema.Struct` with `uppercase` (boolean)
+        and `suffix` (string). Attach the config service class to `defineAgent` and access it by
+        yielding the service and its field Effects inside the `greet` handler. Do not model config
+        as a positional `Config<T>` constructor parameter.
+
+        Do NOT set any default values in `golem.yaml` — all config will be provided when creating
+        individual agent instances via the CLI.
+
+        Expose an Effect-based method called `greet` that takes a `name` string parameter and
+        returns a string. Build the greeting as `"{greeting}, {name}{suffix}"`. If `uppercase` is
+        true, convert the entire result to uppercase before returning.
+
+        Make sure the project builds and deploys successfully.
+      scala: *non-effect-add-config-cli-prompt
+      moonbit: *non-effect-add-config-cli-prompt
     expectedSkills:
       rust:
         - "golem-add-config-rust"
       ts:
         - "golem-add-config-ts"
+      effect:
+        - "golem-add-config-effect"
       scala:
         - "golem-add-config-scala"
       moonbit:
@@ -65,6 +89,7 @@ steps:
       method:
         rust: "greet"
         ts: "greet"
+        effect: "greet"
         scala: "greet"
         moonbit: "greet"
       args: '"World"'

@@ -34,6 +34,26 @@ steps:
         - After the log messages, return the string "done".
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a new durable agent type called
+        `LogDemoAgent`, defined and implemented with Effect v4 and
+        `@golemcloud/effect-golem`, with one string `constructorParams` field named
+        `instanceName`.
+
+        It must expose a method called `doWork` that takes a string `taskName` and
+        returns the string "done". Inside `doWork`, use Effect logging rather than
+        `console` and emit these messages:
+        - With `Effect.logInfo`: "starting task: {taskName}"
+        - With `Effect.logDebug`: "processing task: {taskName}"
+        - With `Effect.logWarning`: "task is slow: {taskName}"
+        - After the log messages, return the string "done".
+
+        Annotate the logs with `instanceName` and `taskName`, and scope the method body
+        in an Effect tracing span named `LogDemoAgent.doWork`. All three messages must
+        appear in streamed output, so locally set `References.MinimumLogLevel` to
+        `"Debug"` around the handler Effect with `Effect.provideService`.
+
+        Make sure the project builds and deploys successfully.
       scala: >
         In the test-app project, add a new durable agent type called `LogDemoAgent`
         identified by a single constructor parameter for the instance name.
@@ -65,6 +85,8 @@ steps:
         - "golem-logging-rust"
       ts:
         - "golem-logging-ts"
+      effect:
+        - "golem-logging-effect"
       scala:
         - "golem-logging-scala"
       moonbit:
@@ -79,6 +101,7 @@ steps:
       method:
         rust: "do_work"
         ts: "doWork"
+        effect: "doWork"
         scala: "doWork"
         moonbit: "do_work"
       args: '"my-task"'
@@ -97,6 +120,11 @@ steps:
         Invoke the LogDemoAgent's doWork method for agent "demo1" with the argument
         "streamed-task", with default streaming enabled. Redirect the full CLI output
         (both stdout and stderr) to a file called log-output.txt in the test-app directory.
+      effect: >
+        In the Effect-based test-app project, invoke the LogDemoAgent's doWork method
+        for agent "demo1" with the argument "streamed-task", with default streaming
+        enabled. Redirect the full CLI output (both stdout and stderr) to a file called
+        log-output.txt in the test-app directory.
       scala: >
         Invoke the LogDemoAgent's doWork method for agent "demo1" with the argument
         "streamed-task", with default streaming enabled. Redirect the full CLI output

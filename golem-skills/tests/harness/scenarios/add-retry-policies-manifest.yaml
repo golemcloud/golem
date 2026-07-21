@@ -124,6 +124,32 @@ steps:
         using the SDK.
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the test-app project, add a new durable Effect-based agent type called
+        `RetryAgent`, using Effect and `@golemcloud/effect-golem`, identified by a
+        single string constructor parameter for the instance name.
+
+        Define all Golem host-operation retry policies exclusively in the
+        application manifest (`golem.yaml`) under `retryPolicyDefaults` for the
+        `local` environment. Do not create, set, or emulate retry policies from
+        Effect code. Define two policies:
+
+        1. `http-transient` — priority 10, predicate matching `status-code` in
+           [502, 503, 504], policy: countBox with maxRetries 5, inner exponential
+           with baseDelay "200ms" and factor 2.0, clamped to [100ms, 5s], with
+           15% jitter.
+
+        2. `catch-all` — priority 0, predicate true, policy: countBox with
+           maxRetries 3, inner exponential with baseDelay "100ms" and factor 3.0.
+
+        Expose an Effect agent method called `listRetryPolicies` that takes no
+        parameters and returns an array of objects with `name` (string) and
+        `priority` (number). Query the currently active host policies dynamically
+        with `Retry.getPolicies` and map those fields into the output. Do not
+        hardcode policy names, and do not use `Effect.retry` as a replacement for
+        the host policy.
+
+        Make sure the Effect project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-retry-policies-rust"
@@ -133,6 +159,8 @@ steps:
         - "golem-retry-policies-scala"
       moonbit:
         - "golem-retry-policies-moonbit"
+      effect:
+        - "golem-retry-policies-effect"
     verify:
       build: true
       deploy: true
@@ -152,6 +180,7 @@ steps:
         ts: ["-l", "getRetryPolicies", "test-app/", "-g", "*.ts"]
         scala: ["-l", "getRetryPolicies|getNamedPolicies", "test-app/", "-g", "*.scala"]
         moonbit: ["-l", "get_retry_policies", "test-app/", "-g", "*.mbt"]
+        effect: ["-l", "Retry\\.getPolicies", "test-app/", "-g", "*.ts"]
     expect:
       exit_code: 0
 
@@ -163,6 +192,7 @@ steps:
         ts: "listRetryPolicies"
         scala: "listRetryPolicies"
         moonbit: "list_retry_policies"
+        effect: "listRetryPolicies"
       args: ""
     expect:
       rust:
@@ -184,6 +214,12 @@ steps:
           - path: "$[?(@.name=='http-transient')].priority"
             equals: 10
       moonbit:
+        result_json:
+          - path: "$[?(@.name=='catch-all')].priority"
+            equals: 0
+          - path: "$[?(@.name=='http-transient')].priority"
+            equals: 10
+      effect:
         result_json:
           - path: "$[?(@.name=='catch-all')].priority"
             equals: 0
