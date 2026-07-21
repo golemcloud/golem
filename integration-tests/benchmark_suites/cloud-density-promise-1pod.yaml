@@ -1,5 +1,6 @@
 # Promise-completion density on one worker-executor pod. The workflow drives
 # each cell independently and passes these values to `benchmarks density`.
+# Focused warm-path run while diagnosing promise-pool restaging latency.
 name: cloud-density-promise-1pod
 section: promise
 defaultRamp: [1, 2, 4, 8, 16, 32, 64, 128, 256]
