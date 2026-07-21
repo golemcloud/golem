@@ -21,6 +21,12 @@ import type {
   Repetition,
   StreamSpec,
 } from 'golem:tool/common@0.1.0';
+import {
+  ToolRpc,
+  type RpcError,
+  type ToolError,
+  type TypedSchemaValue as WireTypedSchemaValue,
+} from 'golem:tool/host@0.1.0';
 import type { Principal } from '../principal';
 import {
   type ExtendedCommandBody,
@@ -45,8 +51,17 @@ import {
   listCodec,
   normalizeExtendedTool,
   parseSourceValue,
+  schemaValueConforms,
   toolBuildError,
 } from '../internal/tool';
+import {
+  deepEqual,
+  t,
+  typedSchemaValueFromWit,
+  typedSchemaValueToWit,
+  type TypedSchemaValue,
+} from '../internal/schema-model';
+import { disposeWitResource } from '../internal/pollableUtils';
 import { ToolRegistry } from '../internal/registry/toolRegistry';
 import { compileSchema } from './schema/adapter';
 import type { FluentCodec } from './schema/codec';
@@ -368,6 +383,39 @@ type RootClient<Model> =
     : never;
 
 export type ToolClient<Definition> = Simplify<RootClient<ToolCommandModelOf<Definition>>>;
+
+export interface ToolClientInvocationResult {
+  readonly result?: WireTypedSchemaValue;
+  readonly stdout?: ReadableStream<Uint8Array>;
+}
+
+/** Wire-level invocation seam used by typed tool clients. */
+export interface ToolClientTransport {
+  invokeAndAwait(
+    commandPath: readonly string[],
+    input: WireTypedSchemaValue,
+    stdin: ReadableStream<Uint8Array> | undefined,
+  ): ToolClientInvocationResult | Promise<ToolClientInvocationResult>;
+}
+
+export interface ToolClientOptions {
+  readonly transport?: ToolClientTransport;
+}
+
+export type ToolCallErrorCause<Errors> =
+  | { readonly tag: 'rpc'; readonly error: RpcError }
+  | { readonly tag: 'tool'; readonly error: Errors };
+
+/** A stable rejected-promise error for remote tool calls. */
+export class ToolCallError<Errors = never> extends Error {
+  readonly cause: ToolCallErrorCause<Errors>;
+
+  constructor(cause: ToolCallErrorCause<Errors>) {
+    super(formatToolCallError(cause));
+    this.name = 'ToolCallError';
+    this.cause = cause;
+  }
+}
 
 export interface ImplementedTool<Name extends string = string> {
   readonly name: Name;
@@ -1043,6 +1091,308 @@ export function getExtendedToolDefinition<Definition extends AnyToolDefinition>(
   definition: Definition,
 ): ExtendedToolType {
   return definition[BUILD_TOOL]();
+}
+
+/** Assemble a typed runtime client directly from a local tool definition. */
+export function client<Definition extends AnyToolDefinition>(
+  definition: Definition,
+  options: ToolClientOptions = {},
+): ToolClient<Definition> {
+  const tool = getExtendedToolDefinition(definition);
+  const transport = options.transport ?? new HostToolClientTransport(tool.toolName);
+  const result: Record<string, unknown> = {};
+
+  if (tool.root.body) {
+    defineClientMember(
+      result,
+      tool.root.name,
+      createToolClientMethod(tool, tool.root, [], transport),
+    );
+  }
+  tool.root.subcommands.forEach((child) => {
+    defineClientMember(
+      result,
+      child.name,
+      assembleToolClientNode(tool, child, [child.name], transport),
+    );
+  });
+
+  return result as ToolClient<Definition>;
+}
+
+class HostToolClientTransport implements ToolClientTransport {
+  private rpc?: ToolRpc;
+
+  constructor(private readonly toolName: string) {}
+
+  invokeAndAwait(
+    commandPath: readonly string[],
+    input: WireTypedSchemaValue,
+    stdin: ReadableStream<Uint8Array> | undefined,
+  ): ToolClientInvocationResult {
+    if (stdin !== undefined) {
+      throw protocolRpcError(
+        'caller-provided Web stdin cannot be converted to an owned wasi:io input-stream',
+      );
+    }
+
+    this.rpc ??= new ToolRpc(this.toolName);
+    const result = this.rpc.invokeAndAwait([...commandPath], input, undefined);
+    if (result.stdout !== undefined) {
+      disposeWitResource(result.stdout);
+      throw protocolRpcError(
+        'tool stdout is a write-only wasi:io output-stream and cannot be exposed as a Web ReadableStream',
+      );
+    }
+    return { result: result.result };
+  }
+}
+
+function assembleToolClientNode(
+  tool: ExtendedToolType,
+  node: ExtendedCommandNode,
+  commandPath: readonly string[],
+  transport: ToolClientTransport,
+): unknown {
+  const result: Record<string, unknown> | ((args: Record<string, unknown>) => Promise<unknown>) =
+    node.body ? createToolClientMethod(tool, node, commandPath, transport) : {};
+
+  node.subcommands.forEach((child) => {
+    defineClientMember(
+      result,
+      child.name,
+      assembleToolClientNode(tool, child, [...commandPath, child.name], transport),
+    );
+  });
+  return result;
+}
+
+function defineClientMember(target: object, name: string, value: unknown): void {
+  Object.defineProperty(target, name, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: false,
+  });
+}
+
+function createToolClientMethod(
+  tool: ExtendedToolType,
+  node: ExtendedCommandNode,
+  commandPath: readonly string[],
+  transport: ToolClientTransport,
+): (args: Record<string, unknown>) => Promise<unknown> {
+  const body = node.body;
+  if (!body) throw new Error(`tool command "${node.name}" has no callable body`);
+  const inputModel = tool.canonicalInputModel(node);
+  const callName = [tool.toolName, ...commandPath].join(' ');
+
+  return async (args: Record<string, unknown>): Promise<unknown> => {
+    try {
+      if (!isImplementationObject(args)) {
+        throw new Error('tool client arguments must be an object');
+      }
+      const canonicalInput = Object.fromEntries(
+        inputModel.fields.map((field) => {
+          const projectedName = camelCase(field.name);
+          return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
+        }),
+      );
+      const input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
+      const stdin = body.stdin ? (args.stdin as ReadableStream<Uint8Array> | undefined) : undefined;
+      if (body.stdin?.required && stdin === undefined) {
+        throw new Error('required stdin stream is missing');
+      }
+      if (stdin !== undefined && !(stdin instanceof ReadableStream)) {
+        throw new Error('stdin must be a ReadableStream');
+      }
+      const invocation = await transport.invokeAndAwait(commandPath, input, stdin);
+      return decodeToolClientResult(body, invocation, callName);
+    } catch (error) {
+      if (error instanceof ToolCallError) throw error;
+      if (isRpcError(error)) throw mapToolRpcError(body, error, callName);
+      throw protocolToolCallError(`${callName}: ${errorMessage(error)}`);
+    }
+  };
+}
+
+function decodeToolClientResult(
+  body: ExtendedCommandBody,
+  invocation: ToolClientInvocationResult,
+  callName: string,
+): unknown {
+  const hasResult = invocation.result !== undefined;
+  const hasStdout = invocation.stdout !== undefined;
+
+  try {
+    if (hasStdout && !(invocation.stdout instanceof ReadableStream)) {
+      throw protocolToolCallError(`${callName}: stdout is not a ReadableStream`);
+    }
+    if (!body.result && hasResult) {
+      throw protocolToolCallError(`${callName}: unit command returned an unexpected result`);
+    }
+    if (body.result && !hasResult) {
+      throw protocolToolCallError(`${callName}: structured command result is missing`);
+    }
+    if (!body.stdout && hasStdout) {
+      throw protocolToolCallError(`${callName}: command returned undeclared stdout`);
+    }
+    if (body.stdout?.required && !hasStdout) {
+      throw protocolToolCallError(`${callName}: required stdout stream is missing`);
+    }
+
+    const decodedResult = body.result
+      ? decodeWireValue(body.result.codec, invocation.result!, `${callName} result`)
+      : undefined;
+    if (!body.stdout) return decodedResult;
+    if (!body.result) return invocation.stdout;
+    return hasStdout
+      ? { result: decodedResult, stdout: invocation.stdout }
+      : { result: decodedResult };
+  } catch (error) {
+    if (invocation.stdout instanceof ReadableStream) cancelReadableStream(invocation.stdout);
+    throw error;
+  }
+}
+
+function cancelReadableStream(stream: ReadableStream<Uint8Array>): void {
+  try {
+    void stream.cancel().catch(() => {});
+  } catch {
+    // Preserve the tool-call failure rather than replacing it with cleanup failure.
+  }
+}
+
+function mapToolRpcError(
+  body: ExtendedCommandBody,
+  error: RpcError,
+  callName: string,
+): ToolCallError<unknown> {
+  if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {
+    return new ToolCallError({ tag: 'rpc', error });
+  }
+
+  try {
+    const declaredError = decodeDeclaredToolError(body, error.val.val, callName);
+    return new ToolCallError({ tag: 'tool', error: declaredError });
+  } catch (decodeError) {
+    if (decodeError instanceof ToolCallError) return decodeError;
+    return protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
+  }
+}
+
+function decodeDeclaredToolError(
+  body: ExtendedCommandBody,
+  wirePayload: WireTypedSchemaValue,
+  callName: string,
+): ToolErr<string, unknown> | ToolErr<string> {
+  const payload = typedSchemaValueFromWit(wirePayload);
+  const unitGraph = { defs: new Map(), root: t.tuple([]) };
+  const matches = body.errors.filter((errorCase) =>
+    deepEqual(payload.graph, errorCase.payloadCodec?.graph ?? unitGraph),
+  );
+  if (matches.length === 0) {
+    throw new Error('remote custom error does not match any declared error schema');
+  }
+  if (matches.length > 1) {
+    throw new Error('remote custom error matches more than one declared error schema');
+  }
+
+  const errorCase = matches[0];
+  if (!errorCase.payloadCodec) {
+    if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
+      throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
+    }
+    return err(errorCase.name);
+  }
+  const decoded = decodeTypedValue(
+    errorCase.payloadCodec,
+    payload,
+    `${callName} custom error "${errorCase.name}"`,
+  );
+  return err(errorCase.name, decoded);
+}
+
+function decodeWireValue(
+  codec: FluentCodec,
+  wire: WireTypedSchemaValue,
+  position: string,
+): unknown {
+  return decodeTypedValue(codec, typedSchemaValueFromWit(wire), position);
+}
+
+function decodeTypedValue(codec: FluentCodec, typed: TypedSchemaValue, position: string): unknown {
+  if (!deepEqual(typed.graph, codec.graph)) {
+    throw new Error(`${position} schema does not match the local definition`);
+  }
+  if (!schemaValueConforms(codec.graph, codec.graph.root, typed.value)) {
+    throw new Error(`${position} does not conform to the local definition`);
+  }
+  return codec.fromValue(typed.value);
+}
+
+function protocolToolCallError(message: string): ToolCallError<never> {
+  return new ToolCallError({ tag: 'rpc', error: protocolRpcError(message) });
+}
+
+function protocolRpcError(message: string): RpcError {
+  return { tag: 'protocol-error', val: message };
+}
+
+function isRpcError(value: unknown): value is RpcError {
+  if (!isImplementationObject(value) || typeof value.tag !== 'string' || !hasOwn(value, 'val')) {
+    return false;
+  }
+  switch (value.tag) {
+    case 'protocol-error':
+    case 'denied':
+    case 'not-found':
+    case 'remote-internal-error':
+      return typeof value.val === 'string';
+    case 'remote-tool-error':
+      return isToolError(value.val);
+    default:
+      return false;
+  }
+}
+
+function isToolError(value: unknown): value is ToolError {
+  if (!isImplementationObject(value) || typeof value.tag !== 'string' || !hasOwn(value, 'val')) {
+    return false;
+  }
+  switch (value.tag) {
+    case 'invalid-tool-name':
+    case 'invalid-input':
+    case 'constraint-violation':
+    case 'invalid-result':
+      return typeof value.val === 'string';
+    case 'invalid-command-path':
+      return Array.isArray(value.val) && value.val.every((segment) => typeof segment === 'string');
+    case 'custom-error':
+      return (
+        isImplementationObject(value.val) &&
+        hasOwn(value.val, 'graph') &&
+        hasOwn(value.val, 'value')
+      );
+    default:
+      return false;
+  }
+}
+
+function formatToolCallError(cause: ToolCallErrorCause<unknown>): string {
+  if (cause.tag === 'tool') {
+    const name = isImplementationObject(cause.error) ? cause.error.name : undefined;
+    return typeof name === 'string'
+      ? `Remote tool returned declared error "${name}"`
+      : 'Remote tool returned a declared error';
+  }
+  return cause.error.tag === 'remote-tool-error'
+    ? `Remote tool call failed: ${cause.error.val.tag}`
+    : `Remote tool call failed: ${cause.error.tag}: ${cause.error.val}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Render descriptor-based help for the root or a nested command. */

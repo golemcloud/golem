@@ -50,7 +50,17 @@ export type { KeyValueOptions, PathOptions, QuantityOptions } from './schema/mar
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { FluentCodec, SchemaWalker } from './schema/codec';
 
-export { c, command, err, ok, renderArgumentHelp, renderHelp, toolDefinition } from './tool';
+export {
+  c,
+  client,
+  command,
+  err,
+  ok,
+  renderArgumentHelp,
+  renderHelp,
+  ToolCallError,
+  toolDefinition,
+} from './tool';
 export type {
   CamelCase,
   ConstraintRef,
@@ -70,9 +80,13 @@ export type {
   StreamOptions,
   TailOptions,
   ToolBodyModel,
+  ToolCallErrorCause,
   ToolClient,
   ToolClientErrors,
+  ToolClientInvocationResult,
   ToolClientMethod,
+  ToolClientOptions,
+  ToolClientTransport,
   ToolCommandModel,
   ToolCommandModelOf,
   ToolConstraint,
