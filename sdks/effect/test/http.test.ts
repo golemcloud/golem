@@ -14,6 +14,7 @@ import {
   get,
   head,
   HttpRouteError,
+  isQueryOrHeaderBindableSchema,
   isStringBindableSchema,
   literal,
   mount,
@@ -406,6 +407,37 @@ describe("Http isStringBindableSchema", () => {
   })
 })
 
+describe("Http isQueryOrHeaderBindableSchema", () => {
+  it("accepts primitive scalars and arrays of primitives", () => {
+    expect(isQueryOrHeaderBindableSchema(Schema.String)).toBe(true)
+    expect(isQueryOrHeaderBindableSchema(Schema.Array(Schema.String))).toBe(true)
+    expect(isQueryOrHeaderBindableSchema(Schema.Array(Schema.Number))).toBe(true)
+    expect(isQueryOrHeaderBindableSchema(Schema.Array(Schema.BigInt))).toBe(true)
+    expect(isQueryOrHeaderBindableSchema(Schema.Array(Schema.Boolean))).toBe(true)
+    expect(isQueryOrHeaderBindableSchema(Schema.Array(Schema.Literals(["open", "closed"])))).toBe(
+      true,
+    )
+  })
+
+  it("preserves optional primitive query and header schemas", () => {
+    expect(isQueryOrHeaderBindableSchema(Schema.NullOr(Schema.Number))).toBe(true)
+    expect(isQueryOrHeaderBindableSchema(Schema.NullOr(Schema.Boolean))).toBe(true)
+    expect(isQueryOrHeaderBindableSchema(Schema.UndefinedOr(Schema.String))).toBe(true)
+  })
+
+  it("rejects nested, record-element, optional-element, union-element, and non-empty arrays", () => {
+    expect(isQueryOrHeaderBindableSchema(Schema.Array(Schema.Array(Schema.String)))).toBe(false)
+    expect(
+      isQueryOrHeaderBindableSchema(Schema.Array(Schema.Struct({ value: Schema.String }))),
+    ).toBe(false)
+    expect(isQueryOrHeaderBindableSchema(Schema.Array(Schema.NullOr(Schema.String)))).toBe(false)
+    expect(
+      isQueryOrHeaderBindableSchema(Schema.Array(Schema.Union([Schema.String, Schema.Number]))),
+    ).toBe(false)
+    expect(isQueryOrHeaderBindableSchema(Schema.NonEmptyArray(Schema.String))).toBe(false)
+  })
+})
+
 describe("Http defineAgent integration", () => {
   beforeEach(async () => {
     await __resetAgents()
@@ -663,6 +695,71 @@ describe("Http defineAgent integration", () => {
     )
   })
 
+  it("rejects a collection param bound from a path variable", async () => {
+    await expectRouteError(
+      () =>
+        defineAgent({
+          name: "CollectionPathBind",
+          constructorParams: {},
+          http: mount("/x"),
+          methods: {
+            op: method({
+              params: { values: Schema.Array(Schema.String) },
+              success: Schema.String,
+              // @ts-expect-error — collections are query/header-only;
+              // retain the runtime validation as defence-in-depth.
+              http: [post("/items/{values}")],
+            }),
+          },
+        }).implement(() =>
+          Effect.succeed({ op: ({ values }) => Effect.succeed(values.join(",")) }),
+        ),
+      /not bindable from a path variable/,
+    )
+  })
+
+  it("rejects unsupported collection shapes from query parameters", async () => {
+    await expectRouteError(
+      () =>
+        defineAgent({
+          name: "NestedCollectionQueryBind",
+          constructorParams: {},
+          http: mount("/x"),
+          methods: {
+            op: method({
+              params: { values: Schema.Array(Schema.Array(Schema.String)) },
+              success: Schema.String,
+              // @ts-expect-error — nested collections are not host-bindable;
+              // retain the runtime validation as defence-in-depth.
+              http: [get("/items?value={values}")],
+            }),
+          },
+        }).implement(() => Effect.succeed({ op: () => Effect.succeed("") })),
+      /not bindable from a query parameter/,
+    )
+  })
+
+  it("rejects record-element collections from headers", async () => {
+    await expectRouteError(
+      () =>
+        defineAgent({
+          name: "RecordCollectionHeaderBind",
+          constructorParams: {},
+          http: mount("/x"),
+          methods: {
+            op: method({
+              params: { values: Schema.Array(Schema.Struct({ value: Schema.String })) },
+              success: Schema.String,
+              // @ts-expect-error — record elements are not host-bindable;
+              // retain the runtime validation as defence-in-depth.
+              http: [get("/items", { headers: { "X-Value": "values" } as const })],
+            }),
+          },
+        }).implement(() => Effect.succeed({ op: () => Effect.succeed("") })),
+      /not bindable from a header/,
+    )
+  })
+
   it("rejects an unstructured param bound from a path variable", async () => {
     await expectRouteError(
       () =>
@@ -733,6 +830,42 @@ describe("Http defineAgent integration", () => {
         { headerName: "X-Trace", variableName: "traceId" },
       ])
       expect(find.httpEndpoint[0]!.queryVars).toEqual([{ queryParamName: "q", variableName: "q" }])
+    }),
+  )
+
+  it.effect("accepts primitive arrays bound from repeated query and header values", () =>
+    Effect.gen(function* () {
+      defineAgent({
+        name: "CollectionBindings",
+        constructorParams: {},
+        http: mount("/api"),
+        methods: {
+          find: method({
+            params: {
+              tags: Schema.Array(Schema.String),
+              scores: Schema.Array(Schema.Number),
+            },
+            success: Schema.String,
+            http: [
+              get("/items?tag={tags}", {
+                headers: { "X-Score": "scores" } as const,
+              }),
+            ],
+          }),
+        },
+      }).implement(() =>
+        Effect.succeed({
+          find: ({ tags, scores }) => Effect.succeed(`${tags.join(",")}/${scores.join(",")}`),
+        }),
+      )
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const find = types.find((t) => t.typeName === "CollectionBindings")!.methods[0]!
+      expect(find.httpEndpoint[0]!.queryVars).toEqual([
+        { queryParamName: "tag", variableName: "tags" },
+      ])
+      expect(find.httpEndpoint[0]!.headerVars).toEqual([
+        { headerName: "X-Score", variableName: "scores" },
+      ])
     }),
   )
 })

@@ -14,6 +14,7 @@
  *
  * @since 1.5.0
  */
+import type { Schema } from "effect"
 import type { EndpointDef, EndpointKind, MountDef } from "../Http.js"
 // Multimodal / ElementSpec are matched by brand below
 // (the discriminating `_effectGolem` literal-string field) so we no
@@ -316,7 +317,7 @@ export type ValidMountPath<S extends string> = string extends S ? S : ValidateMo
 export type ValidEndpointPath<S extends string> = string extends S ? S : ValidateEndpointShape<S>
 
 // ---------------------------------------------------------------------------
-// BindableKeys — keys whose value is statically eligible for path/query/header binding
+// BindableKeys — keys whose value is statically eligible for HTTP binding
 // ---------------------------------------------------------------------------
 
 // `any`-safe guard. Without this, `[any] extends [Multimodal<…>]` and
@@ -346,6 +347,28 @@ type IsBindable<V> =
         ? false
         : true
 
+type IsPrimitiveValue<V> = [V] extends [string | number | bigint | boolean] ? true : false
+
+type IsPathBindable<V> =
+  IsAny<V> extends true
+    ? true
+    : IsBindable<V> extends true
+      ? V extends Schema.$Array<any> | Schema.NonEmptyArray<any>
+        ? false
+        : true
+      : false
+
+type IsQueryOrHeaderBindable<V> =
+  IsAny<V> extends true
+    ? true
+    : IsBindable<V> extends true
+      ? V extends Schema.NonEmptyArray<any>
+        ? false
+        : V extends Schema.$Array<infer Element>
+          ? IsPrimitiveValue<Element["Type"]>
+          : true
+      : false
+
 /**
  * Subset of `keyof C & string` whose value is statically eligible
  * for binding from a string source (path / query / header) — i.e.
@@ -358,6 +381,36 @@ type IsBindable<V> =
  */
 export type BindableKeys<C> = {
   [K in keyof C & string]: IsBindable<C[K]> extends true ? K : never
+}[keyof C & string]
+
+/**
+ * Subset of parameter keys statically eligible for path binding.
+ * Collection schemas are excluded because the host resolves one path
+ * segment to one primitive value.
+ *
+ * Full scalar bindability remains runtime-validated from the schema AST.
+ *
+ * @since 1.5.1
+ * @category models
+ */
+export type PathBindableKeys<C> = {
+  [K in keyof C & string]: IsPathBindable<C[K]> extends true ? K : never
+}[keyof C & string]
+
+/**
+ * Subset of parameter keys statically eligible for query/header
+ * binding. In addition to scalar schemas, this admits
+ * `Schema.Array` when its decoded element type is primitive. Nested
+ * arrays, record elements, and non-empty arrays are excluded because
+ * the host collection contract is a plain `list<primitive>`.
+ *
+ * Full schema bindability remains runtime-validated from the schema AST.
+ *
+ * @since 1.5.1
+ * @category models
+ */
+export type QueryOrHeaderBindableKeys<C> = {
+  [K in keyof C & string]: IsQueryOrHeaderBindable<C[K]> extends true ? K : never
 }[keyof C & string]
 
 // ---------------------------------------------------------------------------

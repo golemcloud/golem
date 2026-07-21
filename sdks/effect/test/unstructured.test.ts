@@ -8,6 +8,12 @@ import {
   type TextReferenceValue,
 } from "../src/Unstructured.js"
 
+// The existing host output contract can expose an unstructured element
+// directly, but cannot nest it inside the component-model result used for
+// typed method errors.
+// @ts-expect-error unstructured successes cannot declare typed errors
+void method({ params: {}, success: UnstructuredText(), error: Schema.String })
+
 describe("UnstructuredText element", () => {
   it.effect("emits an unstructured-text element schema and round-trips inline text", () =>
     Effect.gen(function* () {
@@ -31,12 +37,55 @@ describe("UnstructuredText element", () => {
 
       const out = yield* invokeDataValue(mc, handler as any, {
         tag: "tuple",
-        val: [{ tag: "unstructured-text", val: inputValue as any }],
+        val: [
+          {
+            tag: "unstructured-text",
+            val: { tag: "inline", val: inputValue.val },
+          },
+        ],
       }) as Effect.Effect<any, unknown, never>
       if (out.tag !== "tuple") throw new Error()
       const elem = out.val[0]!
       if (elem.tag !== "component-model") throw new Error()
       expect(elem.val.nodes.length).toBeGreaterThan(0)
+    }),
+  )
+
+  it.effect("emits an unstructured-text success with language metadata", () =>
+    Effect.gen(function* () {
+      const m = method({
+        params: {},
+        success: UnstructuredText({ restrictions: [{ languageCode: "en" }] }),
+      })
+      const mc = yield* compileMethodSpec("m", m)
+      expect(mc.outputCodec).toBeNull()
+      if (mc.outputSchema.tag !== "tuple") throw new Error()
+      const schema = mc.outputSchema.val[0]![1]
+      expect(schema).toEqual({
+        tag: "unstructured-text",
+        val: { restrictions: [{ languageCode: "en" }] },
+      })
+
+      const value: TextReferenceValue = {
+        _tag: "inline",
+        val: { data: "hello", textType: { languageCode: "en" } },
+      }
+      const out = yield* invokeDataValue(mc, () => Effect.succeed(value), {
+        tag: "tuple",
+        val: [],
+      })
+      expect(out).toEqual({
+        tag: "tuple",
+        val: [
+          {
+            tag: "unstructured-text",
+            val: {
+              tag: "inline",
+              val: { data: "hello", textType: { languageCode: "en" } },
+            },
+          },
+        ],
+      })
     }),
   )
 
@@ -111,19 +160,70 @@ describe("UnstructuredBinary element", () => {
         _tag: "url",
         val: "https://example.com/x.png",
       }
+      const encoded = yield* mc.bindings[0]!.element.encode(ref)
+      expect(encoded).toEqual({
+        tag: "unstructured-binary",
+        val: { tag: "url", val: "https://example.com/x.png" },
+      })
+
       const out = yield* invokeDataValue(
         mc,
         (({ blob }: { blob: BinaryReferenceValue }) =>
           Effect.succeed(blob._tag === "url" ? blob.val : "inline")) as any,
         {
           tag: "tuple",
-          val: [{ tag: "unstructured-binary", val: ref as any }],
+          val: [encoded],
         },
       ) as Effect.Effect<any, unknown, never>
       if (out.tag !== "tuple") throw new Error()
       const elem = out.val[0]!
       if (elem.tag !== "component-model") throw new Error()
-      expect(elem.val).toBeDefined()
+      expect(yield* mc.outputElement!.decode(elem)).toBe("https://example.com/x.png")
+    }),
+  )
+
+  it.effect("emits an unstructured-binary success with its MIME type", () =>
+    Effect.gen(function* () {
+      const m = method({
+        params: {},
+        success: UnstructuredBinary({
+          restrictions: [{ mimeType: "application/octet-stream" }],
+        }),
+      })
+      const mc = yield* compileMethodSpec("m", m)
+      expect(mc.outputCodec).toBeNull()
+      if (mc.outputSchema.tag !== "tuple") throw new Error()
+      expect(mc.outputSchema.val[0]![1]).toEqual({
+        tag: "unstructured-binary",
+        val: { restrictions: [{ mimeType: "application/octet-stream" }] },
+      })
+
+      const value: BinaryReferenceValue = {
+        _tag: "inline",
+        val: {
+          data: new Uint8Array([0, 127, 255]),
+          binaryType: { mimeType: "application/octet-stream" },
+        },
+      }
+      const out = yield* invokeDataValue(mc, () => Effect.succeed(value), {
+        tag: "tuple",
+        val: [],
+      })
+      expect(out).toEqual({
+        tag: "tuple",
+        val: [
+          {
+            tag: "unstructured-binary",
+            val: {
+              tag: "inline",
+              val: {
+                data: new Uint8Array([0, 127, 255]),
+                binaryType: { mimeType: "application/octet-stream" },
+              },
+            },
+          },
+        ],
+      })
     }),
   )
 })

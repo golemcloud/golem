@@ -44,7 +44,17 @@ const AutoSnapshotCounter = defineAgent({
   name: "AutoSnapshotCounter",
   constructorParams: { name: Schema.String },
   snapshot: Snapshot.define({
-    schema: Schema.Struct({ count: Schema.Number, owner: Schema.String }),
+    schema: Schema.Struct({
+      count: Schema.Number,
+      owner: Schema.String,
+      groups: Schema.Record(
+        Schema.String,
+        Schema.Struct({
+          values: Schema.Array(Schema.Number),
+          note: Schema.optional(Schema.String),
+        }),
+      ),
+    }),
     policy: Snapshot.policy.everyN(5),
   }),
   methods: {
@@ -54,7 +64,14 @@ const AutoSnapshotCounter = defineAgent({
   },
 }).implement(({ name }, snap) =>
   Effect.gen(function* () {
-    const state = yield* snap.init({ count: 0, owner: name })
+    const state = yield* snap.init({
+      count: 0,
+      owner: name,
+      groups: {
+        primary: { values: [1, 2, 3], note: "nested record" },
+        secondary: { values: [] },
+      },
+    })
     return {
       value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
       add: ({ by }) =>
@@ -314,7 +331,14 @@ describe("snapshotting", () => {
           claims: "{}",
         },
       })
-      expect(obj.state).toEqual({ count: 14, owner: "alice" })
+      expect(obj.state).toEqual({
+        count: 14,
+        owner: "alice",
+        groups: {
+          primary: { values: [1, 2, 3], note: "nested record" },
+          secondary: { values: [] },
+        },
+      })
 
       // Reset (simulating new container) and load.
       yield* Effect.promise(() => __resetAgents())
@@ -357,6 +381,25 @@ describe("snapshotting", () => {
 
     const wrong = encodeBinaryEnvelope(anonymous, new Uint8Array([1, 2, 3]))
     await expect(dispatchLoadSnapshot(wrong)).rejects.toThrow(SnapshotEnvelopeError)
+  })
+
+  it("auto: load rejects record state that does not match the private snapshot schema", async () => {
+    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
+    const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
+
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
+    __setParseAgentIdForTest(() => [
+      "AutoSnapshotCounter",
+      { tag: "tuple", val: [{ tag: "component-model", val: aliceWv }] },
+      undefined,
+    ])
+
+    const malformed = encodeJsonEnvelope(anonymous, {
+      count: 1,
+      owner: "alice",
+      groups: { broken: { values: ["not-a-number"] } },
+    })
+    await expect(dispatchLoadSnapshot(malformed)).rejects.toThrow()
   })
 
   // -------------------------------------------------------------------------

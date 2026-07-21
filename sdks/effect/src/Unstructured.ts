@@ -75,8 +75,8 @@ export const BinaryReference = Schema.Union([
 
 /**
  * Domain-side shape of a `TextReference` (`Schema.TaggedUnion`-style).
- * The wire shape is the same — `Schema.Union` returns the same encoded
- * JS shape.
+ * The element codec translates the Effect `_tag` discriminator to the
+ * host binding's `tag` discriminator at the wire boundary.
  *
  * @since 1.5.0
  * @category models
@@ -124,23 +124,43 @@ export const isElementSpec = (x: unknown): x is ElementSpec<unknown> =>
   x !== null &&
   (x as { _effectGolem?: unknown })._effectGolem === "ElementSpec"
 
-const passthroughReference = <V>(
+const referenceElement = <V, W>(
   expected: AgentCommon.ElementSchema["tag"],
   context: string,
+  toWire: (value: V) => W,
+  fromWire: (value: W) => V,
 ): {
   encode: (v: V) => Effect.Effect<CoreTypes.ElementValue, Schema.SchemaError>
   decode: (
     e: CoreTypes.ElementValue,
   ) => Effect.Effect<V, Schema.SchemaError | ElementValueKindError>
 } => ({
-  encode: (v) => Effect.succeed({ tag: expected, val: v as any } as CoreTypes.ElementValue),
+  encode: (v) => Effect.succeed({ tag: expected, val: toWire(v) as any } as CoreTypes.ElementValue),
   decode: (element) => {
     if (element.tag !== expected) {
       return Effect.fail(new ElementValueKindError(expected, element.tag, context))
     }
-    return Effect.succeed((element as unknown as { val: V }).val)
+    return Effect.succeed(fromWire((element as unknown as { val: W }).val))
   },
 })
+
+const textReferenceElement = referenceElement<TextReferenceValue, CoreTypes.TextReference>(
+  "unstructured-text",
+  "UnstructuredText element",
+  (value) =>
+    value._tag === "url" ? { tag: "url", val: value.val } : { tag: "inline", val: value.val },
+  (value) =>
+    value.tag === "url" ? { _tag: "url", val: value.val } : { _tag: "inline", val: value.val },
+)
+
+const binaryReferenceElement = referenceElement<BinaryReferenceValue, CoreTypes.BinaryReference>(
+  "unstructured-binary",
+  "UnstructuredBinary element",
+  (value) =>
+    value._tag === "url" ? { tag: "url", val: value.val } : { tag: "inline", val: value.val },
+  (value) =>
+    value.tag === "url" ? { _tag: "url", val: value.val } : { _tag: "inline", val: value.val },
+)
 
 // ---------- Public factories ----------
 
@@ -165,11 +185,14 @@ export interface BinaryRestriction {
 }
 
 /**
- * Element spec for an unstructured text input parameter.
+ * Element spec for an unstructured text input parameter or method
+ * success value.
  *
  * The parameter value at the user side is a `TextReferenceValue` (`url`
  * or `inline`). Restrictions, if provided, surface in the emitted
- * `ElementSchema`'s `restrictions` field.
+ * `ElementSchema`'s `restrictions` field. As a method success value, an
+ * inline reference becomes a plain-text HTTP response and its optional
+ * language code becomes `Content-Language`.
  *
  * @since 1.5.0
  * @category constructors
@@ -185,20 +208,16 @@ export const UnstructuredText = (opts?: {
         : undefined,
     },
   }
-  // Reference values match the wire shape exactly, so we pass them
-  // through verbatim.
-  const io = passthroughReference<TextReferenceValue>(
-    "unstructured-text",
-    "UnstructuredText element",
-  )
   return {
     _effectGolem: "ElementSpec",
-    element: { elementSchema, ...io },
+    element: { elementSchema, ...textReferenceElement },
   }
 }
 
 /**
- * Element spec for an unstructured binary input parameter.
+ * Element spec for an unstructured binary input parameter or method
+ * success value. As a method success value, an inline reference becomes
+ * the raw HTTP response body with its declared MIME type.
  *
  * @since 1.5.0
  * @category constructors
@@ -214,12 +233,8 @@ export const UnstructuredBinary = (opts?: {
         : undefined,
     },
   }
-  const io = passthroughReference<BinaryReferenceValue>(
-    "unstructured-binary",
-    "UnstructuredBinary element",
-  )
   return {
     _effectGolem: "ElementSpec",
-    element: { elementSchema, ...io },
+    element: { elementSchema, ...binaryReferenceElement },
   }
 }

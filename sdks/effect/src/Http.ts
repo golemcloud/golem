@@ -942,21 +942,20 @@ export type EndpointFactory<Kind extends EndpointKind> = <
  * - Bodyless verbs (`GET` / `HEAD`) — only via the {@link get} /
  *   {@link head} shorthands — may not have any unbound method
  *   parameter, since there is no request body in which to deliver it.
- * - Path / query / header bindings to multimodal or unstructured
- *   parameters (i.e. `Multimodal` or `ElementSpec` carriers) are
- *   rejected via the `BindableKeys<Params>` constraint on
- *   `EndpointDef`.
+ * - Path bindings are primitive-only. Query/header bindings may also
+ *   target `Schema.Array` of a host-supported primitive so repeated
+ *   request values arrive as one collection. Multimodal,
+ *   unstructured, nested-collection, and record-element bindings are
+ *   rejected.
  *
  * **Runtime fallbacks (defence-in-depth)**
  *
- * The brace-balance check, the var-name regex, AND full
- * string-bindability of bound parameters (i.e. rejecting a
- * `Schema.Struct` schema as a path var) remain runtime-only because
- * they need parser-level loops or `Schema.AST` introspection. The
- * matching-parameter check for every binding is enforced by the type
- * system via `EndpointDef<BindableKeys<Params>>` for literal call
- * shapes and by `validateEndpoint` at registration time for the
- * widened cases.
+ * The brace-balance check, the var-name regex, and full schema-AST
+ * bindability checks remain at runtime because they need parser-level
+ * loops or `Schema.AST` introspection. Matching-parameter and common
+ * source-specific schema checks are enforced by the type system for
+ * literal `method({ http: [...] })` call shapes and repeated by
+ * `validateEndpoint` at registration time for widened cases.
  *
  * @since 1.5.0
  * @category constructors
@@ -1399,6 +1398,15 @@ export interface MethodHttpInput {
    * variants thereof).
    */
   readonly stringBindableParams: ReadonlySet<string>
+  /**
+   * Names of method parameters whose schema can be bound from a query
+   * parameter or header. This includes every scalar accepted by
+   * {@link stringBindableParams} plus `Schema.Array` of one supported
+   * primitive schema. Optional for compatibility with callers that
+   * construct validator input directly; omission falls back to the
+   * scalar-only set.
+   */
+  readonly queryOrHeaderBindableParams?: ReadonlySet<string>
 }
 
 /**
@@ -1511,10 +1519,10 @@ const validateEndpoint = (
           ),
         )
       }
-      if (!m.stringBindableParams.has(q.varName)) {
+      if (!(m.queryOrHeaderBindableParams ?? m.stringBindableParams).has(q.varName)) {
         return yield* Effect.fail(
           new HttpRouteError(
-            `${ctx}: parameter '${q.varName}' has a schema that is not bindable from a query parameter`,
+            `${ctx}: parameter '${q.varName}' has a schema that is not bindable from a query parameter (only primitive schemas, branded variants thereof, or arrays of those primitives are supported)`,
           ),
         )
       }
@@ -1553,10 +1561,10 @@ const validateEndpoint = (
           ),
         )
       }
-      if (!m.stringBindableParams.has(h.varName)) {
+      if (!(m.queryOrHeaderBindableParams ?? m.stringBindableParams).has(h.varName)) {
         return yield* Effect.fail(
           new HttpRouteError(
-            `${ctx}: parameter '${h.varName}' has a schema that is not bindable from a header`,
+            `${ctx}: parameter '${h.varName}' has a schema that is not bindable from a header (only primitive schemas, branded variants thereof, or arrays of those primitives are supported)`,
           ),
         )
       }
@@ -1741,6 +1749,90 @@ const validateMount = (
  */
 export const isStringBindableSchema = (schema: Schema.Top): boolean =>
   isStringBindableAst(schema.ast)
+
+/**
+ * Determine whether a schema can be decoded from query/header values.
+ * In addition to the scalar schemas accepted by
+ * {@link isStringBindableSchema}, the host supports one plain
+ * `list<primitive>` whose values come from repeated query parameters
+ * or repeated header instances.
+ *
+ * @since 1.5.1
+ * @category guards
+ */
+export const isQueryOrHeaderBindableSchema = (schema: Schema.Top): boolean =>
+  isStringBindableAst(schema.ast) ||
+  isOptionalStringBindableAst(schema.ast) ||
+  isPrimitiveArrayAst(schema.ast)
+
+const isPrimitiveArrayAst = (ast: SchemaAST.AST): boolean => {
+  if (ast._tag !== "Arrays") return false
+  const array = ast as unknown as {
+    elements?: ReadonlyArray<SchemaAST.AST>
+    rest?: ReadonlyArray<SchemaAST.AST>
+  }
+  return (
+    array.elements?.length === 0 &&
+    array.rest?.length === 1 &&
+    isCollectionElementBindableAst(array.rest[0]!)
+  )
+}
+
+const isOptionalStringBindableAst = (ast: SchemaAST.AST): boolean => {
+  if (ast._tag !== "Union") return false
+  const union = ast as unknown as { types?: ReadonlyArray<SchemaAST.AST> }
+  if (union.types === undefined) return false
+
+  const emptyMembers = union.types.filter(isNullOrUndefinedAst)
+  const realMembers = union.types.filter((member) => !isNullOrUndefinedAst(member))
+  return (
+    emptyMembers.length === 1 && realMembers.length === 1 && isStringBindableAst(realMembers[0]!)
+  )
+}
+
+const isNullOrUndefinedAst = (ast: SchemaAST.AST): boolean =>
+  ast._tag === "Null" || ast._tag === "Undefined" || ast._tag === "Void"
+
+const isCollectionElementBindableAst = (ast: SchemaAST.AST): boolean => {
+  switch (ast._tag) {
+    case "String":
+    case "Number":
+    case "BigInt":
+    case "Boolean":
+    case "TemplateLiteral":
+      return true
+    case "Literal": {
+      const literal = (ast as SchemaAST.Literal).literal
+      return (
+        typeof literal === "string" ||
+        typeof literal === "number" ||
+        typeof literal === "bigint" ||
+        typeof literal === "boolean"
+      )
+    }
+    case "Union": {
+      const union = ast as unknown as { types?: ReadonlyArray<SchemaAST.AST> }
+      return (
+        union.types !== undefined &&
+        union.types.length > 0 &&
+        union.types.every(
+          (member) =>
+            member._tag === "Literal" && typeof (member as SchemaAST.Literal).literal === "string",
+        )
+      )
+    }
+    default:
+      break
+  }
+  const encoded = ast as unknown as { from?: SchemaAST.AST; to?: SchemaAST.AST }
+  if (encoded.from && typeof encoded.from._tag === "string") {
+    return isCollectionElementBindableAst(encoded.from)
+  }
+  if (encoded.to && typeof encoded.to._tag === "string") {
+    return isCollectionElementBindableAst(encoded.to)
+  }
+  return false
+}
 
 const isStringBindableAst = (ast: SchemaAST.AST): boolean => {
   switch (ast._tag) {

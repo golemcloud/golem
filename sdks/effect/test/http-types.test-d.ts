@@ -16,7 +16,11 @@
 import { Effect, Schema } from "effect"
 import { defineAgent, method, Method } from "../src/index.js"
 import * as Http from "../src/Http.js"
-import type { BindableKeys } from "../src/internal/httpTypes.js"
+import type {
+  BindableKeys,
+  PathBindableKeys,
+  QueryOrHeaderBindableKeys,
+} from "../src/internal/httpTypes.js"
 import { multimodal } from "../src/Multimodal.js"
 import { UnstructuredText } from "../src/Unstructured.js"
 
@@ -340,11 +344,78 @@ declare const _bAny: _BindAny
 const _bAnyOk: string = _bAny
 void _bAnyOk
 
+declare const _pathAny: PathBindableKeys<any>
+const _pathAnyOk: string = _pathAny
+void _pathAnyOk
+
+declare const _queryHeaderAny: QueryOrHeaderBindableKeys<any>
+const _queryHeaderAnyOk: string = _queryHeaderAny
+void _queryHeaderAnyOk
+
+const StringArray = Schema.Array(Schema.String)
+const NestedStringArray = Schema.Array(StringArray)
+const RecordArray = Schema.Array(Schema.Struct({ value: Schema.String }))
+const NonEmptyStringArray = Schema.NonEmptyArray(Schema.String)
+void NonEmptyStringArray
+
+// Paths remain primitive-only, while query/header bindings admit only
+// plain arrays of primitive elements.
+type _PathBind = PathBindableKeys<{
+  id: typeof Schema.String
+  tags: typeof StringArray
+}>
+declare const _pathBind: _PathBind
+const _pathBindOk: "id" = _pathBind
+void _pathBindOk
+
+type _QueryHeaderBind = QueryOrHeaderBindableKeys<{
+  id: typeof Schema.String
+  tags: typeof StringArray
+  nested: typeof NestedStringArray
+  records: typeof RecordArray
+  nonEmpty: typeof NonEmptyStringArray
+}>
+declare const _queryHeaderBind: _QueryHeaderBind
+const _queryHeaderBindOk: "id" | "tags" = _queryHeaderBind
+void _queryHeaderBindOk
+
 // Positive compile-time test: plain string-bindable keys remain usable.
 void method({
   params: { id: Schema.String },
   success: Schema.String,
   http: [Http.post("/items/{id}")],
+})
+
+// Positive: primitive arrays bind from repeated query/header instances.
+void method({
+  params: { tags: StringArray, scores: Schema.Array(Schema.Number) },
+  success: Schema.String,
+  http: [
+    Http.get("/items?tag={tags}", {
+      headers: { "X-Score": "scores" } as const,
+    }),
+  ],
+})
+
+void method({
+  params: { values: StringArray },
+  success: Schema.String,
+  // @ts-expect-error — collection schemas cannot bind from path segments
+  http: [Http.post("/items/{values}")],
+})
+
+void method({
+  params: { values: NestedStringArray },
+  success: Schema.String,
+  // @ts-expect-error — nested collection elements are unsupported
+  http: [Http.get("/items?value={values}")],
+})
+
+void method({
+  params: { values: RecordArray },
+  success: Schema.String,
+  // @ts-expect-error — record collection elements are unsupported
+  http: [Http.get("/items", { headers: { "X-Value": "values" } as const })],
 })
 
 // Negative compile-time test: ElementSpec param can't be bound from a path.

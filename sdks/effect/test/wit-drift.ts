@@ -22,10 +22,14 @@
  * `.test.ts`.
  */
 
+import * as Datetime from "../src/Datetime.js"
+import * as Ids from "../src/Ids.js"
 import * as Quota from "../src/Quota.js"
 import * as Unstructured from "../src/Unstructured.js"
+import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as QuotaHost from "golem:quota/types@1.5.0"
+import type * as WallClock from "wasi:clocks/wall-clock@0.2.3"
 
 /**
  * Structural mutual-assignability check, recursively normalising
@@ -56,6 +60,28 @@ type StructEqual<A, B> = [Mutable<A>] extends [Mutable<B>]
 type AssertAllTrue<T extends Record<string, true>> = T
 
 /**
+ * Canonical Golem identifier schemas. `AccountId` and `EnvironmentId`
+ * are included because the public SDK also exposes those opaque IDs;
+ * scalar aliases such as `OplogIndex`, `NodeIndex`, and `ResourceId`
+ * continue to use the existing `WitTypes` primitive codecs.
+ */
+export type _Drift_IdSchemaCodecs = AssertAllTrue<{
+  "Ids.Uuid": StructEqual<typeof Ids.Uuid.Type, CoreTypes.Uuid>
+  "Ids.ComponentId": StructEqual<typeof Ids.ComponentId.Type, CoreTypes.ComponentId>
+  "Ids.AgentId": StructEqual<typeof Ids.AgentId.Type, CoreTypes.AgentId>
+  "Ids.AccountId": StructEqual<typeof Ids.AccountId.Type, CoreTypes.AccountId>
+  "Ids.EnvironmentId": StructEqual<typeof Ids.EnvironmentId.Type, ApiHost.EnvironmentId>
+  "Ids.PromiseId": StructEqual<typeof Ids.PromiseId.Type, CoreTypes.PromiseId>
+}>
+
+/**
+ * Canonical datetime schema matching the WASI wall-clock record.
+ */
+export type _Drift_DatetimeSchemaCodec = AssertAllTrue<{
+  "Datetime.Datetime": StructEqual<typeof Datetime.Datetime.Type, WallClock.Datetime>
+}>
+
+/**
  * Schema codecs in `src/quota.ts` that mirror WIT records bit-for-bit
  * for the RPC wire format (`Schema.Struct({...})` shape == WIT record
  * shape). Any field rename / type change / addition on the WIT side
@@ -67,8 +93,7 @@ export type _Drift_QuotaSchemaCodecs = AssertAllTrue<{
   // src/quota.ts:EnvironmentId mirrors golem:api/host@1.5.0.EnvironmentId
   // (re-exported from QuotaHost).
   "Quota.EnvironmentId": StructEqual<typeof Quota.EnvironmentId.Type, QuotaHost.EnvironmentId>
-  // src/quota.ts:Datetime mirrors wasi:clocks/wall-clock@0.2.3.Datetime
-  // (re-exported from QuotaHost).
+  // Quota.Datetime remains an exact alias of the canonical datetime schema.
   "Quota.Datetime": StructEqual<typeof Quota.Datetime.Type, QuotaHost.Datetime>
   // src/quota.ts:QuotaTokenRecord mirrors golem:quota/types@1.5.0.QuotaTokenRecord.
   "Quota.QuotaTokenRecord": StructEqual<

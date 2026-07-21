@@ -7,7 +7,6 @@ import {
   isSqliteClient,
   type SqliteClient,
 } from "./Sqlite/SqliteClient.js"
-import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
 
 /**
  * Per-agent snapshotting configuration.
@@ -528,8 +527,6 @@ export type CompiledSnapshot =
       readonly policy: SnapshotPolicy
       readonly witConfig: AgentCommon.SnapshottingConfig
       readonly schema: Schema.Top
-      /** Pre-built WIT codec (for parity / future use); not strictly required for JSON. */
-      readonly witCodec: WitCodec<Schema.Top>
       /**
        * The database names declared by the user (deduplicated), in the
        * order they were given. Empty when no `databases` field was
@@ -555,11 +552,10 @@ export type CompiledSnapshot =
 export const compileSnapshot = (
   agentName: string,
   def: SnapshotDef,
-): Effect.Effect<CompiledSnapshot, UnsupportedSchemaError | InvalidSnapshotError> =>
+): Effect.Effect<CompiledSnapshot, InvalidSnapshotError> =>
   Effect.gen(function* () {
     const witConfig = yield* policyToWit(def.policy, `agent '${agentName}' snapshot`)
     if (def._tag === "AutoSnapshotDef") {
-      const witCodec = (yield* toWitCodec(def.schema)) as WitCodec<Schema.Top>
       const rawDbs = def.databases ?? []
       const seenNames = new Set<string>()
       for (const name of rawDbs) {
@@ -584,7 +580,6 @@ export const compileSnapshot = (
         policy: def.policy,
         witConfig,
         schema: def.schema,
-        witCodec,
         declaredDatabases: [...rawDbs],
       }
     }

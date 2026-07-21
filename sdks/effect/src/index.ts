@@ -61,6 +61,15 @@ export * as Client from "./Client.js"
 export * as Config from "./Config.js"
 
 /**
+ * Canonical WIT datetime schema and lossless conversions to and from JavaScript
+ * `Date`, Effect `DateTime`, and epoch milliseconds.
+ *
+ * @since 1.5.1
+ * @category modules
+ */
+export * as Datetime from "./Datetime.js"
+
+/**
  * Effect-typed wrappers around the execution-mode controls on
  * `golem:api/host@1.5.0` (persistence level, idempotence mode, atomic
  * regions, oplog commit, idempotency-key generation), plus the high-level
@@ -87,6 +96,15 @@ export * as Element from "./Element.js"
  * @category modules
  */
 export * as Http from "./Http.js"
+
+/**
+ * Canonical Effect Schema codecs for Golem identifiers such as `Uuid`,
+ * `ComponentId`, `AgentId`, `AccountId`, `EnvironmentId`, and `PromiseId`.
+ *
+ * @since 1.5.1
+ * @category modules
+ */
+export * as Ids from "./Ids.js"
 
 /**
  * Effect-typed wrappers around the eventually-consistent subset of

@@ -13,6 +13,7 @@ import { HostLive, type HostServices } from "../host/HostLive.js"
 import { SqliteHostExtClient } from "../host/SqliteHostExtClient.js"
 import {
   HttpRouteError,
+  isQueryOrHeaderBindableSchema,
   isStringBindableSchema,
   validateAgentHttp,
   type MethodHttpInput,
@@ -28,6 +29,7 @@ import {
   type MethodInput,
   type MethodParams,
   type MethodSpec,
+  type MethodSuccess,
   type ParamBinding,
 } from "./method.js"
 import { Principal } from "../Principal.js"
@@ -583,7 +585,7 @@ interface CompiledAgent {
   readonly constructorBindings: ReadonlyArray<ParamBinding>
   /** Filtered view of {@link constructorBindings}: only component-model wire bindings. */
   readonly constructorCodecs: ReadonlyArray<ParamCodec>
-  readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, Schema.Top, Schema.Top>>
+  readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
   readonly agentType: AgentCommon.AgentType
   /** Compiled config bundle when `metadata.config` is set; `null` otherwise. */
   readonly compiledConfig: CompiledConfig | null
@@ -684,12 +686,12 @@ export const registerAgent = <
       .filter((b): b is typeof b & { witCodec: WitCodec<Schema.Top> } => b.witCodec !== null)
       .map((b) => ({ name: b.name, codec: b.witCodec }))
 
-    const methodCodecs = new Map<string, MethodCodec<MethodParams, Schema.Top, Schema.Top>>()
+    const methodCodecs = new Map<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>()
     const methodHttpInputs: Array<MethodHttpInput> = []
     for (const [methodName, spec] of Object.entries(metadata.methods)) {
       const mc = (yield* compileMethodSpec(methodName, spec)) as MethodCodec<
         MethodParams,
-        Schema.Top,
+        MethodSuccess,
         Schema.Top
       >
       methodCodecs.set(methodName, mc)
@@ -699,6 +701,7 @@ export const registerAgent = <
         endpoints: spec.http ?? [],
         nonStringBindableParams: collectNonStringBindableParams(spec.params),
         stringBindableParams: collectStringBindableParams(spec.params),
+        queryOrHeaderBindableParams: collectQueryOrHeaderBindableParams(spec.params),
       })
     }
 
@@ -806,13 +809,22 @@ const collectNonStringBindableParams = (
 
 const collectStringBindableParams = (
   params: Readonly<Record<string, unknown>>,
+): ReadonlySet<string> => collectBindableParams(params, isStringBindableSchema)
+
+const collectQueryOrHeaderBindableParams = (
+  params: Readonly<Record<string, unknown>>,
+): ReadonlySet<string> => collectBindableParams(params, isQueryOrHeaderBindableSchema)
+
+const collectBindableParams = (
+  params: Readonly<Record<string, unknown>>,
+  isBindable: (schema: Schema.Top) => boolean,
 ): ReadonlySet<string> => {
   const out = new Set<string>()
   for (const [name, p] of Object.entries(params)) {
     if (isMultimodal(p) || isElementSpec(p)) continue
     // Only Schema.Top values can be string-bindable.
     if (p && typeof p === "object" && "ast" in (p as object)) {
-      if (isStringBindableSchema(p as Schema.Top)) {
+      if (isBindable(p as Schema.Top)) {
         out.add(name)
       }
     }
