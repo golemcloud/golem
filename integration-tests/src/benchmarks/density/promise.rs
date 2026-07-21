@@ -245,6 +245,15 @@ async fn complete_at_rate(
     while let Some(completion) = completions.join_next().await {
         completion_latencies.push(completion??);
     }
+
+    // Every restaged worker has one ready promise when the measured window ends.
+    // Complete these unmeasured promises before advancing so the next rate starts
+    // from an empty promise registry rather than accumulating one pool per step.
+    drop(ready_sender);
+    while let Ok(work) = ready_work.try_recv() {
+        let work = work?;
+        user.complete_promise(&work.promise, Vec::new()).await?;
+    }
     Ok(Period {
         completed: completion_latencies.len() as u64,
         elapsed: started.elapsed(),
