@@ -1731,18 +1731,12 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    // TODO: FCL: cleanup this, and make lang ids reserved for template names
+    // Guesses the language from the applied language templates, which are named after the
+    // language id they provide (see `GuestLanguage::from_id_string`).
     pub fn guess_language(&self) -> Option<GuestLanguage> {
-        self.applied_layers().iter().find_map(|(id, _)| {
-            id.template_name()
-                .and_then(|template_name| match template_name {
-                    "ts" => Some(GuestLanguage::TypeScript),
-                    "rust" => Some(GuestLanguage::Rust),
-                    "scala" => Some(GuestLanguage::Scala),
-                    "moonbit" => Some(GuestLanguage::MoonBit),
-                    _ => None,
-                })
-        })
+        self.applied_layers()
+            .iter()
+            .find_map(|(id, _)| id.template_name().and_then(GuestLanguage::from_id_string))
     }
 
     pub fn source(&self) -> &Path {
