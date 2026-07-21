@@ -1932,16 +1932,17 @@ impl AppCommandHandler {
         let http_api_deployment_handler = self.ctx.api_deployment_handler();
         let interactive_handler = self.ctx.interactive_handler();
 
-        let approve = || {
-            if approve_staging_steps && !interactive_handler.confirm_staging_next_step()? {
+        let approve = |operation: &str, name: &str| {
+            if approve_staging_steps
+                && !interactive_handler.confirm_staging_next_step(operation, name)?
+            {
                 bail!("Aborted staging");
             }
             Ok(())
         };
 
-        // TODO
         for (component_name, component_diff) in &diff_stage.components {
-            approve()?;
+            approve(staging_operation(component_diff), component_name)?;
 
             let component_name = ComponentName(component_name.to_string());
 
@@ -2013,7 +2014,7 @@ impl AppCommandHandler {
         }
 
         for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
-            approve()?;
+            approve(staging_operation(http_api_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
 
@@ -2047,7 +2048,7 @@ impl AppCommandHandler {
         }
 
         for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
-            approve()?;
+            approve(staging_operation(mcp_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
 
@@ -2867,6 +2868,15 @@ fn materialize_agent_secret_defaults(
     unused_paths.dedup();
 
     (materialized_defaults, unused_paths)
+}
+
+/// The staging operation verb for a diff entry, used to add context to staging approval prompts.
+fn staging_operation<D>(diff: &diff::BTreeMapDiffValue<D>) -> &'static str {
+    match diff {
+        diff::BTreeMapDiffValue::Create => "create",
+        diff::BTreeMapDiffValue::Delete => "delete",
+        diff::BTreeMapDiffValue::Update(_) => "update",
+    }
 }
 
 /// Returns the components (sorted) that were matched by more than one fuzzy pattern,
