@@ -166,7 +166,10 @@ async fn cleanup_pool(
 ) -> anyhow::Result<()> {
     let workers = (0..PROMISE_POOL_SIZE)
         .filter_map(|index| {
-            let agent = agent_id!(PROMISE_AGENT_TYPE, format!("{}-{index}", config.cell_name()));
+            let agent = agent_id!(
+                PROMISE_AGENT_TYPE,
+                format!("{}-{index}", config.cell_name())
+            );
             AgentId::from_agent_id(component.id, &agent).ok()
         })
         .collect::<Vec<_>>();
