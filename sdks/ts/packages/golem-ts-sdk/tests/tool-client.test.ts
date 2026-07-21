@@ -13,7 +13,9 @@
 // limitations under the License.
 
 import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import { type as arkType } from 'arktype';
 import { describe, expect, it, vi } from 'vitest';
+import * as z3 from 'zod3';
 import { z } from 'zod/v4';
 import {
   client,
@@ -158,6 +160,50 @@ describe('fluent tool runtime client', () => {
     );
   });
 
+  it('orders inherited globals before fixed positionals, tails, options, and flags', async () => {
+    const definition = toolDefinition('ordered')
+      .global('root-global', z.string(), { required: true })
+      .command('group', (group) =>
+        group
+          .global('group-global', z.number(), { required: true })
+          .command('leaf', (leaf) =>
+            leaf
+              .global('leaf-global', z.boolean(), { kind: 'flag' })
+              .body((body) =>
+                body
+                  .positional('fixed-value', z.string())
+                  .tail('remaining-values', z.string())
+                  .option('local-option', z.number(), { optionalScalar: true })
+                  .flag('local-flag')
+                  .returns(z.void()),
+              ),
+          ),
+      );
+    const transport = new FakeTransport(() => ({}));
+
+    await client(definition, { transport }).group.leaf({
+      rootGlobal: 'root',
+      groupGlobal: 2,
+      leafGlobal: true,
+      fixedValue: 'fixed',
+      remainingValues: ['one', 'two'],
+      localFlag: false,
+    });
+
+    expect(transport.invocations[0].commandPath).toEqual(['group', 'leaf']);
+    expect(typedSchemaValueFromWit(transport.invocations[0].input).value).toEqual(
+      v.record([
+        v.string('root'),
+        v.f64(2),
+        v.bool(true),
+        v.string('fixed'),
+        v.list([v.string('one'), v.string('two')]),
+        v.option(undefined),
+        v.bool(false),
+      ]),
+    );
+  });
+
   it('treats an omitted optional argument named constructor as absent', async () => {
     const definition = toolDefinition('prototype-name').body((body) =>
       body.option('constructor', z.string(), { optionalScalar: true }).returns(z.void()),
@@ -244,6 +290,24 @@ describe('fluent tool runtime client', () => {
         transport: new FakeTransport(() => ({ result: wireValue(z.string(), 'value') })),
       })['optional-stdout']({}),
     ).resolves.toEqual({ result: 'value' });
+  });
+
+  it('combines stdin with structured results and stdout through the transport seam', async () => {
+    const definition = toolDefinition('transform').body((body) =>
+      body.stdin({ required: true }).stdout({ required: true }).returns(z.string()),
+    );
+    const stdin = new ReadableStream<Uint8Array>();
+    const stdout = new ReadableStream<Uint8Array>();
+    const transport = new FakeTransport(() => ({
+      result: wireValue(z.string(), 'transformed'),
+      stdout,
+    }));
+
+    await expect(client(definition, { transport }).transform({ stdin })).resolves.toEqual({
+      result: 'transformed',
+      stdout,
+    });
+    expect(transport.invocations[0].stdin).toBe(stdin);
   });
 
   it.each([
@@ -471,6 +535,82 @@ describe('fluent tool runtime client', () => {
         error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
       },
     });
+  });
+
+  it('rejects a result value that does not conform to its matching schema graph', async () => {
+    const codec = compileSchema(z.object({ value: z.string() }));
+    const definition = toolDefinition('invalid-value').body((body) =>
+      body.returns(z.object({ value: z.string() })),
+    );
+    const failure = await rejectionOf(
+      client(definition, {
+        transport: new FakeTransport(() => ({
+          result: typedSchemaValueToWit({
+            graph: codec.graph,
+            value: v.record([v.bool(true)]),
+          }),
+        })),
+      })['invalid-value']({}),
+    );
+
+    expect(failure).toMatchObject({
+      cause: {
+        tag: 'rpc',
+        error: { tag: 'protocol-error', val: expect.stringContaining('does not conform') },
+      },
+    });
+  });
+
+  it('encodes and decodes Zod 3, Zod 4, and ArkType definitions', async () => {
+    const zod3Definition = toolDefinition('zod-three').body((body) =>
+      body
+        .positional('input', z3.object({ message: z3.string() }))
+        .returns(z3.object({ length: z3.number() })),
+    );
+    const zod4Definition = toolDefinition('zod-four').body((body) =>
+      body
+        .positional('input', z.object({ message: z.string() }))
+        .returns(z.object({ length: z.number() })),
+    );
+    const arkDefinition = toolDefinition('ark').body((body) =>
+      body
+        .positional('input', arkType({ message: 'string' }))
+        .returns(arkType({ length: 'number' })),
+    );
+
+    const zod3Transport = new FakeTransport(() => ({
+      result: wireValue(z3.object({ length: z3.number() }), { length: 3 }),
+    }));
+    const zod4Transport = new FakeTransport(() => ({
+      result: wireValue(z.object({ length: z.number() }), { length: 4 }),
+    }));
+    const arkTransport = new FakeTransport(() => ({
+      result: wireValue(arkType({ length: 'number' }), { length: 5 }),
+    }));
+
+    await expect(
+      client(zod3Definition, { transport: zod3Transport })['zod-three']({
+        input: { message: 'old' },
+      }),
+    ).resolves.toEqual({ length: 3 });
+    await expect(
+      client(zod4Definition, { transport: zod4Transport })['zod-four']({
+        input: { message: 'new' },
+      }),
+    ).resolves.toEqual({ length: 4 });
+    await expect(
+      client(arkDefinition, { transport: arkTransport }).ark({ input: { message: 'ark' } }),
+    ).resolves.toEqual({ length: 5 });
+
+    expect(typedSchemaValueFromWit(zod3Transport.invocations[0].input).value).toEqual(
+      v.record([v.record([v.string('old')])]),
+    );
+    expect(typedSchemaValueFromWit(zod4Transport.invocations[0].input).value).toEqual(
+      v.record([v.record([v.string('new')])]),
+    );
+    expect(typedSchemaValueFromWit(arkTransport.invocations[0].input).value).toEqual(
+      v.record([v.record([v.string('ark')])]),
+    );
   });
 
   it('lazily creates and reuses the default ToolRpc for streamless calls', async () => {
