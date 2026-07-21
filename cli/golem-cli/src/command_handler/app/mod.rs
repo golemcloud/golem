@@ -34,7 +34,7 @@ use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
-use crate::fuzzy::{Error, FuzzySearch};
+use crate::fuzzy::{Error, FuzzySearch, Match};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output, log_action, log_error, log_failed_to,
     log_finished_ok, log_finished_up_to_date, log_preformatted, log_skipping_up_to_date, log_warn,
@@ -2598,7 +2598,6 @@ impl AppCommandHandler {
             .await
     }
 
-    // TODO: forbid matching the same component multiple times
     // Returns false if there is no app
     async fn opt_select_components_internal(
         &self,
@@ -2660,6 +2659,29 @@ impl AppCommandHandler {
                 log_text_view(&AvailableComponentNamesHelp(
                     app_ctx.application().component_names().cloned().collect(),
                 ));
+
+                bail!(NonSuccessfulExit);
+            }
+
+            // Forbid distinct patterns from resolving to the same component, which would
+            // otherwise select (build/deploy) that component more than once.
+            let collisions = duplicate_component_matches(&found);
+            if !collisions.is_empty() {
+                logln("");
+                log_error(format!(
+                    "The following component names were matched by multiple patterns:\n{}",
+                    collisions
+                        .iter()
+                        .map(|(option, patterns)| {
+                            format!(
+                                "  - {} matched by {}",
+                                option.bold(),
+                                patterns.iter().map(|p| p.as_str().bold().to_string()).join(", ")
+                            )
+                        })
+                        .join("\n")
+                ));
+                logln("");
 
                 bail!(NonSuccessfulExit);
             }
@@ -2845,4 +2867,66 @@ fn materialize_agent_secret_defaults(
     unused_paths.dedup();
 
     (materialized_defaults, unused_paths)
+}
+
+/// Returns the components (sorted) that were matched by more than one fuzzy pattern,
+/// each paired with the patterns that matched it. Empty when there are no collisions.
+fn duplicate_component_matches(found: &[Match]) -> Vec<(String, Vec<String>)> {
+    let mut duplicate_options = found
+        .iter()
+        .map(|m| m.option.as_str())
+        .counts()
+        .into_iter()
+        .filter(|&(_, count)| count > 1)
+        .map(|(option, _)| option.to_string())
+        .collect::<Vec<_>>();
+    duplicate_options.sort();
+
+    duplicate_options
+        .into_iter()
+        .map(|option| {
+            let patterns = found
+                .iter()
+                .filter(|m| m.option == option)
+                .map(|m| m.pattern.clone())
+                .collect::<Vec<_>>();
+            (option, patterns)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::duplicate_component_matches;
+    use crate::fuzzy::Match;
+    use test_r::test;
+
+    fn matched(option: &str, pattern: &str) -> Match {
+        Match {
+            option: option.to_string(),
+            pattern: pattern.to_string(),
+            exact_match: option == pattern,
+        }
+    }
+
+    #[test]
+    fn detects_two_patterns_matching_the_same_component() {
+        let found = vec![
+            matched("payment-service", "payment-service"),
+            matched("payment-service", "payment"),
+        ];
+        assert_eq!(
+            duplicate_component_matches(&found),
+            vec![(
+                "payment-service".to_string(),
+                vec!["payment-service".to_string(), "payment".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn no_collision_for_distinct_components() {
+        let found = vec![matched("a", "a"), matched("b", "b")];
+        assert!(duplicate_component_matches(&found).is_empty());
+    }
 }
