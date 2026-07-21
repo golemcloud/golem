@@ -35,6 +35,7 @@ const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const POOL_STARVATION_THRESHOLD: Duration = Duration::from_millis(10);
+const SLOW_RESTAGE_THRESHOLD: Duration = Duration::from_millis(100);
 // Keep the pool small enough that benchmark scaffolding does not become an
 // agent-density test; pool starvation reports lifecycle capacity separately.
 const PROMISE_POOL_SIZE: usize = 256;
@@ -259,11 +260,22 @@ async fn complete_at_rate(
                 user.complete_promise(&work.promise, payload).await?;
                 completion_started.elapsed()
             };
+            let idle_wait_started = Instant::now();
             user.wait_for_status(&work.agent, AgentStatus::Idle, WAITER_READY_TIMEOUT)
                 .await?;
+            let idle_wait = idle_wait_started.elapsed();
             let _permit = staging_limit.acquire_owned().await?;
+            let restage_started = Instant::now();
             let restaged =
                 stage_work(&user, &component, work.agent, work.parsed_agent, work.wait).await?;
+            let restage = restage_started.elapsed();
+            if idle_wait > SLOW_RESTAGE_THRESHOLD || restage > SLOW_RESTAGE_THRESHOLD {
+                println!(
+                    "Promise-density: slow restage idle-wait-ms={} stage-ms={}",
+                    idle_wait.as_millis(),
+                    restage.as_millis()
+                );
+            }
             ready_sender
                 .send(Ok(restaged))
                 .await

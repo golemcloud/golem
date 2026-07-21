@@ -4,15 +4,15 @@ name: cloud-density-promise-1pod
 section: promise
 defaultRamp: [1, 2, 4, 8, 16, 32, 64, 128, 256]
 cells:
-  - { name: promise-tiny-cold-1pod, payloadSize: 256, waiterPresence: cold }
-  - { name: promise-tiny-warm-1pod, payloadSize: 256, waiterPresence: warm }
-  - { name: promise-tiny-mixed-1pod, payloadSize: 256, waiterPresence: mixed }
-  - { name: promise-small-cold-1pod, payloadSize: 65536, waiterPresence: cold }
-  - { name: promise-small-warm-1pod, payloadSize: 65536, waiterPresence: warm }
-  - { name: promise-small-mixed-1pod, payloadSize: 65536, waiterPresence: mixed }
-  - { name: promise-medium-cold-1pod, payloadSize: 16777216, waiterPresence: cold }
-  - { name: promise-medium-warm-1pod, payloadSize: 16777216, waiterPresence: warm }
-  - { name: promise-medium-mixed-1pod, payloadSize: 16777216, waiterPresence: mixed }
-  - { name: promise-huge-cold-1pod, payloadSize: 32505856, waiterPresence: cold }
-  - { name: promise-huge-warm-1pod, payloadSize: 32505856, waiterPresence: warm }
-  - { name: promise-huge-mixed-1pod, payloadSize: 32505856, waiterPresence: mixed }
+  - { name: promise-tiny-cold-1pod, enabled: false, payloadSize: 256, waiterPresence: cold }
+  - { name: promise-tiny-warm-1pod, enabled: true, payloadSize: 256, waiterPresence: warm }
+  - { name: promise-tiny-mixed-1pod, enabled: false, payloadSize: 256, waiterPresence: mixed }
+  - { name: promise-small-cold-1pod, enabled: false, payloadSize: 65536, waiterPresence: cold }
+  - { name: promise-small-warm-1pod, enabled: false, payloadSize: 65536, waiterPresence: warm }
+  - { name: promise-small-mixed-1pod, enabled: false, payloadSize: 65536, waiterPresence: mixed }
+  - { name: promise-medium-cold-1pod, enabled: false, payloadSize: 16777216, waiterPresence: cold }
+  - { name: promise-medium-warm-1pod, enabled: false, payloadSize: 16777216, waiterPresence: warm }
+  - { name: promise-medium-mixed-1pod, enabled: false, payloadSize: 16777216, waiterPresence: mixed }
+  - { name: promise-huge-cold-1pod, enabled: false, payloadSize: 32505856, waiterPresence: cold }
+  - { name: promise-huge-warm-1pod, enabled: false, payloadSize: 32505856, waiterPresence: warm }
+  - { name: promise-huge-mixed-1pod, enabled: false, payloadSize: 32505856, waiterPresence: mixed }
