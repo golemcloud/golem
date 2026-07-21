@@ -309,6 +309,66 @@ type RootImplementation<Model> =
 
 export type ToolImplementation<Definition> = RootImplementation<ToolCommandModelOf<Definition>>;
 
+declare const TOOL_CLIENT_ERRORS: unique symbol;
+
+export interface ToolClientMethod<Args, Result, Errors = never> {
+  (args: Simplify<Args>): Promise<Result>;
+  readonly [TOOL_CLIENT_ERRORS]: Errors;
+}
+
+export type ToolClientErrors<Method> = Method extends {
+  readonly [TOOL_CLIENT_ERRORS]: infer Errors;
+}
+  ? Errors
+  : never;
+
+type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, ReadableStream<Uint8Array>>;
+
+type ClientResult<Body> =
+  BodyStdout<Body> extends 'required'
+    ? [BodySuccess<Body>] extends [undefined]
+      ? ReadableStream<Uint8Array>
+      : { result: BodySuccess<Body>; stdout: ReadableStream<Uint8Array> }
+    : BodyStdout<Body> extends 'optional'
+      ? [BodySuccess<Body>] extends [undefined]
+        ? ReadableStream<Uint8Array> | undefined
+        : { result: BodySuccess<Body>; stdout?: ReadableStream<Uint8Array> }
+      : [BodySuccess<Body>] extends [undefined]
+        ? void
+        : BodySuccess<Body>;
+
+type ClientMethodFor<Model, Inherited> =
+  Model extends ToolCommandModel<string, infer Globals, infer Body, object>
+    ? Body extends AnyToolBodyModel
+      ? ToolClientMethod<
+          Inherited & Globals & BodyArgs<Body> & ClientStdin<Body>,
+          ClientResult<Body>,
+          BodyErrors<Body>
+        >
+      : never
+    : never;
+
+type ChildClients<Children, Inherited> = {
+  [Name in keyof Children]: NodeClient<Children[Name], Inherited>;
+};
+
+type NodeClient<Model, Inherited> =
+  Model extends ToolSubtreeModel<infer Command>
+    ? NodeClient<Command, Inherited>
+    : Model extends ToolCommandModel<string, infer Globals, infer Body, infer Children>
+      ? Body extends AnyToolBodyModel
+        ? ClientMethodFor<Model, Inherited> & ChildClients<Children, Inherited & Globals>
+        : ChildClients<Children, Inherited & Globals>
+      : never;
+
+type RootClient<Model> =
+  Model extends ToolCommandModel<infer Name, infer Globals, infer Body, infer Children>
+    ? (Body extends AnyToolBodyModel ? { [Key in Name]: ClientMethodFor<Model, {}> } : {}) &
+        ChildClients<Children, Globals>
+    : never;
+
+export type ToolClient<Definition> = Simplify<RootClient<ToolCommandModelOf<Definition>>>;
+
 export interface ImplementedTool<Name extends string = string> {
   readonly name: Name;
 }
@@ -1550,6 +1610,12 @@ function validateTypeScriptProjection(tool: ExtendedToolType): void {
       const projected = new Map<string, string>();
       tool.canonicalInputFields(commandNode).forEach((field) => {
         const key = camelCase(field.name);
+        if (commandNode.body?.stdin && key === 'stdin') {
+          toolBuildError(
+            'duplicate-name',
+            `tool argument "${field.name}" conflicts with the TypeScript stdin stream field`,
+          );
+        }
         const previous = projected.get(key);
         if (previous !== undefined) {
           toolBuildError(

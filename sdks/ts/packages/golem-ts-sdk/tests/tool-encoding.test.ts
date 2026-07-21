@@ -811,9 +811,15 @@ describe('extended tool WIT encoding', () => {
     const collision = toolDefinition('collision').body((commandBody) =>
       commandBody.option('max-1', z.string()).option('max1', z.string()),
     );
+    const stdinCollision = toolDefinition('stdin-collision').body((commandBody) =>
+      commandBody.option('stdin', z.string()).stdin({ required: false }),
+    );
     const dispatcherAnnotations = toolDefinition('dispatcher').annotations({ readOnly: true });
 
     expect(() => getExtendedToolDefinition(collision)).toThrowError(
+      expect.objectContaining({ code: 'duplicate-name' }),
+    );
+    expect(() => getExtendedToolDefinition(stdinCollision)).toThrowError(
       expect.objectContaining({ code: 'duplicate-name' }),
     );
     expect(() => getExtendedToolDefinition(dispatcherAnnotations)).toThrowError(

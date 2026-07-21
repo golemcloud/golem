@@ -25,8 +25,16 @@ import {
   ok,
   s,
   toolDefinition,
+  type ToolClient,
+  type ToolClientErrors,
   type ToolImplementation,
 } from '../dist/index.mjs';
+
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+    ? true
+    : false;
+type Expect<Value extends true> = Value;
 
 const CommitResult = z.object({
   hash: z.string(),
@@ -584,3 +592,198 @@ void invalidDispatcherImplementation;
 // @ts-expect-error the root implicit-body key is the tool metadata name, not camelCase
 const wrongRootKey: ToolImplementation<typeof grepDef> = { grepTool: async () => ok([]) };
 void wrongRootKey;
+
+declare const grepClient: ToolClient<typeof grepDef>;
+const grepCall = grepClient.grep({
+  pattern: 'TODO',
+  files: ['./src'],
+  extraPatterns: [],
+  caseSensitive: true,
+  color: 'auto',
+  stdin: new ReadableStream<Uint8Array>(),
+});
+const grepResult: Promise<{
+  result: Array<{ file: unknown; line: number; text: string }>;
+  stdout: ReadableStream<Uint8Array>;
+}> = grepCall;
+type GrepClientResult = Expect<
+  Equal<
+    typeof grepCall,
+    Promise<{
+      result: Array<{ file: unknown; line: number; text: string }>;
+      stdout: ReadableStream<Uint8Array>;
+    }>
+  >
+>;
+void grepResult;
+void (undefined as unknown as GrepClientResult);
+
+type GrepClientErrors = ToolClientErrors<(typeof grepClient)['grep']>;
+const invalidPatternClientError: GrepClientErrors = err('invalid-pattern', { reason: 'bad' });
+const noMatchClientError: GrepClientErrors = err('no-match');
+// @ts-expect-error client methods retain only their declared custom errors
+const undeclaredClientError: GrepClientErrors = err('other-error');
+void invalidPatternClientError;
+void noMatchClientError;
+void undeclaredClientError;
+
+const replaceResult: Promise<bigint> = grepClient.replace({
+  pattern: 'TODO',
+  replacement: 'DONE',
+  files: ['./src'],
+  caseSensitive: false,
+  color: 'never',
+});
+type ReplaceClientResult = Expect<
+  Equal<ReturnType<(typeof grepClient)['replace']>, Promise<bigint>>
+>;
+void replaceResult;
+void (undefined as unknown as ReplaceClientResult);
+// @ts-expect-error client argument fields use camelCase, not canonical metadata names
+grepClient.replace({ pattern: 'x', replacement: 'y', files: [], 'case-sensitive': true });
+grepClient.replace({
+  pattern: 'x',
+  replacement: 'y',
+  files: [],
+  caseSensitive: true,
+  color: 'auto',
+  // @ts-expect-error replace does not declare stdin
+  stdin: new ReadableStream<Uint8Array>(),
+});
+
+declare const gitClient: ToolClient<typeof gitDef>;
+type CommitClientArgs = Parameters<(typeof gitClient)['commit']>[0];
+declare const commitClientArgs: CommitClientArgs;
+const commitMessage: string = commitClientArgs.message;
+const commitGitDir: string = commitClientArgs.gitDir;
+const commitConfig: Map<string, string> = commitClientArgs.config;
+const commitVerbose: number = commitClientArgs.verbose;
+void commitMessage;
+void commitGitDir;
+void commitConfig;
+void commitVerbose;
+// @ts-expect-error command aliases are metadata-only and do not create client members
+void gitClient.ci;
+// @ts-expect-error pure dispatchers are nested objects, not callable methods
+gitClient.remote({});
+const remoteRemoveResult: Promise<void> = gitClient.remote.remove({
+  name: 'origin',
+  gitDir: '.git',
+  config: new Map(),
+  verbose: 0,
+  paginate: false,
+});
+type UnitClientResult = Expect<
+  Equal<ReturnType<(typeof gitClient.remote)['remove']>, Promise<void>>
+>;
+void remoteRemoveResult;
+void (undefined as unknown as UnitClientResult);
+
+const stashResult: Promise<void> = gitClient.stash({
+  message: 'work',
+  keepIndex: false,
+  gitDir: '.git',
+  verbose: 0,
+});
+const stashPopResult: Promise<void> = gitClient.stash.pop({
+  gitDir: '.git',
+  verbose: 0,
+});
+void stashResult;
+void stashPopResult;
+
+const requiredStdoutDef = toolDefinition('required-stdout').body((body) =>
+  body.stdout({ required: true }).returns(z.void()),
+);
+declare const requiredStdoutClient: ToolClient<typeof requiredStdoutDef>;
+const requiredStdout: Promise<ReadableStream<Uint8Array>> = requiredStdoutClient['required-stdout'](
+  {},
+);
+type RequiredStdoutResult = Expect<
+  Equal<
+    ReturnType<(typeof requiredStdoutClient)['required-stdout']>,
+    Promise<ReadableStream<Uint8Array>>
+  >
+>;
+void requiredStdout;
+void (undefined as unknown as RequiredStdoutResult);
+// @ts-expect-error root bodies use the exact metadata name, not a camelCase duplicate
+requiredStdoutClient.requiredStdout({});
+
+const optionalStdoutDef = toolDefinition('optional-stdout').body((body) =>
+  body.stdout({ required: false }).returns(z.void()),
+);
+declare const optionalStdoutClient: ToolClient<typeof optionalStdoutDef>;
+const optionalStdout: Promise<ReadableStream<Uint8Array> | undefined> = optionalStdoutClient[
+  'optional-stdout'
+]({});
+type OptionalStdoutResult = Expect<
+  Equal<
+    ReturnType<(typeof optionalStdoutClient)['optional-stdout']>,
+    Promise<ReadableStream<Uint8Array> | undefined>
+  >
+>;
+void optionalStdout;
+void (undefined as unknown as OptionalStdoutResult);
+
+const optionalStructuredStdoutDef = toolDefinition('optional-structured-stdout').body((body) =>
+  body.stdout({ required: false }).returns(z.string()),
+);
+declare const optionalStructuredStdoutClient: ToolClient<typeof optionalStructuredStdoutDef>;
+const optionalStructuredStdout: Promise<{
+  result: string;
+  stdout?: ReadableStream<Uint8Array>;
+}> = optionalStructuredStdoutClient['optional-structured-stdout']({});
+type OptionalStructuredStdoutResult = Expect<
+  Equal<
+    ReturnType<(typeof optionalStructuredStdoutClient)['optional-structured-stdout']>,
+    Promise<{ result: string; stdout?: ReadableStream<Uint8Array> }>
+  >
+>;
+void optionalStructuredStdout;
+void (undefined as unknown as OptionalStructuredStdoutResult);
+
+declare const optionalStreamClient: ToolClient<typeof optionalStreamDef>;
+const optionalStdinOmitted: Promise<void> = optionalStreamClient['optional-stream']({});
+const optionalStdinSupplied: Promise<void> = optionalStreamClient['optional-stream']({
+  stdin: new ReadableStream<Uint8Array>(),
+});
+void optionalStdinOmitted;
+void optionalStdinSupplied;
+
+const requiredStdinDef = toolDefinition('required-stdin').body((body) =>
+  body.stdin({ required: true }).returns(z.void()),
+);
+declare const requiredStdinClient: ToolClient<typeof requiredStdinDef>;
+requiredStdinClient['required-stdin']({ stdin: new ReadableStream<Uint8Array>() });
+// @ts-expect-error required stdin must be supplied by the caller
+requiredStdinClient['required-stdin']({});
+
+const clientSubtreeDef = toolDefinition('client-subtree')
+  .global('child-global', z.string(), { required: true })
+  .body((body) => body.positional('value', z.number()).returns(z.boolean()))
+  .command('nested', (nested) => nested.body((body) => body.returns(z.string())));
+const clientParentDef = toolDefinition('client-parent')
+  .global('parent-global', z.boolean(), { kind: 'flag' })
+  .command('client-subtree', clientSubtreeDef);
+declare const clientParent: ToolClient<typeof clientParentDef>;
+const subtreeResult: Promise<boolean> = clientParent['client-subtree']({
+  parentGlobal: true,
+  childGlobal: 'child',
+  value: 1,
+});
+const nestedSubtreeResult: Promise<string> = clientParent['client-subtree'].nested({
+  parentGlobal: true,
+  childGlobal: 'child',
+});
+void subtreeResult;
+void nestedSubtreeResult;
+declare const standaloneSubtreeClient: ToolClient<typeof clientSubtreeDef>;
+standaloneSubtreeClient['client-subtree']({ childGlobal: 'child', value: 1 });
+standaloneSubtreeClient.nested({ childGlobal: 'child' });
+standaloneSubtreeClient['client-subtree']({
+  // @ts-expect-error the standalone subtree client does not inherit its graft parent's globals
+  parentGlobal: true,
+  childGlobal: 'child',
+  value: 1,
+});
