@@ -794,6 +794,10 @@ mod tests {
             package["dependencies"]["effect"],
             crate::versions::effect_dep::EFFECT,
         );
+        assert_eq!(
+            package["dependencies"]["@golemcloud/effect-golem"],
+            crate::versions::sdk::EFFECT_GOLEM,
+        );
         assert!(package["dependencies"].get("@effect/ai-openai").is_none());
     }
 }
