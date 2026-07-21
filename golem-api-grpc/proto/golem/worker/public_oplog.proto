@@ -69,6 +69,7 @@ message OplogEntry {
     CancelledParameters Cancelled = 46;
     CardRevokedParameters CardRevoked = 47;
     HostStreamFrameParameters HostStreamFrame = 48;
+    CompletionDiscardedParameters CompletionDiscarded = 49;
   }
 }
 
@@ -141,6 +142,11 @@ message CancelledParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
   optional golem.schema.TypedSchemaValue partial = 3;
+}
+
+message CompletionDiscardedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 start_index = 2;
 }
 
 message AgentInvocationStartedParameters {

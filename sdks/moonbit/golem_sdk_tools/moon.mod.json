@@ -4,7 +4,8 @@
   "deps": {
     "moonbitlang/x": "0.4.39",
     "moonbitlang/parser": "0.2.5",
-    "moonbitlang/formatter": "0.1.5"
+    "moonbitlang/formatter": "0.1.5",
+    "Yoorkin/prettyprinter": "0.4.9"
   },
   "readme": "README.mbt.md",
   "repository": "https://github.com/golemcloud/moonbit-sdk",

@@ -1,4 +1,4 @@
-declare module 'wasi:cli/environment@0.2.3' {
+declare module 'wasi:cli/environment@0.2.6' {
   /**
    * Get the POSIX-style environment variables.
    * Each environment variable is provided as a pair of string variable names

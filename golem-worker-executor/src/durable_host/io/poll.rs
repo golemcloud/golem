@@ -38,12 +38,14 @@ use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
+        let rep = self_.rep();
         let handle = CallHandle::<IoPollReady, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
         )
         .await?;
+        let was_live = handle.is_live();
 
         let result = handle
             .run(self, async |ctx| -> wasmtime::Result<_> {
@@ -57,7 +59,20 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
             })
             .await?;
 
-        result.result.map_err(wasmtime::Error::msg)
+        let is_ready = result.result.map_err(wasmtime::Error::msg)?;
+
+        // A file-stream pollable recorded as ready was actually awaited by the live run before
+        // its result was persisted, and the file operation it gates re-executes for real during
+        // replay. Await the real readiness too, so subsequent (non-durable) reads/writes observe
+        // the same stream state as the recorded run (see
+        // `PrivateDurableWorkerState::file_stream_pollables`).
+        if !was_live && is_ready && self.state.file_stream_pollables.contains(&rep) {
+            let pollable = Resource::<Pollable>::new_borrow(rep);
+            let mut view = self.as_wasi_view();
+            HostPollable::block(&mut view.io_data(), pollable).await?;
+        }
+
+        Ok(is_ready)
     }
 
     async fn block(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<()> {
@@ -79,6 +94,10 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
             let mut view = self.as_wasi_view();
             HostPollable::drop(&mut view.io_data(), rep)?;
         }
+
+        // Only unclassify after the resource is really gone: reps are recycled by the
+        // resource table, and a failed drop leaves the pollable live.
+        self.state.file_stream_pollables.remove(&child_rep);
 
         // If this child belonged to a FutureInvokeResult whose drop was deferred,
         // finalize the parent deletion now that this child is gone.
@@ -172,7 +191,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let response: HostResponsePollResult = 'poll: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'poll response,
+                    CallReplayOutcome::Replayed(response) => {
+                        // File-stream pollables recorded as ready were actually awaited by the
+                        // live run before this poll's result was persisted, and the file
+                        // operations they gate re-execute for real during replay. Await their
+                        // real readiness too, so subsequent (non-durable) reads/writes observe
+                        // the same stream state as the recorded run (see
+                        // `PrivateDurableWorkerState::file_stream_pollables`).
+                        if let Ok(ready_indices) = &response.result {
+                            let ready_file_pollables = ready_indices
+                                .iter()
+                                .filter_map(|idx| in_.get(*idx as usize))
+                                .map(|pollable| pollable.rep())
+                                .filter(|rep| self.state.file_stream_pollables.contains(rep))
+                                .collect::<Vec<_>>();
+                            for rep in ready_file_pollables {
+                                let pollable = Resource::<Pollable>::new_borrow(rep);
+                                let mut view = self.as_wasi_view();
+                                HostPollable::block(&mut view.io_data(), pollable).await?;
+                            }
+                        }
+                        break 'poll response;
+                    }
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
             }

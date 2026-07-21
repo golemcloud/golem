@@ -1257,6 +1257,22 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         format!("Cancelled at {cancelled_idx}"),
                     ))
                 }
+                Resolution::CompletedButDiscarded {
+                    end_idx,
+                    marker_idx,
+                    ..
+                } => {
+                    // Discarded completions are recorded only on the accessor completion path;
+                    // durable invocations are always persisted as a delivered `Start` + `End`
+                    // pair, so a marker resolving here means the oplog does not match this code
+                    // path.
+                    Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "End delivered to the guest",
+                        format!(
+                            "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
+                        ),
+                    ))
+                }
             }
         }
     }

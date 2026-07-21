@@ -19,8 +19,8 @@ use super::serialization::{
 };
 use super::*;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, AccessStartContext, CallHandle, CallReplayOutcome, Cancellable, DropPolicy,
-    LeaveIncompleteOnDrop, finish_span_access, finish_span_in_memory,
+    AccessClaimOptions, AccessStartContext, CallHandle, Cancellable, DeferredCallReplayOutcome,
+    DropPolicy, LeaveIncompleteOnDrop, finish_span_access, finish_span_in_memory,
     try_replay_recorded_start_span_access,
 };
 use crate::durable_host::durability::{
@@ -42,7 +42,7 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostRequestP3HttpClientSend,
-    HostResponseP3HttpClientSendResult, OplogIndex,
+    HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex,
 };
 use golem_common::model::{
     NamedRetryPolicy, OwnedAgentId, PredicateValue, RetryContext, RetryProperties,
@@ -209,6 +209,7 @@ where
     let span = match legacy_send_span {
         Some(span_id) => P3HttpSendSpan {
             span_id,
+            send_start_index,
             legacy_durable: true,
         },
         None => store
@@ -226,6 +227,7 @@ where
                 }
                 Ok::<_, WorkerExecutorError>(P3HttpSendSpan {
                     span_id,
+                    send_start_index,
                     legacy_durable: false,
                 })
             })
@@ -242,11 +244,11 @@ where
         let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
         spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
         match handle
-            .replay_access(store, durable_worker_ctx::<Ctx, U>)
+            .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await
             .map_err(HttpError::trap)?
         {
-            CallReplayOutcome::Replayed(response) => {
+            DeferredCallReplayOutcome::Replayed(response, delivery) => {
                 let _ = disarm_leak_guard_tx.send(());
                 // The live path consumes the request inside `WasiHttp::send`.
                 // On replay we never call `send`, so consume it here (delete
@@ -326,11 +328,24 @@ where
                         // at the same point as the live path, so a demanded
                         // recording's `Start` is claimed where it was appended.
                         start_transmission_recording::<Ctx, U>(store, pending_transmission);
+                        if delivery.is_replay_discarded() {
+                            // The recorded run persisted this send's `End` but the guest
+                            // dropped the send future before it returned. The recorded
+                            // continuation is mirrored above (request consumed, response
+                            // bookkeeping, recorder spawned); park instead of returning the
+                            // response, so the deterministic guest drops this future at the
+                            // same point it did live.
+                            std::future::pending::<()>().await;
+                            unreachable!("std::future::pending never completes")
+                        }
+                        delivery.delivered();
                         return Ok(response);
                     }
                     Err(error) => {
                         // A recorded send error closed the span live right
-                        // after the `End`; finish it here at the same point.
+                        // after the `End`; finish it here at the same point
+                        // (consuming the positional `FinishSpan` for legacy
+                        // spans).
                         finish_p3_send_span::<Ctx, U>(store, &span)
                             .await
                             .map_err(HttpError::trap)?;
@@ -338,11 +353,20 @@ where
                         // at the same point as the live path, so a demanded
                         // recording's `Start` is claimed where it was appended.
                         start_transmission_recording::<Ctx, U>(store, pending_transmission);
+                        if delivery.is_replay_discarded() {
+                            // The recorded run persisted this send's `End` but the guest
+                            // dropped the send future before the error was returned. The
+                            // recorded continuation is mirrored above; park instead of
+                            // returning the error.
+                            std::future::pending::<()>().await;
+                            unreachable!("std::future::pending never completes")
+                        }
+                        delivery.delivered();
                         return Err(error);
                     }
                 }
             }
-            CallReplayOutcome::Incomplete(live_handle) => {
+            DeferredCallReplayOutcome::Incomplete(live_handle) => {
                 let _ = disarm_leak_guard_tx.send(());
                 handle = live_handle
             }
@@ -397,18 +421,43 @@ where
                 let error_code = error.error_code;
                 let serialized_error = serialize_error_code(&error_code);
                 let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
-                handle
-                    .complete_access(
+                // The guest-visible error return below is the real delivery boundary: record
+                // the terminal through the deferred API — the span's durable `FinishSpan`
+                // (legacy spans) rides the same owned task as the `End` — so a future torn
+                // between the `End` and the return records the discard instead of replay
+                // redelivering the error.
+                let (_, delivery) = handle
+                    .complete_access_deferred(
                         store,
                         durable_worker_ctx::<Ctx, U>,
                         HostResponseP3HttpClientSendResult { result },
+                        span.deferred_finish_entry(),
                     )
                     .await
                     .map_err(HttpError::trap)?;
-                finish_p3_send_span::<Ctx, U>(store, &span)
-                    .await
-                    .map_err(HttpError::trap)?;
-                start_transmission_recording::<Ctx, U>(store, pending_transmission);
+                if delivery.is_live_armed() {
+                    // Only the synchronous in-memory span finish remains; everything up to
+                    // the return leaves no tear window.
+                    if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
+                        // The error is observed by the caller (the worker traps): not a
+                        // silent discard, so no marker.
+                        delivery.suppress();
+                        return Err(HttpError::trap(error));
+                    }
+                    start_transmission_recording::<Ctx, U>(store, pending_transmission);
+                    // The guest-visible error return below still crosses Wasmtime's lowering
+                    // and terminal-consumption boundary: hand the token to the terminal
+                    // observer instead of consuming it here.
+                    delivery.deliver_at_accessor_terminal(store);
+                } else {
+                    // Unpersisted live call (snapshotting): the original span handling
+                    // applies.
+                    finish_p3_send_span::<Ctx, U>(store, &span)
+                        .await
+                        .map_err(HttpError::trap)?;
+                    start_transmission_recording::<Ctx, U>(store, pending_transmission);
+                    delivery.delivered();
+                }
                 return Err(error_code.into());
             }
         };
@@ -441,6 +490,62 @@ where
 
         match attempt_result {
             Ok((response, io, pooled_connection)) => {
+                // A send whose lease is still owned by an open atomic region may not retry
+                // inline (that would skip the region's rollback semantics), so
+                // `inline_retry_eligible` is false — but a matching user-defined status-code
+                // policy must still be honoured. Escalate to trap+replay keyed on the owning
+                // region (via the call's execution scope): without this the guest would see
+                // the rejected response, throw, and trap with an impoverished context (no
+                // `status-code`), silently falling back to the default trap policy. Mirrors
+                // `try_status_code_retry`'s atomic-region fallback on the p2 path.
+                if handle.trap_context().in_atomic_region
+                    && store.with(|mut access| {
+                        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+                        ctx.state.is_live()
+                            && ctx.state.snapshotting_mode.is_none()
+                            && ctx.state.persistence_level
+                                != golem_common::model::oplog::PersistenceLevel::PersistNothing
+                    })
+                    && matching_status_retry_policy(
+                        store,
+                        &mut retry_task_ctx,
+                        &retry_method,
+                        &retry_uri,
+                        response.status().as_u16(),
+                        &serialized_request.method,
+                    )
+                    .await
+                    .is_some()
+                {
+                    let status = response.status().as_u16();
+                    // The rejected response's connection may hold undrained bytes; keep the
+                    // pool from reusing it (same as the inline-retry and p2 status paths).
+                    poison_p3_pooled_connection(&pooled_connection);
+                    let properties = http_retry_properties(
+                        store,
+                        &retry_method,
+                        &retry_uri,
+                        Some(status),
+                        "http-status",
+                        &serialized_request.method,
+                    );
+                    let for_retry: Result<(), String> = Err(format!(
+                        "HTTP status {status} matched a status-code retry policy inside an atomic region"
+                    ));
+                    handle
+                        .try_trigger_retry_access(
+                            store,
+                            durable_worker_ctx::<Ctx, U>,
+                            &for_retry,
+                            |_| HostFailureKind::Transient,
+                            properties,
+                        )
+                        .await
+                        .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))?;
+                    // The policy gave up (retry budget exhausted): expose the rejected
+                    // response to the guest as-is.
+                    break Ok((response, io));
+                }
                 if inline_retry_eligible
                     && let Some(policy) = matching_status_retry_policy(
                         store,
@@ -603,11 +708,16 @@ where
             } else {
                 SerializableP3HttpClientSendResult::Success(headers)
             };
-            handle
-                .complete_access(
+            // The guest-visible `Ok(response)` return below is the real delivery boundary:
+            // record the terminal through the deferred API so a future torn between the `End`
+            // and the return records the discard instead of replay redelivering the response.
+            // The span stays open with the response, so there is no post-`End` entry.
+            let (_, delivery) = handle
+                .complete_access_deferred(
                     store,
                     durable_worker_ctx::<Ctx, U>,
                     HostResponseP3HttpClientSendResult { result },
+                    None,
                 )
                 .await
                 .map_err(HttpError::trap)?;
@@ -645,6 +755,10 @@ where
             // replay arm above): if the guest reads the transmission future,
             // the result is recorded here; otherwise no entries are written.
             start_transmission_recording::<Ctx, U>(store, pending_transmission);
+            // Everything since the `End` was synchronous, so no tear window remains between
+            // here and handing the token to Wasmtime's terminal observer, which settles it
+            // when the guest actually consumes (or discards) the lowered response.
+            delivery.deliver_at_accessor_terminal(store);
             Ok(response)
         }
         Err(error_code) => {
@@ -689,17 +803,35 @@ where
             }
 
             let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
-            handle
-                .complete_access(
+            // The guest-visible error return below is the real delivery boundary: record the
+            // terminal through the deferred API — the span's durable `FinishSpan` (legacy
+            // spans) rides the same owned task as the `End` — so a future torn between the
+            // `End` and the return records the discard instead of replay redelivering the
+            // error.
+            let (_, delivery) = handle
+                .complete_access_deferred(
                     store,
                     durable_worker_ctx::<Ctx, U>,
                     HostResponseP3HttpClientSendResult { result },
+                    span.deferred_finish_entry(),
                 )
                 .await
                 .map_err(HttpError::trap)?;
-            finish_p3_send_span::<Ctx, U>(store, &span)
-                .await
-                .map_err(HttpError::trap)?;
+            if delivery.is_live_armed() {
+                // Only the synchronous in-memory span finish remains; everything up to the
+                // return leaves no tear window.
+                if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
+                    // The error is observed by the caller (the worker traps): not a silent
+                    // discard, so no marker.
+                    delivery.suppress();
+                    return Err(HttpError::trap(error));
+                }
+            } else {
+                // Unpersisted live call (snapshotting): the original span handling applies.
+                finish_p3_send_span::<Ctx, U>(store, &span)
+                    .await
+                    .map_err(HttpError::trap)?;
+            }
             // Spawns the demand-gated transmission recorder at a
             // deterministic point (right after the send `End` and the
             // span finish, mirrored by the replay arm above). The inner
@@ -707,6 +839,10 @@ where
             // transmission result — `Ok(())` from the dropped I/O wiring,
             // or a deterministic body-validation error — still resolves.
             start_transmission_recording::<Ctx, U>(store, pending_transmission);
+            // The guest-visible error return below still crosses Wasmtime's lowering and
+            // terminal-consumption boundary: hand the token to the terminal observer instead
+            // of consuming it here.
+            delivery.deliver_at_accessor_terminal(store);
             Err(error_code.into())
         }
     }
@@ -1062,6 +1198,11 @@ where
 #[derive(Clone)]
 pub(crate) struct P3HttpSendSpan {
     pub(crate) span_id: SpanId,
+    /// The send's own host-call `Start` index. Used to discriminate the durable consume-body
+    /// scope of the response body: unlike the span id (which is derived from the owning agent's
+    /// id and therefore changes when the oplog is forked to another agent), the `Start` index is
+    /// part of the recorded oplog itself and survives fork/revert unchanged.
+    pub(crate) send_start_index: OplogIndex,
     pub(super) legacy_durable: bool,
 }
 
@@ -1139,6 +1280,30 @@ pub(super) async fn finish_p3_send_span<Ctx: WorkerCtx, U: 'static>(
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             finish_span_in_memory(ctx, &span.span_id)
         })
+    }
+}
+
+/// Finishes the send span at a live deferred-completion site: the durable positional
+/// `FinishSpan` (legacy spans only) is already appended by the owned terminal task — see
+/// [`P3HttpSendSpan::deferred_finish_entry`] — so only the synchronous in-memory finish remains.
+pub(super) fn finish_p3_send_span_in_memory<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    span: &P3HttpSendSpan,
+) -> Result<(), WorkerExecutorError> {
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        finish_span_in_memory(ctx, &span.span_id)
+    })
+}
+
+impl P3HttpSendSpan {
+    /// The owned post-`End` oplog append for closing this span through the deferred-delivery
+    /// API (`complete_access_deferred`): a positional durable `FinishSpan` for legacy-recorded
+    /// spans (whose replay consumes it via [`finish_p3_send_span`]), nothing for derived spans
+    /// (finished in memory only).
+    pub(super) fn deferred_finish_entry(&self) -> Option<OplogEntry> {
+        self.legacy_durable
+            .then(|| OplogEntry::finish_span(self.span_id.clone()))
     }
 }
 

@@ -188,6 +188,12 @@ enum PairingSignature {
     Cancelled {
         start_index: OplogIndex,
     },
+    /// A hint, not a terminal, but replay-relevant: it decides whether the referenced call's
+    /// `End` is delivered to the guest or parked as a discarded completion, so an override must
+    /// not add, remove, or repoint it.
+    CompletionDiscarded {
+        start_index: OplogIndex,
+    },
     HostStreamFrame {
         parent_start_index: OplogIndex,
         kind: HostStreamKind,
@@ -247,6 +253,11 @@ impl PairingSignature {
             OplogEntry::Cancelled { start_index, .. } => PairingSignature::Cancelled {
                 start_index: *start_index,
             },
+            OplogEntry::CompletionDiscarded { start_index, .. } => {
+                PairingSignature::CompletionDiscarded {
+                    start_index: *start_index,
+                }
+            }
             OplogEntry::HostStreamFrame {
                 parent_start_index,
                 kind,

@@ -33,6 +33,7 @@ use golem_common::model::oplog::{
     HostResponseP3HttpClientRequestBodyTransmission, HostStreamKind, OplogEntry, OplogIndex,
 };
 use golem_common::serialization::serialize;
+use http::HeaderMap;
 use http_body::Body as HttpBody;
 use http_body::Frame;
 use http_body::SizeHint;
@@ -61,6 +62,17 @@ use wasmtime_wasi_http::p3::bindings::http::types::{
 /// a recording lands, so oplog backpressure propagates to the request-body
 /// write side and the in-memory footprint of unrecorded frames stays bounded.
 const REQUEST_BODY_RECORDING_WINDOW: usize = 4;
+
+/// Byte budget for keeping pulled request-body frames in memory for resends.
+/// Frames within the budget are served synchronously by a resend attempt's
+/// view, so the HTTP client writes the whole request (head and body) in one
+/// flush. Without this, each resend frame is loaded from the oplog
+/// asynchronously: the client flushes the request head first and the body
+/// lands on the wire a moment later, and a server that answers the head early
+/// without draining the request body (as Node.js-style chaos backends do)
+/// then parses the late body bytes as a new, malformed request. Bodies beyond
+/// the budget fall back to oplog loads, keeping resend memory bounded.
+const REQUEST_BODY_RESEND_CACHE_BYTES: usize = 256 * 1024;
 
 /// Durable recorder and resend source for the outgoing request body of a p3
 /// `client::send`.
@@ -99,11 +111,20 @@ struct DurableRequestBodyState {
     pulled_frames: usize,
     /// Frame recordings spawned but not yet appended to the oplog.
     pending_recordings: usize,
+    /// Bytes of frame payloads currently cached in slots for synchronous
+    /// resends; capped by [`REQUEST_BODY_RESEND_CACHE_BYTES`].
+    cached_resend_bytes: usize,
     terminal: Option<RequestBodyTerminal>,
     /// First frame-recording failure; refuses resends and fails views.
     recording_failed: Option<String>,
     live_polled: bool,
     active_live_view: bool,
+    /// Bumped when an attempt's view is revoked (the attempt was abandoned
+    /// for a retry). Views created before the bump fail their next poll
+    /// instead of serving more frames, so the HTTP client aborts the
+    /// abandoned attempt's body write instead of streaming the remaining
+    /// frames onto a connection whose response was already consumed.
+    revoke_epoch: u64,
     wakers: Vec<Waker>,
 }
 
@@ -111,6 +132,17 @@ struct RecordedFrameSlot {
     /// Data length of the frame (0 for trailers), for size hints.
     data_len: u64,
     recording: FrameRecording,
+    /// The frame's payload kept in memory while the shared
+    /// [`REQUEST_BODY_RESEND_CACHE_BYTES`] budget allows, so a resend view can
+    /// serve it synchronously (no oplog round-trip between the request head
+    /// and body writes).
+    cached: Option<CachedResendFrame>,
+}
+
+/// In-memory copy of a pulled request-body frame for synchronous resends.
+enum CachedResendFrame {
+    Data(Bytes),
+    Trailers(HeaderMap),
 }
 
 enum FrameRecording {
@@ -170,10 +202,12 @@ impl DurableRequestBody {
                 next_offset: 0,
                 pulled_frames: 0,
                 pending_recordings: 0,
+                cached_resend_bytes: 0,
                 terminal: None,
                 recording_failed: None,
                 live_polled: false,
                 active_live_view: false,
+                revoke_epoch: 0,
                 wakers: Vec::new(),
             })),
         }
@@ -183,11 +217,13 @@ impl DurableRequestBody {
     /// the oplog first, then claims the live guest body and continues pulling
     /// (recording as it goes). At most one view may be live at a time.
     pub(super) fn replayer(&self) -> DurableRequestBodyView {
+        let epoch = self.lock_state().revoke_epoch;
         DurableRequestBodyView {
             shared: self.clone(),
             pos: 0,
             live_claimed: false,
             pending_load: None,
+            epoch,
         }
     }
 
@@ -234,12 +270,19 @@ impl DurableRequestBody {
             && state.recording_failed.is_none()
     }
 
-    /// Force-releases the live claim of an abandoned attempt's view (the
-    /// attempt's request/connection may be dropped asynchronously), so a drain
-    /// or a subsequent view can pull the body.
+    /// Revokes the abandoned attempt's view: force-releases its live claim
+    /// (the attempt's request/connection may be dropped asynchronously), so a
+    /// drain or a subsequent view can pull the body, and bumps the revoke
+    /// epoch so the abandoned view's next poll fails instead of serving more
+    /// frames. Without the revocation, the HTTP client task that still owns
+    /// the abandoned view would keep writing the remaining body frames onto
+    /// the old connection after its (rejected) response was already taken —
+    /// a server that answered early without draining the request body then
+    /// parses those late bytes as a new, malformed request.
     pub(super) fn abandon_active_live_view(&self) {
         let mut state = self.lock_state();
         state.active_live_view = false;
+        state.revoke_epoch += 1;
         state.wake_all();
     }
 
@@ -307,9 +350,15 @@ impl DurableRequestBody {
             Ok(data) => {
                 state.pulled_frames += 1;
                 if self.recording_enabled {
+                    let cached = (state.cached_resend_bytes + data.len()
+                        <= REQUEST_BODY_RESEND_CACHE_BYTES)
+                        .then(|| {
+                            state.cached_resend_bytes += data.len();
+                            CachedResendFrame::Data(data.clone())
+                        });
                     self.spawn_frame_recording(
                         state,
-                        Some(data.len() as u64),
+                        Some((data.len() as u64, cached)),
                         SerializableP3HttpRequestBodyFrame::Data {
                             offset: state.next_offset,
                             bytes: data.to_vec(),
@@ -322,9 +371,11 @@ impl DurableRequestBody {
             Err(Ok(trailers)) => {
                 state.pulled_frames += 1;
                 if self.recording_enabled {
+                    let cached = (state.cached_resend_bytes <= REQUEST_BODY_RESEND_CACHE_BYTES)
+                        .then(|| CachedResendFrame::Trailers(trailers.clone()));
                     self.spawn_frame_recording(
                         state,
-                        Some(0),
+                        Some((0, cached)),
                         SerializableP3HttpRequestBodyFrame::Trailers(Some(serialize_headers(
                             &trailers,
                         ))),
@@ -350,18 +401,20 @@ impl DurableRequestBody {
         state.wake_all();
     }
 
-    /// Spawns the oplog append of one frame. With `slot_data_len` set, a
-    /// replayable slot is pushed for the frame; terminal frames pass `None`.
+    /// Spawns the oplog append of one frame. With `slot_data` set, a
+    /// replayable slot is pushed for the frame (data length plus the optional
+    /// in-memory resend copy); terminal frames pass `None`.
     fn spawn_frame_recording(
         &self,
         state: &mut DurableRequestBodyState,
-        slot_data_len: Option<u64>,
+        slot_data: Option<(u64, Option<CachedResendFrame>)>,
         frame: SerializableP3HttpRequestBodyFrame,
     ) {
-        let slot = slot_data_len.map(|data_len| {
+        let slot = slot_data.map(|(data_len, cached)| {
             state.slots.push(RecordedFrameSlot {
                 data_len,
                 recording: FrameRecording::InFlight,
+                cached,
             });
             state.slots.len() - 1
         });
@@ -656,13 +709,20 @@ pub(super) fn recorded_request_body_replay(
     http_body_util::StreamBody::new(stream).boxed_unsync()
 }
 
+/// An in-flight load of one recorded body frame from the oplog.
+type PendingFrameLoad = Pin<Box<dyn Future<Output = Result<Frame<Bytes>, ErrorCode>> + Send>>;
+
 /// One attempt's request body handed to the HTTP client: replays the recorded
 /// frame prefix from the oplog, then continues with the live guest body.
 pub(super) struct DurableRequestBodyView {
     shared: DurableRequestBody,
     pos: usize,
     live_claimed: bool,
-    pending_load: Option<Pin<Box<dyn Future<Output = Result<Frame<Bytes>, ErrorCode>> + Send>>>,
+    pending_load: Option<PendingFrameLoad>,
+    /// Revoke epoch at creation; when the shared state's epoch moves past it
+    /// (the attempt was abandoned for a retry) the view fails its next poll
+    /// so the HTTP client aborts the body write.
+    epoch: u64,
 }
 
 impl Drop for DurableRequestBodyView {
@@ -684,6 +744,11 @@ impl HttpBody for DurableRequestBodyView {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
+        if this.epoch < this.shared.lock_state().revoke_epoch {
+            return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(
+                "request body attempt abandoned for retry".to_string(),
+            )))));
+        }
         loop {
             if let Some(load) = this.pending_load.as_mut() {
                 let frame = std::task::ready!(load.as_mut().poll(cx));
@@ -697,6 +762,18 @@ impl HttpBody for DurableRequestBodyView {
                 return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(message.clone())))));
             }
             if this.pos < state.slots.len() {
+                // A cached frame is served synchronously (even while its oplog
+                // append is still in flight), so a resend writes the request
+                // head and body in one flush instead of dribbling the body
+                // after an oplog round-trip.
+                if let Some(cached) = &state.slots[this.pos].cached {
+                    let frame = match cached {
+                        CachedResendFrame::Data(bytes) => Frame::data(bytes.clone()),
+                        CachedResendFrame::Trailers(trailers) => Frame::trailers(trailers.clone()),
+                    };
+                    this.pos += 1;
+                    return Poll::Ready(Some(Ok(frame)));
+                }
                 match &state.slots[this.pos].recording {
                     FrameRecording::Recorded(index) => {
                         this.pending_load =
@@ -754,7 +831,12 @@ impl HttpBody for DurableRequestBodyView {
                     shared.record_terminal(&mut state, RequestBodyTerminal::End);
                     return Poll::Ready(None);
                 }
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => {
+                    // Parking here (in addition to the inner body's own waker)
+                    // lets a revoke wake this view so it can fail the write.
+                    state.park(cx);
+                    return Poll::Pending;
+                }
             }
         }
     }
@@ -764,6 +846,10 @@ impl HttpBody for DurableRequestBodyView {
             return false;
         }
         let state = self.shared.lock_state();
+        if self.epoch < state.revoke_epoch {
+            // A revoked view must be polled so it can fail the body write.
+            return false;
+        }
         self.pos >= state.slots.len() && matches!(state.terminal, Some(RequestBodyTerminal::End))
     }
 

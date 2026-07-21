@@ -2,7 +2,7 @@
  * Invocation context support
  */
 declare module 'golem:api/context@1.5.0' {
-  import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
+  import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
   /**
    * Starts a new `span` with the given name, as a child of the current invocation context
    */
@@ -75,7 +75,7 @@ declare module 'golem:api/context@1.5.0' {
      */
     traceContextHeaders(): [string, string][];
   }
-  export type Datetime = wasiClocks023WallClock.Datetime;
+  export type Datetime = wasiClocks030SystemClock.Instant;
   /**
    * Possible span attribute value types
    */

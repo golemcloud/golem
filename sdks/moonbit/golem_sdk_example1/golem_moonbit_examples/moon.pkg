@@ -8,7 +8,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/core/types" @types,
   "golemcloud/golem_sdk/rpc" @rpc,
   "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
+  "golemcloud/golem_sdk/interface/wasi/clocks/systemClock" @systemClock,
   "moonbitlang/core/json" @json,
   "moonbitlang/core/encoding/utf8" @utf8,
   "golemcloud/golem_sdk/schema_model" @model,

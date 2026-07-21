@@ -18,17 +18,17 @@ use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
-    NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -146,6 +146,13 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
                 partial: partial.map(encode_public_typed_schema_value).transpose()?,
+            }),
+            PublicOplogEntry::CompletionDiscarded(CompletionDiscardedParams {
+                timestamp,
+                start_index,
+            }) => Self::CompletionDiscarded(oplog::CompletionDiscardedParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
             }),
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp,
@@ -947,6 +954,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
                 partial: params.partial.map(oplog_payload_from_wit),
             }),
+            oplog::OplogEntry::CompletionDiscarded(params) => Ok(Self::CompletionDiscarded {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
+            }),
             oplog::OplogEntry::AgentInvocationStarted(params) => {
                 let trace_id = golem_common::model::invocation_context::TraceId::from_string(
                     &params.trace_id,
@@ -1645,6 +1656,15 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 start_index: start_index.into(),
                 partial: partial.map(oplog_payload_to_wit).transpose()?,
             })),
+            M::CompletionDiscarded {
+                timestamp,
+                start_index,
+            } => Ok(Self::CompletionDiscarded(
+                oplog::RawCompletionDiscardedParameters {
+                    timestamp: timestamp.into(),
+                    start_index: start_index.into(),
+                },
+            )),
             M::AgentInvocationStarted {
                 timestamp,
                 idempotency_key,

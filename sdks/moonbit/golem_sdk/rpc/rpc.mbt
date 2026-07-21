@@ -137,7 +137,7 @@ pub fn AgentClient::invoke(
 ///|
 pub fn AgentClient::schedule_invocation(
   self : AgentClient,
-  scheduled_at : @wallClock.Datetime,
+  scheduled_at : @systemClock.Instant,
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> Unit {
@@ -147,7 +147,7 @@ pub fn AgentClient::schedule_invocation(
 ///|
 pub fn AgentClient::schedule_cancelable_invocation(
   self : AgentClient,
-  scheduled_at : @wallClock.Datetime,
+  scheduled_at : @systemClock.Instant,
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> @agentHost.CancellationToken {

@@ -271,7 +271,7 @@ fn emit_client_method(
     "  self.client.invoke(\"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
   )
   // schedule
-  let sched_args = "self : \{client}, scheduled_at : @wallClock.Datetime" +
+  let sched_args = "self : \{client}, scheduled_at : @systemClock.Instant" +
     (if arg_sig.is_empty() { "" } else { ", " + arg_sig })
   buf.write_string("///|\n")
   buf.write_string(

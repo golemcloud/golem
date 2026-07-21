@@ -1,5 +1,5 @@
 declare module 'golem:api/retry@1.5.0' {
-  import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
+  import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   /**
    * ── Host functions ───────────────────────────────────────────────
    * Get all retry policies active for this agent
@@ -24,7 +24,7 @@ declare module 'golem:api/retry@1.5.0' {
    * Remove a named retry policy by name (persisted to oplog).
    */
   export function removeRetryPolicy(name: string): void;
-  export type Duration = wasiClocks023MonotonicClock.Duration;
+  export type Duration = wasiClocks030Types.Duration;
   /**
    * ── Predicate value ──────────────────────────────────────────────
    * Dynamic value for property comparisons in retry predicates

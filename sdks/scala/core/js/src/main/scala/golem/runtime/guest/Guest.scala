@@ -149,21 +149,26 @@ object Guest {
       resultPromise.`catch`[js.Any](onRejected)
     }
 
-  private def getDefinition(): js.Promise[js.Any] =
+  // `get-definition` and `discover-agent-types` are synchronous WIT exports, so they
+  // must return their values directly (and signal errors by throwing) instead of
+  // returning a Promise; the WASI 0.3 guest wrapper rejects Promises from sync exports.
+  private def getDefinition(): js.Any =
     if (js.isUndefined(resolved)) {
-      js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Any]]
+      throw js.JavaScriptException(invalidAgentId("Agent is not initialized"))
     } else {
-      js.Promise.resolve[js.Any](resolved.asInstanceOf[Resolved].defn.agentType.asInstanceOf[js.Any])
+      resolved.asInstanceOf[Resolved].defn.agentType.asInstanceOf[js.Any]
     }
 
-  private def discoverAgentTypes(): js.Promise[js.Array[js.Any]] =
+  private def discoverAgentTypes(): js.Array[js.Any] =
     try {
       val arr = new js.Array[js.Any]()
       AgentRegistry.all.foreach(d => arr.push(d.agentType.asInstanceOf[js.Any]))
-      js.Promise.resolve[js.Array[js.Any]](arr)
+      arr
     } catch {
+      case js.JavaScriptException(err) if isJsAgentError(err) =>
+        throw js.JavaScriptException(err)
       case t: Throwable =>
-        js.Promise.reject(asAgentError(t.toString, "custom-error")).asInstanceOf[js.Promise[js.Array[js.Any]]]
+        throw js.JavaScriptException(asAgentError(t.toString, "custom-error"))
     }
 
   private def toUint8Array(bytes: Array[Byte]): Uint8Array = {

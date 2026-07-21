@@ -333,6 +333,75 @@ impl DebugServiceDefault {
         unmatched.pop_first()
     }
 
+    /// Scans the full recorded oplog and returns the first durable call whose `End` lies at or
+    /// before `target_index` while its `CompletionDiscarded` marker lies strictly after it —
+    /// that is, a target that splits a call's completion from its recorded delivery status.
+    /// Returns `(start_index, end_index, marker_index)` for the offending call.
+    ///
+    /// Replaying to such a target would deliver the completion to the guest, but the recorded
+    /// execution never observed it (the marker records that it was discarded before delivery),
+    /// so every recorded entry after the `End` reflects the discarded outcome. A debug session
+    /// parked at such a target would diverge from the recording as soon as its target advances
+    /// past the marker, so the target is rejected up front.
+    ///
+    /// Regions dropped by `Jump` or `Revert` entries are excluded on both sides, mirroring how
+    /// replay skips them: a marker in a dropped region never influences replay, and an `End` in
+    /// a dropped region is never resolved from.
+    pub async fn find_split_discarded_completion_at(
+        raw_oplog: Arc<dyn Oplog>,
+        target_index: OplogIndex,
+    ) -> Option<(OplogIndex, OplogIndex, OplogIndex)> {
+        const CHUNK_SIZE: u64 = 1024;
+
+        let scan_end = raw_oplog.current_oplog_index().await;
+        if target_index >= scan_end {
+            return None;
+        }
+
+        // start_index -> End index, for End entries at or before the target
+        let mut ends: std::collections::BTreeMap<OplogIndex, OplogIndex> =
+            std::collections::BTreeMap::new();
+        // marker index -> start_index, for CompletionDiscarded entries after the target
+        let mut markers: std::collections::BTreeMap<OplogIndex, OplogIndex> =
+            std::collections::BTreeMap::new();
+
+        let mut index = OplogIndex::INITIAL;
+        while index <= scan_end {
+            let available = u64::from(scan_end) - u64::from(index) + 1;
+            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
+            if entries.is_empty() {
+                break;
+            }
+            for (idx, entry) in &entries {
+                match entry {
+                    OplogEntry::End { start_index, .. } if *idx <= target_index => {
+                        ends.insert(*start_index, *idx);
+                    }
+                    OplogEntry::CompletionDiscarded { start_index, .. } if *idx > target_index => {
+                        markers.insert(*idx, *start_index);
+                    }
+                    OplogEntry::Jump { jump, .. } => {
+                        ends.retain(|start, end| !jump.contains(*start) && !jump.contains(*end));
+                        markers.retain(|marker, _| !jump.contains(*marker));
+                    }
+                    OplogEntry::Revert { dropped_region, .. } => {
+                        ends.retain(|start, end| {
+                            !dropped_region.contains(*start) && !dropped_region.contains(*end)
+                        });
+                        markers.retain(|marker, _| !dropped_region.contains(*marker));
+                    }
+                    _ => {}
+                }
+            }
+            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+        }
+
+        markers.into_iter().find_map(|(marker_idx, start_idx)| {
+            ends.get(&start_idx)
+                .map(|end_idx| (start_idx, *end_idx, marker_idx))
+        })
+    }
+
     pub async fn target_index_at_invocation_boundary(
         agent_id: &AgentId,
         worker: &Arc<Worker<DebugContext>>,
@@ -531,6 +600,21 @@ impl DebugService for DebugServiceDefault {
             });
         }
 
+        // Refuse targets that split a completed durable call's `End` from its
+        // `CompletionDiscarded` marker: replay to such a target would deliver a completion the
+        // recorded execution never observed, diverging from the recording as soon as the target
+        // advances past the marker.
+        if let Some((start_index, end_index, marker_index)) =
+            Self::find_split_discarded_completion_at(raw_oplog.clone(), new_target_index).await
+        {
+            return Err(DebugServiceError::ValidationFailed {
+                agent_id: Some(agent_id.clone()),
+                errors: vec![format!(
+                    "Playback target index {new_target_index} splits a durable call's completion from its recorded delivery status: the call started at oplog index {start_index} completed at {end_index}, but its completion was discarded before reaching the guest (CompletionDiscarded marker at {marker_index}). Replaying to this target would deliver a completion the recorded execution never observed; choose a target index before the call's completion or at/after the marker"
+                )],
+            });
+        }
+
         let playback_overrides_validated = if let Some(overrides) = playback_overrides {
             Some(
                 Self::validate_playback_overrides(
@@ -698,6 +782,20 @@ impl DebugService for DebugServiceDefault {
             });
         }
 
+        // Refuse targets that split a completed durable call's `End` from its
+        // `CompletionDiscarded` marker, exactly like playback: replay to such a target would
+        // deliver a completion the recorded execution never observed.
+        if let Some((start_index, end_index, marker_index)) =
+            Self::find_split_discarded_completion_at(raw_oplog.clone(), new_target_index).await
+        {
+            return Err(DebugServiceError::ValidationFailed {
+                agent_id: Some(owned_agent_id.agent_id.clone()),
+                errors: vec![format!(
+                    "Rewind target index {new_target_index} splits a durable call's completion from its recorded delivery status: the call started at oplog index {start_index} completed at {end_index}, but its completion was discarded before reaching the guest (CompletionDiscarded marker at {marker_index}). Replaying to this target would deliver a completion the recorded execution never observed; choose a target index before the call's completion or at/after the marker"
+                )],
+            });
+        }
+
         self.debug_session
             .update(debug_session_id.clone(), new_target_index, None)
             .await;
@@ -861,6 +959,7 @@ mod tests {
     use golem_common::base_model::component::ComponentRevision;
     use golem_common::model::oplog::{OplogEntry, OplogPayload, PayloadId, RawOplogPayload};
     use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
+    use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentInvocationResult, Timestamp};
     use golem_worker_executor::services::oplog::CommitLevel;
     use std::collections::BTreeMap;
@@ -896,6 +995,194 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+    }
+
+    fn noop_entry() -> OplogEntry {
+        OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    fn end_entry(start_index: u64) -> OplogEntry {
+        OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(start_index),
+            response: None,
+            forced_commit: false,
+        }
+    }
+
+    fn discarded_entry(start_index: u64) -> OplogEntry {
+        OplogEntry::CompletionDiscarded {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(start_index),
+        }
+    }
+
+    fn jump_entry(start: u64, end: u64) -> OplogEntry {
+        OplogEntry::Jump {
+            timestamp: Timestamp::now_utc(),
+            jump: OplogRegion {
+                start: OplogIndex::from_u64(start),
+                end: OplogIndex::from_u64(end),
+            },
+        }
+    }
+
+    fn revert_entry(start: u64, end: u64) -> OplogEntry {
+        OplogEntry::Revert {
+            timestamp: Timestamp::now_utc(),
+            dropped_region: OplogRegion {
+                start: OplogIndex::from_u64(start),
+                end: OplogIndex::from_u64(end),
+            },
+        }
+    }
+
+    async fn split_at(entries: Vec<OplogEntry>, target: u64) -> Option<(u64, u64, u64)> {
+        DebugServiceDefault::find_split_discarded_completion_at(
+            Arc::new(SeqOplog { entries }),
+            OplogIndex::from_u64(target),
+        )
+        .await
+        .map(|(start, end, marker)| (u64::from(start), u64::from(end), u64::from(marker)))
+    }
+
+    #[test]
+    async fn split_discarded_completion_is_rejected_between_end_and_marker() {
+        // [Start placeholder, End(1), NoOp, CompletionDiscarded(1)]
+        let entries = vec![noop_entry(), end_entry(1), noop_entry(), discarded_entry(1)];
+        // Targets strictly between the End (2) and the marker (4) split the pair
+        assert_eq!(split_at(entries.clone(), 2).await, Some((1, 2, 4)));
+        assert_eq!(split_at(entries.clone(), 3).await, Some((1, 2, 4)));
+        // Target before the End: the completion is not visible at all, nothing splits
+        assert_eq!(split_at(entries.clone(), 1).await, None);
+        // Target at the marker: the marker is visible and replay parks the delivery
+        assert_eq!(split_at(entries, 4).await, None);
+    }
+
+    #[test]
+    async fn split_check_ignores_calls_completing_after_the_target() {
+        // End and marker both lie after the target: the in-flight validator's domain, not a
+        // split pair
+        let entries = vec![noop_entry(), noop_entry(), end_entry(1), discarded_entry(1)];
+        assert_eq!(split_at(entries, 2).await, None);
+    }
+
+    #[test]
+    async fn split_check_ignores_markers_in_dropped_regions() {
+        // The marker is inside a region dropped by a later Revert: replay never sees it
+        let entries = vec![
+            noop_entry(),
+            end_entry(1),
+            discarded_entry(1),
+            revert_entry(3, 3),
+        ];
+        assert_eq!(split_at(entries, 2).await, None);
+    }
+
+    #[test]
+    async fn split_check_ignores_calls_in_regions_dropped_by_jump() {
+        // The call's Start and End are inside a region skipped by a Jump: the marker is an
+        // orphan that replay drains without effect
+        let entries = vec![
+            noop_entry(),
+            end_entry(1),
+            jump_entry(1, 2),
+            discarded_entry(1),
+        ];
+        assert_eq!(split_at(entries, 3).await, None);
+    }
+
+    #[test]
+    async fn split_check_accepts_target_at_or_beyond_oplog_end() {
+        let entries = vec![noop_entry(), end_entry(1), discarded_entry(1)];
+        assert_eq!(split_at(entries.clone(), 3).await, None);
+        assert_eq!(split_at(entries, 10).await, None);
+    }
+
+    struct SeqOplog {
+        entries: Vec<OplogEntry>,
+    }
+
+    impl Debug for SeqOplog {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "SeqOplog")
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for SeqOplog {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn add_start_with_reserved_raw_payload(
+            &self,
+            _serialized_request: Vec<u8>,
+            _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+            unimplemented!()
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+            unimplemented!()
+        }
+
+        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+            unimplemented!()
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            OplogIndex::from_u64(self.entries.len() as u64)
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            unimplemented!()
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            unimplemented!()
+        }
+
+        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            self.entries[(u64::from(oplog_index) - 1) as usize].clone()
+        }
+
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            let mut result = BTreeMap::new();
+            let mut current = oplog_index;
+            for _ in 0..n {
+                if u64::from(current) > self.entries.len() as u64 {
+                    break;
+                }
+                result.insert(current, self.read(current).await);
+                current = current.next();
+            }
+            result
+        }
+
+        async fn length(&self) -> u64 {
+            self.entries.len() as u64
+        }
+
+        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
+            unimplemented!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unimplemented!()
+        }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     struct TestOplog {

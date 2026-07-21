@@ -101,15 +101,20 @@ where
         }
         let entry = read(idx).await;
         let spanning = match &entry {
-            OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
-                Some((
-                    *start_index,
-                    SpanningConstruct::DurableCall {
-                        start_index: *start_index,
-                        terminal_index: idx,
-                    },
-                ))
-            }
+            // `CompletionDiscarded` is a hint, not a second terminal, but it carries the delivery
+            // status of its call's `End`: a cut between the `End` and the marker would leave a
+            // prefix whose recorded guest behavior reflects the discarded completion while replay
+            // (with the marker cut off) would deliver the response, so such a cut is rejected the
+            // same way as one splitting a `Start` from its terminal.
+            OplogEntry::End { start_index, .. }
+            | OplogEntry::Cancelled { start_index, .. }
+            | OplogEntry::CompletionDiscarded { start_index, .. } => Some((
+                *start_index,
+                SpanningConstruct::DurableCall {
+                    start_index: *start_index,
+                    terminal_index: idx,
+                },
+            )),
             OplogEntry::EndAtomicRegion { begin_index, .. } => Some((
                 *begin_index,
                 SpanningConstruct::AtomicRegion {
@@ -237,6 +242,32 @@ mod tests {
                 terminal_index: idx(4),
             })
         );
+    }
+
+    #[test]
+    async fn completion_discarded_after_cut_referencing_surviving_start_is_rejected() {
+        // Start(2)/End(3) survive the cut at 4, but the CompletionDiscarded marker at 5 is cut
+        // off: the surviving prefix reflects the discarded completion while replay without the
+        // marker would deliver the response, so the cut is rejected.
+        let entries = HashMap::from([
+            (3, OplogEntry::end(idx(2), None, false)),
+            (5, OplogEntry::completion_discarded(idx(2))),
+        ]);
+        assert_eq!(
+            scan(&entries, 4, 6, &deleted(vec![])).await,
+            Some(SpanningConstruct::DurableCall {
+                start_index: idx(2),
+                terminal_index: idx(5),
+            })
+        );
+    }
+
+    #[test]
+    async fn completion_discarded_with_start_in_deleted_region_is_ignored() {
+        // A marker after the cut whose referenced Start lies in a deleted region is an orphan of
+        // an abandoned timeline; it must not invalidate the cut.
+        let entries = HashMap::from([(5, OplogEntry::completion_discarded(idx(2)))]);
+        assert_eq!(scan(&entries, 4, 6, &deleted(vec![(2, 3)])).await, None);
     }
 
     #[test]

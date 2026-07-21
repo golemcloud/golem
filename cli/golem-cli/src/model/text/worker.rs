@@ -505,6 +505,14 @@ impl TextView for PublicOplogEntry {
                     ));
                 }
             }
+            PublicOplogEntry::CompletionDiscarded(params) => {
+                logln(format_message_highlight("COMPLETION DISCARDED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+            }
             PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
                 PublicAgentInvocation::AgentMethodInvocation(inner) => {
                     logln(format!(

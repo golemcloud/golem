@@ -39,15 +39,15 @@ use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
-    SuspendParams,
+    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
@@ -425,6 +425,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     partial: cancelled.partial.map(TryInto::try_into).transpose()?,
                 }))
             }
+            oplog_entry::Entry::CompletionDiscarded(completion_discarded) => Ok(
+                PublicOplogEntry::CompletionDiscarded(CompletionDiscardedParams {
+                    timestamp: completion_discarded
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    start_index: crate::base_model::OplogIndex::from_u64(
+                        completion_discarded.start_index,
+                    ),
+                }),
+            ),
             oplog_entry::Entry::AgentInvocationStarted(agent_invocation_started) => Ok(
                 PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                     timestamp: agent_invocation_started
@@ -889,6 +900,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(cancelled.timestamp.into()),
                             start_index: cancelled.start_index.as_u64(),
                             partial: cancelled.partial.map(Into::into),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CompletionDiscarded(completion_discarded) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CompletionDiscarded(
+                        golem_api_grpc::proto::golem::worker::CompletionDiscardedParameters {
+                            timestamp: Some(completion_discarded.timestamp.into()),
+                            start_index: completion_discarded.start_index.as_u64(),
                         },
                     )),
                 }
@@ -2281,6 +2302,12 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     partial,
                 })
             }
+            PublicOplogEntry::CompletionDiscarded(completion_discarded) => {
+                Ok(OplogEntry::CompletionDiscarded {
+                    timestamp: completion_discarded.timestamp,
+                    start_index: completion_discarded.start_index,
+                })
+            }
             PublicOplogEntry::AgentInvocationStarted(_) => {
                 Err("Converting AgentInvocationStarted from public to raw oplog entry is not yet supported".to_string())
             }
@@ -2906,9 +2933,10 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawActivatePluginParameters, RawAgentInvocationFinishedParameters,
             RawAgentInvocationStartedParameters, RawBeginRemoteTransactionParameters,
             RawCancelPendingInvocationParameters, RawCancelledParameters, RawCardRevokedParameters,
-            RawChangePersistenceLevelParameters, RawCreateParameters, RawCreateResourceParameters,
-            RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
-            RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
+            RawChangePersistenceLevelParameters, RawCompletionDiscardedParameters,
+            RawCreateParameters, RawCreateResourceParameters, RawDeactivatePluginParameters,
+            RawDropResourceParameters, RawEndAtomicRegionParameters, RawEndParameters, RawEnvVar,
+            RawErrorParameters, RawFailedUpdateParameters,
             RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
             RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
             RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
@@ -2993,6 +3021,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 start_index: start_index.as_u64(),
                 partial: partial.map(oplog_payload_to_proto).transpose()?,
             }),
+            OplogEntry::CompletionDiscarded { start_index, .. } => {
+                Entry::CompletionDiscarded(RawCompletionDiscardedParameters {
+                    start_index: start_index.as_u64(),
+                })
+            }
             OplogEntry::AgentInvocationStarted {
                 idempotency_key,
                 payload,
@@ -3382,6 +3415,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     partial,
                 })
             }
+            Entry::CompletionDiscarded(p) => Ok(OplogEntry::CompletionDiscarded {
+                timestamp,
+                start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
+            }),
             Entry::AgentInvocationStarted(p) => {
                 let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;

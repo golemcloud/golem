@@ -29,15 +29,15 @@ use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
-    SuspendParams,
+    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -403,6 +403,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     partial: partial_value,
                 }))
             }
+            OplogEntry::CompletionDiscarded {
+                timestamp,
+                start_index,
+            } => Ok(PublicOplogEntry::CompletionDiscarded(
+                CompletionDiscardedParams {
+                    timestamp,
+                    start_index,
+                },
+            )),
             OplogEntry::AgentInvocationStarted {
                 timestamp,
                 idempotency_key,

@@ -1510,13 +1510,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
                 Ok(begin_index)
             } else {
-                let scope_names = [HostFunctionName::Custom(
-                    "<scope:batched-write>".to_string(),
-                )];
+                let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
                 let (begin_index, scope_handle) = self
                     .state
                     .replay_state
-                    .claim_scope_start(&scope_names, function_type)
+                    .claim_scope_start(&scope_name, function_type)
                     .await?;
                 // The begin-side completion / legality probe stays a non-consuming forward scan: it
                 // decides whether the scope is safe to continue replaying or must be retried *before*
@@ -1725,6 +1723,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             format!("Cancelled {{ start_index: {begin_index} }}"),
                         ));
                     }
+                    concurrent::ResolutionOutcome::Resolved(
+                        concurrent::Resolution::CompletedButDiscarded {
+                            end_idx,
+                            marker_idx,
+                            ..
+                        },
+                    ) => {
+                        // Discarded completions are recorded only for accessor completion
+                        // futures; a marker referencing a durable scope `Start` means the oplog
+                        // does not match this code path.
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            format!("End {{ start_index: {begin_index} }}"),
+                            format!(
+                                "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a durable scope"
+                            ),
+                        ));
+                    }
                     concurrent::ResolutionOutcome::Incomplete => {
                         // FU5 half-pair recovery: the scope `Start` (and any terminal marker) is
                         // committed but the scope `End` was lost to a crash. Replay has reached the
@@ -1865,12 +1880,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // reading the scope `End` positionally. The handle is stored only when the transaction
             // continues replaying (not when recovery restarts it live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_names = [HostFunctionName::Custom("<scope:transaction>".to_string())];
+            let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
             let (scope_start_index, scope_handle) = self
                 .state
                 .replay_state
                 .claim_scope_start(
-                    &scope_names,
+                    &scope_name,
                     &DurableFunctionType::WriteRemoteTransaction(None),
                 )
                 .await?;
@@ -2735,7 +2750,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
-        let replay_events = self.state.replay_state.take_new_replay_events().await;
+        let replay_events = self.state.replay_state.take_new_replay_events();
         if !replay_events.is_empty() {
             debug!("Applying pending side effects accumulated during replay");
         }
@@ -3711,12 +3726,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .await;
 
             store
-                .as_context_mut()
-                .data_mut()
-                .durable_ctx_mut()
+                .as_context()
+                .data()
+                .durable_ctx()
                 .state
                 .replay_state
-                .set_replay_target(new_target);
+                .set_replay_target(new_target)
+                .await?;
         }
 
         let (agent_mode, is_agent) = {
@@ -4213,6 +4229,188 @@ mod tests {
         };
 
         assert!(!should_restart_after_shard_assignment_change(&status));
+    }
+
+    fn open_region(regions: &mut Vec<ActiveAtomicRegion>, begin: u64) -> OplogIndex {
+        let begin_index = OplogIndex::from_u64(begin);
+        regions.push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
+        begin_index
+    }
+
+    #[test]
+    fn atomic_region_nested_close_transfers_pending_lease_to_parent() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+        let inner = open_region(&mut regions, 20);
+
+        let lease = register_atomic_region_call(&mut regions, inner, true).unwrap();
+        assert_eq!(lease.owner(), Some(inner));
+
+        close_atomic_region(&mut regions, inner);
+
+        assert_eq!(lease.owner(), Some(outer));
+        let survivors = atomic_region_surviving_members(&regions, outer);
+        assert_eq!(survivors.len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&survivors[0], &lease));
+    }
+
+    #[test]
+    fn atomic_region_outermost_close_detaches_replay_safe_call() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+
+        let lease = register_atomic_region_call(&mut regions, outer, true).unwrap();
+        assert!(!atomic_region_has_parent(&regions, outer));
+
+        close_atomic_region(&mut regions, outer);
+
+        // Detached: the call's retry grouping falls back to its own execution scope.
+        assert_eq!(lease.owner(), None);
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn atomic_region_outermost_close_guard_sees_pending_unsafe_call() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+
+        let _lease = register_atomic_region_call(&mut regions, outer, false).unwrap();
+
+        // The live close path (mark_end_operation) rejects the close when the outermost region
+        // still has a surviving non-repairable member; verify the guard predicate observes it.
+        let blocked = !atomic_region_has_parent(&regions, outer)
+            && atomic_region_surviving_members(&regions, outer)
+                .iter()
+                .any(|lease| !lease.repairable_when_incomplete());
+        assert!(blocked);
+    }
+
+    #[test]
+    fn atomic_region_nested_close_transfers_unsafe_call_without_blocking() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+        let inner = open_region(&mut regions, 20);
+
+        let lease = register_atomic_region_call(&mut regions, inner, false).unwrap();
+
+        // A nested close never blocks: the unsafe call transfers to the parent, which becomes
+        // responsible for it at its own close.
+        assert!(atomic_region_has_parent(&regions, inner));
+        close_atomic_region(&mut regions, inner);
+
+        assert_eq!(lease.owner(), Some(outer));
+        let blocked = !atomic_region_has_parent(&regions, outer)
+            && atomic_region_surviving_members(&regions, outer)
+                .iter()
+                .any(|lease| !lease.repairable_when_incomplete());
+        assert!(blocked);
+    }
+
+    #[test]
+    fn atomic_region_release_after_transfer_removes_member_from_new_owner() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+        let inner = open_region(&mut regions, 20);
+
+        let lease = register_atomic_region_call(&mut regions, inner, false).unwrap();
+        close_atomic_region(&mut regions, inner);
+        assert_eq!(lease.owner(), Some(outer));
+
+        // Completion / cancellation releases the lease from its *current* owner.
+        lease.release();
+        assert_eq!(lease.owner(), None);
+        assert!(atomic_region_surviving_members(&regions, outer).is_empty());
+    }
+
+    #[test]
+    fn atomic_region_released_lease_is_not_transferred_on_close() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+        let inner = open_region(&mut regions, 20);
+
+        let lease = register_atomic_region_call(&mut regions, inner, true).unwrap();
+        lease.release();
+
+        close_atomic_region(&mut regions, inner);
+
+        assert_eq!(lease.owner(), None);
+        assert!(atomic_region_surviving_members(&regions, outer).is_empty());
+    }
+
+    #[test]
+    fn atomic_region_dropped_lease_leaves_no_stale_member() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+
+        let lease = register_atomic_region_call(&mut regions, outer, false).unwrap();
+        drop(lease);
+
+        // The registry holds weak references only: a dropped handle's bookkeeping does not
+        // survive as a stale blocker.
+        assert!(atomic_region_surviving_members(&regions, outer).is_empty());
+        let blocked = atomic_region_surviving_members(&regions, outer)
+            .iter()
+            .any(|lease| !lease.repairable_when_incomplete());
+        assert!(!blocked);
+    }
+
+    #[test]
+    fn atomic_region_nested_close_propagates_side_effects_to_parent() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+        let inner = open_region(&mut regions, 20);
+
+        assert!(mark_atomic_region_has_side_effects_for(&mut regions, inner));
+        close_atomic_region(&mut regions, inner);
+
+        assert!(
+            regions
+                .iter()
+                .find(|region| region.begin_index == outer)
+                .unwrap()
+                .has_side_effects
+        );
+    }
+
+    #[test]
+    fn atomic_region_close_of_unknown_region_is_noop() {
+        let mut regions = Vec::new();
+        let outer = open_region(&mut regions, 10);
+        let lease = register_atomic_region_call(&mut regions, outer, true).unwrap();
+
+        close_atomic_region(&mut regions, OplogIndex::from_u64(99));
+
+        assert_eq!(lease.owner(), Some(outer));
+        assert_eq!(regions.len(), 1);
+    }
+
+    #[test]
+    fn atomic_region_register_in_unknown_region_returns_none() {
+        let mut regions = Vec::new();
+        open_region(&mut regions, 10);
+
+        assert!(
+            register_atomic_region_call(&mut regions, OplogIndex::from_u64(99), true).is_none()
+        );
+    }
+
+    #[test]
+    fn atomic_region_two_level_transfer_follows_current_owner() {
+        let mut regions = Vec::new();
+        let outermost = open_region(&mut regions, 10);
+        let middle = open_region(&mut regions, 20);
+        let innermost = open_region(&mut regions, 30);
+
+        let lease = register_atomic_region_call(&mut regions, innermost, true).unwrap();
+
+        close_atomic_region(&mut regions, innermost);
+        assert_eq!(lease.owner(), Some(middle));
+
+        close_atomic_region(&mut regions, middle);
+        assert_eq!(lease.owner(), Some(outermost));
+
+        close_atomic_region(&mut regions, outermost);
+        assert_eq!(lease.owner(), None);
     }
 
     #[test]
@@ -4877,12 +5075,90 @@ pub(crate) struct HttpOutputStreamState {
     pub request: HostRequestHttpRequest,
 }
 
+/// A durable call's atomic-region membership as a *transferable retry lease*.
+///
+/// The lease tracks which open atomic region currently owns the call's retry grouping. It starts
+/// out owned by the region the call was initiated in, and the owner can change over the call's
+/// lifetime: when a region is closed (`mark-end-operation`) while member calls are still pending,
+/// their leases transfer to the enclosing open atomic region, or detach entirely at the outermost
+/// close (allowed only for calls that are safe to re-execute from an incomplete `Start` on
+/// replay). A detached lease means the call's trap/retry grouping falls back to its own execution
+/// scope (`retry_from`) and its late terminal marks no atomic-region side effects — it must never
+/// retry "into" the already-committed region.
+///
+/// Reads and writes are store-free (interior mutability), so terminal paths, `Drop` impls, and
+/// accessor tasks can release or consult the lease without borrowing the worker state.
+#[derive(Debug)]
+pub struct AtomicRegionLease {
+    /// The begin index of the open atomic region that currently owns this call, or `None` once the
+    /// call completed / was released or detached.
+    owner: std::sync::Mutex<Option<OplogIndex>>,
+    /// Whether the call may be safely re-executed when replay finds its `Start` committed but its
+    /// terminal missing (see `InFunctionRetryController::can_reexecute_on_incomplete_replay`).
+    /// Non-repairable calls (non-idempotent / batched / transactional writes) keep the outermost
+    /// region close rejected while they are pending.
+    repairable_when_incomplete: bool,
+}
+
+impl AtomicRegionLease {
+    fn new(owner: OplogIndex, repairable_when_incomplete: bool) -> Self {
+        Self {
+            owner: std::sync::Mutex::new(Some(owner)),
+            repairable_when_incomplete,
+        }
+    }
+
+    /// The atomic region currently owning this call, if any.
+    pub(crate) fn owner(&self) -> Option<OplogIndex> {
+        *self.owner.lock().unwrap()
+    }
+
+    /// Releases the lease: the call reached a terminal (or its start was rolled back) and no
+    /// longer counts as an in-flight member of any region. Idempotent and store-free, so it is
+    /// safe from `Drop` impls and accessor tasks.
+    pub(crate) fn release(&self) {
+        *self.owner.lock().unwrap() = None;
+    }
+
+    /// Whether the call is safe to leave incomplete inside a committed (closed) atomic region.
+    pub(crate) fn repairable_when_incomplete(&self) -> bool {
+        self.repairable_when_incomplete
+    }
+
+    fn transfer(&self, new_owner: Option<OplogIndex>) {
+        *self.owner.lock().unwrap() = new_owner;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ActiveAtomicRegion {
     begin_index: OplogIndex,
     next_idempotency_key_oplog_index: OplogIndex,
     has_side_effects: bool,
-    in_flight_call_count: u32,
+    /// Leases of durable calls initiated in (or transferred into) this region. Weak so a finished
+    /// call's bookkeeping does not outlive its handle; pruned lazily. A member is *surviving*
+    /// (still in flight in this region) when the weak upgrades and the lease's current owner is
+    /// this region.
+    members: Vec<std::sync::Weak<AtomicRegionLease>>,
+}
+
+impl ActiveAtomicRegion {
+    fn new(begin_index: OplogIndex, next_idempotency_key_oplog_index: OplogIndex) -> Self {
+        Self {
+            begin_index,
+            next_idempotency_key_oplog_index,
+            has_side_effects: false,
+            members: Vec::new(),
+        }
+    }
+
+    fn surviving_members(&self) -> Vec<std::sync::Arc<AtomicRegionLease>> {
+        self.members
+            .iter()
+            .filter_map(|weak| weak.upgrade())
+            .filter(|lease| lease.owner() == Some(self.begin_index))
+            .collect()
+    }
 }
 
 fn mark_atomic_region_has_side_effects_for(
@@ -4900,34 +5176,91 @@ fn mark_atomic_region_has_side_effects_for(
     }
 }
 
+/// Registers a durable call as an in-flight member of the atomic region `begin_index` and returns
+/// its ownership lease, or `None` when the region is not open.
 fn register_atomic_region_call(
     active_atomic_regions: &mut [ActiveAtomicRegion],
     begin_index: OplogIndex,
-) -> bool {
-    if let Some(region) = active_atomic_regions
+    repairable_when_incomplete: bool,
+) -> Option<std::sync::Arc<AtomicRegionLease>> {
+    let region = active_atomic_regions
         .iter_mut()
-        .find(|region| region.begin_index == begin_index)
-    {
-        region.in_flight_call_count += 1;
-        true
-    } else {
-        false
-    }
+        .find(|region| region.begin_index == begin_index)?;
+    let lease = std::sync::Arc::new(AtomicRegionLease::new(
+        begin_index,
+        repairable_when_incomplete,
+    ));
+    region.members.push(std::sync::Arc::downgrade(&lease));
+    Some(lease)
 }
 
-fn unregister_atomic_region_call(
-    active_atomic_regions: &mut [ActiveAtomicRegion],
+/// The leases of durable calls still in flight in the atomic region `begin_index`.
+fn atomic_region_surviving_members(
+    active_atomic_regions: &[ActiveAtomicRegion],
+    begin_index: OplogIndex,
+) -> Vec<std::sync::Arc<AtomicRegionLease>> {
+    active_atomic_regions
+        .iter()
+        .find(|region| region.begin_index == begin_index)
+        .map(|region| region.surviving_members())
+        .unwrap_or_default()
+}
+
+/// Whether the atomic region `begin_index` is nested inside another open atomic region (which
+/// would receive its surviving members on close).
+fn atomic_region_has_parent(
+    active_atomic_regions: &[ActiveAtomicRegion],
     begin_index: OplogIndex,
 ) -> bool {
-    if let Some(region) = active_atomic_regions
-        .iter_mut()
-        .find(|region| region.begin_index == begin_index)
-        && region.in_flight_call_count > 0
-    {
-        region.in_flight_call_count -= 1;
-        true
+    active_atomic_regions
+        .iter()
+        .position(|region| region.begin_index == begin_index)
+        .is_some_and(|pos| pos > 0)
+}
+
+/// Closes the atomic region `begin_index`: transfers its surviving member leases (and its
+/// side-effect bit) to the enclosing open atomic region if one exists, detaches them otherwise,
+/// and removes the region. No-op when the region is not open.
+fn close_atomic_region(
+    active_atomic_regions: &mut Vec<ActiveAtomicRegion>,
+    begin_index: OplogIndex,
+) {
+    let Some(pos) = active_atomic_regions
+        .iter()
+        .position(|region| region.begin_index == begin_index)
+    else {
+        return;
+    };
+    let closed = active_atomic_regions.remove(pos);
+    let parent = if pos > 0 {
+        Some(&mut active_atomic_regions[pos - 1])
     } else {
-        false
+        None
+    };
+    match parent {
+        Some(parent) => {
+            let parent_begin = parent.begin_index;
+            for weak in &closed.members {
+                if let Some(lease) = weak.upgrade()
+                    && lease.owner() == Some(begin_index)
+                {
+                    lease.transfer(Some(parent_begin));
+                    parent.members.push(std::sync::Weak::clone(weak));
+                }
+            }
+            // Entries persisted inside the closed region lie inside the parent's span too, so
+            // the parent inherits the side-effect classification.
+            parent.has_side_effects |= closed.has_side_effects;
+        }
+        None => {
+            for weak in &closed.members {
+                if let Some(lease) = weak.upgrade()
+                    && lease.owner() == Some(begin_index)
+                {
+                    lease.release();
+                }
+            }
+        }
     }
 }
 
@@ -5067,6 +5400,21 @@ struct PrivateDurableWorkerState {
     /// Tracks file-backed wasi output streams so quota charging can be based on
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
+
+    /// Reps of file-backed wasi input streams created by `read_via_stream`. Used together with
+    /// [`Self::file_stream_pollables`] to identify pollables whose backing operation re-executes
+    /// during replay.
+    open_filesystem_input_streams: HashSet<u32>,
+
+    /// Reps of pollables subscribed to file-backed input/output streams. Reads/writes on file
+    /// streams are not persisted — they re-execute against the restored filesystem during replay —
+    /// but their readiness is driven by a background host task that a live `io::poll::poll` /
+    /// `pollable::ready` actually awaited before its result was recorded. When such a poll is
+    /// replayed, the executor must await the real readiness of these pollables before handing the
+    /// guest the recorded result; otherwise the guest's read/poll loop observes a not-yet-ready
+    /// stream after a "ready" poll and issues more polls than were recorded, diverging from the
+    /// oplog.
+    file_stream_pollables: HashSet<u32>,
 
     /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
     /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
@@ -5383,6 +5731,8 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
+            open_filesystem_input_streams: HashSet::new(),
+            file_stream_pollables: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: None,
             invocation_strictness: InvocationStrictness::Normal,
@@ -5750,19 +6100,43 @@ impl PrivateDurableWorkerState {
         mark_atomic_region_has_side_effects_for(&mut self.active_atomic_regions, begin_index)
     }
 
-    pub fn register_atomic_region_call(&mut self, begin_index: OplogIndex) -> bool {
-        register_atomic_region_call(&mut self.active_atomic_regions, begin_index)
+    /// Registers a durable call as an in-flight member of the atomic region `begin_index` and
+    /// returns its ownership lease, or `None` when the region is not open. The caller keeps the
+    /// returned `Arc` alive for the call's lifetime and `release()`s it when the call reaches a
+    /// terminal; region close (`close_atomic_region`) transfers or detaches surviving leases.
+    pub fn register_atomic_region_call(
+        &mut self,
+        begin_index: OplogIndex,
+        repairable_when_incomplete: bool,
+    ) -> Option<std::sync::Arc<AtomicRegionLease>> {
+        register_atomic_region_call(
+            &mut self.active_atomic_regions,
+            begin_index,
+            repairable_when_incomplete,
+        )
     }
 
-    pub fn unregister_atomic_region_call(&mut self, begin_index: OplogIndex) -> bool {
-        unregister_atomic_region_call(&mut self.active_atomic_regions, begin_index)
+    /// The leases of durable calls still in flight in the atomic region `begin_index`.
+    pub fn atomic_region_surviving_members(
+        &self,
+        begin_index: OplogIndex,
+    ) -> Vec<std::sync::Arc<AtomicRegionLease>> {
+        atomic_region_surviving_members(&self.active_atomic_regions, begin_index)
     }
 
-    pub fn atomic_region_has_in_flight_calls(&self, begin_index: OplogIndex) -> bool {
-        self.active_atomic_regions
-            .iter()
-            .find(|region| region.begin_index == begin_index)
-            .is_some_and(|region| region.in_flight_call_count > 0)
+    /// Whether the atomic region `begin_index` is nested inside another open atomic region (which
+    /// would receive its surviving members on close).
+    pub fn atomic_region_has_parent(&self, begin_index: OplogIndex) -> bool {
+        atomic_region_has_parent(&self.active_atomic_regions, begin_index)
+    }
+
+    /// Closes the atomic region `begin_index`: transfers its surviving member leases (and its
+    /// side-effect bit) to the enclosing open atomic region if one exists, detaches them
+    /// otherwise, and removes the region. Run on both the live path (after the `EndAtomicRegion`
+    /// entry is appended) and the replay path (after the entry is consumed), so replay performs
+    /// the same ownership transitions as live execution did. No-op when the region is not open.
+    pub fn close_atomic_region(&mut self, begin_index: OplogIndex) {
+        close_atomic_region(&mut self.active_atomic_regions, begin_index)
     }
 
     /// Whether the atomic region identified by `begin_index` has recorded side effects. Used for
@@ -6343,6 +6717,31 @@ macro_rules! get_oplog_entry {
     ($replay_state:expr, $($cases:path),+) => {
         loop {
             let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry().await?;
+            match oplog_entry {
+                $($cases { .. } => {
+                    break Ok((oplog_index, oplog_entry));
+                })+
+                _ => {
+                    tracing::error!("Unexpected oplog entry - expected {}, got {:?}", stringify!($($cases |)+), oplog_entry);
+                    break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                        stringify!($($cases |)+),
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    };
+}
+
+/// [`get_oplog_entry!`] variant for call sites running inside Wasmtime accessor futures: reads
+/// through [`crate::durable_host::replay_state::ReplayState::get_oplog_entry_owned`], whose cursor
+/// transaction runs on an owned task, so the store-polled caller never queues on the cursor mutex
+/// directly. Direct invocation-loop / p2 host-call readers keep using [`get_oplog_entry!`].
+#[macro_export]
+macro_rules! get_oplog_entry_owned {
+    ($replay_state:expr, $($cases:path),+) => {
+        loop {
+            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry_owned().await?;
             match oplog_entry {
                 $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));

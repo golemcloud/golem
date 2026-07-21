@@ -207,12 +207,17 @@ fn resolve_cargo_target_dir_uncached(repo_root: &Path) -> PathBuf {
     if !manifest_path.exists() {
         return fallback();
     }
+    // `repo_root` is usually a relative path (e.g. `..`). Cargo resolves a
+    // relative `--manifest-path` against the child process's working
+    // directory, so a relative path combined with `current_dir(repo_root)`
+    // would be applied twice and point outside the repo. Absolutize it
+    // against our own working directory instead.
+    let manifest_path = manifest_path.canonicalize().unwrap_or(manifest_path);
 
     let output = std::process::Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .arg("--manifest-path")
         .arg(&manifest_path)
-        .current_dir(repo_root)
         .output();
 
     match output {

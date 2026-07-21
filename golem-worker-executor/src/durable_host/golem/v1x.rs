@@ -354,6 +354,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .replay_state
             .is_in_skipped_region(original_target)
             .await
+            .map_err(anyhow::Error::from)?
         {
             Err(anyhow!(
                 "Attempted to jump to a deleted region in oplog to index {original_target} from {jump_source}"
@@ -416,12 +417,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let begin_index = self.state.current_oplog_index().await;
             let next_idempotency_key_oplog_index =
                 next_idempotency_key_oplog_index.unwrap_or_else(|| begin_index.next());
-            self.state.active_atomic_regions.push(ActiveAtomicRegion {
-                begin_index,
-                next_idempotency_key_oplog_index,
-                has_side_effects: false,
-                in_flight_call_count: 0,
-            });
+            self.state
+                .active_atomic_regions
+                .push(ActiveAtomicRegion::new(
+                    begin_index,
+                    next_idempotency_key_oplog_index,
+                ));
             Ok(begin_index.into())
         } else {
             let (begin_index, _) =
@@ -466,12 +467,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            self.state.active_atomic_regions.push(ActiveAtomicRegion {
-                begin_index,
-                next_idempotency_key_oplog_index: begin_index.next(),
-                has_side_effects: false,
-                in_flight_call_count: 0,
-            });
+            self.state
+                .active_atomic_regions
+                .push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
             Ok(begin_index.into())
         }
     }
@@ -483,16 +481,38 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "mark_end_operation");
         let begin_index = OplogIndex::from_u64(begin);
         if self.state.is_live() {
-            // Atomic-region legality under overlap: an atomic region must not be closed while
-            // durable calls initiated inside it are still in flight. Their `End`/`Cancelled` is
-            // recorded later and must still be able to mark side effects and unregister against the
-            // region that made them retry-relevant; removing the region first would lose that
-            // membership. A region is closed only once all its member calls have completed.
-            if self.state.atomic_region_has_in_flight_calls(begin_index) {
+            // Atomic-region legality under overlap: closing a region does not require all member
+            // calls to have completed. Each member call holds a transferable ownership lease
+            // (`AtomicRegionLease`); on close, surviving members transfer to the enclosing open
+            // atomic region if one exists, and at the outermost close they detach — allowed only
+            // for calls that replay can safely re-execute from an incomplete `Start` (reads,
+            // local writes, idempotent remote writes). A pending non-repairable write (a
+            // non-idempotent / batched / transactional remote write) still blocks the outermost
+            // close: its terminal must be able to record against the region that made it
+            // retry-relevant, and replay cannot repair it if it never lands.
+            //
+            // A member call the guest already awaited may still hold its lease here: its cleanup
+            // (terminal join, scope close, lease release) is queued as a dropped-call event and
+            // drained at the next safe worker-access window. Ending the region is such a window,
+            // so drain first — otherwise a fully completed call would spuriously count as a
+            // surviving member (mirrors the jump and persistence-level guards).
+            drain_queued_dropped_call_events(self)
+                .await
+                .map_err(anyhow::Error::from)?;
+            if !self.state.atomic_region_has_parent(begin_index)
+                && self
+                    .state
+                    .atomic_region_surviving_members(begin_index)
+                    .iter()
+                    .any(|lease| !lease.repairable_when_incomplete())
+            {
                 return Err(anyhow!(
-                    "Cannot end atomic region {begin_index}: durable calls initiated in it are still in flight"
+                    "Cannot end atomic region {begin_index}: non-re-executable durable calls initiated in it are still in flight"
                 ));
             }
+            // The `EndAtomicRegion` entry is the durable linearization point of the transfer /
+            // detach decision: append it first, then transition the leases, so a crash before the
+            // append leaves the region uncommitted and replay retries it as a whole.
             self.state
                 .oplog
                 .add(OplogEntry::end_atomic_region(begin_index))
@@ -501,9 +521,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
         }
 
-        self.state
-            .active_atomic_regions
-            .retain(|region| region.begin_index != begin_index);
+        // Same transition on live and replay: transfer surviving members to the parent region (or
+        // detach them at the outermost close) and remove the region, so replayed calls observe the
+        // same ownership changes as live ones did. The replay path deliberately skips the
+        // non-repairable validation above — a committed `EndAtomicRegion` is a fact of the oplog
+        // and must replay even for layouts a newer live executor would reject.
+        self.state.close_atomic_region(begin_index);
 
         Ok(())
     }

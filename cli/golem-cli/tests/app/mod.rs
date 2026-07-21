@@ -498,6 +498,10 @@ impl TestContext {
         tokio::task::spawn_blocking(move || {
             let mut command = std::process::Command::new(golem_cli_path);
             command.current_dir(working_dir).envs(env).args(args);
+            // The session runs in a PTY; ensure a capable terminal type so terminal
+            // features like readline tab completion are not disabled (e.g. when the
+            // parent environment has TERM=dumb or TERM unset).
+            command.env("TERM", "xterm-256color");
             let mut session = expectrl::Session::spawn(command)
                 .expect("failed to spawn interactive golem-cli session");
 
@@ -585,7 +589,7 @@ impl TestContext {
 
         {
             let start = Instant::now();
-            let timeout = Duration::from_secs(10);
+            let timeout = Duration::from_secs(60);
             let sleep_interval = Duration::from_millis(100);
             loop {
                 let server_process = self
@@ -1084,9 +1088,20 @@ fn test_binary_profile() -> String {
     }
 }
 
+/// Resolves the cargo target directory from the running test executable's location
+/// (`<target-dir>/<profile>/deps/<test-binary>`), so it honors redirected target
+/// directories (`CARGO_TARGET_DIR`, `build.target-dir` in cargo config, or cargo
+/// wrappers). Falls back to the legacy `<workspace>/target` location.
+fn cargo_target_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.parent()?.to_path_buf()))
+        .unwrap_or_else(|| workspace_path().join("target"))
+}
+
 fn test_binary_path(profile: &str, binary_name: &str) -> PathBuf {
-    let path = workspace_path().join(format!(
-        "target/{profile}/{binary_name}{}",
+    let path = cargo_target_dir().join(format!(
+        "{profile}/{binary_name}{}",
         std::env::consts::EXE_SUFFIX
     ));
     if !path.exists() {

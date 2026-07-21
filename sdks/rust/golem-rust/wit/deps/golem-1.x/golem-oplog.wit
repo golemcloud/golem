@@ -154,6 +154,15 @@ interface oplog {
         partial: option<typed-schema-value>,
     }
 
+    /// Parameters of a `completion-discarded` entry: the durable host call started at
+    /// `start-index` completed successfully (its `end` entry was persisted) but the response
+    /// was never delivered to the agent, because the agent dropped the call's completion
+    /// future after the `end` was already recorded.
+    record completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
     record local-span-data {
         span-id: span-id,
         start: datetime,
@@ -552,6 +561,11 @@ interface oplog {
         partial: option<oplog-payload>,
     }
 
+    record raw-completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
     /// Parameters for a host-stream-frame oplog entry, with the frame payload in raw
     /// (possibly externally stored) form.
     record raw-host-stream-frame-parameters {
@@ -766,7 +780,11 @@ interface oplog {
         card-revoked(card-revoked-parameters),
         /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
         /// attached to the durable host call identified by its start entry's index
-        host-stream-frame(raw-host-stream-frame-parameters)
+        host-stream-frame(raw-host-stream-frame-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was persisted, but its response was never delivered to the agent (the agent dropped
+        /// the completion future after the `end` was recorded)
+        completion-discarded(raw-completion-discarded-parameters)
     }
 
     variant public-oplog-entry {
@@ -865,7 +883,11 @@ interface oplog {
         card-revoked(card-revoked-parameters),
         /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
         /// attached to the durable host call identified by its start entry's index
-        host-stream-frame(host-stream-frame-parameters)
+        host-stream-frame(host-stream-frame-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was persisted, but its response was never delivered to the agent (the agent dropped
+        /// the completion future after the `end` was recorded)
+        completion-discarded(completion-discarded-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

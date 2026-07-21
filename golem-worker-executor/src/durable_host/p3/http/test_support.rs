@@ -71,6 +71,11 @@ impl FrameTestOplog {
         self.entries.lock().unwrap().len()
     }
 
+    /// All appended entries, in oplog order.
+    pub(super) fn entries(&self) -> Vec<OplogEntry> {
+        self.entries.lock().unwrap().clone()
+    }
+
     /// The request-body frames recorded for `parent`, in oplog order. Frames
     /// recorded for other parents are ignored.
     pub(super) fn recorded_frames_for(

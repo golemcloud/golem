@@ -61,6 +61,7 @@ message RawOplogEntry {
     RawCancelledParameters cancelled = 45;
     RawCardRevokedParameters card_revoked = 46;
     RawHostStreamFrameParameters host_stream_frame = 47;
+    RawCompletionDiscardedParameters completion_discarded = 48;
   }
 }
 
@@ -162,6 +163,10 @@ message RawEndParameters {
 message RawCancelledParameters {
   uint64 start_index = 1;
   optional RawOplogPayload partial = 2;
+}
+
+message RawCompletionDiscardedParameters {
+  uint64 start_index = 1;
 }
 
 message RawAgentInvocationStartedParameters {

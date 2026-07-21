@@ -6,7 +6,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/core/types" @types,
   "golemcloud/golem_sdk/rpc" @rpc,
   "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
+  "golemcloud/golem_sdk/interface/wasi/clocks/systemClock" @systemClock,
   "golemcloud/golem_sdk/gen" @gen,
   "moonbitlang/core/json" @json,
 }

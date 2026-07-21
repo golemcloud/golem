@@ -1283,6 +1283,23 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         ),
                     ));
                 }
+                Resolution::CompletedButDiscarded {
+                    end_idx,
+                    marker_idx,
+                    ..
+                } => {
+                    // Discarded completions are recorded only on the accessor completion path;
+                    // `future_incoming_response::get` replays through the poll-based path, so a
+                    // marker resolving here means the oplog does not match this code path.
+                    return Err(wasmtime::Error::from(
+                        WorkerExecutorError::unexpected_oplog_entry(
+                            "End delivered to the guest",
+                            format!(
+                                "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
+                            ),
+                        ),
+                    ));
+                }
             };
 
             match serialized_response {

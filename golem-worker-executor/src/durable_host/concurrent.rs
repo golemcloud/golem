@@ -51,7 +51,7 @@ use golem_service_base::error::worker_executor::{
 use golem_service_base::model::component::Component;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
-use wasmtime::component::{Accessor, HasData};
+use wasmtime::component::{Accessor, HasData, TerminalConsumption};
 
 use crate::durable_host::durability::{
     ClassifiedHostError, DurabilityHost, DurableCallTrapContext, DurableCallTrapError,
@@ -59,9 +59,9 @@ use crate::durable_host::durability::{
     InternalRetryResult, TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
     try_trigger_host_trap_retry,
 };
-use crate::durable_host::replay_state::OplogEntryLookupResult;
+use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::durable_host::{
-    DurableScopeKind, DurableWorkerCtx, IFSWorkerFile, PublicDurableWorkerState,
+    AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, IFSWorkerFile, PublicDurableWorkerState,
 };
 use crate::services::HasWorker;
 use crate::services::card::CardService;
@@ -109,6 +109,20 @@ pub enum Resolution {
         cancelled_idx: OplogIndex,
         partial: Option<OplogPayload<HostResponse>>,
     },
+    /// The call completed successfully via an `End` entry, but a `CompletionDiscarded` marker
+    /// records that the response was never delivered to the guest: the guest dropped the accessor
+    /// completion future (e.g. the losing branch of a `select!`) after the `End` was persisted.
+    /// Replay must not deliver the response to the *guest* either — the replaying guest parks
+    /// (at the recorded delivery boundary) until it drops the future at the same point it did
+    /// live. The recorded response payload is still carried: deferred-delivery replay sites
+    /// ([`CallHandle::replay_access_deferred`]) must decode it to reconstruct deterministic
+    /// host-side state (span finishes, terminal-child bookkeeping) executed between the `End`
+    /// and the point where delivery would have happened.
+    CompletedButDiscarded {
+        end_idx: OplogIndex,
+        marker_idx: OplogIndex,
+        response: Option<OplogPayload<HostResponse>>,
+    },
 }
 
 /// The outcome of driving the replay cursor for a durable call.
@@ -138,6 +152,21 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     /// switched to live completion of that existing `Start`: the caller must re-run the side effect
     /// and call [`CallHandle::complete`] (which appends the missing `End`). Only produced for
     /// function types that are safe to re-execute.
+    Incomplete(CallHandle<Pair, P>),
+}
+
+/// The result of [`CallHandle::replay_access_deferred`]: like [`CallReplayOutcome`], but each
+/// replayed response carries the [`CompletionDelivery`] token describing the recorded delivery
+/// status the caller must mirror.
+#[allow(clippy::large_enum_variant)]
+pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
+    /// The call's terminal was replayed and decoded. If the token reports
+    /// [`CompletionDelivery::is_replay_discarded`], the recorded run discarded this completion:
+    /// the caller must not deliver the response and instead parks at the delivery boundary after
+    /// its deterministic post-`End` continuation.
+    Replayed(Pair::Resp, CompletionDelivery),
+    /// See [`CallReplayOutcome::Incomplete`]; the caller re-runs the side effect and completes
+    /// via [`CallHandle::complete_access_deferred`].
     Incomplete(CallHandle<Pair, P>),
 }
 
@@ -284,7 +313,10 @@ pub struct DroppedCall {
     begin_index: OplogIndex,
     function_type: DurableFunctionType,
     request_upload: PendingUpload,
-    atomic_region_registration: Option<OplogIndex>,
+    /// The dropped call's atomic-region ownership lease, shared with every other holder (the
+    /// originating handle, terminal guards). Released — store-free and idempotently — once the
+    /// call's terminal is recorded.
+    atomic_lease: Option<Arc<AtomicRegionLease>>,
     /// The dropped call's own trap classification, captured from its execution scope at drop time.
     /// A cancellation-drain failure (deferred request upload / terminal recorder join) traps with
     /// this context so the retry grouping belongs to the dropped call, not to whichever later host
@@ -317,8 +349,16 @@ impl DroppedCall {
         &self.request_upload
     }
 
-    pub fn atomic_region_registration(&self) -> Option<OplogIndex> {
-        self.atomic_region_registration
+    /// The atomic region currently owning the dropped call, read through its lease.
+    pub fn atomic_region(&self) -> Option<OplogIndex> {
+        self.atomic_lease.as_ref().and_then(|lease| lease.owner())
+    }
+
+    /// Releases the dropped call's atomic-region membership (idempotent, store-free).
+    fn release_atomic_lease(&self) {
+        if let Some(lease) = &self.atomic_lease {
+            lease.release();
+        }
     }
 
     pub fn trap_context(&self) -> DurableCallTrapContext {
@@ -340,9 +380,7 @@ impl DroppedCall {
     ) -> Result<(), WorkerExecutorError> {
         self.append_cancelled_with_oplog(ctx.state.oplog.clone(), partial)
             .await?;
-        if let Some(begin_index) = self.atomic_region_registration {
-            ctx.state.unregister_atomic_region_call(begin_index);
-        }
+        self.release_atomic_lease();
         ctx.end_durable_function(&self.function_type, self.begin_index, false)
             .await?;
         Ok(())
@@ -379,13 +417,11 @@ pub enum DropEvent {
     UnfinishedCancellable { call: DroppedCall },
     /// A `NotCancellable` handle was dropped unfinished; this is a programming error.
     UnfinishedNotCancellable { call: DroppedCall },
-    /// A terminal was already being recorded when the future was dropped; only in-memory atomic
-    /// membership cleanup is needed, not another durable terminal entry.
-    CleanupAtomicRegion { begin_index: OplogIndex },
-    /// A terminal append was handed to an owned task; wait for it before in-memory cleanup. A join
-    /// failure traps with the dropped call's own `trap_context` rather than ambient state.
+    /// A terminal append was handed to an owned task; wait for it before releasing the call's
+    /// atomic-region lease. A join failure traps with the dropped call's own `trap_context`
+    /// rather than ambient state.
     CleanupAfterTerminal {
-        atomic_region_registration: Option<OplogIndex>,
+        atomic_lease: Option<Arc<AtomicRegionLease>>,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -394,6 +430,17 @@ pub enum DropEvent {
         /// terminal task joined and the durable-function scope closed), so a positional boundary
         /// (e.g. a persistence-level change) cannot be placed before the delayed terminal append.
         /// Never read — held purely for its `Drop` effect on the shared counter.
+        live_call_permit: Option<LiveCallPermit>,
+    },
+    /// A deferred guest-delivery token ([`CompletionDelivery`]) was dropped while still armed:
+    /// its call's terminal `End` is already recorded and the durable scope already closed, so the
+    /// only remaining work is joining the owned marker (or trailing ordered-append) task while
+    /// keeping the call counted as in flight — no scope close and no atomic-region cleanup.
+    AwaitDiscardMarker {
+        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+        trap_context: DurableCallTrapContext,
+        /// Held so invocation settlement waits until the marker append is joined; released when
+        /// the event is finished or dropped. Never read.
         live_call_permit: Option<LiveCallPermit>,
     },
     /// A guest-cancelled accessor future may leave a caller-managed durable scope with no code path
@@ -469,12 +516,498 @@ impl Drop for AccessDropEventDrainGuard {
     }
 }
 
+/// Everything needed to append a `CompletionDiscarded` marker from an owned task when an armed
+/// [`AccessTerminalGuard`] is dropped: the guest tore the accessor completion future *after* the
+/// successful `End` append was handed to its owned task, so the response was persisted but never
+/// delivered. Armed only on the `End` path ([`CallHandle::persist_access_terminal`]) — never for
+/// cancellations — and explicitly suppressed on internal-error returns the caller observes
+/// ([`AccessTerminalGuard::suppress_discard_marker`]), so a marker is recorded exactly when the
+/// completion was silently discarded by the guest.
+struct DiscardMarker {
+    start_idx: OplogIndex,
+    oplog: Arc<dyn Oplog>,
+    replay_state: ReplayState,
+}
+
+impl DiscardMarker {
+    /// Appends the `CompletionDiscarded` marker entry and records it in the replay state. The
+    /// terminal `End` append (and any ordered post-`End` append, e.g. a `FinishSpan`) must
+    /// already be durable when this runs.
+    async fn append(self) {
+        let marker_idx = self
+            .oplog
+            .add(OplogEntry::CompletionDiscarded {
+                timestamp: Timestamp::now_utc(),
+                start_index: self.start_idx,
+            })
+            .await;
+        self.replay_state
+            .record_discarded_completion(self.start_idx, marker_idx);
+    }
+
+    /// Spawns the owned marker-recording task, chained after the (possibly still pending) owned
+    /// terminal `End` append. Returns the chained handle, which replaces the terminal handle in
+    /// the emitted [`DropEvent::CleanupAfterTerminal`], so every existing drain that joins the
+    /// terminal also awaits the marker append — invocation completion cannot overtake it. The
+    /// task is detached (`tokio::spawn`): even if the drain future itself is torn and the event
+    /// is lost, the marker append still runs to completion.
+    fn spawn_chained(
+        self,
+        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    ) -> tokio::task::JoinHandle<Result<(), WorkerExecutorError>> {
+        tokio::spawn(async move {
+            if let Some(handle) = terminal {
+                handle.await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "durable call terminal recorder task failed: {err}"
+                    ))
+                })??;
+            }
+            self.append().await;
+            Ok(())
+        })
+    }
+}
+
+/// A deferred guest-delivery token returned by [`CallHandle::complete_access_deferred`] /
+/// [`CallHandle::replay_access_deferred`] for call sites whose result crosses one more fallible
+/// boundary *after* the durable terminal is recorded — a second-stage channel send to the guest
+/// task, a span finish plus resource-state transition before the host method returns, or a wire
+/// conversion. The plain `complete_access` boundary (the accessor terminal itself) is too early
+/// for those sites: the guest can silently discard the persisted completion between the `End`
+/// and the real delivery, which replay would otherwise deliver.
+///
+/// Live, the token stays armed after the `End` is persisted and the durable scope is closed:
+/// - [`Self::delivered`] — the final guest-facing transfer succeeded; no marker.
+/// - [`Self::suppress`] — a post-`End` error is observed by the caller (the worker traps); no
+///   marker.
+/// - [`Self::discarded`] — the caller detected a silent discard (e.g. the guest dropped the
+///   receiving end of the delivery channel); appends exactly one `CompletionDiscarded` marker
+///   inline and returns once it is durable.
+/// - `Drop` while armed — the delivering future itself was torn; spawns exactly one owned marker
+///   append (ordered after any pending [`Self::append_ordered`] entry) and hands its join plus
+///   the in-flight [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitDiscardMarker`],
+///   so invocation settlement cannot overtake the append.
+///
+/// On replay the token mirrors the recorded delivery status: [`Self::is_replay_discarded`]
+/// reports whether the recorded run discarded the completion, in which case the caller must not
+/// deliver — it performs its deterministic post-`End` continuation (span consumption, terminal
+/// bookkeeping) and parks at the exact point where live delivery would have happened. All token
+/// operations are no-ops on replay.
+pub struct CompletionDelivery {
+    state: CompletionDeliveryState,
+}
+
+enum CompletionDeliveryState {
+    /// Live, armed: the `End` is persisted and a torn/failed delivery must record a marker.
+    Live(Box<LiveDelivery>),
+    /// Live, but the call was not persisted (snapshotting): nothing to reconcile.
+    Unarmed,
+    /// Replay of a normally delivered completion.
+    ReplayDelivered,
+    /// Replay of a recorded discarded completion: the caller must not deliver and parks at the
+    /// delivery boundary.
+    ReplayDiscarded,
+    /// Consumed (`delivered`/`suppress`/`discarded`).
+    Done,
+}
+
+struct LiveDelivery {
+    marker: DiscardMarker,
+    trap_context: DurableCallTrapContext,
+    /// Keeps the call counted as in flight (for positional-boundary and snapshot checks) until
+    /// the token is consumed or its drain event is processed. Settlement itself waits for the
+    /// marker because both invocation exit paths drain the drop-event queue — joining any
+    /// [`DropEvent::AwaitDiscardMarker`] — before writing their final oplog state.
+    live_call_permit: Option<LiveCallPermit>,
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
+    /// An owned oplog append (e.g. a durable `FinishSpan`) that must land *before* any marker
+    /// append, preserving the recorded `End → FinishSpan → CompletionDiscarded` order replay
+    /// consumes positionally. See [`CompletionDelivery::append_ordered`].
+    pending_append: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+}
+
+impl CompletionDelivery {
+    fn unarmed() -> Self {
+        Self {
+            state: CompletionDeliveryState::Unarmed,
+        }
+    }
+
+    fn replay_delivered() -> Self {
+        Self {
+            state: CompletionDeliveryState::ReplayDelivered,
+        }
+    }
+
+    fn replay_discarded() -> Self {
+        Self {
+            state: CompletionDeliveryState::ReplayDiscarded,
+        }
+    }
+
+    /// Whether the recorded run discarded this completion: the caller must not deliver the
+    /// response to the guest and instead parks at the delivery boundary after finishing its
+    /// deterministic post-`End` continuation.
+    pub fn is_replay_discarded(&self) -> bool {
+        matches!(self.state, CompletionDeliveryState::ReplayDiscarded)
+    }
+
+    /// Whether the token is live and armed (a torn delivery would record a marker). Callers use
+    /// this to route ordered post-`End` appends through [`Self::append_ordered`] instead of a
+    /// direct oplog append that would race the torn-drop marker.
+    pub fn is_live_armed(&self) -> bool {
+        matches!(self.state, CompletionDeliveryState::Live(_))
+    }
+
+    /// Hands an oplog entry append (e.g. a durable `FinishSpan`) to an owned task ordered
+    /// *before* any later marker append by this token. Must be called with no `await` between
+    /// the token's creation (or previous [`Self::wait_appends`]) and this call when the entry is
+    /// mandatory — a tear cannot happen between synchronous statements, so the obligation is
+    /// transferred atomically. No-op unless live and armed.
+    pub fn append_ordered(&mut self, entry: OplogEntry) {
+        if let CompletionDeliveryState::Live(live) = &mut self.state {
+            let oplog = live.marker.oplog.clone();
+            let previous = live.pending_append.take();
+            live.pending_append = Some(tokio::spawn(async move {
+                if let Some(handle) = previous {
+                    handle.await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "ordered post-End append task failed: {err}"
+                        ))
+                    })??;
+                }
+                oplog.add(entry).await;
+                Ok(())
+            }));
+        }
+    }
+
+    /// Joins the pending ordered append(s). Cancellation-safe: a tear mid-join leaves the join
+    /// handle owned by the token, so the torn-drop marker append still chains after it.
+    pub async fn wait_appends(&mut self) -> Result<(), WorkerExecutorError> {
+        if let CompletionDeliveryState::Live(live) = &mut self.state
+            && let Some(handle) = &mut live.pending_append
+        {
+            let result = handle.await.map_err(|err| {
+                WorkerExecutorError::runtime(format!("ordered post-End append task failed: {err}"))
+            });
+            live.pending_append = None;
+            result??;
+        }
+        Ok(())
+    }
+
+    /// The final guest-facing delivery succeeded: no marker. Consumes the token; any pending
+    /// ordered append keeps running as an owned task and its join (plus the in-flight permit) is
+    /// handed to the drain queue so settlement still waits for it.
+    pub fn delivered(mut self) {
+        self.settle();
+    }
+
+    /// A post-`End` error is returned to (observed by) the caller — the worker traps — so the
+    /// completion was not *silently* discarded: no marker.
+    pub fn suppress(mut self) {
+        self.settle();
+    }
+
+    /// Consumes the token by arming Wasmtime's terminal-consumption observer for the host
+    /// subtask `store` belongs to: the *actual* guest-delivery boundary of a direct accessor
+    /// host call. The host method returning its result is not that boundary — Wasmtime still
+    /// lowers the result and queues the subtask's `Returned` event afterwards, and the guest can
+    /// consume that event via `subtask.cancel` (or abandon it through a post-`End` cancellation)
+    /// without ever observing the response.
+    ///
+    /// The observer maps Wasmtime's verdict onto the token:
+    /// - `Delivered` (the guest received the successful terminal) → [`Self::delivered`].
+    /// - `Discarded` / `Cancelled` (the guest consumed or abandoned the completion without
+    ///   observing the result after the `End` was persisted) → the armed token is dropped, which
+    ///   spawns the owned cancellation-safe `CompletionDiscarded` marker append and hands its
+    ///   join to the drain queue, so invocation settlement waits for it.
+    /// - Dropped without being invoked (a trap, a lowering failure, or store teardown — all of
+    ///   which abandon the whole execution rather than silently discarding this one completion;
+    ///   replay re-executes the guest to the same point and redelivers) → [`Self::suppress`].
+    ///
+    /// Registering a newer observer for the same host subtask (a later durable call in the same
+    /// host function) supersedes this one, suppressing its token: once a later durable event is
+    /// recorded, replay re-executes the host code past this `End` deterministically and
+    /// re-consumes the response internally, so no marker is needed.
+    ///
+    /// Non-live tokens (replay, unpersisted snapshotting calls) settle immediately; if the
+    /// accessor has no guest-visible host subtask (e.g. a spawned background task), the token
+    /// settles without a marker, matching the pre-observer behavior of consuming it at the host
+    /// return.
+    pub fn deliver_at_accessor_terminal<T, D>(self, store: &Accessor<T, D>)
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+    {
+        if !self.is_live_armed() {
+            self.delivered();
+            return;
+        }
+        let guard = AccessorDeliveryGuard {
+            delivery: Some(self),
+        };
+        if let Err(error) = store
+            .register_terminal_observer(Box::new(move |consumption| guard.consume(consumption)))
+        {
+            // No guest-visible host subtask to observe (the guard is dropped by the failed
+            // registration, suppressing the token — no marker).
+            tracing::debug!(
+                "durable call completion has no guest-visible host subtask to observe: {error}"
+            );
+        }
+    }
+
+    fn settle(&mut self) {
+        match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
+            CompletionDeliveryState::Live(live) => {
+                if let Some(pending) = live.pending_append {
+                    // The ordered append is still in flight: keep it settlement-accounted via
+                    // the drain queue, without a marker.
+                    Self::emit_await_event(
+                        live.cleanup_sink,
+                        pending,
+                        live.trap_context,
+                        live.live_call_permit,
+                    );
+                }
+            }
+            CompletionDeliveryState::ReplayDelivered
+            | CompletionDeliveryState::ReplayDiscarded
+            | CompletionDeliveryState::Unarmed
+            | CompletionDeliveryState::Done => {}
+        }
+    }
+
+    /// The caller detected a silent discard of the persisted completion (e.g. the guest dropped
+    /// the receiving end of the delivery channel): appends exactly one `CompletionDiscarded`
+    /// marker — ordered after any pending [`Self::append_ordered`] entry — and returns once it
+    /// is durable. Cancellation-safe: marker persistence moves to an owned task *before* the
+    /// first await, and a tear mid-wait hands the join plus the in-flight permit to the drain
+    /// queue exactly like a torn armed drop, so the marker still lands and settlement still
+    /// waits for it. No-op on replay.
+    pub async fn discarded(mut self) -> Result<(), WorkerExecutorError> {
+        match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
+            CompletionDeliveryState::Live(live) => {
+                let LiveDelivery {
+                    marker,
+                    trap_context,
+                    live_call_permit,
+                    cleanup_sink,
+                    pending_append,
+                } = *live;
+                let guard = MarkerAwaitGuard {
+                    join: Some(marker.spawn_chained(pending_append)),
+                    trap_context,
+                    live_call_permit,
+                    cleanup_sink,
+                };
+                guard.wait().await
+            }
+            CompletionDeliveryState::ReplayDelivered => {
+                // Live delivered this completion (no marker on record), but replay could not: a
+                // nondeterministic guest tore the receiving end at a different point. Nothing
+                // durable to reconcile.
+                tracing::warn!(
+                    "replayed durable call completion could not be delivered although the recorded run delivered it"
+                );
+                Ok(())
+            }
+            CompletionDeliveryState::ReplayDiscarded
+            | CompletionDeliveryState::Unarmed
+            | CompletionDeliveryState::Done => Ok(()),
+        }
+    }
+
+    fn emit_await_event(
+        sink: Option<UnboundedSender<DropEvent>>,
+        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+        trap_context: DurableCallTrapContext,
+        live_call_permit: Option<LiveCallPermit>,
+    ) {
+        if let Some(sink) = &sink {
+            let _ = sink.send(DropEvent::AwaitDiscardMarker {
+                terminal: Some(terminal),
+                trap_context,
+                live_call_permit,
+            });
+        }
+    }
+}
+
+/// Test-only [`CompletionDelivery`] factories for delivery-boundary unit tests outside this
+/// module (e.g. the consume-body chunk transfer helper). They build real tokens — the live one
+/// appends a real `CompletionDiscarded` marker to the given oplog — without exposing the token
+/// internals.
+#[cfg(test)]
+impl CompletionDelivery {
+    /// A live-armed token over `oplog` whose torn/failed delivery appends a
+    /// `CompletionDiscarded` marker for `start_idx`, exactly as
+    /// [`CallHandle::complete_access_deferred`] arms one for a persisted live call whose `End`
+    /// is already durable. `oplog` must already contain the call's `Start`/`End` entries (the
+    /// token's replay state is built over its current contents).
+    pub(crate) async fn test_live_armed(
+        oplog: Arc<dyn Oplog>,
+        start_idx: OplogIndex,
+    ) -> Result<Self, WorkerExecutorError> {
+        let replay_state = ReplayState::new(
+            golem_common::model::OwnedAgentId {
+                environment_id: golem_common::model::environment::EnvironmentId::new(),
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "completion-delivery-test".to_string(),
+                },
+            },
+            oplog.clone(),
+            golem_common::model::regions::DeletedRegions::default(),
+        )
+        .await?;
+        Ok(Self {
+            state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
+                marker: DiscardMarker {
+                    start_idx,
+                    oplog,
+                    replay_state,
+                },
+                trap_context: DurableCallTrapContext {
+                    retry_from: start_idx,
+                    in_atomic_region: false,
+                },
+                live_call_permit: None,
+                cleanup_sink: None,
+                pending_append: None,
+            })),
+        })
+    }
+
+    /// A replay token for a recorded discarded completion, as
+    /// [`CallHandle::replay_access_deferred`] returns when the recorded run persisted the `End`
+    /// but never delivered it.
+    pub(crate) fn test_replay_discarded() -> Self {
+        Self::replay_discarded()
+    }
+}
+
+impl Drop for CompletionDelivery {
+    fn drop(&mut self) {
+        match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
+            CompletionDeliveryState::Live(live) => {
+                // The delivering future was torn while the token was still armed: the guest
+                // silently discarded a persisted successful completion. Chain the owned marker
+                // append after any pending ordered append (preserving the recorded
+                // `End → FinishSpan → CompletionDiscarded` order) and hand the join plus the
+                // in-flight permit to the drain queue so invocation settlement waits for it. The
+                // task is spawned unconditionally — marker recording must not depend on the
+                // event surviving the drain.
+                let terminal = live.marker.spawn_chained(live.pending_append);
+                Self::emit_await_event(
+                    live.cleanup_sink,
+                    terminal,
+                    live.trap_context,
+                    live.live_call_permit,
+                );
+            }
+            CompletionDeliveryState::ReplayDelivered => {
+                // Anomalous: replay delivered a completion the recorded run delivered too, but
+                // the site dropped the token without consuming it (or the future was torn at a
+                // point live was not). Nothing durable to reconcile.
+                tracing::warn!("replay completion-delivery token dropped without being consumed");
+            }
+            CompletionDeliveryState::ReplayDiscarded
+            | CompletionDeliveryState::Unarmed
+            | CompletionDeliveryState::Done => {}
+        }
+    }
+}
+
+/// Adapts a live armed [`CompletionDelivery`] token to a Wasmtime terminal observer (see
+/// [`CompletionDelivery::deliver_at_accessor_terminal`]). The observer runs inside Wasmtime's
+/// event loop and must not access the store: every branch below only consumes the token, which
+/// touches Golem-owned channels and owned tasks.
+struct AccessorDeliveryGuard {
+    delivery: Option<CompletionDelivery>,
+}
+
+impl AccessorDeliveryGuard {
+    fn consume(mut self, consumption: TerminalConsumption) {
+        let delivery = self
+            .delivery
+            .take()
+            .expect("terminal observers are invoked at most once");
+        match consumption {
+            // The guest received the successful terminal: no marker.
+            TerminalConsumption::Delivered => delivery.delivered(),
+            // The guest consumed the pending terminal via `subtask.cancel` after the successful
+            // lowering (`Discarded`), or cancelled the call after the `End` was persisted
+            // (`Cancelled`): either way the guest never observes the persisted completion.
+            // Dropping the armed token spawns the owned cancellation-safe marker append and
+            // hands its join to the drain queue, so invocation settlement waits for it.
+            TerminalConsumption::Discarded | TerminalConsumption::Cancelled => drop(delivery),
+        }
+    }
+}
+
+impl Drop for AccessorDeliveryGuard {
+    fn drop(&mut self) {
+        // Dropped without being invoked: the terminal was never consumed by the guest — a trap,
+        // a lowering failure, or store teardown (or a later durable call in the same host
+        // function superseding this observer). None of these silently discard the completion,
+        // so no marker.
+        if let Some(delivery) = self.delivery.take() {
+            delivery.suppress();
+        }
+    }
+}
+
+/// RAII guard for awaiting an owned `CompletionDiscarded` marker task inline
+/// ([`CompletionDelivery::discarded`]). Marker persistence already lives in the owned task; the
+/// guard makes the *wait* cancellation-safe: a tear mid-wait hands the join plus the in-flight
+/// [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitDiscardMarker`], so invocation
+/// settlement still waits for the marker append.
+struct MarkerAwaitGuard {
+    /// `Some` until the join completes (successfully or not); a `Drop` with the join still
+    /// pending emits the drain event.
+    join: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    trap_context: DurableCallTrapContext,
+    live_call_permit: Option<LiveCallPermit>,
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
+}
+
+impl MarkerAwaitGuard {
+    async fn wait(mut self) -> Result<(), WorkerExecutorError> {
+        let joined = self
+            .join
+            .as_mut()
+            .expect("MarkerAwaitGuard is always constructed with a join handle")
+            .await;
+        self.join = None;
+        joined.map_err(|err| {
+            WorkerExecutorError::runtime(format!("durable call discard-marker task failed: {err}"))
+        })?
+    }
+}
+
+impl Drop for MarkerAwaitGuard {
+    fn drop(&mut self) {
+        if let Some(join) = self.join.take() {
+            CompletionDelivery::emit_await_event(
+                self.cleanup_sink.take(),
+                join,
+                self.trap_context,
+                self.live_call_permit.take(),
+            );
+        }
+    }
+}
+
 enum AccessTerminalGuardState {
     BeforeTerminal {
         call: DroppedCall,
     },
     CleanupAfterTerminal {
-        atomic_region_registration: Option<OplogIndex>,
+        atomic_lease: Option<Arc<AtomicRegionLease>>,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -482,6 +1015,9 @@ enum AccessTerminalGuardState {
         /// Moved out of the armed [`DroppedCall`] when the terminal is handed to an owned task,
         /// so the call stays counted as in flight while the append is still pending.
         live_call_permit: Option<LiveCallPermit>,
+        /// `Some` while a torn drop must record a `CompletionDiscarded` marker (successful `End`
+        /// path, no error observed by the caller yet); see [`DiscardMarker`].
+        discard_marker: Option<DiscardMarker>,
     },
     Disarmed,
 }
@@ -513,14 +1049,18 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         }
     }
 
-    fn atomic_region_registration(&self) -> Option<OplogIndex> {
-        match &self.state {
-            AccessTerminalGuardState::BeforeTerminal { call } => call.atomic_region_registration(),
-            AccessTerminalGuardState::CleanupAfterTerminal {
-                atomic_region_registration,
-                ..
-            } => *atomic_region_registration,
+    /// Releases the armed call's atomic-region lease (idempotent, store-free). A no-op once the
+    /// guard is disarmed.
+    fn release_atomic_lease(&self) {
+        let lease = match &self.state {
+            AccessTerminalGuardState::BeforeTerminal { call } => call.atomic_lease.as_ref(),
+            AccessTerminalGuardState::CleanupAfterTerminal { atomic_lease, .. } => {
+                atomic_lease.as_ref()
+            }
             AccessTerminalGuardState::Disarmed => None,
+        };
+        if let Some(lease) = lease {
+            lease.release();
         }
     }
 
@@ -531,16 +1071,20 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         }
     }
 
+    /// Hands the terminal append to an owned task. `discard_marker` must be `Some` only on the
+    /// successful-`End` path (a torn drop from that state means the guest silently discarded the
+    /// persisted completion); cancellation terminals pass `None`.
     fn cleanup_after_terminal(
         &mut self,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+        discard_marker: Option<DiscardMarker>,
     ) {
         let call = match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { call } => call,
             _ => panic!("cleanup_after_terminal called before the terminal is armed"),
         };
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
-            atomic_region_registration: call.atomic_region_registration(),
+            atomic_lease: call.atomic_lease.clone(),
             function_type: call.function_type().clone(),
             durable_begin_index: call.begin_index(),
             terminal: Some(terminal),
@@ -548,7 +1092,21 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
             // The permit moves with the state transition: the call remains counted as in flight
             // while the owned terminal append is pending.
             live_call_permit: call.live_call_permit,
+            discard_marker,
         };
+    }
+
+    /// Disarms only the `CompletionDiscarded` marker while keeping the terminal cleanup armed.
+    /// Called on internal-error returns *after* the `End` was persisted (atomic-region close
+    /// failure, durable-scope close failure): the caller observes the error and the worker traps,
+    /// so the completion was not silently discarded by the guest and no marker may be recorded —
+    /// but the pending terminal join / permit release must still reach the drain.
+    fn suppress_discard_marker(&mut self) {
+        if let AccessTerminalGuardState::CleanupAfterTerminal { discard_marker, .. } =
+            &mut self.state
+        {
+            *discard_marker = None;
+        }
     }
 
     async fn wait_terminal(&mut self) -> Result<(), WorkerExecutorError> {
@@ -568,6 +1126,35 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
     fn disarm(&mut self) {
         self.state = AccessTerminalGuardState::Disarmed;
     }
+
+    /// Converts a fully completed terminal guard (terminal joined, scope closed) into a deferred
+    /// guest-delivery token: the armed discard marker, the in-flight permit and the trap context
+    /// move to the [`CompletionDelivery`], which owns the silent-discard reconciliation from here
+    /// to the final guest-facing boundary. Falls back to an unarmed token when the call was not
+    /// persisted (no marker to reconcile).
+    fn take_completion_delivery(&mut self) -> CompletionDelivery {
+        match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
+            AccessTerminalGuardState::CleanupAfterTerminal {
+                terminal,
+                trap_context,
+                live_call_permit,
+                discard_marker: Some(marker),
+                ..
+            } => CompletionDelivery {
+                state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
+                    marker,
+                    trap_context,
+                    live_call_permit,
+                    cleanup_sink: self.cleanup_sink.clone(),
+                    // Normally already joined (`wait_terminal`) by the time the guard is
+                    // converted; chained defensively so a still-pending terminal append can never
+                    // be overtaken by a marker append.
+                    pending_append: terminal,
+                })),
+            },
+            _ => CompletionDelivery::unarmed(),
+        }
+    }
 }
 
 impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
@@ -577,16 +1164,27 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 P::unfinished_drop(call, self.sink.as_ref());
             }
             AccessTerminalGuardState::CleanupAfterTerminal {
-                atomic_region_registration,
+                atomic_lease,
                 function_type,
                 durable_begin_index,
                 terminal,
                 trap_context,
                 live_call_permit,
+                discard_marker,
             } => {
+                // A torn drop with the marker still armed: the guest discarded a persisted
+                // successful completion. Chain the owned marker append after the terminal task
+                // and let the chained handle take the terminal's place in the drop event, so
+                // drains (and thus invocation completion) await the marker append too. The task
+                // is spawned unconditionally — marker recording must not depend on the event
+                // surviving the drain.
+                let terminal = match discard_marker {
+                    Some(marker) => Some(marker.spawn_chained(terminal)),
+                    None => terminal,
+                };
                 if let Some(sink) = &self.cleanup_sink {
                     let _ = sink.send(DropEvent::CleanupAfterTerminal {
-                        atomic_region_registration,
+                        atomic_lease,
                         function_type,
                         durable_begin_index,
                         terminal,
@@ -640,11 +1238,8 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 call.trap_context(),
             ));
         }
-        DropEvent::CleanupAtomicRegion { begin_index } => {
-            ctx.state.unregister_atomic_region_call(begin_index);
-        }
         DropEvent::CleanupAfterTerminal {
-            atomic_region_registration,
+            atomic_lease,
             function_type,
             durable_begin_index,
             terminal,
@@ -666,12 +1261,33 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                     }
                 }
             }
-            if let Some(begin_index) = atomic_region_registration {
-                ctx.state.unregister_atomic_region_call(begin_index);
+            if let Some(lease) = &atomic_lease {
+                lease.release();
             }
             ctx.end_durable_function(&function_type, durable_begin_index, false)
                 .await
                 .map_err(|err| TerminalCallError::new(err, trap_context))?;
+        }
+        DropEvent::AwaitDiscardMarker {
+            terminal,
+            trap_context,
+            // Bound (not `_`) so the permit is released only at the end of this arm, after the
+            // marker append is joined.
+            live_call_permit: _live_call_permit,
+        } => {
+            if let Some(terminal) = terminal {
+                let joined = terminal.await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "completion-discarded marker recorder task failed: {err}"
+                    ))
+                });
+                match joined {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) | Err(err) => {
+                        return Err(TerminalCallError::new(err, trap_context));
+                    }
+                }
+            }
         }
         DropEvent::CloseDurableScope {
             function_type,
@@ -731,7 +1347,6 @@ where
     while drain.start_next() {
         match drain.current_mut() {
             DropEvent::UnfinishedCancellable { call } => {
-                let begin_index = call.atomic_region_registration();
                 let context = call.trap_context();
                 let function_type = call.function_type().clone();
                 let durable_begin_index = call.begin_index();
@@ -742,13 +1357,17 @@ where
                 .await;
                 match result {
                     Ok(()) => {
-                        if let Some(begin_index) = begin_index {
-                            drain.replace_current(DropEvent::CleanupAtomicRegion { begin_index });
-                            store.with(|mut access| {
-                                let ctx = get_ctx(access.data_mut());
-                                ctx.state.unregister_atomic_region_call(begin_index);
-                            });
-                        }
+                        // The `Cancelled` entry is durable and the lease release is synchronous
+                        // (store-free), so neutralize the event before the remaining fallible
+                        // work: a torn drain from here re-queues only a permit-holding no-op
+                        // instead of re-appending a second `Cancelled`.
+                        call.release_atomic_lease();
+                        let live_call_permit = call.live_call_permit.take();
+                        drain.replace_current(DropEvent::AwaitDiscardMarker {
+                            terminal: None,
+                            trap_context: context,
+                            live_call_permit,
+                        });
                         if let Err(err) = end_durable_function_access(
                             store,
                             get_ctx,
@@ -782,16 +1401,8 @@ where
                     )
                 });
             }
-            DropEvent::CleanupAtomicRegion { begin_index } => {
-                let begin_index = *begin_index;
-                store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    ctx.state.unregister_atomic_region_call(begin_index);
-                });
-                recorded += 1;
-            }
             DropEvent::CleanupAfterTerminal {
-                atomic_region_registration,
+                atomic_lease,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -801,7 +1412,7 @@ where
                 // finished or dropped.
                 live_call_permit: _,
             } => {
-                let atomic_region_registration = *atomic_region_registration;
+                let atomic_lease = atomic_lease.clone();
                 let function_type = function_type.clone();
                 let durable_begin_index = *durable_begin_index;
                 let trap_context = *trap_context;
@@ -824,11 +1435,8 @@ where
                     }
                 }
                 if terminal_recorded {
-                    if let Some(begin_index) = atomic_region_registration {
-                        store.with(|mut access| {
-                            let ctx = get_ctx(access.data_mut());
-                            ctx.state.unregister_atomic_region_call(begin_index);
-                        });
+                    if let Some(lease) = &atomic_lease {
+                        lease.release();
                     }
                     if let Err(err) = end_durable_function_access(
                         store,
@@ -845,6 +1453,35 @@ where
                     } else {
                         recorded += 1;
                     }
+                }
+            }
+            DropEvent::AwaitDiscardMarker {
+                terminal,
+                trap_context,
+                // Left in place: the permit stays owned by the event, so it survives a torn drain
+                // (the event is re-queued with the permit) and is released when the event is
+                // finished or dropped.
+                live_call_permit: _,
+            } => {
+                let trap_context = *trap_context;
+                if let Some(handle) = terminal {
+                    match handle.await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "completion-discarded marker recorder task failed: {err}"
+                        ))
+                    }) {
+                        Ok(Ok(())) => {
+                            *terminal = None;
+                            recorded += 1;
+                        }
+                        Ok(Err(err)) | Err(err) => {
+                            if first_error.is_none() {
+                                first_error = Some(TerminalCallError::new(err, trap_context));
+                            }
+                        }
+                    }
+                } else {
+                    recorded += 1;
                 }
             }
             DropEvent::CloseDurableScope {
@@ -980,12 +1617,11 @@ impl DropPolicy for LeaveIncompleteOnDrop {
         sink
     }
 
-    fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>) {
-        if let Some(begin_index) = call.atomic_region_registration()
-            && let Some(sink) = sink
-        {
-            let _ = sink.send(DropEvent::CleanupAtomicRegion { begin_index });
-        }
+    fn unfinished_drop(call: DroppedCall, _sink: Option<&UnboundedSender<DropEvent>>) {
+        // No terminal will ever be recorded for this call (its committed `Start` is left
+        // incomplete for replay), so its atomic-region membership ends here. The release is
+        // store-free, so it is safe directly from the drop path.
+        call.release_atomic_lease();
         tracing::debug!(
             start_idx = %call.start_idx(),
             "durable call dropped unfinished; leaving committed Start incomplete for replay"
@@ -1036,18 +1672,16 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// Replay-side resolver receiver; `Some` only for replay handles.
     replay: Option<ReplayCallHandle>,
     finished: bool,
-    /// `true` when this replay handle parked on a recorded `Cancelled { partial: None }` terminal,
+    /// `true` when this replay handle parked on a recorded terminal that was never delivered to
+    /// the guest — a `Cancelled { partial: None }` or an `End` marked `CompletionDiscarded` —
     /// waiting for the deterministic guest to drop it at the same point it did live. Makes that
     /// drop an expected state (debug-logged, scope close enqueued) rather than an anomaly.
-    parked_cancelled_replay: bool,
-    /// Initiation-time execution metadata owned by this call. Later phases still mirror selected
-    /// fields into `PrivateDurableWorkerState` for compatibility, but the call-owned copy is the
-    /// source we can move retry/atomic decisions onto as the Accessor reshape proceeds.
+    parked_undelivered_replay: bool,
+    /// Initiation-time execution metadata owned by this call, including its atomic-region
+    /// ownership lease (see [`CallExecutionScope::atomic_lease`]). Later phases still mirror
+    /// selected fields into `PrivateDurableWorkerState` for compatibility, but the call-owned copy
+    /// is the source we can move retry/atomic decisions onto as the Accessor reshape proceeds.
     execution_scope: CallExecutionScope,
-    /// Atomic region membership registered while this live call is in flight. `Drop` deliberately
-    /// does not clear it because drop-only cancellation cannot access the worker store; successful
-    /// `complete`/`cancel` terminals clear it explicitly.
-    atomic_region_registration: Option<OplogIndex>,
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     retry: InFunctionRetryController,
@@ -1095,9 +1729,8 @@ struct BegunCallExecutionScope {
     /// The durable scope this host-call `Start` will be nested under, if any. This is derived from
     /// the call's own function type / begin index, never from temporally-open sibling scopes.
     parent_start_index: Option<OplogIndex>,
-    /// Atomic region active when the durable call was initiated. This is captured now so later
-    /// completion/error handling can move from completion-time state to initiation-time membership.
-    #[allow(dead_code)]
+    /// Atomic region active when the durable call was initiated, captured so the call's membership
+    /// lease is registered against the region it was actually started in.
     atomic_region: Option<OplogIndex>,
     /// Persistence level active when the call was initiated. Kept with the call so p3 Accessor
     /// windows can snapshot all execution facts before async work resumes elsewhere.
@@ -1106,11 +1739,15 @@ struct BegunCallExecutionScope {
 }
 
 impl BegunCallExecutionScope {
-    fn finish(self, start_idx: OplogIndex) -> CallExecutionScope {
+    fn finish(
+        self,
+        start_idx: OplogIndex,
+        atomic_lease: Option<Arc<AtomicRegionLease>>,
+    ) -> CallExecutionScope {
         CallExecutionScope {
             retry_from: self.parent_start_index.unwrap_or(start_idx),
             durable_scope: self.parent_start_index,
-            atomic_region: self.atomic_region,
+            atomic_lease,
             persistence_level: self.persistence_level,
         }
     }
@@ -1124,26 +1761,56 @@ struct CallExecutionScope {
     /// The enclosing durable scope, if this call belongs to one.
     #[allow(dead_code)]
     durable_scope: Option<OplogIndex>,
-    /// Atomic region active when this call was initiated.
-    #[allow(dead_code)]
-    atomic_region: Option<OplogIndex>,
+    /// The call's atomic-region ownership lease, registered when the call was initiated inside an
+    /// open atomic region. The lease's *current* owner — not the initiation-time region — drives
+    /// trap/retry classification: region close transfers pending members to the enclosing region
+    /// or detaches them, and a detached call must group at its own `retry_from` instead of
+    /// retrying into the committed region.
+    atomic_lease: Option<Arc<AtomicRegionLease>>,
     /// Persistence level active when this call was initiated.
     #[allow(dead_code)]
     persistence_level: PersistenceLevel,
 }
 
 impl CallExecutionScope {
+    /// The atomic region *currently* owning this call, if any (read through the lease, so it
+    /// reflects transfers and detachments performed by region close).
     fn atomic_region(&self) -> Option<OplogIndex> {
-        self.atomic_region
+        self.atomic_lease.as_ref().and_then(|lease| lease.owner())
     }
 
-    /// The retry point to attach to a trap raised by this call: the call's own atomic region (whole
-    /// region retried from its begin index) if it was initiated inside one, otherwise its enclosing
-    /// durable scope `Start` or its own `Start`. This mirrors [`ScopedRetryHost::retry_point`] so a
-    /// hard (non-semantic) trap groups exactly like an inline/semantic retry would.
-    fn trap_retry_point(&self) -> OplogIndex {
-        self.atomic_region.unwrap_or(self.retry_from)
+    /// Releases the call's atomic-region membership (idempotent, store-free).
+    fn release_atomic_lease(&self) {
+        if let Some(lease) = &self.atomic_lease {
+            lease.release();
+        }
     }
+
+    /// The retry point to attach to a trap raised by this call: the call's *currently owning*
+    /// atomic region (whole region retried from its begin index) if it still has one, otherwise
+    /// its enclosing durable scope `Start` or its own `Start`. This mirrors
+    /// [`ScopedRetryHost::retry_point`] so a hard (non-semantic) trap groups exactly like an
+    /// inline/semantic retry would.
+    fn trap_retry_point(&self) -> OplogIndex {
+        self.atomic_region().unwrap_or(self.retry_from)
+    }
+}
+
+/// Builds an *unregistered* atomic-region lease: it preserves the call's initiation-time region
+/// for trap/retry classification (matching the immutable capture used before leases existed) but
+/// is not a member of any region registry, so it never transfers or detaches on region close.
+/// Used for replay and snapshotting handles, which do not participate in the live in-flight
+/// member guard.
+fn unregistered_atomic_lease(
+    atomic_region: Option<OplogIndex>,
+    repairable_when_incomplete: bool,
+) -> Option<Arc<AtomicRegionLease>> {
+    atomic_region.map(|begin_index| {
+        Arc::new(AtomicRegionLease::new(
+            begin_index,
+            repairable_when_incomplete,
+        ))
+    })
 }
 
 struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
@@ -1154,7 +1821,9 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     replay_state: crate::durable_host::replay_state::ReplayState,
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
-    atomic_region_registration: Option<OplogIndex>,
+    /// The registered atomic-region membership lease for a live persisted call initiated inside an
+    /// open atomic region; `None` otherwise.
+    atomic_lease: Option<Arc<AtomicRegionLease>>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
     claim_options: AccessClaimOptions,
@@ -1180,8 +1849,8 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
 ///   name (`<scope:batched-write:DISCRIMINATOR>`), so the replayed call claims exactly its own
 ///   scope. It must be a deterministic function of state that is identical on the live and replay
 ///   paths (e.g. a hash of the recorded request, or the `Start` index of an already-claimed
-///   related call). Replay falls back to the plain legacy name for oplogs recorded before the
-///   discriminator existed.
+///   related call). Replay matches the discriminated name exactly — there is no plain-name
+///   fallback (P3 deploys on a clean database, so no oplog predates the discriminators).
 /// - `request_identity` is the [`HostRequest`] value the live path persists in the call's
 ///   `Start` entry; when set, the replay claim also requires the recorded request payload to
 ///   match it (by value, never by serialized bytes — payloads can contain `HashMap`s whose byte
@@ -1201,7 +1870,6 @@ struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
     replay: Option<ReplayCallHandle>,
     execution_scope: CallExecutionScope,
     retry: InFunctionRetryController,
-    atomic_region_registration: Option<OplogIndex>,
     opened_scope: Option<AccessOpenedScope>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
@@ -1219,7 +1887,9 @@ struct AccessOpenedScope {
 }
 
 struct AccessStartCleanup {
-    atomic_region_registration: Option<OplogIndex>,
+    /// The lease to release when the start failed before a handle was constructed. Release is
+    /// idempotent and store-free.
+    atomic_lease: Option<Arc<AtomicRegionLease>>,
 }
 
 /// Context handed to the request builder of [`CallHandle::start_access_with`], available after the
@@ -1235,33 +1905,27 @@ pub struct AccessStartContext {
     pub is_live: bool,
 }
 
+/// Releases a just-registered atomic-region lease when the accessor start path is torn (the
+/// future dropped between registration and handle construction). Release is store-free, so the
+/// `Drop` impl performs it directly.
 struct AccessStartAtomicGuard {
-    atomic_region_registration: Option<OplogIndex>,
-    sink: Option<UnboundedSender<DropEvent>>,
+    atomic_lease: Option<Arc<AtomicRegionLease>>,
 }
 
 impl AccessStartAtomicGuard {
-    fn new(
-        atomic_region_registration: Option<OplogIndex>,
-        sink: Option<UnboundedSender<DropEvent>>,
-    ) -> Self {
-        Self {
-            atomic_region_registration,
-            sink,
-        }
+    fn new(atomic_lease: Option<Arc<AtomicRegionLease>>) -> Self {
+        Self { atomic_lease }
     }
 
     fn disarm(&mut self) {
-        self.atomic_region_registration = None;
+        self.atomic_lease = None;
     }
 }
 
 impl Drop for AccessStartAtomicGuard {
     fn drop(&mut self) {
-        if let Some(begin_index) = self.atomic_region_registration.take()
-            && let Some(sink) = &self.sink
-        {
-            let _ = sink.send(DropEvent::CleanupAtomicRegion { begin_index });
+        if let Some(lease) = self.atomic_lease.take() {
+            lease.release();
         }
     }
 }
@@ -1289,16 +1953,14 @@ impl<'a, H> ScopedRetryHost<'a, H> {
     }
 
     fn retry_point(&self) -> OplogIndex {
-        self.execution_scope
-            .atomic_region
-            .unwrap_or(self.execution_scope.retry_from)
+        self.execution_scope.trap_retry_point()
     }
 }
 
 #[async_trait]
 impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHost<'_, H> {
     fn in_atomic_region(&self) -> bool {
-        self.execution_scope.atomic_region.is_some()
+        self.execution_scope.atomic_region().is_some()
     }
 
     fn current_retry_point(&self) -> OplogIndex {
@@ -1327,12 +1989,12 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
     }
 
     fn retry_context_atomic_region_had_side_effects(&self) -> bool {
-        // Membership/initiation-precise: classify against the region this call was *initiated* in,
-        // not whatever region happens to be outermost at retry time. A call started outside any
-        // atomic region never writes `inside_atomic_region = true`, even if a sibling later opened
-        // one.
+        // Membership-precise: classify against the region *currently owning* this call (via its
+        // lease — the initiation region, a parent it was transferred to on nested close, or none
+        // once detached). A call started outside any atomic region never writes
+        // `inside_atomic_region = true`, even if a sibling later opened one.
         self.execution_scope
-            .atomic_region
+            .atomic_region()
             .is_some_and(|begin_index| self.inner.atomic_region_has_side_effects_for(begin_index))
     }
 
@@ -1530,10 +2192,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             let ctx = get_ctx(access.data_mut());
             Self::prepare_access_start(ctx, function_type, claim_options)
         })?;
-        let mut start_guard = AccessStartAtomicGuard::new(
-            prepared.atomic_region_registration,
-            prepared.cleanup_sink.clone(),
-        );
+        let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
         if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
             return Err(err.source);
@@ -1549,7 +2208,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 if result.is_ok() {
                     start_guard.disarm();
                 }
-                result
+                let mut handle = result?;
+                handle
+                    .supersede_prior_completion_delivery(store, get_ctx)
+                    .await?;
+                Ok(handle)
             }
             Err((err, cleanup)) => {
                 store.with(|mut access| {
@@ -1560,6 +2223,56 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 Err(err)
             }
         }
+    }
+
+    /// Supersedes any completion-delivery observer still armed on this accessor's host subtask
+    /// once this call owns a persisted live `Start`.
+    ///
+    /// Such an observer belongs to an *earlier* durable call in the same host function whose
+    /// response has already been consumed internally by host code (see
+    /// [`CompletionDelivery::deliver_at_accessor_terminal`]): the guest can no longer discard
+    /// that completion individually — only the whole host call's terminal — and replay
+    /// re-executes the host code past its `End` deterministically, re-consuming the response
+    /// internally. So no `CompletionDiscarded` marker is needed, and the observer's
+    /// [`LiveCallPermit`] must not keep blocking suspension (e.g. for the whole duration of a
+    /// subsequent suspendable wait such as `monotonic-clock.wait-for`). Clearing the observer
+    /// drops its guard, which suppresses the token and releases the permit; the follow-up drain
+    /// joins any ordered append the superseded token parked in the drain queue, so its oplog
+    /// ordering and settlement accounting survive.
+    ///
+    /// This handoff is only performed once *this* call is a persisted live barrier (never for
+    /// replay or snapshotting handles): until then the prior observer must stay armed so a guest
+    /// cancellation landing before this call's `Start` still records its `CompletionDiscarded`
+    /// marker and parks replay at the prior call.
+    ///
+    /// Invariant required of host functions: after this supersession, a failure of this call
+    /// must either arm a newer observer (via its own completion) or escape as a
+    /// trap/cancellation — host code must not swallow the failure and return a successful outer
+    /// result derived from the superseded completion with no observer armed.
+    async fn supersede_prior_completion_delivery<T, D, Ctx>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        if !(self.is_live && self.persisted) {
+            return Ok(());
+        }
+        if let Err(error) = store.clear_terminal_observer() {
+            self.abandon_for_trap();
+            return Err(WorkerExecutorError::runtime(format!(
+                "failed to supersede prior accessor completion observer: {error}"
+            )));
+        }
+        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+            self.abandon_for_trap();
+            return Err(err.source);
+        }
+        Ok(())
     }
 
     fn prepare_access_start<Ctx: WorkerCtx>(
@@ -1591,15 +2304,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .active_atomic_regions
             .last()
             .map(|region| region.begin_index);
-        if durable_execution_state.is_live
-            && durable_execution_state.snapshotting_mode.is_none()
-            && let Some(begin_index) = atomic_region
-            && !ctx.state.register_atomic_region_call(begin_index)
-        {
-            return Err(WorkerExecutorError::runtime(format!(
-                "durable call started in atomic region {begin_index}, but the region is not open"
-            )));
-        }
 
         let parent_start_index = ctx
             .state
@@ -1613,6 +2317,28 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let snapshotting = durable_execution_state.snapshotting_mode.is_some();
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
+        // A live persisted call initiated inside an open atomic region joins the region's member
+        // registry: its lease starts owned by that region and follows the region's close
+        // transitions (transfer to the enclosing region, or detachment at the outermost close).
+        let atomic_lease = if is_live && !snapshotting {
+            match atomic_region {
+                Some(begin_index) => Some(
+                    ctx.state
+                        .register_atomic_region_call(
+                            begin_index,
+                            retry.can_reexecute_on_incomplete_replay(),
+                        )
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(format!(
+                                "durable call started in atomic region {begin_index}, but the region is not open"
+                            ))
+                        })?,
+                ),
+                None => None,
+            }
+        } else {
+            None
+        };
         let cleanup_sink = ctx.state.dropped_call_event_sender();
         let live_host_calls = ctx.state.live_host_call_counter();
         Ok(PreparedAccessStart {
@@ -1623,11 +2349,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             replay_state: ctx.state.replay_state.clone(),
             execution_scope,
             retry,
-            atomic_region_registration: if is_live && !snapshotting {
-                atomic_region
-            } else {
-                None
-            },
+            atomic_lease,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
             cleanup_sink,
             claim_options,
@@ -1719,7 +2441,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             (
                 err,
                 AccessStartCleanup {
-                    atomic_region_registration: prepared.atomic_region_registration,
+                    atomic_lease: prepared.atomic_lease.clone(),
                 },
             )
         })?;
@@ -1727,6 +2449,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if is_live {
             if prepared.snapshotting {
                 let start_idx = prepared.oplog.current_oplog_index().await;
+                let atomic_lease = unregistered_atomic_lease(
+                    execution_scope.atomic_region,
+                    retry.can_reexecute_on_incomplete_replay(),
+                );
                 Ok(ExecutedAccessStart {
                     begin_index: scope_start
                         .as_ref()
@@ -1736,9 +2462,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     persisted: false,
                     request_upload: PendingUpload::already_durable(),
                     replay: None,
-                    execution_scope: execution_scope.finish(start_idx),
+                    execution_scope: execution_scope.finish(start_idx, atomic_lease),
                     retry,
-                    atomic_region_registration: None,
                     opened_scope: scope_start,
                     drop_sink: prepared.drop_sink,
                     cleanup_sink: prepared.cleanup_sink,
@@ -1767,10 +2492,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                                 "failed to serialize and store durable call request: {err}"
                             )),
                             AccessStartCleanup {
-                                atomic_region_registration: prepared.atomic_region_registration,
+                                atomic_lease: prepared.atomic_lease.clone(),
                             },
                         )
                     })?;
+                // The registered lease from prepare time when this call started live inside an
+                // open region; a replayed scope that switched to live mid-start falls back to an
+                // unregistered lease preserving its initiation-time classification.
+                let atomic_lease = prepared.atomic_lease.clone().or_else(|| {
+                    unregistered_atomic_lease(
+                        execution_scope.atomic_region,
+                        retry.can_reexecute_on_incomplete_replay(),
+                    )
+                });
                 Ok(ExecutedAccessStart {
                     begin_index: scope_start
                         .as_ref()
@@ -1780,9 +2514,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     persisted: true,
                     request_upload,
                     replay: None,
-                    execution_scope: execution_scope.finish(start_idx),
+                    execution_scope: execution_scope.finish(start_idx, atomic_lease),
                     retry,
-                    atomic_region_registration: prepared.atomic_region_registration,
                     opened_scope: scope_start,
                     drop_sink: prepared.drop_sink,
                     cleanup_sink: prepared.cleanup_sink,
@@ -1798,7 +2531,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         "Trying to replay a durable invocation in a PersistNothing block",
                     ),
                     AccessStartCleanup {
-                        atomic_region_registration: prepared.atomic_region_registration,
+                        atomic_lease: prepared.atomic_lease.clone(),
                     },
                 ));
             }
@@ -1856,11 +2589,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 (
                     err,
                     AccessStartCleanup {
-                        atomic_region_registration: prepared.atomic_region_registration,
+                        atomic_lease: prepared.atomic_lease.clone(),
                     },
                 )
             })?;
             let start_idx = replay.start_idx();
+            // Replay handles never participate in the live in-flight member guard, but keep
+            // their initiation-time region for trap/retry classification.
+            let atomic_lease = unregistered_atomic_lease(
+                execution_scope.atomic_region,
+                retry.can_reexecute_on_incomplete_replay(),
+            );
             Ok(ExecutedAccessStart {
                 begin_index: scope_start
                     .as_ref()
@@ -1870,9 +2609,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 persisted: false,
                 request_upload: PendingUpload::already_durable(),
                 replay: Some(replay),
-                execution_scope: execution_scope.finish(start_idx),
+                execution_scope: execution_scope.finish(start_idx, atomic_lease),
                 retry,
-                atomic_region_registration: None,
                 opened_scope: scope_start,
                 drop_sink: prepared.drop_sink,
                 cleanup_sink: prepared.cleanup_sink,
@@ -1915,24 +2653,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 switched_to_live: false,
             })
         } else {
-            // The plain legacy name is accepted as fallback for oplogs recorded before the
-            // discriminator existed (those recordings are ambiguous among concurrent siblings
-            // anyway; matches are claimed in oplog order).
-            let mut scope_names = vec![scope_name];
-            if prepared.claim_options.scope_discriminator.is_some() {
-                scope_names.push(HostFunctionName::Custom(
-                    "<scope:batched-write>".to_string(),
-                ));
-            }
+            // Replay requires exactly the name the live path recorded (including the
+            // discriminator suffix). There is no plain-name fallback: a discriminated claim must
+            // never steal a plain sibling scope, and P3 deploys on a clean database so every
+            // replayed oplog was recorded with the discriminators already in place.
             let (begin_index, replay_handle) = prepared
                 .replay_state
-                .claim_scope_start(&scope_names, &function_type)
+                .claim_scope_start(&scope_name, &function_type)
                 .await
                 .map_err(|err| {
                     (
                         err,
                         AccessStartCleanup {
-                            atomic_region_registration: prepared.atomic_region_registration,
+                            atomic_lease: prepared.atomic_lease.clone(),
                         },
                     )
                 })?;
@@ -1952,7 +2685,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ),
                         AccessStartCleanup {
-                            atomic_region_registration: prepared.atomic_region_registration,
+                            atomic_lease: prepared.atomic_lease.clone(),
                         },
                     ));
                 }
@@ -2014,7 +2747,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ),
                             AccessStartCleanup {
-                                atomic_region_registration: prepared.atomic_region_registration,
+                                atomic_lease: prepared.atomic_lease.clone(),
                             },
                         ))
                     }
@@ -2055,9 +2788,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             request_upload: executed.request_upload,
             replay: executed.replay,
             finished: false,
-            parked_cancelled_replay: false,
+            parked_undelivered_replay: false,
             execution_scope: executed.execution_scope,
-            atomic_region_registration: executed.atomic_region_registration,
             retry: executed.retry,
             drop_sink: executed.drop_sink,
             cleanup_sink: executed.cleanup_sink,
@@ -2069,11 +2801,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     }
 
     fn cleanup_access_start<Ctx: WorkerCtx>(
-        ctx: &mut DurableWorkerCtx<Ctx>,
+        _ctx: &mut DurableWorkerCtx<Ctx>,
         cleanup: AccessStartCleanup,
     ) {
-        if let Some(begin_index) = cleanup.atomic_region_registration {
-            ctx.state.unregister_atomic_region_call(begin_index);
+        if let Some(lease) = cleanup.atomic_lease {
+            lease.release();
         }
     }
 
@@ -2471,9 +3203,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     "failed to serialize and store durable call request: {err}"
                 ))
             }) {
-                if let Some(begin_index) = self.atomic_region_registration.take() {
-                    ctx.state.unregister_atomic_region_call(begin_index);
-                }
+                self.execution_scope.release_atomic_lease();
                 return Err(err);
             }
             let host_response: HostResponse = response.clone().into();
@@ -2484,9 +3214,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             }) {
                 Ok(payload) => payload,
                 Err(err) => {
-                    if let Some(begin_index) = self.atomic_region_registration.take() {
-                        ctx.state.unregister_atomic_region_call(begin_index);
-                    }
+                    self.execution_scope.release_atomic_lease();
                     return Err(err);
                 }
             };
@@ -2495,9 +3223,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     .state
                     .mark_atomic_region_has_side_effects_for(begin_index)
             {
-                if let Some(begin_index) = self.atomic_region_registration.take() {
-                    ctx.state.unregister_atomic_region_call(begin_index);
-                }
+                self.execution_scope.release_atomic_lease();
                 return Err(WorkerExecutorError::runtime(format!(
                     "durable call {} completed after its atomic region {begin_index} was closed",
                     self.start_idx
@@ -2510,9 +3236,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 forced_commit: false,
             };
             oplog.add(end).await;
-            if let Some(begin_index) = self.atomic_region_registration.take() {
-                ctx.state.unregister_atomic_region_call(begin_index);
-            }
+            self.execution_scope.release_atomic_lease();
             // Close the durable scope (if one was opened), commit at the right boundary, and run the
             // mid-invocation checkpoint, all via `end_durable_function`.
             ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
@@ -2541,7 +3265,48 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             self.abandon_for_trap();
             return Err(err);
         }
-        self.complete_access_impl(store, get_ctx, response)
+        let (response, delivery) = self
+            .complete_access_impl(store, get_ctx, response, None)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))?;
+        // Non-deferred boundary: no fallible guest-facing work follows the host return, so hand
+        // the token to Wasmtime's terminal observer synchronously (no tear window exists between
+        // the impl returning and this call) — the observer settles it when the guest actually
+        // consumes (or discards) the lowered result.
+        delivery.deliver_at_accessor_terminal(store);
+        Ok(response)
+    }
+
+    /// Like [`Self::complete_access`], but for call sites whose response crosses one more
+    /// fallible/cancellable boundary after the durable terminal (a second-stage channel send, a
+    /// span finish before the host method returns, a wire conversion). Returns the response
+    /// together with an armed [`CompletionDelivery`] token; the caller must consume the token at
+    /// the real guest-facing boundary (`delivered` / `suppress` / `discarded`), and a torn future
+    /// in between records the `CompletionDiscarded` marker via the token's drop.
+    ///
+    /// `post_end_entry` (e.g. the call's durable `FinishSpan`) is appended by the same owned task
+    /// as the terminal `End`, so it is recorded even when this future is torn mid-completion:
+    /// replay can then rely on the entry unconditionally following the `End` — the recorded
+    /// discard marker (a hint entry) always sorts after both. Callers passing it must *not*
+    /// append the entry themselves and only perform its in-memory effect.
+    pub async fn complete_access_deferred<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        post_end_entry: Option<OplogEntry>,
+    ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+            self.abandon_for_trap();
+            return Err(err);
+        }
+        self.complete_access_impl(store, get_ctx, response, post_end_entry)
             .await
             .map_err(|source| TerminalCallError::new(source, context))
     }
@@ -2551,7 +3316,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
-    ) -> Result<Pair::Resp, WorkerExecutorError>
+        post_end_entry: Option<OplogEntry>,
+    ) -> Result<(Pair::Resp, CompletionDelivery), WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -2566,7 +3332,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let function_type = self.retry.function_type().clone();
         let begin_index = self.begin_index;
         {
-            let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+            let (oplog, replay_state) = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                (ctx.state.oplog.clone(), ctx.state.replay_state.clone())
+            });
             let trap_context = self.trap_context();
             let mut guard = AccessTerminalGuard::<P>::new(
                 DroppedCall {
@@ -2574,7 +3343,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     begin_index: self.begin_index,
                     function_type: self.retry.function_type().clone(),
                     request_upload: self.request_upload.clone(),
-                    atomic_region_registration: self.atomic_region_registration.take(),
+                    atomic_lease: self.execution_scope.atomic_lease.clone(),
                     trap_context,
                     live_call_permit: self.live_call_permit.clone(),
                 },
@@ -2583,13 +3352,23 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             );
             self.finished = true;
             let persist_result: Result<(), WorkerExecutorError> = if self.persisted {
-                Self::persist_access_terminal(oplog, &mut guard, self.start_idx, &response).await
+                Self::persist_access_terminal(
+                    oplog,
+                    replay_state,
+                    &mut guard,
+                    self.start_idx,
+                    &response,
+                    post_end_entry,
+                )
+                .await
             } else {
                 Ok(())
             };
 
+            // Read the current owner through the lease *after* the terminal is persisted, so a
+            // region close that transferred this call mid-flight marks side effects against the
+            // region that now owns it.
             let atomic_region = self.execution_scope.atomic_region();
-            let registration = guard.atomic_region_registration();
             let finish_result = store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
                 let mut result = Ok(());
@@ -2602,20 +3381,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                             self.start_idx
                         )));
                 }
-                if let Some(begin_index) = registration {
-                    ctx.state.unregister_atomic_region_call(begin_index);
-                }
                 result
             });
+            guard.release_atomic_lease();
 
             if let Err(err) = persist_result {
                 guard.disarm();
                 return Err(err);
             }
-            finish_result?;
-            end_durable_function_access(store, get_ctx, function_type, begin_index, false).await?;
-            guard.disarm();
-            Ok(response)
+            // From here on the `End` is persisted, but these error returns are *observed* by the
+            // caller (the worker traps): the completion was not silently discarded by the guest,
+            // so the marker must not be recorded — while the terminal join / permit release must
+            // still reach the drain through the guard's drop event.
+            if let Err(err) = finish_result {
+                guard.suppress_discard_marker();
+                return Err(err);
+            }
+            if let Err(err) =
+                end_durable_function_access(store, get_ctx, function_type, begin_index, false).await
+            {
+                guard.suppress_discard_marker();
+                return Err(err);
+            }
+            Ok((response, guard.take_completion_delivery()))
         }
     }
 
@@ -2632,9 +3420,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// function against a gated oplog to keep that invariant observable.
     async fn persist_access_terminal(
         oplog: Arc<dyn Oplog>,
+        replay_state: ReplayState,
         guard: &mut AccessTerminalGuard<P>,
         start_idx: OplogIndex,
         response: &Pair::Resp,
+        post_end_entry: Option<OplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
         guard
             .call()
@@ -2661,9 +3451,26 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let terminal_oplog = oplog.clone();
         let terminal = tokio::spawn(async move {
             terminal_oplog.add(end).await;
+            // A deferred-delivery call's mandatory post-`End` entry (e.g. its durable
+            // `FinishSpan`) is appended by the same owned task: it is recorded even when the
+            // completing future is torn right after the `End`, so replay can rely on it
+            // unconditionally following the `End` (any discard marker chains after this task).
+            if let Some(entry) = post_end_entry {
+                terminal_oplog.add(entry).await;
+            }
             Ok(())
         });
-        guard.cleanup_after_terminal(terminal);
+        // Arm the discard marker together with the owned `End` append: from this point a torn
+        // completion future means the guest discarded a persisted successful completion (a tear
+        // *during* `wait_terminal` still counts — the owned task appends the `End` regardless).
+        guard.cleanup_after_terminal(
+            terminal,
+            Some(DiscardMarker {
+                start_idx,
+                oplog,
+                replay_state,
+            }),
+        );
         guard.wait_terminal().await
     }
 
@@ -2737,6 +3544,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         format!("Cancelled without partial at {cancelled_idx}"),
                     ))
                 }
+            }
+            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+                end_idx,
+                marker_idx,
+                ..
+            }) => {
+                // Discarded completions are recorded only on the accessor completion path, and
+                // calls replay through the same path they recorded on — a marker resolving on
+                // this non-accessor path means the oplog does not match this code path.
+                self.finished = true;
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "End delivered to the guest",
+                    format!(
+                        "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
+                    ),
+                ))
             }
             ResolutionOutcome::Incomplete => {
                 if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
@@ -2853,7 +3676,176 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         "durable call cancelled without partial at {cancelled_idx} during replay; \
                          parking until the guest drops it"
                     );
-                    self.parked_cancelled_replay = true;
+                    self.parked_undelivered_replay = true;
+                    std::future::pending::<()>().await;
+                    unreachable!("std::future::pending never completes")
+                }
+            }
+            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+                end_idx,
+                marker_idx,
+                ..
+            }) => {
+                // The recorded run persisted a successful `End`, but the guest dropped the
+                // completion future before the response was delivered (the `CompletionDiscarded`
+                // marker at `marker_idx` records this). Mirror live exactly, like the
+                // cancelled-without-partial park above: never complete, so the deterministic
+                // guest drops this future at the same point it did live; durable cleanup is
+                // deferred to this handle's `Drop`.
+                tracing::debug!(
+                    "durable call completed at {end_idx} but its completion was discarded by the \
+                     guest (marker at {marker_idx}); parking until the guest drops it"
+                );
+                self.parked_undelivered_replay = true;
+                std::future::pending::<()>().await;
+                unreachable!("std::future::pending never completes")
+            }
+            ResolutionOutcome::Incomplete => {
+                if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
+                    // Debug sessions must never re-execute side effects; refuse instead of
+                    // switching to live repair.
+                    self.finished = true;
+                    Err(WorkerExecutorError::invalid_request(format!(
+                        "the replay target lies inside an in-flight durable call (Start at {start_idx} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions"
+                    )))
+                } else if self.retry.can_reexecute_on_incomplete_replay() {
+                    self.is_live = true;
+                    self.persisted = true;
+                    self.live_call_permit = Some(LiveCallPermit::new(store.with(|mut access| {
+                        get_ctx(access.data_mut()).state.live_host_call_counter()
+                    })));
+                    Ok(CallReplayOutcome::Incomplete(self))
+                } else {
+                    self.finished = true;
+                    Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "End or Cancelled",
+                        format!(
+                            "incomplete non-idempotent durable call Start at {start_idx} cannot be safely re-executed"
+                        ),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Like [`Self::replay_access`], but for deferred-delivery call sites (see
+    /// [`Self::complete_access_deferred`]): a replayed terminal is returned together with a
+    /// [`CompletionDelivery`] token instead of parking here when the recorded run discarded the
+    /// completion. For a recorded `CompletionDiscarded` marker this decodes the persisted
+    /// response and closes the durable scope — mirroring exactly what live did before its token
+    /// was armed — and the *caller* parks at its own delivery boundary after performing its
+    /// deterministic post-`End` continuation (e.g. consuming a positional `FinishSpan`).
+    pub async fn replay_access_deferred<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.ensure_accessor_terminal_supported("replay_access_deferred")?;
+        let function_type = self.retry.function_type().clone();
+        let begin_index = self.begin_index;
+        let (replay_state, oplog) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (ctx.state.replay_state.clone(), ctx.state.oplog.clone())
+        });
+        let replay = self
+            .replay
+            .take()
+            .expect("replay_access_deferred() called on a live handle");
+        let start_idx = self.start_idx;
+        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        match outcome {
+            ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+                self.finished = true;
+                let payload = response.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "End { response: Some(..) }",
+                        "End { response: None }".to_string(),
+                    )
+                })?;
+                let host_response = oplog.download_payload(payload).await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
+                })?;
+                let response: Pair::Resp = host_response
+                    .try_into()
+                    .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
+                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                    .await?;
+                Ok(DeferredCallReplayOutcome::Replayed(
+                    response,
+                    CompletionDelivery::replay_delivered(),
+                ))
+            }
+            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+                end_idx,
+                marker_idx,
+                response,
+            }) => {
+                // The recorded run persisted a successful `End` but the guest discarded the
+                // completion before final delivery (marker at `marker_idx`). Decode the persisted
+                // response and close the durable scope — the exact state live was in when its
+                // delivery token was armed — and let the caller run its deterministic post-`End`
+                // continuation before parking at the delivery boundary.
+                tracing::debug!(
+                    "durable call completed at {end_idx} but its completion was discarded by the \
+                     guest (marker at {marker_idx}); replaying its post-End continuation before \
+                     parking at the delivery boundary"
+                );
+                self.finished = true;
+                let payload = response.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "End { response: Some(..) }",
+                        "End { response: None }".to_string(),
+                    )
+                })?;
+                let host_response = oplog.download_payload(payload).await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
+                })?;
+                let response: Pair::Resp = host_response
+                    .try_into()
+                    .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
+                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                    .await?;
+                Ok(DeferredCallReplayOutcome::Replayed(
+                    response,
+                    CompletionDelivery::replay_discarded(),
+                ))
+            }
+            ResolutionOutcome::Resolved(Resolution::Cancelled {
+                cancelled_idx,
+                partial,
+            }) => {
+                if let Some(payload) = partial {
+                    self.finished = true;
+                    let host_response = oplog.download_payload(payload).await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "Cancelled partial payload cannot be downloaded: {err}"
+                        ))
+                    })?;
+                    let response: Pair::Resp = host_response.try_into().map_err(|err| {
+                        WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err)
+                    })?;
+                    end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                        .await?;
+                    Ok(DeferredCallReplayOutcome::Replayed(
+                        response,
+                        CompletionDelivery::replay_delivered(),
+                    ))
+                } else {
+                    // Cancelled with no partial: in the recorded run this call never returned a
+                    // value to the guest. Mirror exactly — park here so the deterministic guest
+                    // drops this future at the same point it did live; durable cleanup is
+                    // deferred to this handle's `Drop`. See [`Self::replay_access`] for why the
+                    // scope close must not happen before the park.
+                    tracing::debug!(
+                        "durable call cancelled without partial at {cancelled_idx} during replay; \
+                         parking until the guest drops it"
+                    );
+                    self.parked_undelivered_replay = true;
                     std::future::pending::<()>().await;
                     unreachable!("std::future::pending never completes")
                 }
@@ -2872,7 +3864,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     self.live_call_permit = Some(LiveCallPermit::new(store.with(|mut access| {
                         get_ctx(access.data_mut()).state.live_host_call_counter()
                     })));
-                    Ok(CallReplayOutcome::Incomplete(self))
+                    Ok(DeferredCallReplayOutcome::Incomplete(self))
                 } else {
                     self.finished = true;
                     Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -2950,7 +3942,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     begin_index: self.begin_index,
                     function_type: self.retry.function_type().clone(),
                     request_upload: self.request_upload.clone(),
-                    atomic_region_registration: self.atomic_region_registration.take(),
+                    atomic_lease: self.execution_scope.atomic_lease.clone(),
                     trap_context,
                     live_call_permit: self.live_call_permit.clone(),
                 };
@@ -2958,9 +3950,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 // recording the `Cancelled` that references the request. A no-op when the request was
                 // inline or eagerly uploaded.
                 if let Err(err) = dropped_call.wait_request_upload().await {
-                    if let Some(begin_index) = dropped_call.atomic_region_registration() {
-                        ctx.state.unregister_atomic_region_call(begin_index);
-                    }
+                    dropped_call.release_atomic_lease();
                     return Err(err);
                 }
                 let partial_payload = match partial {
@@ -2973,10 +3963,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         }) {
                             Ok(payload) => Some(payload),
                             Err(err) => {
-                                if let Some(begin_index) = dropped_call.atomic_region_registration()
-                                {
-                                    ctx.state.unregister_atomic_region_call(begin_index);
-                                }
+                                dropped_call.release_atomic_lease();
                                 return Err(err);
                             }
                         }
@@ -2986,9 +3973,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 dropped_call
                     .append_cancelled_with_oplog(oplog, partial_payload)
                     .await?;
-                if let Some(begin_index) = dropped_call.atomic_region_registration() {
-                    ctx.state.unregister_atomic_region_call(begin_index);
-                }
+                dropped_call.release_atomic_lease();
                 ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                     .await?;
             }
@@ -2998,11 +3983,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .take()
                 .expect("cancel() in replay called on a live handle");
             let resolution = ctx.state.replay_state.await_resolution(replay).await?;
-            if let Resolution::Completed { end_idx, .. } = resolution {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "Cancelled",
-                    format!("End at {end_idx}"),
-                ));
+            match resolution {
+                Resolution::Completed { end_idx, .. }
+                | Resolution::CompletedButDiscarded { end_idx, .. } => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "Cancelled",
+                        format!("End at {end_idx}"),
+                    ));
+                }
+                Resolution::Cancelled { .. } => {}
             }
             ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                 .await?;
@@ -3057,7 +4046,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         begin_index: self.begin_index,
                         function_type: self.retry.function_type().clone(),
                         request_upload: self.request_upload.clone(),
-                        atomic_region_registration: self.atomic_region_registration.take(),
+                        atomic_lease: self.execution_scope.atomic_lease.clone(),
                         trap_context,
                         live_call_permit: self.live_call_permit.clone(),
                     },
@@ -3082,17 +4071,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         call.append_cancelled_with_oplog(oplog, partial_payload)
                             .await
                     });
-                    guard.cleanup_after_terminal(terminal);
+                    // Cancellation terminal: never a discarded completion, no marker.
+                    guard.cleanup_after_terminal(terminal, None);
                     guard.wait_terminal().await
                 }
                 .await;
-                let registration = guard.atomic_region_registration();
-                store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    if let Some(begin_index) = registration {
-                        ctx.state.unregister_atomic_region_call(begin_index);
-                    }
-                });
+                guard.release_atomic_lease();
                 if let Err(err) = result {
                     guard.disarm();
                     return Err(err);
@@ -3109,11 +4093,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .take()
                 .expect("cancel_access() in replay called on a live handle");
             let resolution = replay_state.await_resolution(replay).await?;
-            if let Resolution::Completed { end_idx, .. } = resolution {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "Cancelled",
-                    format!("End at {end_idx}"),
-                ));
+            match resolution {
+                Resolution::Completed { end_idx, .. }
+                | Resolution::CompletedButDiscarded { end_idx, .. } => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "Cancelled",
+                        format!("End at {end_idx}"),
+                    ));
+                }
+                Resolution::Cancelled { .. } => {}
             }
             end_durable_function_access(store, get_ctx, function_type, begin_index, false).await?;
         }
@@ -3184,6 +4172,21 @@ where
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         format!("End {{ start_index: {begin_index} }}"),
                         format!("Cancelled {{ start_index: {begin_index} }}"),
+                    ));
+                }
+                ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+                    end_idx,
+                    marker_idx,
+                    ..
+                }) => {
+                    // Discarded completions are recorded only for accessor completion futures; a
+                    // marker referencing a durable scope `Start` means the oplog does not match
+                    // this code path.
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!("End {{ start_index: {begin_index} }}"),
+                        format!(
+                            "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a durable scope"
+                        ),
                     ));
                 }
                 ResolutionOutcome::Incomplete => {
@@ -3285,7 +4288,7 @@ where
     });
 
     let consumed = replay_state
-        .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
+        .try_get_oplog_entry_owned(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
         .await?;
     let Some((
         _,
@@ -3371,7 +4374,7 @@ where
             .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
             .await;
     } else {
-        crate::get_oplog_entry!(replay_state, OplogEntry::FinishSpan)?;
+        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
     }
 
     store.with(|mut access| {
@@ -3427,7 +4430,7 @@ where
 {
     let replay_state =
         store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-    let replay_events = replay_state.take_new_replay_events().await;
+    let replay_events = replay_state.take_new_replay_events();
     for event in replay_events {
         match event {
             crate::durable_host::replay_state::ReplayEvent::ForkReplayed { new_phantom_id } => {
@@ -3897,21 +4900,30 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 })?;
             (idx, true, request_upload)
         };
-        let execution_scope = self.execution_scope.finish(start_idx);
-        let atomic_region_registration = if persisted {
-            if let Some(begin_index) = execution_scope.atomic_region() {
-                if !ctx.state.register_atomic_region_call(begin_index) {
+        let atomic_lease = if persisted {
+            if let Some(begin_index) = self.execution_scope.atomic_region {
+                let lease = ctx.state.register_atomic_region_call(
+                    begin_index,
+                    self.retry.can_reexecute_on_incomplete_replay(),
+                );
+                if lease.is_none() {
                     return Err(WorkerExecutorError::runtime(format!(
                         "durable call {start_idx} started in atomic region {begin_index}, but the region is not open"
                     )));
                 }
-                Some(begin_index)
+                lease
             } else {
                 None
             }
         } else {
-            None
+            // Snapshotting persists nothing; keep the initiation-time region for trap/retry
+            // classification without joining the live in-flight member guard.
+            unregistered_atomic_lease(
+                self.execution_scope.atomic_region,
+                self.retry.can_reexecute_on_incomplete_replay(),
+            )
         };
+        let execution_scope = self.execution_scope.finish(start_idx, atomic_lease);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,
@@ -3920,9 +4932,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload,
             replay: None,
             finished: false,
-            parked_cancelled_replay: false,
+            parked_undelivered_replay: false,
             execution_scope,
-            atomic_region_registration,
             retry: self.retry,
             drop_sink: self.drop_sink,
             cleanup_sink: self.cleanup_sink,
@@ -3952,7 +4963,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
             .await?;
         let start_idx = replay.start_idx();
-        let execution_scope = self.execution_scope.finish(start_idx);
+        // Replay handles never participate in the live in-flight member guard, but keep their
+        // initiation-time region for trap/retry classification.
+        let atomic_lease = unregistered_atomic_lease(
+            self.execution_scope.atomic_region,
+            self.retry.can_reexecute_on_incomplete_replay(),
+        );
+        let execution_scope = self.execution_scope.finish(start_idx, atomic_lease);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,
@@ -3961,9 +4978,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload: PendingUpload::already_durable(),
             replay: Some(replay),
             finished: false,
-            parked_cancelled_replay: false,
+            parked_undelivered_replay: false,
             execution_scope,
-            atomic_region_registration: None,
             retry: self.retry,
             drop_sink: self.drop_sink,
             cleanup_sink: self.cleanup_sink,
@@ -3988,7 +5004,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
                         begin_index: self.begin_index,
                         function_type: self.retry.function_type().clone(),
                         request_upload: self.request_upload.clone(),
-                        atomic_region_registration: self.atomic_region_registration,
+                        atomic_lease: self.execution_scope.atomic_lease.clone(),
                         trap_context,
                         live_call_permit: self.live_call_permit.take(),
                     },
@@ -4008,12 +5024,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
                     span_id: None,
                 });
             }
-            if self.parked_cancelled_replay {
-                // Expected: the recorded terminal was `Cancelled { partial: None }` and the
-                // deterministic guest dropped this future at the same point it did live. Any
+            if self.parked_undelivered_replay {
+                // Expected: the recorded terminal was never delivered to the guest live
+                // (`Cancelled { partial: None }` or an `End` marked `CompletionDiscarded`) and
+                // the deterministic guest dropped this future at the same point it did live. Any
                 // scope close was enqueued above.
                 tracing::debug!(
-                    "parked cancelled durable call replay handle for Start {} dropped by the guest",
+                    "parked undelivered durable call replay handle for Start {} dropped by the guest",
                     self.start_idx
                 );
             } else {
@@ -4181,7 +5198,7 @@ mod tests {
 
     fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
         start_idx: OplogIndex,
-        atomic_region_registration: Option<OplogIndex>,
+        atomic_region: Option<OplogIndex>,
         sink: mpsc::UnboundedSender<DropEvent>,
     ) -> CallHandle<host_functions::MonotonicClockNow, P> {
         use crate::durable_host::durability::DurableExecutionState;
@@ -4201,14 +5218,13 @@ mod tests {
             request_upload: PendingUpload::already_durable(),
             replay: None,
             finished: false,
-            parked_cancelled_replay: false,
+            parked_undelivered_replay: false,
             execution_scope: CallExecutionScope {
                 retry_from: start_idx,
                 durable_scope: None,
-                atomic_region: None,
+                atomic_lease: unregistered_atomic_lease(atomic_region, true),
                 persistence_level: PersistenceLevel::Smart,
             },
-            atomic_region_registration,
             retry: InFunctionRetryController::new(
                 DurableFunctionType::ReadLocal,
                 durable_execution_state,
@@ -4240,7 +5256,6 @@ mod tests {
             max_in_function_retry_delay: Duration::ZERO,
         };
         let start_idx = scope.retry_from;
-        let atomic_region_registration = scope.atomic_region;
         CallHandle {
             start_idx,
             begin_index: start_idx,
@@ -4249,9 +5264,8 @@ mod tests {
             request_upload: PendingUpload::already_durable(),
             replay: None,
             finished: true,
-            parked_cancelled_replay: false,
+            parked_undelivered_replay: false,
             execution_scope: scope,
-            atomic_region_registration,
             retry: InFunctionRetryController::new(
                 DurableFunctionType::ReadLocal,
                 durable_execution_state,
@@ -4308,7 +5322,7 @@ mod tests {
                     begin_index: idx(4),
                     function_type: DurableFunctionType::ReadRemote,
                     request_upload: PendingUpload::already_durable(),
-                    atomic_region_registration: None,
+                    atomic_lease: None,
                     trap_context: DurableCallTrapContext {
                         retry_from: idx(4),
                         in_atomic_region: false,
@@ -4323,7 +5337,7 @@ mod tests {
                 let _ = gate_rx.await;
                 Ok(())
             });
-            guard.cleanup_after_terminal(terminal);
+            guard.cleanup_after_terminal(terminal, None);
             assert_eq!(
                 counter.load(Ordering::Acquire),
                 1,
@@ -4345,10 +5359,283 @@ mod tests {
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
+    // ---- CompletionDelivery (deferred guest-delivery token) ----
+
+    /// Builds a live-armed [`CompletionDelivery`] over the given oplog, exactly as
+    /// [`AccessTerminalGuard::take_completion_delivery`] produces one for a persisted live call
+    /// whose `End` is already durable.
+    async fn live_delivery_token(
+        oplog: Arc<InMemoryOplog>,
+        permit_counter: Arc<AtomicUsize>,
+        cleanup_tx: mpsc::UnboundedSender<DropEvent>,
+    ) -> CompletionDelivery {
+        let oplog_dyn: Arc<dyn Oplog> = oplog;
+        // The replay state is built over a separately seeded [Start, End] oplog so the observed
+        // oplog contains only what the token itself appends (and so an End gate installed on the
+        // observed oplog is not tripped by the seeding).
+        let seed_oplog = Arc::new(InMemoryOplog::new());
+        seed_oplog
+            .add(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::MonotonicClockNow,
+                request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                    golem_common::model::oplog::HostRequestNoInput {},
+                )))),
+                durable_function_type: DurableFunctionType::ReadLocal,
+            })
+            .await;
+        seed_oplog
+            .add(OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(1),
+                response: None,
+                forced_commit: false,
+            })
+            .await;
+        let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
+        let replay_state = ReplayState::new(
+            golem_common::model::OwnedAgentId {
+                environment_id: golem_common::model::environment::EnvironmentId::new(),
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "completion-delivery-test".to_string(),
+                },
+            },
+            seed_oplog_dyn,
+            golem_common::model::regions::DeletedRegions::default(),
+        )
+        .await
+        .expect("failed to build replay state");
+        CompletionDelivery {
+            state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
+                marker: DiscardMarker {
+                    start_idx: idx(1),
+                    oplog: oplog_dyn,
+                    replay_state,
+                },
+                trap_context: DurableCallTrapContext {
+                    retry_from: idx(1),
+                    in_atomic_region: false,
+                },
+                live_call_permit: Some(LiveCallPermit::new(permit_counter)),
+                cleanup_sink: Some(cleanup_tx),
+                pending_append: None,
+            })),
+        }
+    }
+
+    #[test]
+    async fn completion_delivery_delivered_and_suppress_record_no_marker() {
+        // `delivered` (successful final guest transfer) and `suppress` (caller-observed
+        // post-`End` error) must not record a `CompletionDiscarded` marker and must release the
+        // in-flight permit without queueing a drain event (no pending ordered append).
+        let variants: [fn(CompletionDelivery); 2] =
+            [CompletionDelivery::delivered, CompletionDelivery::suppress];
+        for consume in variants {
+            let oplog = Arc::new(InMemoryOplog::new());
+            let counter = Arc::new(AtomicUsize::new(0));
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+            assert_eq!(counter.load(Ordering::Acquire), 1);
+            consume(token);
+            assert_eq!(counter.load(Ordering::Acquire), 0);
+            assert!(rx.try_recv().is_err(), "no drain event may be queued");
+            assert!(
+                oplog.entries.lock().await.is_empty(),
+                "no marker may be recorded"
+            );
+        }
+    }
+
+    #[test]
+    async fn completion_delivery_armed_drop_records_marker_via_drain() {
+        // Dropping the token while still armed (a torn delivering future) must spawn the owned
+        // marker append and hand its join plus the in-flight permit to the drain queue, so
+        // invocation settlement waits for the marker.
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        {
+            let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+            assert_eq!(counter.load(Ordering::Acquire), 1);
+            drop(token);
+        }
+        assert_eq!(
+            counter.load(Ordering::Acquire),
+            1,
+            "the queued drain event must own the permit"
+        );
+        match rx.try_recv() {
+            Ok(DropEvent::AwaitDiscardMarker {
+                terminal,
+                live_call_permit,
+                ..
+            }) => {
+                terminal
+                    .expect("the drain event must carry the marker join")
+                    .await
+                    .expect("marker task must not panic")
+                    .expect("marker append must succeed");
+                let entries = oplog.entries.lock().await;
+                assert_eq!(entries.len(), 1, "expected exactly one marker entry");
+                match &entries[0] {
+                    OplogEntry::CompletionDiscarded { start_index, .. } => {
+                        assert_eq!(*start_index, idx(1))
+                    }
+                    other => panic!("expected CompletionDiscarded, got {other:?}"),
+                }
+                drop(live_call_permit);
+                assert_eq!(counter.load(Ordering::Acquire), 0);
+            }
+            other => panic!("expected an AwaitDiscardMarker drop event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    async fn completion_delivery_discarded_appends_marker_inline() {
+        // `discarded` (caller-detected silent discard) appends exactly one marker inline and
+        // returns once it is durable; the permit is released and no drain event is queued.
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+        token.discarded().await.expect("discarded must succeed");
+        {
+            let entries = oplog.entries.lock().await;
+            assert_eq!(entries.len(), 1, "expected exactly one marker entry");
+            assert!(matches!(
+                &entries[0],
+                OplogEntry::CompletionDiscarded { start_index, .. } if *start_index == idx(1)
+            ));
+        }
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+        assert!(rx.try_recv().is_err(), "no drain event may be queued");
+    }
+
+    #[test]
+    async fn completion_delivery_discarded_is_cancellation_safe() {
+        // Tearing the future awaiting `discarded()` mid-wait must not lose the marker: the
+        // owned append task keeps running, and the join plus the in-flight permit are handed to
+        // the drain queue so settlement still waits for the marker.
+        let (reached_tx, mut reached_rx) = mpsc::unbounded_channel();
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let oplog = Arc::new(InMemoryOplog::with_end_gate(reached_tx, gate.clone()));
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+
+        let discard_task = tokio::spawn(async move { token.discarded().await });
+        // The owned marker append is provably inside the gated `add`...
+        reached_rx
+            .recv()
+            .await
+            .expect("marker append must reach the gate");
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        assert!(rx.try_recv().is_err());
+
+        // ...when the awaiting future is torn.
+        discard_task.abort();
+        let _ = discard_task.await;
+
+        // The drain event owns the join and the permit; the marker still lands.
+        match rx.try_recv() {
+            Ok(DropEvent::AwaitDiscardMarker {
+                terminal,
+                live_call_permit,
+                ..
+            }) => {
+                assert_eq!(
+                    counter.load(Ordering::Acquire),
+                    1,
+                    "the drain event must own the permit"
+                );
+                gate.add_permits(1);
+                terminal
+                    .expect("the drain event must carry the marker join")
+                    .await
+                    .expect("marker task must not panic")
+                    .expect("marker append must succeed");
+                let entries = oplog.entries.lock().await;
+                assert_eq!(entries.len(), 1, "expected exactly one marker entry");
+                assert!(matches!(
+                    &entries[0],
+                    OplogEntry::CompletionDiscarded { start_index, .. } if *start_index == idx(1)
+                ));
+                drop(live_call_permit);
+                assert_eq!(counter.load(Ordering::Acquire), 0);
+            }
+            other => panic!("expected an AwaitDiscardMarker drop event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    async fn completion_delivery_replay_tokens_are_inert() {
+        // Replay tokens mirror the recorded delivery status and never touch the oplog again:
+        // - `replay_discarded` reports the discard (the caller must not redeliver the recorded
+        //   response) and consuming or dropping it records nothing;
+        // - `replay_delivered` reports normal delivery and is equally inert.
+        // Together with `replay_resolves_completed_but_discarded` (replay_state) and the live
+        // marker tests above, this pins the full discard chain: a recorded
+        // `[Start, End, CompletionDiscarded]` resolves to a discarded token, the call site skips
+        // redelivery, and replay appends no second marker.
+        let discarded = CompletionDelivery::replay_discarded();
+        assert!(discarded.is_replay_discarded());
+        assert!(!discarded.is_live_armed());
+        discarded
+            .discarded()
+            .await
+            .expect("discarding a replay-discarded token is a no-op");
+
+        let delivered = CompletionDelivery::replay_delivered();
+        assert!(!delivered.is_replay_discarded());
+        assert!(!delivered.is_live_armed());
+        delivered.delivered();
+
+        // Dropping an unconsumed replay-discarded token is a no-op as well (the park path drops
+        // the token after waiting for the guest to abandon the delivery boundary).
+        drop(CompletionDelivery::replay_discarded());
+    }
+
+    #[test]
+    async fn completion_delivery_ordered_append_lands_before_marker() {
+        // An `append_ordered` entry (e.g. a durable `FinishSpan`) handed to the token must land
+        // *before* the torn-drop marker, preserving the recorded
+        // `End → FinishSpan → CompletionDiscarded` order replay consumes positionally.
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        {
+            let mut token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+            token.append_ordered(OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+            });
+            drop(token);
+        }
+        match rx.try_recv() {
+            Ok(DropEvent::AwaitDiscardMarker { terminal, .. }) => {
+                terminal
+                    .expect("the drain event must carry the chained join")
+                    .await
+                    .expect("chained task must not panic")
+                    .expect("chained appends must succeed");
+            }
+            other => panic!("expected an AwaitDiscardMarker drop event, got {other:?}"),
+        }
+        let entries = oplog.entries.lock().await;
+        assert_eq!(entries.len(), 2, "expected [ordered entry, marker]");
+        assert!(matches!(&entries[0], OplogEntry::NoOp { .. }));
+        assert!(matches!(
+            &entries[1],
+            OplogEntry::CompletionDiscarded { start_index, .. } if *start_index == idx(1)
+        ));
+    }
+
     /// Minimal in-memory [`Oplog`] recording appended entries, for tests that assert what a
-    /// drained drop event writes durably. With an `end_gate` installed, appending an `End` entry
-    /// first signals `reached` and then blocks until the gate semaphore yields a permit, so a
-    /// test can hold the terminal append open and observe what is (not) visible meanwhile.
+    /// drained drop event writes durably. With an `end_gate` installed, appending an `End` or
+    /// `CompletionDiscarded` entry first signals `reached` and then blocks until the gate
+    /// semaphore yields a permit, so a test can hold the terminal or marker append open and
+    /// observe what is (not) visible meanwhile.
     #[derive(Debug)]
     struct InMemoryOplog {
         entries: tokio::sync::Mutex<Vec<OplogEntry>>,
@@ -4377,8 +5664,10 @@ mod tests {
     #[async_trait]
     impl Oplog for InMemoryOplog {
         async fn add(&self, entry: OplogEntry) -> OplogIndex {
-            if matches!(entry, OplogEntry::End { .. })
-                && let Some((reached, gate)) = &self.end_gate
+            if matches!(
+                entry,
+                OplogEntry::End { .. } | OplogEntry::CompletionDiscarded { .. }
+            ) && let Some((reached, gate)) = &self.end_gate
             {
                 let _ = reached.send(());
                 gate.acquire()
@@ -4567,7 +5856,7 @@ mod tests {
                 begin_index: start_idx,
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
-                atomic_region_registration: None,
+                atomic_lease: None,
                 trap_context: DurableCallTrapContext {
                     retry_from: start_idx,
                     in_atomic_region: false,
@@ -4580,10 +5869,23 @@ mod tests {
         assert_eq!(permit_counter.load(Ordering::Acquire), 1);
 
         let persist_oplog: Arc<dyn Oplog> = oplog.clone();
+        let persist_replay_state = ReplayState::new(
+            golem_common::model::OwnedAgentId {
+                environment_id: golem_common::model::environment::EnvironmentId::new(),
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "concurrent-test".to_string(),
+                },
+            },
+            persist_oplog.clone(),
+            golem_common::model::regions::DeletedRegions::default(),
+        )
+        .await
+        .expect("failed to build replay state");
         let persist = tokio::spawn(async move {
             let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
             let result = CallHandle::<host_functions::MonotonicClockNow, NotCancellable>::
-                persist_access_terminal(persist_oplog, &mut guard, start_idx, &response)
+                persist_access_terminal(persist_oplog, persist_replay_state, &mut guard, start_idx, &response, None)
             .await;
             (result, guard)
         });
@@ -4671,7 +5973,7 @@ mod tests {
         match rx.try_recv() {
             Ok(DropEvent::UnfinishedCancellable { call }) => {
                 assert_eq!(call.start_idx(), idx(5));
-                assert_eq!(call.atomic_region_registration(), None);
+                assert_eq!(call.atomic_region(), None);
             }
             other => panic!("expected one UnfinishedCancellable, got {other:?}"),
         }
@@ -4688,7 +5990,7 @@ mod tests {
         match rx.try_recv() {
             Ok(DropEvent::UnfinishedCancellable { call }) => {
                 assert_eq!(call.start_idx(), idx(5));
-                assert_eq!(call.atomic_region_registration(), Some(idx(2)));
+                assert_eq!(call.atomic_region(), Some(idx(2)));
             }
             other => panic!("expected one UnfinishedCancellable, got {other:?}"),
         }
@@ -4739,14 +6041,14 @@ mod tests {
         match rx.try_recv() {
             Ok(DropEvent::UnfinishedCancellable { call }) => {
                 assert_eq!(call.start_idx(), idx(5));
-                assert_eq!(call.atomic_region_registration(), Some(idx(2)));
+                assert_eq!(call.atomic_region(), Some(idx(2)));
             }
             other => panic!("expected first cancellable drop snapshot, got {other:?}"),
         }
         match rx.try_recv() {
             Ok(DropEvent::UnfinishedCancellable { call }) => {
                 assert_eq!(call.start_idx(), idx(9));
-                assert_eq!(call.atomic_region_registration(), Some(idx(3)));
+                assert_eq!(call.atomic_region(), Some(idx(3)));
             }
             other => panic!("expected second cancellable drop snapshot, got {other:?}"),
         }
@@ -4858,7 +6160,7 @@ mod tests {
         let scope = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: None,
+            atomic_lease: None,
             persistence_level: PersistenceLevel::PersistRemoteSideEffects,
         };
 
@@ -4878,7 +6180,7 @@ mod tests {
         let scope = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: Some(idx(7)),
+            atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
             persistence_level: PersistenceLevel::Smart,
         };
 
@@ -4894,7 +6196,7 @@ mod tests {
         let scope = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: None,
+            atomic_lease: None,
             persistence_level: PersistenceLevel::Smart,
         };
         let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -4918,13 +6220,13 @@ mod tests {
         let scope_a = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: None,
+            atomic_lease: None,
             persistence_level: PersistenceLevel::Smart,
         };
         let scope_b = CallExecutionScope {
             retry_from: idx(77),
             durable_scope: Some(idx(70)),
-            atomic_region: None,
+            atomic_lease: None,
             persistence_level: PersistenceLevel::Smart,
         };
 
@@ -4967,13 +6269,13 @@ mod tests {
         let scope_a = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: Some(idx(7)),
+            atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
             persistence_level: PersistenceLevel::Smart,
         };
         let scope_b = CallExecutionScope {
             retry_from: idx(77),
             durable_scope: Some(idx(70)),
-            atomic_region: Some(idx(8)),
+            atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
             persistence_level: PersistenceLevel::Smart,
         };
 
@@ -5036,7 +6338,7 @@ mod tests {
         let scope = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: None,
+            atomic_lease: None,
             persistence_level: PersistenceLevel::Smart,
         };
         let handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
@@ -5070,13 +6372,13 @@ mod tests {
         let scope_a = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: Some(idx(7)),
+            atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
             persistence_level: PersistenceLevel::Smart,
         };
         let scope_b = CallExecutionScope {
             retry_from: idx(77),
             durable_scope: Some(idx(70)),
-            atomic_region: None,
+            atomic_lease: None,
             persistence_level: PersistenceLevel::Smart,
         };
         let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
@@ -5130,7 +6432,7 @@ mod tests {
             begin_index: idx(4),
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
-            atomic_region_registration: Some(idx(3)),
+            atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
             trap_context: DurableCallTrapContext {
                 retry_from: idx(3),
                 in_atomic_region: true,
@@ -5144,7 +6446,7 @@ mod tests {
             begin_index: idx(8),
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
-            atomic_region_registration: None,
+            atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: idx(8),
                 in_atomic_region: false,
@@ -5188,11 +6490,12 @@ mod tests {
             persistence_level: PersistenceLevel::PersistNothing,
         };
 
-        let scope = begun.finish(idx(11));
+        let lease = unregistered_atomic_lease(begun.atomic_region, true);
+        let scope = begun.finish(idx(11), lease);
 
         assert_eq!(scope.retry_from, idx(10));
         assert_eq!(scope.durable_scope, Some(idx(10)));
-        assert_eq!(scope.atomic_region, Some(idx(2)));
+        assert_eq!(scope.atomic_region(), Some(idx(2)));
         assert_eq!(scope.persistence_level, PersistenceLevel::PersistNothing);
     }
 
@@ -5204,11 +6507,11 @@ mod tests {
             persistence_level: PersistenceLevel::Smart,
         };
 
-        let scope = begun.finish(idx(12));
+        let scope = begun.finish(idx(12), None);
 
         assert_eq!(scope.retry_from, idx(12));
         assert_eq!(scope.durable_scope, None);
-        assert_eq!(scope.atomic_region, None);
+        assert_eq!(scope.atomic_region(), None);
         assert_eq!(scope.persistence_level, PersistenceLevel::Smart);
     }
 
@@ -5217,7 +6520,7 @@ mod tests {
         let scope = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
-            atomic_region: None,
+            atomic_lease: None,
             persistence_level: PersistenceLevel::Smart,
         };
 

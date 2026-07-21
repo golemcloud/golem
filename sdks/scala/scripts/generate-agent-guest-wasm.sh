@@ -72,6 +72,7 @@ rm -rf "$dts_dir"
 wasm-rquickjs generate-dts \
   --wit "$agent_wit_root" \
   --world golem:agent-guest/agent-guest \
+  --target wasi-p3 \
   --output "$dts_dir"
 echo "[agent-guest] TypeScript definitions written to $dts_dir" >&2
 ls -1 "$dts_dir"/*.d.ts 2>/dev/null | while read -r f; do echo "  $(basename "$f")"; done >&2
@@ -81,6 +82,7 @@ rm -rf "$wrapper_dir"
 wasm-rquickjs generate-wrapper-crate \
   --wit "$agent_wit_root" \
   --world golem:agent-guest/agent-guest \
+  --target wasi-p3 \
   --js-modules "user=@slot" \
   --output "$wrapper_dir"
 
@@ -90,7 +92,7 @@ if [[ -f "$HOME/.cargo/env" ]]; then
   . "$HOME/.cargo/env"
 fi
 
-( cd "$wrapper_dir" && env -u ARGV0 rustup run stable cargo build --target wasm32-wasip2 --release --features full,golem )
+( cd "$wrapper_dir" && env -u ARGV0 rustup run stable cargo build --target wasm32-wasip2 --release --no-default-features --features full-p3,golem )
 
 if [[ ! -f "$out_wasm" ]]; then
   echo "[agent-guest] ERROR: build did not produce $out_wasm" >&2

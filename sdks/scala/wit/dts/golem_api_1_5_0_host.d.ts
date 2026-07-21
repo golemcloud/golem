@@ -4,7 +4,6 @@
  */
 declare module 'golem:api/host@1.5.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   /**
    * Create a new promise
    */
@@ -142,20 +141,15 @@ declare module 'golem:api/host@1.5.0' {
   }
   export class GetPromiseResult {
     /**
-     * Returns a pollable that can be used to wait for the promise to become ready.j
+     * Awaits the result of the promise.
      */
-    subscribe(): Pollable;
-    /**
-     * Poll the result of the promise, returning none if it is not yet ready.
-     */
-    get(): Uint8Array | undefined;
+    get(): Promise<Uint8Array>;
   }
   export type ComponentId = golemCore200Types.ComponentId;
   export type Uuid = golemCore200Types.Uuid;
   export type AgentId = golemCore200Types.AgentId;
   export type PromiseId = golemCore200Types.PromiseId;
   export type OplogIndex = golemCore200Types.OplogIndex;
-  export type Pollable = wasiIo023Poll.Pollable;
   /**
    * Represents a Golem component's version
    */

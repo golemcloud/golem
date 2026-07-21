@@ -172,6 +172,14 @@ declare module 'golem:api/oplog@1.5.0' {
     originalPhantomId?: Uuid;
     instanceId: Uuid;
   };
+  /**
+   * Parameters of an enriched durable host-call `start` entry.
+   * The recorded `request` payload of every durable host call — including
+   * durable P3 async calls such as HTTP send/consume-body, sockets, keyvalue,
+   * and blobstore operations — surfaces as a generic `typed-schema-value`
+   * tree, identified by `function-name`; there are no per-interface named WIT
+   * variants for the payload shapes.
+   */
   export type StartParameters = {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
@@ -179,16 +187,36 @@ declare module 'golem:api/oplog@1.5.0' {
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
   };
+  /**
+   * Parameters of an enriched durable host-call `end` entry. Like the
+   * `start` `request`, the recorded `response` payload surfaces as a generic
+   * `typed-schema-value` tree (no per-interface named WIT variants).
+   */
   export type EndParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     response?: TypedSchemaValue;
     forcedCommit: boolean;
   };
+  /**
+   * Parameters of an enriched durable host-call `cancelled` entry. Like the
+   * `start` `request`, the optional recorded `partial` result surfaces as a
+   * generic `typed-schema-value` tree (no per-interface named WIT variants).
+   */
   export type CancelledParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     partial?: TypedSchemaValue;
+  };
+  /**
+   * Parameters of a `completion-discarded` entry: the durable host call started at
+   * `start-index` completed successfully (its `end` entry was persisted) but the response
+   * was never delivered to the agent, because the agent dropped the call's completion
+   * future after the `end` was already recorded.
+   */
+  export type CompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
   };
   export type LocalSpanData = {
     spanId: SpanId;
@@ -622,6 +650,10 @@ declare module 'golem:api/oplog@1.5.0' {
     startIndex: OplogIndex;
     partial?: OplogPayload;
   };
+  export type RawCompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
   /**
    * Parameters for a host-stream-frame oplog entry, with the frame payload in raw
    * (possibly externally stored) form.
@@ -971,6 +1003,15 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'host-stream-frame'
     val: RawHostStreamFrameParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was persisted, but its response was never delivered to the agent (the agent dropped
+   * the completion future after the `end` was recorded)
+   */
+  {
+    tag: 'completion-discarded'
+    val: RawCompletionDiscardedParameters
   };
   export type PublicOplogEntry = 
   /** The initial agent oplog entry */
@@ -1211,6 +1252,15 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'host-stream-frame'
     val: HostStreamFrameParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was persisted, but its response was never delivered to the agent (the agent dropped
+   * the completion future after the `end` was recorded)
+   */
+  {
+    tag: 'completion-discarded'
+    val: CompletionDiscardedParameters
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

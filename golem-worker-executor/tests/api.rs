@@ -1659,7 +1659,7 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 2097152);
+    assert_eq!(metadata2.total_linear_memory_size, 1966080);
     Ok(())
 }
 

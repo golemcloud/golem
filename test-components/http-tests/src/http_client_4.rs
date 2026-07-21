@@ -92,6 +92,15 @@ pub trait HttpClient4 {
     /// that pending read before the server sends any body bytes.
     async fn get_and_cancel_pending_body_read(&self) -> String;
 
+    /// Sends a GET request whose response body delivers one chunk and then
+    /// stalls, starts reading a body chunk, and cancels that pending read only
+    /// once a second request (`GET /cancel-signal`) completes — the test
+    /// server withholds that response until the exact moment it wants the
+    /// pending read dropped. The body stream is then dropped as well, and a
+    /// third request (`GET /cancel-done`) confirms to the test server that
+    /// both the pending read future and the body stream are gone.
+    async fn get_and_cancel_body_read_after_signal(&self) -> String;
+
     /// Sends a POST via raw wasip3 `wasi:http` whose declared `content-length`
     /// is larger than the bytes actually written, and returns the request-body
     /// transmission future's result (together with the send outcome). The
@@ -247,6 +256,10 @@ impl HttpClient4 for HttpClient4Impl {
         do_get_and_cancel_pending_body_read().await
     }
 
+    async fn get_and_cancel_body_read_after_signal(&self) -> String {
+        do_get_and_cancel_body_read_after_signal().await
+    }
+
     async fn post_with_short_body_transmission_error(&self) -> String {
         do_post_with_short_body_transmission_error().await
     }
@@ -395,6 +408,54 @@ async fn do_get_and_cancel_pending_body_read() -> String {
     };
 
     (read, cancel).race().await
+}
+
+async fn do_get_and_cancel_body_read_after_signal() -> String {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let response = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/gated-body"))
+        .send()
+        .await
+        .expect("Request failed");
+    let status = response.status().as_u16();
+    let mut body = response.into_body();
+
+    let read = async {
+        let chunk = body.chunk().await.unwrap_or_default();
+        format!("read({status}, {})", chunk.len())
+    };
+    let cancel = async {
+        // The test server withholds this response until the exact moment it
+        // wants the pending chunk read above to be dropped.
+        let signal = wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/cancel-signal"))
+            .send()
+            .await
+            .expect("Cancel-signal request failed");
+        let signal_status = signal.status().as_u16();
+        drop(signal);
+        format!("cancelled-after-signal({status}, {signal_status})")
+    };
+
+    let result = (read, cancel).race().await;
+
+    // The race's loser (the pending chunk read) is dropped when the winner
+    // resolves; dropping the body itself then also drops the host-side reply
+    // path of the still-in-flight chunk demand. By the time this request
+    // reaches the test server, no bytes persisted for that demand can be
+    // delivered anymore.
+    drop(body);
+    let done = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/cancel-done"))
+        .send()
+        .await
+        .expect("Cancel-done request failed");
+    let done_status = done.status().as_u16();
+    drop(done);
+    format!("{result} done={done_status}")
 }
 
 async fn do_post_with_short_body_transmission_error() -> String {

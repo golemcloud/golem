@@ -663,15 +663,15 @@ async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::
 
     let mut p3_start_indices = HashSet::new();
     for entry in &oplog {
-        if let PublicOplogEntry::Start(params) = &entry.entry {
-            if params.function_name == "http::client::send" {
-                assert!(
-                    params.request.is_some(),
-                    "P3 `http::client::send` Start entry at {} must carry a typed-schema-value request payload",
-                    entry.oplog_index
-                );
-                p3_start_indices.insert(entry.oplog_index.as_u64());
-            }
+        if let PublicOplogEntry::Start(params) = &entry.entry
+            && params.function_name == "http::client::send"
+        {
+            assert!(
+                params.request.is_some(),
+                "P3 `http::client::send` Start entry at {} must carry a typed-schema-value request payload",
+                entry.oplog_index
+            );
+            p3_start_indices.insert(entry.oplog_index.as_u64());
         }
     }
     assert!(
@@ -681,15 +681,15 @@ async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::
 
     let mut p3_end_indices = HashSet::new();
     for entry in &oplog {
-        if let PublicOplogEntry::End(params) = &entry.entry {
-            if p3_start_indices.contains(&params.start_index.as_u64()) {
-                assert!(
-                    params.response.is_some(),
-                    "P3 `http::client::send` End entry at {} must carry a typed-schema-value response payload",
-                    entry.oplog_index
-                );
-                p3_end_indices.insert(entry.oplog_index.as_u64());
-            }
+        if let PublicOplogEntry::End(params) = &entry.entry
+            && p3_start_indices.contains(&params.start_index.as_u64())
+        {
+            assert!(
+                params.response.is_some(),
+                "P3 `http::client::send` End entry at {} must carry a typed-schema-value response payload",
+                entry.oplog_index
+            );
+            p3_end_indices.insert(entry.oplog_index.as_u64());
         }
     }
     assert_eq!(

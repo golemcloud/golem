@@ -703,5 +703,27 @@ oplog_entry! {
             kind: HostStreamKind,
             payload: TypedSchemaValue,
         }
+    },
+    /// Marks that the successful completion (`End`) of the durable host call started by the
+    /// `Start` at `start_index` was persisted, but its response was never delivered to the
+    /// guest: the guest dropped the call's completion future (e.g. as the loser of a `select!`)
+    /// after the `End` was already appended.
+    ///
+    /// During replay the recorded `End` for such a call must not be resolved to the guest;
+    /// the call parks unresolved so the deterministic guest drops it at the same point it did
+    /// live. The marker is a hint entry: it always lies physically *after* the `End` it
+    /// describes (its exact position depends on drop-event drain timing), so the replay cursor
+    /// skips it positionally and instead collects all markers in an upfront oplog scan,
+    /// consulting that map when the `End` is resolved.
+    CompletionDiscarded {
+        hint: true
+        wit_raw_type: "raw-completion-discarded-parameters"
+        wit_public_type: "completion-discarded-parameters"
+        raw {
+            start_index: OplogIndex,
+        }
+        public {
+            start_index: OplogIndex,
+        }
     }
 }

@@ -77,6 +77,19 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub resume_replay_pending: Arc<AtomicBool>,
 }
 
+/// Outcome of creating the worker instance for one iteration of the invocation loop.
+enum CreateInstanceResult<Ctx: WorkerCtx> {
+    Created {
+        instance: Instance,
+        store: Mutex<Store<Ctx>>,
+    },
+    /// Wasm executing during instantiation trapped with an [`InterruptKind`] (e.g. a fuel
+    /// suspension from the epoch deadline callback). The worker itself was created successfully.
+    Interrupted(InterruptKind),
+    /// Instance creation failed; the worker was already stopped with the startup failure.
+    Failed,
+}
+
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     fn interrupt_decision(kind: InterruptKind) -> RetryDecision {
         match kind {
@@ -109,11 +122,45 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         'outer: loop {
             debug!("Invocation queue loop creating the instance");
 
-            let (instance, store) = if let Some((instance, store)) = self.create_instance().await {
-                (instance, store)
-            } else {
-                // early return, can't retry a failed instance creation
-                break;
+            let (instance, store) = match self.create_instance().await {
+                CreateInstanceResult::Created { instance, store } => (instance, store),
+                CreateInstanceResult::Interrupted(kind) => {
+                    // Interrupted while instantiating: record the same lifecycle oplog entry the
+                    // invocation failure path would (`Suspend`/`Interrupted`), then park or
+                    // restart. There is no store to run `on_invocation_failure` on, but no
+                    // invocation was running either — the status marker is all that is needed.
+                    match kind {
+                        InterruptKind::Restart | InterruptKind::Jump => {
+                            debug!("Instantiation interrupted for restart, retrying");
+                            continue;
+                        }
+                        InterruptKind::Suspend(ts) => {
+                            self.parent
+                                .add_and_commit_oplog(OplogEntry::suspend())
+                                .await;
+                            if ts < *self.parent.last_resume_request.lock().await {
+                                debug!(
+                                    "Suspend during instantiation ignored because there was a resume request since it"
+                                );
+                                continue;
+                            } else {
+                                self.stop_unloaded().await;
+                                break;
+                            }
+                        }
+                        InterruptKind::Interrupt(_) => {
+                            self.parent
+                                .add_and_commit_oplog(OplogEntry::interrupted())
+                                .await;
+                            self.stop_unloaded().await;
+                            break;
+                        }
+                    }
+                }
+                CreateInstanceResult::Failed => {
+                    // early return, can't retry a failed instance creation
+                    break;
+                }
             };
 
             debug!("Invocation queue loop preparing the instance");
@@ -296,14 +343,27 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     /// Create the worker instance and publish an event about it
-    async fn create_instance(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
+    async fn create_instance(&self) -> CreateInstanceResult<Ctx> {
         match RunningWorker::create_instance(self.parent.clone()).await {
             Ok((instance, store)) => {
                 self.parent.events().publish(Event::WorkerLoaded {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Ok(()),
                 });
-                Some((instance, store))
+                CreateInstanceResult::Created { instance, store }
+            }
+            // Wasm executing during instantiation was interrupted (e.g. suspended by the fuel
+            // check in the epoch deadline callback). The worker exists — its metadata and
+            // `Create` oplog entry are already persisted — so this is not a creation failure:
+            // creation waiters are released successfully and the caller parks or restarts the
+            // worker like any other interrupt.
+            Err(WorkerExecutorError::Interrupted { kind }) => {
+                debug!("Worker instantiation interrupted: {kind:?}");
+                self.parent.events().publish(Event::WorkerLoaded {
+                    agent_id: self.owned_agent_id.agent_id(),
+                    result: Ok(()),
+                });
+                CreateInstanceResult::Interrupted(kind)
             }
             Err(err) => {
                 warn!("Failed to start the worker: {err}");
@@ -320,7 +380,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         },
                     )
                     .await;
-                None
+                CreateInstanceResult::Failed
             }
         }
     }

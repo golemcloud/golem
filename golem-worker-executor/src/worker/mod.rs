@@ -3768,13 +3768,21 @@ impl RunningWorker {
             .instantiate_async(&mut store)
             .await
             .map_err(|e| {
-                WorkerExecutorError::worker_creation_failed(
-                    parent.owned_agent_id.agent_id(),
-                    format!(
-                        "Failed to instantiate worker {}: {e}",
-                        parent.owned_agent_id
-                    ),
-                )
+                // Wasm may already execute during instantiation (start functions, ctors), so the
+                // epoch deadline callback can fire here: an `InterruptKind` trap (e.g. a fuel
+                // suspension) is a lifecycle event, not a creation failure, and must be kept
+                // distinguishable for the invocation loop.
+                if let Some(kind) = e.root_cause().downcast_ref::<InterruptKind>() {
+                    WorkerExecutorError::Interrupted { kind: *kind }
+                } else {
+                    WorkerExecutorError::worker_creation_failed(
+                        parent.owned_agent_id.agent_id(),
+                        format!(
+                            "Failed to instantiate worker {}: {e}",
+                            parent.owned_agent_id
+                        ),
+                    )
+                }
             })?;
         let store = async_lock::Mutex::new(store);
         Ok((instance, store))

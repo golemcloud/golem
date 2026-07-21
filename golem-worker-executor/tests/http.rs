@@ -1153,6 +1153,374 @@ async fn outgoing_http_pending_body_read_cancellation_replays(
     Ok(())
 }
 
+/// The durable shape of one `get_and_cancel_body_read_after_signal` run in the
+/// oplog: the guest's chunk demand was persisted as a completed child
+/// `Start`/`End(Data)` pair, but the guest dropped the body reader before the
+/// persisted bytes were delivered, so the child carries a `CompletionDiscarded`
+/// marker placed after its `End` and settled before the `consume-body` parent's
+/// terminal — which itself closes before the invocation's
+/// `AgentInvocationFinished`.
+struct DiscardedChunkEntries {
+    chunk_start_index: golem_common::model::oplog::OplogIndex,
+    finished_index: golem_common::model::oplog::OplogIndex,
+}
+
+/// Asserts the durable record of `expected_runs` gated-and-discarded body
+/// chunk reads (each a full `get_and_cancel_body_read_after_signal` run) and
+/// returns the entries of each run in oplog order. Every persisted chunk child
+/// must be a completed `End` recording the exact gated `Data` bytes plus a
+/// `CompletionDiscarded` marker referencing it — never a delivered read, a
+/// `Cancelled` terminal, or an orphaned `Start` — and each run's marker must
+/// settle before its `consume-body` parent terminal, which must land before
+/// the run's `AgentInvocationFinished`.
+fn assert_discarded_body_chunk_entries(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    expected_runs: usize,
+    expected_chunk_bytes: &[u8],
+) -> Vec<DiscardedChunkEntries> {
+    use golem_common::model::oplog::payload::types::SerializableP3HttpBodyChunk;
+    use golem_common::model::oplog::{
+        HostResponse, HostResponseP3HttpClientConsumeBodyChunk, PublicOplogEntry,
+    };
+
+    let sends = partition_starts(oplog, "http::client::send");
+    // Each run performs three sends: /gated-body, /cancel-signal and
+    // /cancel-done, all completing normally.
+    assert_eq!(
+        sends.counts(),
+        (0, expected_runs * 3, 0),
+        "each send must complete with an End: {sends:?}"
+    );
+    let bodies = partition_starts(oplog, "http::types::response::consume-body");
+    assert_eq!(
+        bodies.counts(),
+        (0, expected_runs, 0),
+        "each consume-body parent must complete with an End: {bodies:?}"
+    );
+    let chunks = partition_starts(oplog, "http::types::response::consume-body-chunk");
+    assert_eq!(
+        chunks.counts(),
+        (0, expected_runs, 0),
+        "each gated chunk read must complete with an End persisting the Data chunk: {chunks:?}"
+    );
+
+    let expected_chunk: HostResponse = HostResponseP3HttpClientConsumeBodyChunk {
+        chunk: SerializableP3HttpBodyChunk::Data(expected_chunk_bytes.to_vec()),
+    }
+    .into();
+    let expected_chunk = expected_chunk
+        .into_typed_schema_value()
+        .expect("rendering the expected Data chunk failed");
+
+    let mut runs = Vec::new();
+    for chunk_start_index in chunks.ended {
+        let chunk_end = oplog
+            .iter()
+            .find_map(|e| match &e.entry {
+                PublicOplogEntry::End(p) if p.start_index == chunk_start_index => {
+                    Some((e.oplog_index, p.response.clone()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!("missing End for the gated chunk read at {chunk_start_index}")
+            });
+        let (chunk_end_index, chunk_response) = chunk_end;
+        assert_eq!(
+            chunk_response,
+            Some(expected_chunk.clone()),
+            "the gated chunk read at {chunk_start_index} must persist the server's Data bytes \
+             as its recorded terminal even though they were never delivered"
+        );
+
+        let markers: Vec<_> = oplog
+            .iter()
+            .filter_map(|e| match &e.entry {
+                PublicOplogEntry::CompletionDiscarded(p) if p.start_index == chunk_start_index => {
+                    Some(e.oplog_index)
+                }
+                _ => None,
+            })
+            .collect();
+        let [marker_index] = markers.as_slice() else {
+            panic!(
+                "the discarded chunk read at {chunk_start_index} must have exactly one \
+                 CompletionDiscarded marker, found {markers:?}"
+            )
+        };
+        let marker_index = *marker_index;
+        assert!(
+            marker_index > chunk_end_index,
+            "the CompletionDiscarded marker at {marker_index} must lie after the chunk End at \
+             {chunk_end_index}"
+        );
+
+        // The enclosing parent is the nearest consume-body Start preceding the
+        // chunk Start (each run opens its own parent).
+        let parent_end_index = oplog
+            .iter()
+            .rev()
+            .find_map(|e| match &e.entry {
+                PublicOplogEntry::Start(p)
+                    if p.function_name == "http::types::response::consume-body"
+                        && e.oplog_index < chunk_start_index =>
+                {
+                    oplog.iter().find_map(|end| match &end.entry {
+                        PublicOplogEntry::End(ep) if ep.start_index == e.oplog_index => {
+                            Some(end.oplog_index)
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing completed consume-body parent for the chunk read at \
+                     {chunk_start_index}"
+                )
+            });
+        assert!(
+            parent_end_index > marker_index,
+            "the consume-body parent End at {parent_end_index} must settle after the child's \
+             CompletionDiscarded marker at {marker_index}"
+        );
+
+        let finished_index = oplog
+            .iter()
+            .find_map(|e| {
+                (e.oplog_index > chunk_start_index
+                    && matches!(e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .then_some(e.oplog_index)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing AgentInvocationFinished after the chunk read at {chunk_start_index}"
+                )
+            });
+        assert!(
+            parent_end_index < finished_index,
+            "the consume-body parent End at {parent_end_index} must land before the \
+             invocation's AgentInvocationFinished at {finished_index}"
+        );
+
+        runs.push(DiscardedChunkEntries {
+            chunk_start_index,
+            finished_index,
+        });
+    }
+    runs.sort_by_key(|run| run.chunk_start_index);
+    runs
+}
+
+/// One live `get_and_cancel_body_read_after_signal` round against the gated
+/// test server: waits for the server to send the gated body chunk, waits for
+/// the armed oplog gate to report the chunk's `End(Data)` durable (producer
+/// paused before guest delivery), releases the withheld `/cancel-signal`
+/// response so the guest's race drops the pending read and the body, waits for
+/// the guest's `/cancel-done` confirmation that the reply path is gone, and
+/// only then releases the paused producer — whose delivery must now fail and
+/// record the child's `CompletionDiscarded` marker.
+async fn drive_gated_body_discard_round(
+    gate: &mut golem_worker_executor_test_utils::ConsumeBodyChunkEndGateHandle,
+    gated_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<()>>,
+    done_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<()>>,
+    cancel_signal_release: &tokio::sync::Semaphore,
+) -> anyhow::Result<()> {
+    recv_request_event(gated_rx).await?;
+    timeout(Duration::from_secs(10), gate.appended()).await?;
+    cancel_signal_release.add_permits(1);
+    recv_request_event(done_rx).await?;
+    gate.release();
+    Ok(())
+}
+
+/// A response-body chunk whose durable `End(Data)` is already persisted when
+/// the guest drops the body reader must not be delivered — live or on replay.
+/// The test pauses the consume-body producer between the chunk's durable `End`
+/// and its guest-facing delivery (via the test-utils oplog gate), makes the
+/// deterministic guest drop the pending read and the body stream in that
+/// window, and releases the producer only after the guest confirmed the drop:
+/// the delivery fails, the child records a `CompletionDiscarded` marker, no
+/// bytes reach the guest, and the parent still settles before
+/// `AgentInvocationFinished`. After an executor restart the recorded run
+/// replays (the replay-discarded chunk parks instead of being re-delivered)
+/// and a second gated live run lands on top with the same durable shape.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogIndex;
+
+    const GATED_CHUNK: &[u8] = b"gated-first-chunk";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let (gated_tx, mut gated_rx) = mpsc::unbounded_channel();
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel();
+    let cancel_signal_release = Arc::new(tokio::sync::Semaphore::new(0));
+
+    let http_server = spawn({
+        let cancel_signal_release = cancel_signal_release.clone();
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let gated_tx = gated_tx.clone();
+                let done_tx = done_tx.clone();
+                let cancel_signal_release = cancel_signal_release.clone();
+                spawn(
+                    async move {
+                        let result = async {
+                            let request = read_request_headers(&mut stream).await?;
+                            if request.starts_with(b"GET /gated-body ") {
+                                // Headers plus one body data chunk; the rest of
+                                // the declared body never arrives, so the next
+                                // upstream read stalls while the persisted chunk
+                                // sits at the gated delivery boundary.
+                                stream
+                                    .write_all(
+                                        b"HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n",
+                                    )
+                                    .await?;
+                                stream.write_all(GATED_CHUNK).await?;
+                                stream.flush().await?;
+                                let _ = gated_tx.send(Ok(()));
+                                futures::future::pending::<()>().await;
+                            } else if request.starts_with(b"GET /cancel-signal ") {
+                                // Withheld until the test wants the guest's race
+                                // to drop the pending chunk read.
+                                let _permit = cancel_signal_release.acquire().await?;
+                                stream
+                                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                                    .await?;
+                                stream.flush().await?;
+                            } else if request.starts_with(b"GET /cancel-done ") {
+                                stream
+                                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                                    .await?;
+                                stream.flush().await?;
+                                let _ = done_tx.send(Ok(()));
+                            } else {
+                                anyhow::bail!(
+                                    "unexpected request: {}",
+                                    String::from_utf8_lossy(&request)
+                                );
+                            }
+                            Ok(())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            let _ = gated_tx.send(Err(error));
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    // Arm the gate before the invocation that performs the gated read.
+    let mut gate = executor.gate_first_consume_body_chunk_end(&worker_id).await;
+
+    let invocation = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_body_read_after_signal",
+            data_value!(),
+        ),
+    );
+    let (result, round) = tokio::join!(
+        invocation,
+        drive_gated_body_discard_round(
+            &mut gate,
+            &mut gated_rx,
+            &mut done_rx,
+            &cancel_signal_release,
+        )
+    );
+    round?;
+    let result = result??.into_typed::<String>()?;
+    // The guest must observe the cancellation, never the gated bytes.
+    assert_eq!(result, "cancelled-after-signal(200, 200) done=200");
+
+    {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_discarded_body_chunk_entries(&oplog, 1, GATED_CHUNK);
+    }
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart the executor: the second invocation first replays the recorded
+    // run — where the replay-discarded chunk must park instead of being
+    // re-delivered to the deterministic guest — and then runs a second gated
+    // live round on top of it.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let mut gate = executor.gate_first_consume_body_chunk_end(&worker_id).await;
+
+    let invocation = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_body_read_after_signal",
+            data_value!(),
+        ),
+    );
+    let (result2, round2) = tokio::join!(
+        invocation,
+        drive_gated_body_discard_round(
+            &mut gate,
+            &mut gated_rx,
+            &mut done_rx,
+            &cancel_signal_release,
+        )
+    );
+    round2?;
+    let result2 = result2??.into_typed::<String>()?;
+    assert_eq!(result2, "cancelled-after-signal(200, 200) done=200");
+
+    // The replayed first run kept its durable shape (no re-delivery, no new
+    // entries for it) and the second live run recorded the identical shape.
+    {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let runs = assert_discarded_body_chunk_entries(&oplog, 2, GATED_CHUNK);
+        assert!(
+            runs[0].finished_index < runs[1].chunk_start_index,
+            "the two gated runs must be recorded in separate invocations \
+             (first finished at {}, second chunk Start at {})",
+            runs[0].finished_index,
+            runs[1].chunk_start_index
+        );
+    }
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    Ok(())
+}
+
 /// Dropping a still-pending P3 response future of an idempotent (GET) send
 /// must abort the underlying HTTP request instead of leaving the socket
 /// parked waiting for response headers, and leave the committed `Start`

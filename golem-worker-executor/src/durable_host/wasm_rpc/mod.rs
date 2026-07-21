@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome, NotCancellable,
+    finish_span_in_memory,
+};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{
@@ -655,6 +658,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     remote_agent_id,
                     env,
                     span_id: span.span_id().clone(),
+                    cancel_token: tokio_util::sync::CancellationToken::new(),
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -675,6 +679,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     remote_agent_id,
                     env,
                     span_id: span.span_id().clone(),
+                    cancel_token: tokio_util::sync::CancellationToken::new(),
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -920,7 +925,7 @@ async fn finish_span_access<T, Ctx: WorkerCtx>(
             .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
             .await;
     } else {
-        crate::get_oplog_entry!(replay_state, OplogEntry::FinishSpan)?;
+        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
     }
 
     accessor.with(|mut access| {
@@ -943,6 +948,67 @@ async fn finish_span_access<T, Ctx: WorkerCtx>(
             .map_err(WorkerExecutorError::runtime);
         Ok(())
     })
+}
+
+/// Terminal path for a live in-flight `future-invoke-result.get` whose shared cancel token was
+/// triggered by a concurrent `future-invoke-result::cancel`. The caller has already dropped the
+/// background task (aborting the in-flight RPC). This best-effort cancels the remote invocation,
+/// records the call's `Cancelled` terminal with a partial "Invocation cancelled" response (so a
+/// replayed `get` deterministically delivers the same result via `replay_access_deferred`),
+/// finishes the invocation span, and marks the resource consumed.
+async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: FutureInvokeCallHandle,
+    request: &HostRequestGolemRpcInvoke,
+    span_id: &SpanId,
+    this_rep: u32,
+) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
+    let (worker_proxy, auth_ctx) = accessor.with(|mut access| {
+        let ctx = access.get();
+        (ctx.worker_proxy(), ctx.agent_auth_ctx())
+    });
+    if let Err(err) = worker_proxy
+        .cancel_invocation(
+            &request.remote_agent_id,
+            request.idempotency_key.clone(),
+            &auth_ctx,
+        )
+        .await
+    {
+        tracing::info!(err=%err, "Best-effort cancel_invocation failed");
+    }
+
+    let partial_result: Result<SchemaValue, SerializableRpcError> =
+        Err(SerializableRpcError::ProtocolError {
+            details: "Invocation cancelled".to_string(),
+        });
+    handle
+        .cancel_access(
+            accessor,
+            accessor.getter(),
+            Some(HostResponseGolemRpcInvokeAndAwait {
+                result: partial_result.clone(),
+            }),
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+    finish_span_access(accessor, span_id).await?;
+    accessor.with(|mut access| {
+        let ctx = access.get();
+        let entry = ctx
+            .table()
+            .get_mut(&Resource::<FutureInvokeResult>::new_borrow(this_rep))?;
+        let state = entry
+            .payload
+            .as_any_mut()
+            .downcast_mut::<FutureInvokeResultState>()
+            .unwrap();
+        *state = FutureInvokeResultState::Consumed {
+            span_id: span_id.clone(),
+        };
+        Ok::<_, anyhow::Error>(())
+    })?;
+    invoke_and_await_response_to_wire(partial_result)
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
@@ -969,6 +1035,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
             /// The single durable call is still open; drive it to its `End`. `request`,
             /// `remote_agent_id`, and `env` are carried so a replay that finds an incomplete `Start`
             /// (crash-after-`Start`) can re-dispatch the read-only RPC and complete it.
+            /// `cancel_token` is shared with the state left in the table: a concurrent
+            /// `future-invoke-result::cancel` (which finds `handle: None` there) triggers it, and
+            /// the live await below reacts by cancelling this call.
             Active {
                 handle: FutureInvokeCallHandle,
                 task: Option<FutureInvokeTaskHandle>,
@@ -976,6 +1045,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 remote_agent_id: OwnedAgentId,
                 env: Vec<(String, String)>,
                 span_id: SpanId,
+                cancel_token: tokio_util::sync::CancellationToken,
             },
         }
 
@@ -1035,6 +1105,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     remote_agent_id,
                     env,
                     span_id,
+                    cancel_token,
                 } => {
                     let handle = handle
                         .take()
@@ -1046,6 +1117,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         remote_agent_id: remote_agent_id.clone(),
                         env: env.clone(),
                         span_id: span_id.clone(),
+                        cancel_token: cancel_token.clone(),
                     }
                 }
             })
@@ -1069,22 +1141,50 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 remote_agent_id,
                 env,
                 span_id,
+                cancel_token,
             } => {
-                let response = if handle.is_live() {
+                // The response crosses more guest-facing work after the durable `End` (span
+                // finish, resource-state transition, wire conversion), so the terminal is
+                // recorded through the deferred-delivery API: the returned token stays armed
+                // until this method actually returns the result, and a torn future in between
+                // records the `CompletionDiscarded` marker. The call's durable `FinishSpan` is
+                // appended by the same owned task as the `End` (see `post_end_entry`), so replay
+                // can rely on it unconditionally following the `End` on this path.
+                let (response, delivery) = if handle.is_live() {
                     let task =
                         task.expect("a live future-invoke-result must own its background task");
                     let task_result = {
-                        let mut task = task.lock().await;
-                        (&mut *task).await
+                        let mut guard = task.lock().await;
+                        tokio::select! {
+                            biased;
+                            _ = cancel_token.cancelled() => None,
+                            result = &mut *guard => Some(result),
+                        }
+                    };
+                    let task_result = match task_result {
+                        Some(result) => result,
+                        None => {
+                            // A concurrent `future-invoke-result::cancel` fired while this `get`
+                            // owned the handle. Drop the background task (aborting the in-flight
+                            // RPC), then cancel the durable call: best-effort remote cancellation
+                            // plus a `Cancelled` terminal carrying the partial "Invocation
+                            // cancelled" response, so replay delivers the same result here.
+                            drop(task);
+                            return cancel_in_flight_get(
+                                accessor, handle, &request, &span_id, this_rep,
+                            )
+                            .await;
+                        }
                     };
                     match task_result {
                         Ok(rpc_result) => handle
-                            .complete_access(
+                            .complete_access_deferred(
                                 accessor,
                                 accessor.getter(),
                                 HostResponseGolemRpcInvokeAndAwait {
                                     result: rpc_result.map_err(Into::into),
                                 },
+                                Some(OplogEntry::finish_span(span_id.clone())),
                             )
                             .await
                             .map_err(anyhow::Error::from)?,
@@ -1097,12 +1197,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     }
                 } else {
                     match handle
-                        .replay_access(accessor, accessor.getter())
+                        .replay_access_deferred(accessor, accessor.getter())
                         .await
                         .map_err(anyhow::Error::from)?
                     {
-                        CallReplayOutcome::Replayed(response) => response,
-                        CallReplayOutcome::Incomplete(mut live) => {
+                        DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                            (response, delivery)
+                        }
+                        DeferredCallReplayOutcome::Incomplete(mut live) => {
                             // Crash-after-`Start` recovery: the eager `Start` is committed but its
                             // terminal was never written. A read-only `WriteRemote` call is safe to
                             // re-execute, so re-dispatch the RPC now and complete the existing `Start`
@@ -1121,18 +1223,33 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     retry_point,
                                 )
                             });
-                            match (&mut task).await {
-                                Ok(rpc_result) => live
-                                    .complete_access(
+                            let task_result = tokio::select! {
+                                biased;
+                                _ = cancel_token.cancelled() => None,
+                                result = &mut task => Some(result),
+                            };
+                            match task_result {
+                                None => {
+                                    // Cancelled while re-executing the recovered call: same
+                                    // handling as the live-path cancellation race above.
+                                    drop(task);
+                                    return cancel_in_flight_get(
+                                        accessor, live, &request, &span_id, this_rep,
+                                    )
+                                    .await;
+                                }
+                                Some(Ok(rpc_result)) => live
+                                    .complete_access_deferred(
                                         accessor,
                                         accessor.getter(),
                                         HostResponseGolemRpcInvokeAndAwait {
                                             result: rpc_result.map_err(Into::into),
                                         },
+                                        Some(OplogEntry::finish_span(span_id.clone())),
                                     )
                                     .await
                                     .map_err(anyhow::Error::from)?,
-                                Err(err) => {
+                                Some(Err(err)) => {
                                     return Err(live.trap(anyhow::anyhow!(err.to_string())));
                                 }
                             }
@@ -1140,24 +1257,94 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     }
                 };
 
-                finish_span_access(accessor, &span_id).await?;
-                accessor.with(|mut access| {
-                    let ctx = access.get();
-                    let entry = ctx
-                        .table()
-                        .get_mut(&Resource::<FutureInvokeResult>::new_borrow(this_rep))?;
-                    let state = entry
-                        .payload
-                        .as_any_mut()
-                        .downcast_mut::<FutureInvokeResultState>()
-                        .unwrap();
-                    *state = FutureInvokeResultState::Consumed {
-                        span_id: span_id.clone(),
-                    };
-                    Ok::<_, anyhow::Error>(())
-                })?;
+                if delivery.is_replay_discarded() {
+                    // The recorded run persisted the `End` (and its `FinishSpan`) but the guest
+                    // dropped this future before `get` returned. Mirror the recorded post-`End`
+                    // continuation deterministically — consume the positional `FinishSpan` and
+                    // mark the resource consumed — then park: never return the response, so the
+                    // deterministic guest drops this future at the same point it did live (its
+                    // resource `drop` sees no open handle and writes nothing durable).
+                    finish_span_access(accessor, &span_id).await?;
+                    accessor.with(|mut access| {
+                        let ctx = access.get();
+                        let entry = ctx
+                            .table()
+                            .get_mut(&Resource::<FutureInvokeResult>::new_borrow(this_rep))?;
+                        let state = entry
+                            .payload
+                            .as_any_mut()
+                            .downcast_mut::<FutureInvokeResultState>()
+                            .unwrap();
+                        *state = FutureInvokeResultState::Consumed {
+                            span_id: span_id.clone(),
+                        };
+                        Ok::<_, anyhow::Error>(())
+                    })?;
+                    std::future::pending::<()>().await;
+                    unreachable!("std::future::pending never completes")
+                }
 
-                invoke_and_await_response_to_wire(response.result)
+                if delivery.is_live_armed() {
+                    // Live: the durable `FinishSpan` is already recorded by the owned terminal
+                    // task; everything left before the return is synchronous (in-memory span
+                    // finish, resource transition, wire conversion), so no tear window remains
+                    // between here and consuming the token.
+                    let finalize = accessor.with(|mut access| {
+                        let ctx = access.get();
+                        finish_span_in_memory(ctx, &span_id).map_err(anyhow::Error::from)?;
+                        let entry = ctx
+                            .table()
+                            .get_mut(&Resource::<FutureInvokeResult>::new_borrow(this_rep))?;
+                        let state = entry
+                            .payload
+                            .as_any_mut()
+                            .downcast_mut::<FutureInvokeResultState>()
+                            .unwrap();
+                        *state = FutureInvokeResultState::Consumed {
+                            span_id: span_id.clone(),
+                        };
+                        Ok::<_, anyhow::Error>(())
+                    });
+                    match finalize.and_then(|()| invoke_and_await_response_to_wire(response.result))
+                    {
+                        Ok(wire) => {
+                            // The wire result returned below still crosses Wasmtime's lowering
+                            // and terminal-consumption boundary: hand the token to the terminal
+                            // observer instead of consuming it here.
+                            delivery.deliver_at_accessor_terminal(accessor);
+                            Ok(wire)
+                        }
+                        Err(err) => {
+                            // The error is observed by the caller (the worker traps): the
+                            // completion was not silently discarded, so no marker.
+                            delivery.suppress();
+                            Err(err)
+                        }
+                    }
+                } else {
+                    // Replay of a delivered completion, or a live unpersisted (snapshotting)
+                    // call: the original span handling applies — replay consumes the positional
+                    // `FinishSpan`, an unpersisted live call appends it here.
+                    finish_span_access(accessor, &span_id).await?;
+                    accessor.with(|mut access| {
+                        let ctx = access.get();
+                        let entry = ctx
+                            .table()
+                            .get_mut(&Resource::<FutureInvokeResult>::new_borrow(this_rep))?;
+                        let state = entry
+                            .payload
+                            .as_any_mut()
+                            .downcast_mut::<FutureInvokeResultState>()
+                            .unwrap();
+                        *state = FutureInvokeResultState::Consumed {
+                            span_id: span_id.clone(),
+                        };
+                        Ok::<_, anyhow::Error>(())
+                    })?;
+                    let wire = invoke_and_await_response_to_wire(response.result);
+                    delivery.delivered();
+                    wire
+                }
             }
         }
     }
@@ -1281,6 +1468,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     handle,
                     request,
                     span_id,
+                    cancel_token,
                     ..
                 } => match handle.take() {
                     Some(handle) => {
@@ -1297,7 +1485,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             span_id,
                         }
                     }
-                    None => CancelPlan::Nothing,
+                    None => {
+                        // An in-flight `get` owns the handle. Signal it through the shared
+                        // token: the racing `get` aborts the RPC, records the `Cancelled`
+                        // terminal (with the partial "Invocation cancelled" response), and
+                        // finishes the span, so nothing durable is written here.
+                        cancel_token.cancel();
+                        CancelPlan::Nothing
+                    }
                 },
                 FutureInvokeResultState::Baked { .. }
                 | FutureInvokeResultState::Cancelled { .. }
@@ -1790,6 +1985,13 @@ enum FutureInvokeResultState {
     /// incomplete `Start` (the worker crashed after the eager `Start` but before its terminal), `get`
     /// re-dispatches the read-only RPC — using `remote_agent_id`, `request`, and `env` — and
     /// completes the existing `Start`.
+    ///
+    /// `cancel_token` is the side-channel for cancelling an *in-flight* `get`: `get` takes the
+    /// handle (and task) out of this state before awaiting, so a concurrent `cancel` finds
+    /// `handle: None` and cannot record the `Cancelled` itself. Instead it triggers this token;
+    /// the in-flight `get` races its await against it, and on cancellation aborts the RPC task,
+    /// best-effort cancels the remote invocation, and records the `Cancelled` (with a partial
+    /// "Invocation cancelled" response so replay deterministically delivers the same result).
     Active {
         handle: Option<FutureInvokeCallHandle>,
         task: Option<FutureInvokeTaskHandle>,
@@ -1797,6 +1999,7 @@ enum FutureInvokeResultState {
         remote_agent_id: OwnedAgentId,
         env: Vec<(String, String)>,
         span_id: SpanId,
+        cancel_token: tokio_util::sync::CancellationToken,
     },
     /// Method resolution / input lifting failed deterministically before any host call was opened,
     /// so no `Start` / `End` is written for this future. `get` surfaces the baked error and finishes
