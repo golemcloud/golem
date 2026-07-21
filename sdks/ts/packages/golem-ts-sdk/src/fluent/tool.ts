@@ -27,6 +27,7 @@ import {
   type ToolError,
   type TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/host@0.1.0';
+import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import type { Principal } from '../principal';
 import {
   type ExtendedCommandBody,
@@ -337,17 +338,17 @@ export type ToolClientErrors<Method> = Method extends {
   ? Errors
   : never;
 
-type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, ReadableStream<Uint8Array>>;
+type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, InputStream>;
 
 type ClientResult<Body> =
   BodyStdout<Body> extends 'required'
     ? [BodySuccess<Body>] extends [undefined]
-      ? ReadableStream<Uint8Array>
-      : { result: BodySuccess<Body>; stdout: ReadableStream<Uint8Array> }
+      ? OutputStream
+      : { result: BodySuccess<Body>; stdout: OutputStream }
     : BodyStdout<Body> extends 'optional'
       ? [BodySuccess<Body>] extends [undefined]
-        ? ReadableStream<Uint8Array> | undefined
-        : { result: BodySuccess<Body>; stdout?: ReadableStream<Uint8Array> }
+        ? OutputStream | undefined
+        : { result: BodySuccess<Body>; stdout?: OutputStream }
       : [BodySuccess<Body>] extends [undefined]
         ? void
         : BodySuccess<Body>;
@@ -386,15 +387,15 @@ export type ToolClient<Definition> = Simplify<RootClient<ToolCommandModelOf<Defi
 
 export interface ToolClientInvocationResult {
   readonly result?: WireTypedSchemaValue;
-  readonly stdout?: ReadableStream<Uint8Array>;
+  readonly stdout?: OutputStream;
 }
 
-/** Wire-level invocation seam used by typed tool clients. */
+/** Raw WIT invocation seam used by typed tool clients. */
 export interface ToolClientTransport {
   invokeAndAwait(
     commandPath: readonly string[],
     input: WireTypedSchemaValue,
-    stdin: ReadableStream<Uint8Array> | undefined,
+    stdin: InputStream | undefined,
   ): ToolClientInvocationResult | Promise<ToolClientInvocationResult>;
 }
 
@@ -1128,23 +1129,10 @@ class HostToolClientTransport implements ToolClientTransport {
   invokeAndAwait(
     commandPath: readonly string[],
     input: WireTypedSchemaValue,
-    stdin: ReadableStream<Uint8Array> | undefined,
+    stdin: InputStream | undefined,
   ): ToolClientInvocationResult {
-    if (stdin !== undefined) {
-      throw protocolRpcError(
-        'caller-provided Web stdin cannot be converted to an owned wasi:io input-stream',
-      );
-    }
-
     this.rpc ??= new ToolRpc(this.toolName);
-    const result = this.rpc.invokeAndAwait([...commandPath], input, undefined);
-    if (result.stdout !== undefined) {
-      disposeWitResource(result.stdout);
-      throw protocolRpcError(
-        'tool stdout is a write-only wasi:io output-stream and cannot be exposed as a Web ReadableStream',
-      );
-    }
-    return { result: result.result };
+    return this.rpc.invokeAndAwait([...commandPath], input, stdin);
   }
 }
 
@@ -1199,12 +1187,12 @@ function createToolClientMethod(
         }),
       );
       const input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
-      const stdin = body.stdin ? (args.stdin as ReadableStream<Uint8Array> | undefined) : undefined;
+      const stdin = body.stdin ? (args.stdin as InputStream | undefined) : undefined;
+      if (stdin !== undefined && !isWitResource(stdin)) {
+        throw new Error('stdin must be a WIT resource');
+      }
       if (body.stdin?.required && stdin === undefined) {
         throw new Error('required stdin stream is missing');
-      }
-      if (stdin !== undefined && !(stdin instanceof ReadableStream)) {
-        throw new Error('stdin must be a ReadableStream');
       }
       const invocation = await transport.invokeAndAwait(commandPath, input, stdin);
       return decodeToolClientResult(body, invocation, callName);
@@ -1225,8 +1213,8 @@ function decodeToolClientResult(
   const hasStdout = invocation.stdout !== undefined;
 
   try {
-    if (hasStdout && !(invocation.stdout instanceof ReadableStream)) {
-      throw protocolToolCallError(`${callName}: stdout is not a ReadableStream`);
+    if (hasStdout && !isWitResource(invocation.stdout)) {
+      throw protocolToolCallError(`${callName}: stdout must be a WIT resource`);
     }
     if (!body.result && hasResult) {
       throw protocolToolCallError(`${callName}: unit command returned an unexpected result`);
@@ -1250,17 +1238,17 @@ function decodeToolClientResult(
       ? { result: decodedResult, stdout: invocation.stdout }
       : { result: decodedResult };
   } catch (error) {
-    if (invocation.stdout instanceof ReadableStream) cancelReadableStream(invocation.stdout);
+    try {
+      disposeWitResource(invocation.stdout);
+    } catch {
+      // Preserve the tool-call failure rather than replacing it with cleanup failure.
+    }
     throw error;
   }
 }
 
-function cancelReadableStream(stream: ReadableStream<Uint8Array>): void {
-  try {
-    void stream.cancel().catch(() => {});
-  } catch {
-    // Preserve the tool-call failure rather than replacing it with cleanup failure.
-  }
+function isWitResource(value: unknown): boolean {
+  return value !== null && (typeof value === 'object' || typeof value === 'function');
 }
 
 function mapToolRpcError(

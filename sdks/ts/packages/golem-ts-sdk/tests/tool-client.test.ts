@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import { type as arkType } from 'arktype';
 import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
@@ -37,7 +38,7 @@ import { Bytes, s } from '../src/fluent/schema/markers';
 interface RecordedInvocation {
   readonly commandPath: readonly string[];
   readonly input: Parameters<ToolClientTransport['invokeAndAwait']>[1];
-  readonly stdin: ReadableStream<Uint8Array> | undefined;
+  readonly stdin: InputStream | undefined;
 }
 
 class FakeTransport implements ToolClientTransport {
@@ -52,7 +53,7 @@ class FakeTransport implements ToolClientTransport {
   invokeAndAwait(
     commandPath: readonly string[],
     input: Parameters<ToolClientTransport['invokeAndAwait']>[1],
-    stdin: ReadableStream<Uint8Array> | undefined,
+    stdin: InputStream | undefined,
   ): ToolClientInvocationResult | Promise<ToolClientInvocationResult> {
     const invocation = { commandPath: [...commandPath], input, stdin };
     this.invocations.push(invocation);
@@ -226,7 +227,7 @@ describe('fluent tool runtime client', () => {
     const transport = new FakeTransport(() => ({}));
     const requiredClient = client(required, { transport });
     const optionalClient = client(optional, { transport });
-    const stdin = new ReadableStream<Uint8Array>();
+    const stdin = {} as InputStream;
 
     await requiredClient.required({ stdin });
     await optionalClient.optional({});
@@ -243,17 +244,44 @@ describe('fluent tool runtime client', () => {
         error: { tag: 'protocol-error', val: expect.stringContaining('stdin') },
       },
     });
-    const invalid = await rejectionOf(requiredClient.required({ stdin: 'invalid' } as never));
-    expect(invalid).toMatchObject({
-      cause: {
-        tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('ReadableStream') },
-      },
+  });
+
+  it('rejects null for a required stdin resource', async () => {
+    const definition = toolDefinition('null-stdin').body((body) =>
+      body.stdin({ required: true }).returns(z.void()),
+    );
+    const transport = new FakeTransport(() => ({}));
+
+    const failure = await rejectionOf(
+      client(definition, { transport })['null-stdin']({ stdin: null as never }),
+    );
+
+    expect(failure).toBeInstanceOf(ToolCallError);
+    expect(failure).toMatchObject({
+      cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
     });
+    expect(transport.invocations).toHaveLength(0);
+  });
+
+  it('rejects a non-resource stdin before invoking the transport', async () => {
+    const definition = toolDefinition('invalid-stdin-resource').body((body) =>
+      body.stdin({ required: true }).returns(z.void()),
+    );
+    const transport = new FakeTransport(() => ({}));
+
+    const failure = await rejectionOf(
+      client(definition, { transport })['invalid-stdin-resource']({ stdin: 'invalid' as never }),
+    );
+
+    expect(failure).toBeInstanceOf(ToolCallError);
+    expect(failure).toMatchObject({
+      cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+    });
+    expect(transport.invocations).toHaveLength(0);
   });
 
   it('projects structured, unit, required stdout, and optional stdout results', async () => {
-    const stdout = new ReadableStream<Uint8Array>();
+    const stdout = {} as OutputStream;
     const structured = toolDefinition('structured').body((body) => body.returns(z.string()));
     const unit = toolDefinition('unit').body((body) => body.returns(z.void()));
     const structuredStdout = toolDefinition('structured-stdout').body((body) =>
@@ -296,8 +324,8 @@ describe('fluent tool runtime client', () => {
     const definition = toolDefinition('transform').body((body) =>
       body.stdin({ required: true }).stdout({ required: true }).returns(z.string()),
     );
-    const stdin = new ReadableStream<Uint8Array>();
-    const stdout = new ReadableStream<Uint8Array>();
+    const stdin = {} as InputStream;
+    const stdout = {} as OutputStream;
     const transport = new FakeTransport(() => ({
       result: wireValue(z.string(), 'transformed'),
       stdout,
@@ -331,7 +359,7 @@ describe('fluent tool runtime client', () => {
     {
       name: 'unexpected stdout',
       definition: toolDefinition('unexpected-stdout').body((body) => body.returns(z.void())),
-      response: { stdout: new ReadableStream<Uint8Array>() },
+      response: { stdout: {} as OutputStream },
     },
   ])('rejects $name with a stable protocol error', async ({ definition, response }) => {
     const runtime = client(definition, { transport: new FakeTransport(() => response) }) as Record<
@@ -344,13 +372,41 @@ describe('fluent tool runtime client', () => {
     expect(failure).toMatchObject({ cause: { tag: 'rpc', error: { tag: 'protocol-error' } } });
   });
 
-  it('cancels stdout when another response validation fails', async () => {
-    let cancelled = false;
-    const stdout = new ReadableStream<Uint8Array>({
-      cancel: () => {
-        cancelled = true;
-      },
+  it('rejects null for a required stdout resource', async () => {
+    const definition = toolDefinition('null-stdout').body((body) =>
+      body.stdout({ required: true }).returns(z.void()),
+    );
+    const failure = await rejectionOf(
+      client(definition, {
+        transport: new FakeTransport(() => ({ stdout: null as never })),
+      })['null-stdout']({}),
+    );
+
+    expect(failure).toBeInstanceOf(ToolCallError);
+    expect(failure).toMatchObject({
+      cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
     });
+  });
+
+  it('rejects a non-resource required stdout', async () => {
+    const definition = toolDefinition('invalid-stdout-resource').body((body) =>
+      body.stdout({ required: true }).returns(z.void()),
+    );
+    const failure = await rejectionOf(
+      client(definition, {
+        transport: new FakeTransport(() => ({ stdout: 'invalid' as never })),
+      })['invalid-stdout-resource']({}),
+    );
+
+    expect(failure).toBeInstanceOf(ToolCallError);
+    expect(failure).toMatchObject({
+      cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+    });
+  });
+
+  it('disposes stdout when another response validation fails', async () => {
+    const dispose = vi.fn();
+    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
     const definition = toolDefinition('invalid-streamed-result').body((body) =>
       body.stdout({ required: true }).returns(z.string()),
     );
@@ -364,7 +420,30 @@ describe('fluent tool runtime client', () => {
     );
 
     expect(failure).toMatchObject({ cause: { tag: 'rpc', error: { tag: 'protocol-error' } } });
-    await vi.waitFor(() => expect(cancelled).toBe(true));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a response validation failure when disposing stdout also fails', async () => {
+    const dispose = vi.fn(() => {
+      throw { tag: 'denied', val: 'stdout disposal failed' } satisfies RpcError;
+    });
+    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
+    const definition = toolDefinition('invalid-streamed-result').body((body) =>
+      body.stdout({ required: true }).returns(z.string()),
+    );
+    const failure = await rejectionOf(
+      client(definition, {
+        transport: new FakeTransport(() => ({
+          result: wireValue(z.boolean(), true),
+          stdout,
+        })),
+      })['invalid-streamed-result']({}),
+    );
+
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(failure).toMatchObject({
+      cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+    });
   });
 
   it.each<RpcError>([
@@ -668,38 +747,23 @@ describe('fluent tool runtime client', () => {
     expect(invokeAndAwait.mock.calls.every(([path]) => deepEqual(path, []))).toBe(true);
   });
 
-  it('fails unsupported default host stream adaptation through stable protocol errors', async () => {
-    const stdinDefinition = toolDefinition('stdin-host').body((body) =>
-      body.stdin({ required: true }).returns(z.void()),
-    );
-    const stdinFailure = await rejectionOf(
-      client(stdinDefinition)['stdin-host']({ stdin: new ReadableStream<Uint8Array>() }),
-    );
-    expect(stdinFailure).toMatchObject({
-      cause: {
-        tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('wasi:io input-stream') },
-      },
-    });
-
+  it('passes raw stdin and stdout resources through the default ToolRpc', async () => {
+    const stdin = {} as InputStream;
     const dispose = vi.fn();
-    vi.mocked(ToolRpc).mockImplementation(
-      () =>
-        ({
-          invokeAndAwait: () => ({ stdout: { [Symbol.dispose]: dispose } }),
-        }) as unknown as ToolRpc,
+    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
+    const invokeAndAwait = vi.fn(() => ({ stdout }));
+    vi.mocked(ToolRpc)
+      .mockClear()
+      .mockImplementation(() => ({ invokeAndAwait }) as unknown as ToolRpc);
+    const definition = toolDefinition('streams-host').body((body) =>
+      body.stdin({ required: true }).stdout({ required: true }).returns(z.void()),
     );
-    const stdoutDefinition = toolDefinition('stdout-host').body((body) =>
-      body.stdout({ required: true }).returns(z.void()),
-    );
-    const stdoutFailure = await rejectionOf(client(stdoutDefinition)['stdout-host']({}));
 
-    expect(stdoutFailure).toMatchObject({
-      cause: {
-        tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('write-only') },
-      },
-    });
-    expect(dispose).toHaveBeenCalledOnce();
+    await expect(client(definition)['streams-host']({ stdin })).resolves.toBe(stdout);
+
+    expect(ToolRpc).toHaveBeenCalledWith('streams-host');
+    expect(invokeAndAwait).toHaveBeenCalledOnce();
+    expect(invokeAndAwait).toHaveBeenCalledWith([], expect.anything(), stdin);
+    expect(dispose).not.toHaveBeenCalled();
   });
 });
